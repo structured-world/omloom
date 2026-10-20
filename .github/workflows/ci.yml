@@ -7,8 +7,9 @@ permissions:
 jobs:
   docs:
     name: Documentation
-    if: github.repository_owner == 'structured-world' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: [self-hosted, light]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: scripts/check-docs.sh
+      - uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2
+        with:
+          args: --offline --include-fragments --no-progress README.md CONTRIBUTING.md SECURITY.md
