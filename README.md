@@ -1,4 +1,4 @@
-# SINF
+# Omloom
 
 Infrastructure knowledge and operations.
 
