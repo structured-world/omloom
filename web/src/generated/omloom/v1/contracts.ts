@@ -35,29 +35,46 @@ export interface SourceIdentity {
      */
     connectionId: string;
     /**
+     * Provider object identity interpreted only within the configured connection.
+     *
+     * @generated from protobuf field: omloom.v1.SourceObject object = 2
+     */
+    object?: SourceObject;
+}
+/**
+ * Shared provider object key; a standalone identity or enclosing scan supplies
+ * its connection. Object IDs alone are never globally unique or authoritative.
+ *
+ * @generated from protobuf message omloom.v1.SourceObject
+ */
+export interface SourceObject {
+    /**
      * Adapter-defined object type, e.g. qemu; nonempty ASCII token, max 64 bytes.
      *
-     * @generated from protobuf field: string object_kind = 2
+     * @generated from protobuf field: string object_kind = 1
      */
     objectKind: string;
     /**
      * Provider-generated opaque object identifier, max 256 UTF-8 bytes.
      *
-     * @generated from protobuf field: string object_id = 3
+     * @generated from protobuf field: string object_id = 2
      */
     objectId: string;
     /**
      * Adapter-qualified lifetime evidence; absent on unresolved candidates.
      * Accepted provider mappings require it; absence/reuse requires identity review.
      *
-     * @generated from protobuf field: optional string incarnation_evidence = 4
+     * @generated from protobuf field: optional string incarnation_evidence = 3
      */
     incarnationEvidence?: string;
 }
 /**
- * @generated from protobuf message omloom.v1.Provenance
+ * One source's claims sharing an exact revision and validity window. Standalone
+ * observations or the enclosing scan supply scan identity without copying it.
+ *
+ * @generated from protobuf message omloom.v1.Evidence
  */
-export interface Provenance {
+export interface Evidence {
     /**
      * Omloom-owned source mapping UUID; each source retains independent evidence.
      *
@@ -65,29 +82,31 @@ export interface Provenance {
      */
     sourceId: string;
     /**
-     * Provider revision/cursor, opaque and not lexicographically ordered.
+     * Provider revision/cursor, opaque and not lexicographically ordered; required
+     * when the enclosing observation has no scan identity.
      *
      * @generated from protobuf field: optional string source_revision = 2
      */
     sourceRevision?: string;
     /**
-     * Omloom-generated scan UUID for this observation window, required without revision.
-     *
-     * @generated from protobuf field: optional string scan_id = 3
-     */
-    scanId?: string;
-    /**
      * Source observation instant as Unix milliseconds; not a cross-source ordering key.
      *
-     * @generated from protobuf field: uint64 observed_at_ms = 4
+     * @generated from protobuf field: uint64 observed_at_ms = 3
      */
     observedAtMs: bigint;
     /**
      * End of the evidence validity window as Unix milliseconds; never implies health.
      *
-     * @generated from protobuf field: uint64 valid_until_ms = 5
+     * @generated from protobuf field: uint64 valid_until_ms = 4
      */
     validUntilMs: bigint;
+    /**
+     * Source claims sharing this exact provenance. Absent fields make no claim;
+     * they cannot acquire this window merely by appearing in a stored asset.
+     *
+     * @generated from protobuf field: repeated omloom.v1.Field fields = 5
+     */
+    fields: Field[];
 }
 /**
  * No field entry means absent in a partial payload; clear is an explicit claim.
@@ -164,17 +183,19 @@ export interface IntendedField {
  */
 export interface Observation {
     /**
-     * Separate source identity, observation revision/window and freshness.
+     * Omloom-generated scan UUID for this window; required without a source
+     * revision. Scan batch rows inherit it from the batch instead of sending it.
      *
-     * @generated from protobuf field: omloom.v1.Provenance provenance = 1
+     * @generated from protobuf field: optional string scan_id = 1
      */
-    provenance?: Provenance;
+    scanId?: string;
     /**
-     * Source's claims only; missing fields do not clear existing intent/evidence.
+     * Source identity, revision/window and claims; required even for identity-only
+     * discovery. Current asset layers require at least one field in each group.
      *
-     * @generated from protobuf field: repeated omloom.v1.Field fields = 2
+     * @generated from protobuf field: omloom.v1.Evidence evidence = 2
      */
-    fields: Field[];
+    evidence?: Evidence;
 }
 /**
  * @generated from protobuf message omloom.v1.Asset
@@ -211,13 +232,16 @@ export interface Asset {
      */
     intended: IntendedField[];
     /**
-     * Imported proposals, separately attributed and not implicitly accepted.
+     * Current imported proposals, separately attributed and not implicitly accepted.
+     * Groups may share a source only with disjoint fields and distinct provenance.
      *
      * @generated from protobuf field: repeated omloom.v1.Observation imported = 6
      */
     imported: Observation[];
     /**
-     * Independent observed values; contradictory sources are retained.
+     * Current observed values, not samples/history. Each (source, field) occurs
+     * once; fields with different provenance retain separate groups. Contradictory
+     * sources remain independent. Identical-provenance groups must be combined.
      *
      * @generated from protobuf field: repeated omloom.v1.Observation observed = 7
      */
@@ -257,6 +281,38 @@ export interface Candidate {
      * @generated from protobuf field: omloom.v1.Observation observation = 4
      */
     observation?: Observation;
+}
+/**
+ * Review candidate scoped by its enclosing ScanBatch; not a standalone record.
+ *
+ * @generated from protobuf message omloom.v1.ScanCandidate
+ */
+export interface ScanCandidate {
+    /**
+     * Omloom-generated review UUID, with the same meaning as Candidate.candidate_id.
+     *
+     * @generated from protobuf field: string candidate_id = 1
+     */
+    candidateId: string;
+    /**
+     * Provider identity within ScanBatch.connection_id; no row can override scope.
+     *
+     * @generated from protobuf field: omloom.v1.SourceObject source = 2
+     */
+    source?: SourceObject;
+    /**
+     * Provider-reported inventory type; does not imply adoption or action authority.
+     *
+     * @generated from protobuf field: omloom.v1.AssetKind kind = 3
+     */
+    kind: AssetKind;
+    /**
+     * Source claims attributed to ScanBatch.scan_id. Fields may be empty when only
+     * object identity was discovered; timestamps/revision retain their own meaning.
+     *
+     * @generated from protobuf field: omloom.v1.Evidence evidence = 4
+     */
+    evidence?: Evidence;
 }
 /**
  * @generated from protobuf message omloom.v1.ScanBatch
@@ -301,9 +357,9 @@ export interface ScanBatch {
     /**
      * Bounded page of review candidates; this record never authorizes deletion.
      *
-     * @generated from protobuf field: repeated omloom.v1.Candidate candidates = 7
+     * @generated from protobuf field: repeated omloom.v1.ScanCandidate candidates = 7
      */
-    candidates: Candidate[];
+    candidates: ScanCandidate[];
 }
 /**
  * @generated from protobuf message omloom.v1.Relation
@@ -462,7 +518,7 @@ export interface Requirement {
      */
     kind: RequirementKind;
     /**
-     * Referenced node indexes; graph is acyclic and bounded, including unreachable nodes.
+     * Referenced node indexes; graph is acyclic, bounded and entirely root-reachable.
      *
      * @generated from protobuf field: repeated uint32 children = 2
      */
@@ -503,7 +559,9 @@ export interface Requirements {
      */
     root: number;
     /**
-     * Flat DAG, max 256 nodes/1024 edges; evaluation belongs to the requirement engine.
+     * Flat DAG, max 256 nodes/1024 edges; every node is reachable from root.
+     * Unused nodes are rejected, not silently pruned from a confirmed expression.
+     * Evaluation belongs to the requirement engine.
      *
      * @generated from protobuf field: repeated omloom.v1.Requirement nodes = 3
      */
@@ -968,9 +1026,7 @@ class SourceIdentity$Type extends MessageType<SourceIdentity> {
     constructor() {
         super("omloom.v1.SourceIdentity", [
             { no: 1, name: "connection_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 2, name: "object_kind", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 3, name: "object_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 4, name: "incarnation_evidence", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 2, name: "object", kind: "message", T: () => SourceObject }
         ]);
     }
 }
@@ -979,21 +1035,35 @@ class SourceIdentity$Type extends MessageType<SourceIdentity> {
  */
 export const SourceIdentity = new SourceIdentity$Type();
 // @generated message type with reflection information, may provide speed optimized methods
-class Provenance$Type extends MessageType<Provenance> {
+class SourceObject$Type extends MessageType<SourceObject> {
     constructor() {
-        super("omloom.v1.Provenance", [
-            { no: 1, name: "source_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 2, name: "source_revision", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
-            { no: 3, name: "scan_id", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
-            { no: 4, name: "observed_at_ms", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
-            { no: 5, name: "valid_until_ms", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
+        super("omloom.v1.SourceObject", [
+            { no: 1, name: "object_kind", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "object_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "incarnation_evidence", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
         ]);
     }
 }
 /**
- * @generated MessageType for protobuf message omloom.v1.Provenance
+ * @generated MessageType for protobuf message omloom.v1.SourceObject
  */
-export const Provenance = new Provenance$Type();
+export const SourceObject = new SourceObject$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class Evidence$Type extends MessageType<Evidence> {
+    constructor() {
+        super("omloom.v1.Evidence", [
+            { no: 1, name: "source_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "source_revision", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "observed_at_ms", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 4, name: "valid_until_ms", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 5, name: "fields", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Field }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.v1.Evidence
+ */
+export const Evidence = new Evidence$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class Field$Type extends MessageType<Field> {
     constructor() {
@@ -1027,8 +1097,8 @@ export const IntendedField = new IntendedField$Type();
 class Observation$Type extends MessageType<Observation> {
     constructor() {
         super("omloom.v1.Observation", [
-            { no: 1, name: "provenance", kind: "message", T: () => Provenance },
-            { no: 2, name: "fields", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Field }
+            { no: 1, name: "scan_id", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "evidence", kind: "message", T: () => Evidence }
         ]);
     }
 }
@@ -1071,6 +1141,21 @@ class Candidate$Type extends MessageType<Candidate> {
  */
 export const Candidate = new Candidate$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class ScanCandidate$Type extends MessageType<ScanCandidate> {
+    constructor() {
+        super("omloom.v1.ScanCandidate", [
+            { no: 1, name: "candidate_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "source", kind: "message", T: () => SourceObject },
+            { no: 3, name: "kind", kind: "enum", T: () => ["omloom.v1.AssetKind", AssetKind, "ASSET_KIND_"] },
+            { no: 4, name: "evidence", kind: "message", T: () => Evidence }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.v1.ScanCandidate
+ */
+export const ScanCandidate = new ScanCandidate$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class ScanBatch$Type extends MessageType<ScanBatch> {
     constructor() {
         super("omloom.v1.ScanBatch", [
@@ -1080,7 +1165,7 @@ class ScanBatch$Type extends MessageType<ScanBatch> {
             { no: 4, name: "cursor", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 5, name: "completeness", kind: "enum", T: () => ["omloom.v1.ScanCompleteness", ScanCompleteness, "SCAN_COMPLETENESS_"] },
             { no: 6, name: "snapshot_revision", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
-            { no: 7, name: "candidates", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Candidate }
+            { no: 7, name: "candidates", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => ScanCandidate }
         ]);
     }
 }

@@ -1,5 +1,5 @@
 use crate::{Error, ids, wire::*};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn need<T>(value: &Option<T>) -> Result<&T, Error> {
     value.as_ref().ok_or(Error::Missing)
@@ -41,6 +41,9 @@ fn kind(value: i32) -> Result<(), Error> {
 }
 fn source(value: &SourceIdentity) -> Result<(), Error> {
     ids::check(&value.connection_id)?;
+    source_object(need(&value.object)?)
+}
+fn source_object(value: &SourceObject) -> Result<(), Error> {
     token(&value.object_kind)?;
     text(&value.object_id, 256, false)?;
     if let Some(evidence) = &value.incarnation_evidence {
@@ -48,23 +51,20 @@ fn source(value: &SourceIdentity) -> Result<(), Error> {
     }
     Ok(())
 }
-fn provenance(value: &Provenance) -> Result<(), Error> {
+fn evidence(value: &Evidence, scan_id: Option<&str>) -> Result<(), Error> {
     ids::check(&value.source_id)?;
-    if value.source_revision.is_none() && value.scan_id.is_none() {
+    if value.source_revision.is_none() && scan_id.is_none() {
         return Err(Error::Missing);
     }
     if let Some(rev) = &value.source_revision {
         text(rev, 256, false)?;
-    }
-    if let Some(scan) = &value.scan_id {
-        ids::check(scan)?;
     }
     positive(value.observed_at_ms)?;
     // JS BigInt is used for u64, including instants; no lossy Number conversion.
     if value.valid_until_ms < value.observed_at_ms {
         return Err(Error::Value);
     }
-    Ok(())
+    unique_fields(&value.fields)
 }
 fn field(value: &Field) -> Result<(), Error> {
     token(&value.name)?;
@@ -89,8 +89,52 @@ fn unique_fields<'a>(values: impl IntoIterator<Item = &'a Field>) -> Result<(), 
     Ok(())
 }
 fn observation(value: &Observation) -> Result<(), Error> {
-    provenance(need(&value.provenance)?)?;
-    unique_fields(&value.fields)
+    if let Some(scan) = &value.scan_id {
+        ids::check(scan)?;
+    }
+    evidence(need(&value.evidence)?, value.scan_id.as_deref())
+}
+fn current_observations(values: &[Observation]) -> Result<(), Error> {
+    if values.len() > 256 {
+        return Err(Error::Limit);
+    }
+    // The preflight reservation covers these indexes before any allocation.
+    // Index current source/field claims, never independent historical samples.
+    let mut sources = BTreeMap::new();
+    let mut fields = BTreeSet::new();
+    let mut windows = BTreeSet::new();
+    for value in values {
+        observation(value)?;
+        let ev = need(&value.evidence)?;
+        if ev.fields.is_empty() {
+            return Err(Error::Missing);
+        }
+        let source = ev.source_id.as_str();
+        if !sources.contains_key(source) && sources.len() == 32 {
+            return Err(Error::Limit);
+        }
+        let count = sources.entry(source).or_insert(0);
+        *count += ev.fields.len();
+        if *count > 256 {
+            return Err(Error::Limit);
+        }
+        for field in &ev.fields {
+            if !fields.insert((source, field.name.as_str())) {
+                return Err(Error::Duplicate);
+            }
+        }
+        if !windows.insert((
+            source,
+            ev.source_revision.as_deref(),
+            value.scan_id.as_deref(),
+            ev.observed_at_ms,
+            ev.valid_until_ms,
+        )) {
+            // Identically attributed fields belong in one compact group.
+            return Err(Error::Duplicate);
+        }
+    }
+    Ok(())
 }
 fn candidate(value: &Candidate) -> Result<(), Error> {
     ids::check(&value.candidate_id)?;
@@ -108,11 +152,7 @@ fn asset(value: &Asset) -> Result<(), Error> {
         return Err(Error::Enumeration);
     }
     positive(value.revision)?;
-    if value.intended.len() > 256
-        || value.imported.len() > 32
-        || value.observed.len() > 32
-        || value.sources.len() > 32
-    {
+    if value.intended.len() > 256 || value.sources.len() > 32 {
         return Err(Error::Limit);
     }
     for intent in &value.intended {
@@ -120,20 +160,14 @@ fn asset(value: &Asset) -> Result<(), Error> {
         need(&intent.field)?;
     }
     unique_fields(value.intended.iter().filter_map(|v| v.field.as_ref()))?;
-    for entries in [&value.imported, &value.observed] {
-        let mut sources = BTreeSet::new();
-        for entry in entries {
-            observation(entry)?;
-            if !sources.insert(&need(&entry.provenance)?.source_id) {
-                return Err(Error::Duplicate);
-            }
-        }
-    }
+    current_observations(&value.imported)?;
+    current_observations(&value.observed)?;
     let mut sources = BTreeSet::new();
     for entry in &value.sources {
         source(entry)?;
-        need(&entry.incarnation_evidence)?;
-        if !sources.insert((&entry.connection_id, &entry.object_kind, &entry.object_id)) {
+        let object = need(&entry.object)?;
+        need(&object.incarnation_evidence)?;
+        if !sources.insert((&entry.connection_id, &object.object_kind, &object.object_id)) {
             return Err(Error::Duplicate);
         }
     }
@@ -167,15 +201,11 @@ fn scan(value: &ScanBatch) -> Result<(), Error> {
     let mut identities = BTreeSet::new();
     let mut candidates = BTreeSet::new();
     for entry in &value.candidates {
-        candidate(entry)?;
+        ids::check(&entry.candidate_id)?;
+        kind(entry.kind)?;
         let src = need(&entry.source)?;
-        if src.connection_id != value.connection_id {
-            return Err(Error::Reference);
-        }
-        let prov = need(&need(&entry.observation)?.provenance)?;
-        if prov.scan_id.as_ref() != Some(&value.scan_id) {
-            return Err(Error::Reference);
-        }
+        source_object(src)?;
+        evidence(need(&entry.evidence)?, Some(&value.scan_id))?;
         if !identities.insert((&src.object_kind, &src.object_id))
             || !candidates.insert(&entry.candidate_id)
         {
@@ -299,6 +329,31 @@ fn requirements(value: &Requirements) -> Result<(), Error> {
                 }
             }
         }
+    }
+    // Every admitted node must contribute to this root. Mark on enqueue so a
+    // shared descendant is visited once and the fixed frontier cannot overflow.
+    let mut seen = [false; 256];
+    let mut pending = [0usize; 256];
+    pending[0] = value.root as usize;
+    seen[value.root as usize] = true;
+    let mut len = 1;
+    let mut visited = 1;
+    while len != 0 {
+        len -= 1;
+        let node = pending[len];
+        for &child in &value.nodes[node].children {
+            let child = child as usize;
+            if !seen[child] {
+                seen[child] = true;
+                debug_assert!(len < count);
+                pending[len] = child;
+                len += 1;
+                visited += 1;
+            }
+        }
+    }
+    if visited != count {
+        return Err(Error::Reference);
     }
     Ok(())
 }

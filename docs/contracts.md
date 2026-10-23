@@ -22,9 +22,22 @@ provider mapping requires qualified lifetime evidence.
 
 Accepted intent includes per-field authority. Imported proposals and independent
 observations retain their own provenance, revision/scan window and validity.
+Each current layer contains at most one claim per `(source_id, field name)`.
+Fields with identical provenance share a group; a source may have multiple
+disjoint groups with different windows. If a partial refresh updates B at time
+200 but omits A observed at time 100, A keeps its original window. Replacing B
+replaces its current claim; appending B's old sample to the layer is rejected.
+Empty current groups and split groups with identical provenance are rejected.
 Missing fields are absent claims; an explicit `clear` is a source's claim and
 does not erase another authority's value. Empty text and false are real values.
 Provider revisions are opaque, and source timestamps cannot order other sources.
+`SourceObject` and `Evidence` have one shared validation contract in standalone
+records and scan rows. A `SourceIdentity` supplies a standalone object's connection;
+an `Observation` supplies its optional scan identity. `ScanCandidate` inherits
+both connection and scan identity from `ScanBatch`, so rows cannot override or
+repeat that context. Identity-only discovery may have empty fields; current
+asset evidence groups must have at least one claim.
+
 Scan checkpoints accompany batches for later atomic persistence. Only a qualified
 consistent completed snapshot can support absence proposals; partial or denied
 scans cannot establish deletion. This library neither stores nor deletes assets.
@@ -37,8 +50,12 @@ instead describes endpoint incarnations, direction, service, optional VRF/VLAN
 and typed requirements. Neither connection is evidence of observed health.
 
 Requirement graphs are flat DAGs with nonempty all/any groups, explicit
-completeness and typed resource facts. The library validates structure only;
-evaluation and its satisfied/failed/unknown evidence rules belong to the consumer.
+completeness and typed resource facts. The library validates structure only.
+All nodes must be reachable from the single root. Unused acyclic nodes are
+`Reference` errors; cycles anywhere in the submitted graph are `Cycle` errors.
+Shared descendants are allowed. Admission rejects unused nodes rather than
+silently pruning an expression that a caller may have confirmed.
+Evaluation and its satisfied/failed/unknown evidence rules belong to the consumer.
 It does not implement authorization, monitoring or notification suppression.
 
 Operation records preserve inventory revision, confirmed plan digest, durable
@@ -69,8 +86,10 @@ size assertions protect this envelope when the schema changes. Transport callers
 must independently cap frame reception and concurrency before buffering input;
 raw generated helpers and caller-created/cloned values are outside admission.
 
-Each asset has at most 256 intended fields, 32 imported sources, 32 observation
-sources and 32 provider mappings. Each observation has at most 256 unique fields;
+Each asset has at most 256 intended fields and 32 provider mappings. Each current
+imported/observed layer has at most 32 sources and 256 nonempty provenance groups,
+with at most 256 unique fields per source across all its groups. Each evidence
+group has at most 256 unique fields;
 text values are at most 4096 UTF-8 bytes. Tokens are at most 64 ASCII bytes,
 provider identifiers/revisions/cursors at most 256 bytes. Scan pages hold at most
 128 candidates. Requirement graphs contain at most 256 nodes, 1024 edges and

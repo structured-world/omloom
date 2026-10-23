@@ -28,36 +28,38 @@ pub fn cases() -> Vec<Case> {
     let scan_id = id();
     let source = SourceIdentity {
         connection_id: id(),
-        object_kind: "qemu".into(),
-        object_id: "vm/101".into(),
-        incarnation_evidence: Some("provider-generation-2".into()),
+        object: Some(SourceObject {
+            object_kind: "qemu".into(),
+            object_id: "vm/101".into(),
+            incarnation_evidence: Some("provider-generation-2".into()),
+        }),
     };
     let observation = Observation {
-        provenance: Some(Provenance {
+        scan_id: Some(scan_id.clone()),
+        evidence: Some(Evidence {
             source_id: id(),
             source_revision: None,
-            scan_id: Some(scan_id.clone()),
             observed_at_ms: 100,
             valid_until_ms: 200,
+            fields: vec![
+                Field {
+                    name: "name".into(),
+                    value: Some(field::Value::Text("сервер α".into())),
+                },
+                Field {
+                    name: "description".into(),
+                    value: Some(field::Value::Clear(NullValue::NullValue as i32)),
+                },
+                Field {
+                    name: "enabled".into(),
+                    value: Some(field::Value::Flag(false)),
+                },
+                Field {
+                    name: "delta".into(),
+                    value: Some(field::Value::Integer(i64::MIN)),
+                },
+            ],
         }),
-        fields: vec![
-            Field {
-                name: "name".into(),
-                value: Some(field::Value::Text("сервер α".into())),
-            },
-            Field {
-                name: "description".into(),
-                value: Some(field::Value::Clear(NullValue::NullValue as i32)),
-            },
-            Field {
-                name: "enabled".into(),
-                value: Some(field::Value::Flag(false)),
-            },
-            Field {
-                name: "delta".into(),
-                value: Some(field::Value::Integer(i64::MIN)),
-            },
-        ],
     };
     let candidate = Candidate {
         candidate_id: id(),
@@ -131,7 +133,12 @@ pub fn cases() -> Vec<Case> {
         cursor: "page-2".into(),
         completeness: ScanCompleteness::SnapshotComplete as i32,
         snapshot_revision: Some("snapshot-1".into()),
-        candidates: vec![candidate.clone()],
+        candidates: vec![ScanCandidate {
+            candidate_id: candidate.candidate_id.clone(),
+            source: source.object.clone(),
+            kind: candidate.kind,
+            evidence: observation.evidence.clone(),
+        }],
     };
     add(&mut cases, "scan", record::Body::Scan(scan.clone()), None);
     add(
@@ -193,6 +200,174 @@ pub fn cases() -> Vec<Case> {
         record::Body::Operation(operation.clone()),
         None,
     );
+    // One current record can preserve omitted stale fields, refreshed false and
+    // an explicit clear without duplicating an older version of any field.
+    let mut partial = asset.clone();
+    let mut fresh = observation.clone();
+    let old_fields = &observation.evidence.as_ref().unwrap().fields;
+    partial.observed[0].evidence.as_mut().unwrap().fields =
+        vec![old_fields[0].clone(), old_fields[3].clone()];
+    let fresh_evidence = fresh.evidence.as_mut().unwrap();
+    fresh_evidence.fields = vec![old_fields[1].clone(), old_fields[2].clone()];
+    fresh_evidence.observed_at_ms = 300;
+    fresh_evidence.valid_until_ms = 400;
+    fresh.scan_id = Some(id());
+    partial.observed.push(fresh);
+    add(
+        &mut cases,
+        "partial_refresh",
+        record::Body::Asset(partial.clone()),
+        None,
+    );
+    partial.imported = partial.observed.clone();
+    add(
+        &mut cases,
+        "partial_import",
+        record::Body::Asset(partial),
+        None,
+    );
+
+    // Equal field names from genuinely distinct sources remain independently
+    // attributed, even when they contradict the accepted intended value.
+    let mut conflict = asset.clone();
+    let mut other = observation.clone();
+    let ev = other.evidence.as_mut().unwrap();
+    ev.source_id = id();
+    ev.fields.truncate(1);
+    ev.fields[0].value = Some(field::Value::Text("other source".into()));
+    conflict.observed.push(other);
+    add(
+        &mut cases,
+        "conflicting_sources",
+        record::Body::Asset(conflict),
+        None,
+    );
+
+    // Shared descendants contribute to both branches; reachability admission
+    // must not confuse a diamond DAG with a cycle or an unused definition.
+    let diamond = Requirements {
+        version: 1,
+        root: 3,
+        nodes: vec![
+            leaf.clone(),
+            Requirement {
+                kind: RequirementKind::All as i32,
+                children: vec![0],
+                complete: true,
+                ..Default::default()
+            },
+            Requirement {
+                kind: RequirementKind::Any as i32,
+                children: vec![0],
+                complete: true,
+                ..Default::default()
+            },
+            Requirement {
+                kind: RequirementKind::All as i32,
+                children: vec![1, 2],
+                complete: true,
+                ..Default::default()
+            },
+        ],
+    };
+    add(
+        &mut cases,
+        "requirement_diamond",
+        record::Body::Requirements(diamond),
+        None,
+    );
+
+    // The largest page still carries its connection and scan identity once.
+    let mut page = scan.clone();
+    let template = page.candidates[0].clone();
+    page.candidates = (0..128)
+        .map(|index| {
+            let mut row = template.clone();
+            row.candidate_id = id();
+            row.source.as_mut().unwrap().object_id = index.to_string();
+            row.evidence.as_mut().unwrap().source_id = id();
+            row
+        })
+        .collect();
+    add(&mut cases, "scan_full_page", record::Body::Scan(page), None);
+    let mut identity_only = scan.clone();
+    identity_only.candidates[0]
+        .evidence
+        .as_mut()
+        .unwrap()
+        .fields
+        .clear();
+    add(
+        &mut cases,
+        "scan_identity_only",
+        record::Body::Scan(identity_only),
+        None,
+    );
+
+    // A current layer cannot hide history by grouping older/newer values of
+    // the same source/field under separate timestamps.
+    let mut overlap = asset.clone();
+    let mut newer = observation.clone();
+    newer.evidence.as_mut().unwrap().observed_at_ms = 150;
+    overlap.observed.push(newer);
+    add(
+        &mut cases,
+        "overlapping_source_fields",
+        record::Body::Asset(overlap),
+        Some(Error::Duplicate),
+    );
+    let mut redundant = asset.clone();
+    redundant.observed[0]
+        .evidence
+        .as_mut()
+        .unwrap()
+        .fields
+        .truncate(1);
+    let mut rest = observation.clone();
+    rest.evidence.as_mut().unwrap().fields.remove(0);
+    redundant.observed.push(rest);
+    add(
+        &mut cases,
+        "redundant_provenance_group",
+        record::Body::Asset(redundant),
+        Some(Error::Duplicate),
+    );
+    let mut empty = asset.clone();
+    empty.observed[0].evidence.as_mut().unwrap().fields.clear();
+    add(
+        &mut cases,
+        "empty_current_evidence",
+        record::Body::Asset(empty),
+        Some(Error::Missing),
+    );
+    let mut orphan = requirements.clone();
+    orphan.nodes.push(leaf);
+    add(
+        &mut cases,
+        "orphan_fact",
+        record::Body::Requirements(orphan),
+        Some(Error::Reference),
+    );
+    let mut no_window = candidate.clone();
+    no_window.observation.as_mut().unwrap().scan_id = None;
+    add(
+        &mut cases,
+        "standalone_missing_window_identity",
+        record::Body::Candidate(no_window),
+        Some(Error::Missing),
+    );
+    let mut invalid = scan.clone();
+    invalid.candidates[0]
+        .evidence
+        .as_mut()
+        .unwrap()
+        .valid_until_ms = 99;
+    add(
+        &mut cases,
+        "scan_invalid_freshness",
+        record::Body::Scan(invalid),
+        Some(Error::Value),
+    );
     let mut bad = asset.clone();
     bad.target.as_mut().unwrap().asset_id = "00000000-0000-0000-0000-000000000000".into();
     add(
@@ -229,7 +404,7 @@ pub fn cases() -> Vec<Case> {
     bad.observation
         .as_mut()
         .unwrap()
-        .provenance
+        .evidence
         .as_mut()
         .unwrap()
         .valid_until_ms = 99;
@@ -248,15 +423,15 @@ pub fn cases() -> Vec<Case> {
         Some(Error::Missing),
     );
     let mut bad = scan.clone();
-    bad.connection_id = id();
+    bad.candidates[0].source.as_mut().unwrap().object_kind = "invalid/kind".into();
     add(
         &mut cases,
-        "foreign_scan_source",
+        "invalid_scan_source",
         record::Body::Scan(bad),
-        Some(Error::Reference),
+        Some(Error::Value),
     );
     let mut bad = scan;
-    bad.candidates.push(candidate);
+    bad.candidates.push(bad.candidates[0].clone());
     add(
         &mut cases,
         "duplicate_candidates",

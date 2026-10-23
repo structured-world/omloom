@@ -35,26 +35,37 @@ enum AssetKind {
 message SourceIdentity {
   // Omloom-generated provider connection UUID, scoped to this installation.
   string connection_id = 1;
-  // Adapter-defined object type, e.g. qemu; nonempty ASCII token, max 64 bytes.
-  string object_kind = 2;
-  // Provider-generated opaque object identifier, max 256 UTF-8 bytes.
-  string object_id = 3;
-  // Adapter-qualified lifetime evidence; absent on unresolved candidates.
-  // Accepted provider mappings require it; absence/reuse requires identity review.
-  optional string incarnation_evidence = 4;
+  // Provider object identity interpreted only within the configured connection.
+  SourceObject object = 2;
 }
 
-message Provenance {
+// Shared provider object key; a standalone identity or enclosing scan supplies
+// its connection. Object IDs alone are never globally unique or authoritative.
+message SourceObject {
+  // Adapter-defined object type, e.g. qemu; nonempty ASCII token, max 64 bytes.
+  string object_kind = 1;
+  // Provider-generated opaque object identifier, max 256 UTF-8 bytes.
+  string object_id = 2;
+  // Adapter-qualified lifetime evidence; absent on unresolved candidates.
+  // Accepted provider mappings require it; absence/reuse requires identity review.
+  optional string incarnation_evidence = 3;
+}
+
+// One source's claims sharing an exact revision and validity window. Standalone
+// observations or the enclosing scan supply scan identity without copying it.
+message Evidence {
   // Omloom-owned source mapping UUID; each source retains independent evidence.
   string source_id = 1;
-  // Provider revision/cursor, opaque and not lexicographically ordered.
+  // Provider revision/cursor, opaque and not lexicographically ordered; required
+  // when the enclosing observation has no scan identity.
   optional string source_revision = 2;
-  // Omloom-generated scan UUID for this observation window, required without revision.
-  optional string scan_id = 3;
   // Source observation instant as Unix milliseconds; not a cross-source ordering key.
-  uint64 observed_at_ms = 4;
+  uint64 observed_at_ms = 3;
   // End of the evidence validity window as Unix milliseconds; never implies health.
-  uint64 valid_until_ms = 5;
+  uint64 valid_until_ms = 4;
+  // Source claims sharing this exact provenance. Absent fields make no claim;
+  // they cannot acquire this window merely by appearing in a stored asset.
+  repeated Field fields = 5;
 }
 
 enum NullValue { NULL_VALUE = 0; }
@@ -84,10 +95,12 @@ message IntendedField {
 }
 
 message Observation {
-  // Separate source identity, observation revision/window and freshness.
-  Provenance provenance = 1;
-  // Source's claims only; missing fields do not clear existing intent/evidence.
-  repeated Field fields = 2;
+  // Omloom-generated scan UUID for this window; required without a source
+  // revision. Scan batch rows inherit it from the batch instead of sending it.
+  optional string scan_id = 1;
+  // Source identity, revision/window and claims; required even for identity-only
+  // discovery. Current asset layers require at least one field in each group.
+  Evidence evidence = 2;
 }
 
 enum Adoption {
@@ -107,9 +120,12 @@ message Asset {
   uint64 revision = 4;
   // Accepted intended values with per-field authority; never last-arrival-wins.
   repeated IntendedField intended = 5;
-  // Imported proposals, separately attributed and not implicitly accepted.
+  // Current imported proposals, separately attributed and not implicitly accepted.
+  // Groups may share a source only with disjoint fields and distinct provenance.
   repeated Observation imported = 6;
-  // Independent observed values; contradictory sources are retained.
+  // Current observed values, not samples/history. Each (source, field) occurs
+  // once; fields with different provenance retain separate groups. Contradictory
+  // sources remain independent. Identical-provenance groups must be combined.
   repeated Observation observed = 7;
   // Accepted provider mappings, including scoped lifetime evidence.
   repeated SourceIdentity sources = 8;
@@ -124,6 +140,19 @@ message Candidate {
   AssetKind kind = 3;
   // Observed discovery evidence; does not activate monitoring or credentials.
   Observation observation = 4;
+}
+
+// Review candidate scoped by its enclosing ScanBatch; not a standalone record.
+message ScanCandidate {
+  // Omloom-generated review UUID, with the same meaning as Candidate.candidate_id.
+  string candidate_id = 1;
+  // Provider identity within ScanBatch.connection_id; no row can override scope.
+  SourceObject source = 2;
+  // Provider-reported inventory type; does not imply adoption or action authority.
+  AssetKind kind = 3;
+  // Source claims attributed to ScanBatch.scan_id. Fields may be empty when only
+  // object identity was discovered; timestamps/revision retain their own meaning.
+  Evidence evidence = 4;
 }
 
 enum ScanCompleteness {
@@ -147,7 +176,7 @@ message ScanBatch {
   // Provider snapshot token required for snapshot-complete absence proposals.
   optional string snapshot_revision = 6;
   // Bounded page of review candidates; this record never authorizes deletion.
-  repeated Candidate candidates = 7;
+  repeated ScanCandidate candidates = 7;
 }
 
 enum RelationKind {
@@ -238,7 +267,7 @@ enum RequirementKind {
 message Requirement {
   // Profile-selected expression kind; groups are nonempty and facts have no children.
   RequirementKind kind = 1;
-  // Referenced node indexes; graph is acyclic and bounded, including unreachable nodes.
+  // Referenced node indexes; graph is acyclic, bounded and entirely root-reachable.
   repeated uint32 children = 2;
   // Explicit group membership completeness; false cannot prove exhaustive failure/success.
   bool complete = 3;
@@ -253,7 +282,9 @@ message Requirements {
   uint32 version = 1;
   // Root node index into nodes; index zero is valid.
   uint32 root = 2;
-  // Flat DAG, max 256 nodes/1024 edges; evaluation belongs to the requirement engine.
+  // Flat DAG, max 256 nodes/1024 edges; every node is reachable from root.
+  // Unused nodes are rejected, not silently pruned from a confirmed expression.
+  // Evaluation belongs to the requirement engine.
   repeated Requirement nodes = 3;
 }
 

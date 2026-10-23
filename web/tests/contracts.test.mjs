@@ -24,11 +24,40 @@ for (const row of manifest) {
     if (name === 'asset') {
       assert.equal(record.body.oneofKind, 'asset');
       assert.equal(record.body.asset.revision, 0xffff_ffff_ffff_ffffn);
-      assert.equal(record.body.asset.observed[0].fields[1].value.oneofKind, 'clear');
-      assert.equal(record.body.asset.observed[0].fields[2].value.flag, false);
-      assert.equal(record.body.asset.observed[0].fields[3].value.integer, -0x8000_0000_0000_0000n);
-      assert.equal(record.body.asset.observed[0].provenance.sourceRevision, undefined);
-      assert.notEqual(record.body.asset.intended[0].field.value.text, record.body.asset.observed[0].fields[0].value.text);
+      const evidence = record.body.asset.observed[0].evidence;
+      assert.equal(evidence.fields[1].value.oneofKind, 'clear');
+      assert.equal(evidence.fields[2].value.flag, false);
+      assert.equal(evidence.fields[3].value.integer, -0x8000_0000_0000_0000n);
+      assert.equal(evidence.sourceRevision, undefined);
+      assert.notEqual(record.body.asset.intended[0].field.value.text, evidence.fields[0].value.text);
+    }
+    if (name === 'partial_refresh' || name === 'partial_import') {
+      // A missing field keeps its old window while an explicit clear and false
+      // remain present in the refreshed group. This is current state, not samples.
+      const asset = record.body.asset;
+      const groups = name === 'partial_import' ? asset.imported : asset.observed;
+      assert.equal(groups.length, 2);
+      const [old, fresh] = groups.map(group => group.evidence);
+      assert.equal(old.sourceId, fresh.sourceId);
+      assert.deepEqual(old.fields.map(field => field.name), ['name', 'delta']);
+      assert.deepEqual(fresh.fields.map(field => field.name), ['description', 'enabled']);
+      assert.deepEqual([old.observedAtMs, old.validUntilMs, fresh.observedAtMs, fresh.validUntilMs], [100n, 200n, 300n, 400n]);
+      assert.equal(fresh.fields[0].value.oneofKind, 'clear');
+      assert.equal(fresh.fields[1].value.flag, false);
+      assert.equal(asset.intended[0].field.value.text, 'accepted intent');
+    }
+    if (name === 'scan_full_page') {
+      // Check actual serialized overhead, not just generated interface names.
+      const scan = record.body.scan;
+      assert.equal(scan.candidates.length, 128);
+      for (const context of [scan.connectionId, scan.scanId]) {
+        assert.equal(Buffer.from(encoded).toString('hex').split(Buffer.from(context).toString('hex')).length - 1, 1);
+      }
+      for (const row of scan.candidates) {
+        assert.equal(row.evidence.observedAtMs, 100n);
+        assert.equal(row.evidence.validUntilMs, 200n);
+        assert.equal(row.evidence.fields[1].value.oneofKind, 'clear');
+      }
     }
     if (name === 'operation') {
       assert.equal(record.body.operation.state, OperationState.RECONCILING);

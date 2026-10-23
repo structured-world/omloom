@@ -23,6 +23,28 @@ test('generated contracts preserve Rust values in a real browser', async ({ page
         expect(result.result.state).toBe('RECONCILING');
         expect(JSON.parse(result.result.json).operation.revision).toBe('18446744073709551615');
       }
+      if (name === 'partial_refresh' || name === 'partial_import') {
+        // Chromium must preserve mixed freshness and explicit presence; a UI
+        // must not receive one new timestamp that implicitly freshens old A.
+        const asset = JSON.parse(result.result.json).asset;
+        const groups = name === 'partial_import' ? asset.imported : asset.observed;
+        expect(groups).toHaveLength(2);
+        const [old, fresh] = groups.map(group => group.evidence);
+        expect(old.sourceId).toBe(fresh.sourceId);
+        expect([old.observedAtMs, old.validUntilMs, fresh.observedAtMs, fresh.validUntilMs]).toEqual(['100', '200', '300', '400']);
+        expect(old.fields.map(field => field.name)).toEqual(['name', 'delta']);
+        expect(fresh.fields).toEqual([{ name: 'description', clear: 'NULL_VALUE' }, { name: 'enabled', flag: false }]);
+        expect(asset.intended[0].field.text).toBe('accepted intent');
+      }
+      if (name === 'scan_full_page') {
+        // The browser receives every row but each batch UUID appears only once
+        // on the wire. Empty/missing per-row context cannot override the header.
+        const scan = JSON.parse(result.result.json).scan;
+        expect(scan.candidates).toHaveLength(128);
+        for (const context of [scan.connectionId, scan.scanId]) {
+          expect(Buffer.from(result.result.bytes).toString('hex').split(Buffer.from(context).toString('hex')).length - 1).toBe(1);
+        }
+      }
     }
   }
 });
