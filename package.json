@@ -1,0 +1,22 @@
+{
+  "name": "omloom-contracts-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "protoc --proto_path=proto --plugin=protoc-gen-ts=node_modules/.bin/protoc-gen-ts --ts_out=web/src/generated --ts_opt=long_type_bigint,force_optimize_code_size proto/omloom/v1/contracts.proto",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc && esbuild web/src/browser-corpus.ts --bundle --format=iife --outfile=dist/browser-corpus.js",
+    "test:contracts": "node --test web/tests/contracts.test.mjs",
+    "test:browser": "playwright test",
+    "clean": "node scripts/clean.mjs"
+  },
+  "dependencies": {
+    "@protobuf-ts/runtime": "2.11.1"
+  },
+  "devDependencies": {
+    "@protobuf-ts/plugin": "2.11.1",
+    "@playwright/test": "1.64.1",
+    "typescript": "7.0.2",
+    "esbuild": "0.28.2"
+  }
+}

@@ -2,16 +2,23 @@
 
 Infrastructure knowledge and operations.
 
-This repository is at the initial project setup stage. No runnable application
-or installable product release is available yet.
+Developed by Dmitry Prudnikov, with support from Structured World.
+
+Validated inventory and operation contracts are under development. No runnable
+application or installable product release is available yet.
 
 ## Development
 
-Documentation checks: `scripts/check-docs.sh` (requires lychee).
-CI validates the documents currently shipped here; it does not certify a
-working infrastructure-management application.
+See [contract development and verification](docs/contracts.md) for Rust,
+TypeScript and browser checks. Documentation checks: `scripts/check-docs.sh`
+(requires lychee). These checks do not certify an installable application.
 
 ## License
+
+Copyright © 2026 Dmitry Prudnikov. Contributors retain copyright in their
+respective contributions; third-party components retain their own copyright
+notices and licenses. Support from Structured World does not transfer copyright
+ownership.
 
 GNU Affero General Public License v3.0 only; see [LICENSE](LICENSE).
 Contributions are accepted under the

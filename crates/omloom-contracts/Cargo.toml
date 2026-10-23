@@ -1,0 +1,18 @@
+[package]
+name = "omloom-contracts"
+description = "Validated inventory and operation contracts for Omloom"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+prost.workspace = true
+uuid.workspace = true
+url = "2.5"
+
+[build-dependencies]
+prost-build.workspace = true
+prost-types.workspace = true
+prost.workspace = true

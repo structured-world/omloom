@@ -1,0 +1,355 @@
+syntax = "proto3";
+package omloom.v1;
+
+// These are domain records, not authenticated requests. No field grants access.
+// UUID text is lowercase RFC 9562 section 4 form, version 7 (section 5.7).
+message AssetRef {
+  // Omloom-generated stable asset UUID; not a provider identifier or SID subject.
+  string asset_id = 1;
+  // Omloom-generated UUID for this object's lifetime; replacement never inherits it.
+  string incarnation = 2;
+}
+
+enum AssetKind {
+  ASSET_KIND_UNSPECIFIED = 0;
+  ASSET_KIND_SITE = 1;
+  ASSET_KIND_RACK = 2;
+  ASSET_KIND_DEVICE = 3;
+  ASSET_KIND_PORT = 4;
+  ASSET_KIND_INTERFACE = 5;
+  ASSET_KIND_VIRTUAL_MACHINE = 6;
+  ASSET_KIND_IP_ADDRESS = 7;
+  ASSET_KIND_VRF = 8;
+  ASSET_KIND_VLAN = 9;
+  ASSET_KIND_PREFIX = 10;
+  ASSET_KIND_CABLE = 11;
+  ASSET_KIND_POWER_FEED = 12;
+  ASSET_KIND_SERVICE = 13;
+  ASSET_KIND_STORAGE = 14;
+  ASSET_KIND_CLUSTER = 15;
+  ASSET_KIND_LAG = 16;
+  ASSET_KIND_LOCATION = 17;
+}
+
+// Scoped provider identity is matching evidence, never authority.
+message SourceIdentity {
+  // Omloom-generated provider connection UUID, scoped to this installation.
+  string connection_id = 1;
+  // Provider object identity interpreted only within the configured connection.
+  SourceObject object = 2;
+}
+
+// Shared provider object key; a standalone identity or enclosing scan supplies
+// its connection. Object IDs alone are never globally unique or authoritative.
+message SourceObject {
+  // Adapter-defined object type, e.g. qemu; nonempty ASCII token, max 64 bytes.
+  string object_kind = 1;
+  // Provider-generated opaque object identifier, max 256 UTF-8 bytes.
+  string object_id = 2;
+  // Adapter-qualified lifetime evidence; absent on unresolved candidates.
+  // Accepted provider mappings require it; absence/reuse requires identity review.
+  optional string incarnation_evidence = 3;
+}
+
+// One source's claims sharing an exact revision and validity window. Standalone
+// observations or the enclosing scan supply scan identity without copying it.
+message Evidence {
+  // Omloom-owned source mapping UUID; each source retains independent evidence.
+  string source_id = 1;
+  // Provider revision/cursor, opaque and not lexicographically ordered; required
+  // when the enclosing observation has no scan identity.
+  optional string source_revision = 2;
+  // Source observation instant as Unix milliseconds; not a cross-source ordering key.
+  uint64 observed_at_ms = 3;
+  // End of the evidence validity window as Unix milliseconds; never implies health.
+  uint64 valid_until_ms = 4;
+  // Source claims sharing this exact provenance. Absent fields make no claim;
+  // they cannot acquire this window merely by appearing in a stored asset.
+  repeated Field fields = 5;
+}
+
+enum NullValue { NULL_VALUE = 0; }
+
+// No field entry means absent in a partial payload; clear is an explicit claim.
+message Field {
+  // Qualified field name supplied by the source mapping, max 64 ASCII token bytes.
+  string name = 1;
+  // Source/user value; text is bounded UTF-8, never executable query or template code.
+  oneof value {
+    // Source/user UTF-8 text, max 4096 bytes; empty text is a real present value.
+    string text = 2;
+    // Source/user signed whole number; no floating-point coercion or implied unit.
+    sint64 integer = 3;
+    // Source/user boolean; explicit false is distinct from a missing field.
+    bool flag = 4;
+    // Source/user explicit clear/unknown claim; never clears another authority.
+    NullValue clear = 5;
+  }
+}
+
+message IntendedField {
+  // Accepted value supplied by the user or approved mapping, including explicit clear.
+  Field field = 1;
+  // Omloom-owned authority/mapping UUID; a source cannot elevate its own authority.
+  string authority_id = 2;
+}
+
+message Observation {
+  // Omloom-generated scan UUID for this window; required without a source
+  // revision. Scan batch rows inherit it from the batch instead of sending it.
+  optional string scan_id = 1;
+  // Source identity, revision/window and claims; required even for identity-only
+  // discovery. Current asset layers require at least one field in each group.
+  Evidence evidence = 2;
+}
+
+enum Adoption {
+  ADOPTION_UNSPECIFIED = 0;
+  ADOPTION_ADOPTED = 1;
+  ADOPTION_ARCHIVED = 2;
+}
+
+message Asset {
+  // Omloom-owned stable identity and current incarnation, both required.
+  AssetRef target = 1;
+  // Concrete inventory type; unknown/unspecified values are rejected.
+  AssetKind kind = 2;
+  // Management lifecycle only; independent of physical lifecycle and observed health.
+  Adoption adoption = 3;
+  // Store-generated positive accepted revision for conflict detection, not authority.
+  uint64 revision = 4;
+  // Accepted intended values with per-field authority; never last-arrival-wins.
+  repeated IntendedField intended = 5;
+  // Current imported proposals, separately attributed and not implicitly accepted.
+  // Groups may share a source only with disjoint fields and distinct provenance.
+  repeated Observation imported = 6;
+  // Current observed values, not samples/history. Each (source, field) occurs
+  // once; fields with different provenance retain separate groups. Contradictory
+  // sources remain independent. Identical-provenance groups must be combined.
+  repeated Observation observed = 7;
+  // Accepted provider mappings, including scoped lifetime evidence.
+  repeated SourceIdentity sources = 8;
+}
+
+message Candidate {
+  // Omloom-generated review record UUID, not an active asset identifier.
+  string candidate_id = 1;
+  // Scoped discovery identity; same name/address never implies an existing asset.
+  SourceIdentity source = 2;
+  // Reported type; adopting the object/relations is a separate atomic action.
+  AssetKind kind = 3;
+  // Observed discovery evidence; does not activate monitoring or credentials.
+  Observation observation = 4;
+}
+
+// Review candidate scoped by its enclosing ScanBatch; not a standalone record.
+message ScanCandidate {
+  // Omloom-generated review UUID, with the same meaning as Candidate.candidate_id.
+  string candidate_id = 1;
+  // Provider identity within ScanBatch.connection_id; no row can override scope.
+  SourceObject source = 2;
+  // Provider-reported inventory type; does not imply adoption or action authority.
+  AssetKind kind = 3;
+  // Source claims attributed to ScanBatch.scan_id. Fields may be empty when only
+  // object identity was discovered; timestamps/revision retain their own meaning.
+  Evidence evidence = 4;
+}
+
+enum ScanCompleteness {
+  SCAN_COMPLETENESS_UNSPECIFIED = 0;
+  SCAN_COMPLETENESS_PARTIAL = 1;
+  SCAN_COMPLETENESS_SNAPSHOT_COMPLETE = 2;
+  SCAN_COMPLETENESS_ACCESS_DENIED = 3;
+}
+
+message ScanBatch {
+  // Omloom-generated scan UUID, stable across pages/retries of one scan.
+  string scan_id = 1;
+  // Configured provider connection UUID that owns the source scope.
+  string connection_id = 2;
+  // Source-scoped checkpoint before this batch; absent for the first batch.
+  optional string prior_cursor = 3;
+  // Source-scoped checkpoint persisted atomically with the accepted batch.
+  string cursor = 4;
+  // Adapter-established completeness, not a claim inferred from an empty page.
+  ScanCompleteness completeness = 5;
+  // Provider snapshot token required for snapshot-complete absence proposals.
+  optional string snapshot_revision = 6;
+  // Bounded page of review candidates; this record never authorizes deletion.
+  repeated ScanCandidate candidates = 7;
+}
+
+enum RelationKind {
+  RELATION_KIND_UNSPECIFIED = 0;
+  RELATION_KIND_INSTALLED_IN = 1;
+  RELATION_KIND_CONTAINS = 2;
+  RELATION_KIND_HAS_PORT = 3;
+  RELATION_KIND_CARRIES = 4;
+  RELATION_KIND_CONNECTED_TO = 5;
+  RELATION_KIND_ASSIGNED_TO = 6;
+  RELATION_KIND_RUNS_ON = 7;
+  RELATION_KIND_STORED_ON = 8;
+  RELATION_KIND_ON = 9;
+  RELATION_KIND_USES = 10;
+  RELATION_KIND_POWERED_BY = 11;
+  RELATION_KIND_MANAGES = 12;
+  RELATION_KIND_MEMBER_OF = 13;
+  RELATION_KIND_DEPENDS_ON = 14;
+}
+
+message Relation {
+  // Omloom-generated stable relation UUID; endpoints retain their incarnations.
+  string relation_id = 1;
+  // Accepted originating object; required, never a candidate ID.
+  AssetRef from = 2;
+  // Accepted destination object; required, never a candidate ID.
+  AssetRef to = 3;
+  // Typed attachment/dependency; endpoint compatibility is checked with inventory.
+  RelationKind kind = 4;
+  // Store-generated positive revision for atomic relation edits.
+  uint64 revision = 5;
+  // Accepted field/relation authority UUID, independently established by admission.
+  string authority_id = 6;
+}
+
+enum Direction {
+  DIRECTION_UNSPECIFIED = 0;
+  DIRECTION_FORWARD = 1;
+  DIRECTION_BIDIRECTIONAL = 2;
+}
+
+message ConnectionScope {
+  // Intended source endpoint, including incarnation; required.
+  AssetRef source = 1;
+  // Intended destination endpoint, including incarnation; required.
+  AssetRef destination = 2;
+  // Explicit direction; bidirectional is not inferred from a one-way observation.
+  Direction direction = 3;
+  // Accepted VRF UUID when a VRF is declared; absence means unspecified, not default VRF.
+  optional string vrf_id = 4;
+  // Intended VLAN number, 1..4094 when declared; absence is unknown/inapplicable.
+  optional uint32 vlan = 5;
+  // Intended service/profile token such as tcp.443, not a provider query.
+  string service = 6;
+}
+
+message InfrastructureConnection {
+  // Omloom-generated connection intent UUID, distinct from a provider connection.
+  string connection_id = 1;
+  // Store-generated positive accepted intent revision.
+  uint64 revision = 2;
+  // Intended endpoint, direction and service boundaries.
+  ConnectionScope scope = 3;
+  // Bounded prerequisite graph; not authorization and not observed service health.
+  Requirements requirements = 4;
+}
+
+message ProviderConnection {
+  // Omloom-generated configured provider connection UUID.
+  string connection_id = 1;
+  // Qualified adapter token; does not claim the adapter is installed or usable.
+  string adapter = 2;
+  // User-configured HTTPS origin only; no userinfo, path, query, fragment or secret.
+  string endpoint = 3;
+  // Operator-verified trust configuration UUID; never disables certificate verification.
+  string trust_id = 4;
+  // Optional opaque credential-source binding UUID; never contains a secret/token/path.
+  optional string credential_binding_id = 5;
+}
+
+enum RequirementKind {
+  REQUIREMENT_KIND_UNSPECIFIED = 0;
+  REQUIREMENT_KIND_FACT = 1;
+  REQUIREMENT_KIND_ALL = 2;
+  REQUIREMENT_KIND_ANY = 3;
+}
+
+message Requirement {
+  // Profile-selected expression kind; groups are nonempty and facts have no children.
+  RequirementKind kind = 1;
+  // Referenced node indexes; graph is acyclic, bounded and entirely root-reachable.
+  repeated uint32 children = 2;
+  // Explicit group membership completeness; false cannot prove exhaustive failure/success.
+  bool complete = 3;
+  // Existing resource/incarnation required for a fact; not a copied topology node.
+  AssetRef resource = 4;
+  // Qualified fact/profile token for a leaf; no arbitrary executable expression.
+  string fact = 5;
+}
+
+message Requirements {
+  // Positive version of the typed profile contract, supplied by its owner.
+  uint32 version = 1;
+  // Root node index into nodes; index zero is valid.
+  uint32 root = 2;
+  // Flat DAG, max 256 nodes/1024 edges; every node is reachable from root.
+  // Unused nodes are rejected, not silently pruned from a confirmed expression.
+  // Evaluation belongs to the requirement engine.
+  repeated Requirement nodes = 3;
+}
+
+enum OperationState {
+  OPERATION_STATE_UNSPECIFIED = 0;
+  OPERATION_STATE_DRAFT = 1;
+  OPERATION_STATE_VALIDATED = 2;
+  OPERATION_STATE_QUEUED = 3;
+  OPERATION_STATE_RUNNING = 4;
+  OPERATION_STATE_VERIFYING = 5;
+  OPERATION_STATE_SUCCEEDED = 6;
+  OPERATION_STATE_BLOCKED = 7;
+  OPERATION_STATE_FAILED = 8;
+  OPERATION_STATE_RECONCILING = 9;
+  OPERATION_STATE_NEEDS_ATTENTION = 10;
+  OPERATION_STATE_CANCEL_REQUESTED = 11;
+  OPERATION_STATE_CANCELLED = 12;
+}
+
+enum EffectOutcome {
+  EFFECT_OUTCOME_UNSPECIFIED = 0;
+  EFFECT_OUTCOME_NOT_SENT = 1;
+  EFFECT_OUTCOME_UNKNOWN = 2;
+  EFFECT_OUTCOME_CONFIRMED = 3;
+  EFFECT_OUTCOME_CONFIRMED_NO_EFFECT = 4;
+}
+
+message Operation {
+  // Service-generated UUID retained across retries/reconciliation; not a provider task ID.
+  string operation_id = 1;
+  // Exact adopted asset and incarnation bound by admission.
+  AssetRef target = 2;
+  // Positive inventory revision against which this plan was prepared.
+  uint64 inventory_revision = 3;
+  // Host-computed SHA-256 of the confirmed domain plan; exactly 32 bytes, not authority.
+  bytes plan_digest = 4;
+  // Current durable execution state; not a statement of asset health.
+  OperationState state = 5;
+  // Explicit external effect knowledge; timeout is unknown, not a failed/nonexistent effect.
+  EffectOutcome outcome = 6;
+  // Provider-returned task identity when known; max 256 UTF-8 bytes, not a retry instruction.
+  optional string provider_task_id = 7;
+  // Positive durable revision for compare-and-swap transitions.
+  uint64 revision = 8;
+}
+
+// Versioned unit for serialization/interoperability. No endpoint accepts this as authority.
+message Record {
+  // Exactly one typed domain record. Unknown alternatives are rejected at admission.
+  oneof body {
+    // Host-produced managed inventory record with separately attributed layers.
+    Asset asset = 1;
+    // Source-produced discovery finding; never implicitly operational inventory.
+    Candidate candidate = 2;
+    // Adapter-produced bounded batch and checkpoint for atomic ingestion.
+    ScanBatch scan = 3;
+    // Host-accepted typed relation between existing asset incarnations.
+    Relation relation = 4;
+    // Host-accepted endpoint/service intent and bounded prerequisites.
+    InfrastructureConnection infrastructure_connection = 5;
+    // User-configured adapter endpoint and opaque bindings, without credentials.
+    ProviderConnection provider_connection = 6;
+    // Host-produced durable operation projection, not a mutation request.
+    Operation operation = 7;
+    // Profile-owner-produced flat requirement graph, not an executable query.
+    Requirements requirements = 8;
+  }
+}
