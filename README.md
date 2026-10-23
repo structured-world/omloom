@@ -2,14 +2,14 @@
 
 Infrastructure knowledge and operations.
 
-This repository is at the initial project setup stage. No runnable application
-or installable product release is available yet.
+Validated inventory and operation contracts are under development. No runnable
+application or installable product release is available yet.
 
 ## Development
 
-Documentation checks: `scripts/check-docs.sh` (requires lychee).
-CI validates the documents currently shipped here; it does not certify a
-working infrastructure-management application.
+See [contract development and verification](docs/contracts.md) for Rust,
+TypeScript and browser checks. Documentation checks: `scripts/check-docs.sh`
+(requires lychee). These checks do not certify an installable application.
 
 ## License
 
