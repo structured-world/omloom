@@ -2,8 +2,6 @@
 
 Infrastructure knowledge and operations.
 
-Developed by Dmitry Prudnikov, with support from Structured World.
-
 Validated inventory and operation contracts are under development. No runnable
 application or installable product release is available yet.
 
@@ -15,12 +13,13 @@ TypeScript and browser checks. Documentation checks: `scripts/check-docs.sh`
 
 ## License
 
-Copyright © 2026 Dmitry Prudnikov. Contributors retain copyright in their
-respective contributions; third-party components retain their own copyright
-notices and licenses. Support from Structured World does not transfer copyright
-ownership.
+Copyright © 2026 Dmitry Prudnikov.
 
-GNU Affero General Public License v3.0 only; see [LICENSE](LICENSE).
+Licensed under the GNU Affero General Public License v3.0 only;
+see [LICENSE](LICENSE).
+
+Supported by Structured World.
+
 Contributions are accepted under the
 [Structured World Contributor License Agreement](https://sw.foundation/cla);
 see [CONTRIBUTING.md](CONTRIBUTING.md).
