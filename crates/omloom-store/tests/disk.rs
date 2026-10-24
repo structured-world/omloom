@@ -1,5 +1,7 @@
 #[path = "disk/metrics.rs"]
 mod metrics;
+#[path = "disk/review.rs"]
+mod review;
 mod support;
 use omloom_contracts::{
     ids::*,
@@ -152,13 +154,13 @@ fn operation_atomicity_idempotency_and_argument_binding() -> TestResult {
     let mut plan = plan(target, &arguments);
     let id = store.accept(&plan, 10)?;
     assert_eq!(store.accept(&plan, 11)?, id);
-    assert_eq!(store.pending()?, vec![id]);
+    assert_eq!(store.pending(None)?, vec![id]);
     assert_eq!(store.operation(id)?.arguments, arguments);
     plan.action = "delete";
     assert!(matches!(store.accept(&plan, 12), Err(Error::Conflict)));
     drop(store);
     let store = Store::open(dir.path(), policy())?;
-    assert_eq!(store.pending()?, vec![id]);
+    assert_eq!(store.pending(None)?, vec![id]);
     assert_eq!(store.operation(id)?.arguments, arguments);
     Ok(())
 }
@@ -202,7 +204,7 @@ fn fenced_unknown_effect_requires_reconciliation() -> TestResult {
         Some("task-accepted"),
         33,
     )?;
-    assert!(store.pending()?.is_empty());
+    assert!(store.pending(None)?.is_empty());
     assert!(store.operation(id)?.arguments.is_empty());
     Ok(())
 }
@@ -223,7 +225,7 @@ fn atomic_quota_refusal() -> TestResult {
     second.retry_key = "another";
     assert!(matches!(store.accept(&second, 11), Err(Error::Limit)));
     assert_eq!(store.usage()?, before);
-    assert_eq!(store.pending()?, vec![first]);
+    assert_eq!(store.pending(None)?, vec![first]);
     Ok(())
 }
 
@@ -278,7 +280,7 @@ fn bounded_cleanup_preserves_recovery_and_pin() -> TestResult {
     let id = store.accept(&plan(target, &[]), 10)?;
     let cleanup = store.cleanup(10_000, None)?;
     assert!(cleanup.pinned > 0);
-    assert_eq!(store.pending()?, vec![id]);
+    assert_eq!(store.pending(None)?, vec![id]);
     assert!(store.operation(id).is_ok());
     store.pin_detail(&audit, false, store.usage()?.revision)?;
     let cleanup = store.cleanup(10_000, None)?;
@@ -427,7 +429,7 @@ fn abrupt_exit_recovers_application_intent_and_uncertainty() -> TestResult {
     assert!(status.success());
     let store = Store::open(&dir.path().join("db"), policy())?;
     let id = store.accept(&plan(target, &[text_field("mode", "start")]), 31)?;
-    assert_eq!(store.pending()?, vec![id]);
+    assert_eq!(store.pending(None)?, vec![id]);
     assert_eq!(store.operation(id)?.outcome, EffectOutcome::Unknown);
     let lease = store.claim(id, "replacement", 31, 50)?;
     let operation = store.operation(id)?;
@@ -470,7 +472,7 @@ fn terminal_detail_expiry_does_not_reopen_retry() -> TestResult {
     assert!(matches!(store.operation(id), Err(Error::Missing)));
     assert_eq!(store.usage()?.rows[Class::Checkpoint as usize], before);
     assert!(matches!(store.accept(&plan, 200_000), Err(Error::Expired)));
-    assert!(store.pending()?.is_empty());
+    assert!(store.pending(None)?.is_empty());
     Ok(())
 }
 

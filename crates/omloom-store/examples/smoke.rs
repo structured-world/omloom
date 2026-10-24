@@ -74,7 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     drop(store);
     let reopened = Store::open(directory.path(), policy)?;
     assert_eq!(reopened.asset(target)?.revision, 1);
-    assert_eq!(reopened.pending()?, vec![operation]);
+    assert_eq!(reopened.pending(None)?, vec![operation]);
     assert_eq!(reopened.accept(&plan, 11)?, operation);
     println!(
         "verified: inventory and accepted work survive reopen; identical input and retrieval add no application writes"

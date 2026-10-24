@@ -38,8 +38,12 @@ updates do not add audit entries or rewrite adjacency.
 
 Operation admission commits exact bounded arguments, caller-bound retry digest,
 queued state, audit and local durable work atomically. Work records reference
-the operation, which cannot expire while unresolved. Dispatch first commits
-unknown effect knowledge under a target lease and epoch. An expired sender
+the operation, which cannot expire while unresolved.
+
+Work polling resumes after the last returned operation ID, including unresolved
+or deleted entries; an empty page completes the pass and the worker starts the
+next pass from the beginning. Polling does not claim work or grant dispatch.
+Dispatch first commits unknown effect knowledge under a target lease and epoch. An expired sender
 cannot settle work; taking over unknown work permits reconciliation only.
 Terminal settlement acknowledges work atomically and removes recovery arguments
 that no longer have a consumer. Minimal retry checkpoints have their own budget

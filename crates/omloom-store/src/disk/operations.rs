@@ -395,10 +395,14 @@ impl Store {
         Ok(revision)
     }
 
-    /// One bounded durable-work page. A returned ID is not a dispatch grant.
-    pub fn pending(&self) -> Result<Vec<OperationId>> {
+    /// One bounded durable-work page, ordered by operation ID. Resume after the
+    /// last returned ID even if that operation remains unresolved or is removed.
+    /// Restart at None after reaching an empty page to discover newly queued work.
+    /// A returned ID is not a dispatch grant.
+    pub fn pending(&self, after: Option<OperationId>) -> Result<Vec<OperationId>> {
         let tx = self.begin()?;
-        let rows=tx.query("MATCH (n:OmRow) WHERE n.parent='work' RETURN properties(n) AS p, n.key AS ordering ORDER BY ordering LIMIT $limit",params([("limit",int(u64::from(self.policy.batch_rows))?)]))?;
+        let after = after.map_or_else(String::new, |id| format!("work/{id}"));
+        let rows=tx.query("MATCH (n:OmRow) WHERE n.parent='work' AND n.key>$after RETURN properties(n) AS p, n.key AS ordering ORDER BY ordering LIMIT $limit",params([("after",text(after)),("limit",int(u64::from(self.policy.batch_rows))?)]))?;
         let result = rows
             .iter()
             .map(|p| string(p, "operation")?.parse().map_err(|_| Error::Corrupt))
