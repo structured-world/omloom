@@ -73,6 +73,77 @@ fn lease_key(target: AssetRef) -> String {
     format!("lease/{}/{}", target.asset, target.incarnation)
 }
 
+fn audit_capacity(key: &str) -> Result<u64> {
+    let row = charged_row(
+        &format!("audit/{key}/{}", i64::MAX),
+        &format!("detail/{key}"),
+        Class::Detail,
+        audit_data(
+            &"x".repeat(256),
+            "operation.reconciling",
+            i64::MAX as u64,
+            0,
+        )?,
+    )?;
+    number(&row, "size")
+}
+
+fn reserve_settlement(tx: &mut Tx<'_>, key: &str, operation: &mut Properties) -> Result<()> {
+    // The same row encoder sizes the largest supported terminal projection.
+    // No placeholder payload is persisted; only the reservation's count/bytes.
+    let mut terminal = operation.clone();
+    terminal.insert("provider_task".into(), text("x".repeat(256)));
+    let summary = charged_row(key, "operations", Class::Detail, terminal)?;
+    let bytes = number(&summary, "size")?
+        .checked_add(audit_capacity(key)?.checked_mul(2).ok_or(Error::Limit)?)
+        .ok_or(Error::Limit)?;
+    tx.settlement_reservation(
+        crate::Budget { rows: 0, bytes: 0 },
+        crate::Budget { rows: 3, bytes },
+    )?;
+    operation.insert("settlement_rows".into(), int(3)?);
+    operation.insert("settlement_bytes".into(), int(bytes)?);
+    Ok(())
+}
+
+fn resize_settlement(
+    tx: &mut Tx<'_>,
+    key: &str,
+    operation: &mut Properties,
+    rows: u64,
+) -> Result<()> {
+    let old = crate::Budget {
+        rows: number(operation, "settlement_rows")?,
+        bytes: number(operation, "settlement_bytes")?,
+    };
+    if !(2..=3).contains(&old.rows) || !matches!(rows, 0 | 2 | 3) {
+        return Err(Error::Corrupt);
+    }
+    if old.rows == rows {
+        return Ok(());
+    }
+    let bytes = if rows == 0 {
+        0
+    } else if rows > old.rows {
+        old.bytes
+            .checked_add(audit_capacity(key)?)
+            .ok_or(Error::Limit)?
+    } else {
+        old.bytes
+            .checked_sub(audit_capacity(key)?)
+            .ok_or(Error::Corrupt)?
+    };
+    tx.settlement_reservation(old, crate::Budget { rows, bytes })?;
+    if rows == 0 {
+        operation.remove("settlement_rows");
+        operation.remove("settlement_bytes");
+    } else {
+        operation.insert("settlement_rows".into(), int(rows)?);
+        operation.insert("settlement_bytes".into(), int(bytes)?);
+    }
+    Ok(())
+}
+
 impl Store {
     /// Persist confirmed arguments, retry checkpoint, initial work and audit in
     /// one transaction. Reusing a key with a changed plan never creates work.
@@ -120,6 +191,7 @@ impl Store {
             ("revision", int(1)?),
             ("at", int(now)?),
         ]));
+        reserve_settlement(&mut tx, &key, &mut operation)?;
         tx.put(&key, "operations", Class::Pending, operation)?;
         for field in plan.arguments {
             let p = inventory::field_props(field)?;
@@ -241,7 +313,12 @@ impl Store {
                 ("settled", Value::Bool(false)),
             ]),
         )?;
-        if outcome(&operation)? == EffectOutcome::Unknown {
+        // An unchanged reconciliation state needs no duplicate event. The lease
+        // itself durably records ownership, even when optional audit space is full.
+        if outcome(&operation)? == EffectOutcome::Unknown
+            && state(&operation)? != OperationState::Reconciling
+        {
+            resize_settlement(&mut tx, &key, &mut operation, 2)?;
             operation.insert("state".into(), int(OperationState::Reconciling as u64)?);
             let revision = number(&operation, "revision")?
                 .checked_add(1)
@@ -364,6 +441,13 @@ impl Store {
             }
         }
         let revision = expected.checked_add(1).ok_or(Error::Limit)?;
+        if terminal(next) {
+            resize_settlement(&mut tx, &key, &mut operation, 0)?;
+        } else if next == OperationState::Reconciling {
+            resize_settlement(&mut tx, &key, &mut operation, 2)?;
+        } else if next == OperationState::NeedsAttention {
+            resize_settlement(&mut tx, &key, &mut operation, 3)?;
+        }
         operation.insert("state".into(), int(next as u64)?);
         operation.insert("outcome".into(), int(effect as u64)?);
         operation.insert("revision".into(), int(revision)?);

@@ -22,6 +22,7 @@ use std::{
 type Properties = BTreeMap<String, Value>;
 type Result<T> = std::result::Result<T, Error>;
 const ROOT: &str = "installation";
+const SCHEMA_VERSION: u64 = 2;
 const MAX_CHILDREN: usize = 2048;
 mod inventory;
 mod lifecycle;
@@ -121,7 +122,9 @@ pub struct DurableOperation {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Usage {
+    /// Charged rows, including capacity reserved for pending settlement.
     pub rows: [u64; CLASSES],
+    /// Charged logical bytes, including settlement and lease-owner headroom.
     pub bytes: [u64; CLASSES],
     pub revision: u64,
 }
@@ -149,6 +152,41 @@ fn params(p: impl IntoIterator<Item = (&'static str, Value)>) -> Option<HashMap<
 }
 fn props(items: impl IntoIterator<Item = (&'static str, Value)>) -> Properties {
     items.into_iter().map(|(k, v)| (k.into(), v)).collect()
+}
+
+fn charged_row(key: &str, parent: &str, class: Class, mut data: Properties) -> Result<Properties> {
+    data.insert("key".into(), text(key));
+    data.insert("parent".into(), text(parent));
+    data.insert("class".into(), int(class as u64)?);
+    let mut size = 128u64;
+    for (name, value) in &data {
+        let bytes = match value {
+            // A recovery owner may have a longer identifier than the first
+            // worker. Charge its full supported width before any dispatch.
+            Value::String(_) if parent == "leases" && name == "worker" => 256,
+            Value::String(value) => value.len() as u64,
+            Value::Binary(value) => value.len() as u64,
+            _ => 16,
+        };
+        size = size
+            .checked_add(name.len() as u64 + 64 + bytes)
+            .ok_or(Error::Limit)?;
+    }
+    if parent == "relations" {
+        size = size.checked_add(384).ok_or(Error::Limit)?;
+    }
+    data.insert("size".into(), int(size)?);
+    Ok(data)
+}
+
+fn audit_data(actor: &str, action: &str, revision: u64, now: u64) -> Result<Properties> {
+    Ok(props([
+        ("actor", text(actor)),
+        ("action", text(action)),
+        ("revision", int(revision)?),
+        ("at", int(now)?),
+        ("pinned", Value::Bool(false)),
+    ]))
 }
 fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
@@ -320,6 +358,8 @@ impl Store {
             "until",
             "vtype",
             "vint",
+            "settlement_rows",
+            "settlement_bytes",
         ] {
             schema.add_property(PropertyDef::new(name, PropertyType::Int));
         }
@@ -385,7 +425,7 @@ impl Store {
             )?;
         }
         let root = store.read(ROOT)?.ok_or(Error::Corrupt)?;
-        if number(&root, "schema")? != 1 {
+        if number(&root, "schema")? != SCHEMA_VERSION {
             return Err(Error::SchemaVersion);
         }
         if string(&root, "policy")? != store.policy_identity() {
@@ -413,7 +453,7 @@ impl Store {
     fn new_root(&self) -> Result<Properties> {
         Ok(props([
             ("key", text(ROOT)),
-            ("schema", int(1)?),
+            ("schema", int(SCHEMA_VERSION)?),
             ("revision", int(1)?),
             ("policy", text(self.policy_identity())),
             ("restored", Value::Bool(false)),
@@ -563,6 +603,9 @@ impl Tx<'_> {
                 }
             }
         }
+        self.set_usage(usage)
+    }
+    fn set_usage(&mut self, usage: Usage) -> Result<()> {
         let mut total = 0u64;
         for (index, budget) in self.store.policy.classes.iter().enumerate() {
             if usage.rows[index] > budget.rows || usage.bytes[index] > budget.bytes {
@@ -583,6 +626,23 @@ impl Tx<'_> {
         );
         Ok(())
     }
+    fn settlement_reservation(&mut self, old: crate::Budget, new: crate::Budget) -> Result<()> {
+        let mut usage = usage(&self.root)?;
+        let class = Class::Detail as usize;
+        usage.rows[class] = usage.rows[class]
+            .checked_sub(old.rows)
+            .ok_or(Error::Corrupt)?
+            .checked_add(new.rows)
+            .ok_or(Error::Limit)?;
+        usage.bytes[class] = usage.bytes[class]
+            .checked_sub(old.bytes)
+            .ok_or(Error::Corrupt)?
+            .checked_add(new.bytes)
+            .ok_or(Error::Limit)?;
+        self.set_usage(usage)?;
+        self.changed = true;
+        Ok(())
+    }
     fn put(&mut self, key: &str, parent: &str, class: Class, data: Properties) -> Result<bool> {
         let old = self.get(key)?;
         self.put_against(key, parent, class, data, old.as_ref())
@@ -594,35 +654,13 @@ impl Tx<'_> {
         key: &str,
         parent: &str,
         class: Class,
-        mut data: Properties,
+        data: Properties,
         old: Option<&Properties>,
     ) -> Result<bool> {
         if self.root.get("restored") == Some(&Value::Bool(true)) {
             return Err(Error::RecoveryRequired);
         }
-        data.insert("key".into(), text(key));
-        data.insert("parent".into(), text(parent));
-        data.insert("class".into(), int(class as u64)?);
-        // Conservative application charge: bounded scalar bytes plus per-property
-        // envelope. It deliberately does not masquerade as physical file usage.
-        let mut size = 128u64;
-        for (name, value) in &data {
-            size = size
-                .checked_add(
-                    name.len() as u64
-                        + 64
-                        + match value {
-                            Value::String(s) => s.len() as u64,
-                            Value::Binary(b) => b.len() as u64,
-                            _ => 16,
-                        },
-                )
-                .ok_or(Error::Limit)?;
-        }
-        if parent == "relations" {
-            size = size.checked_add(384).ok_or(Error::Limit)?;
-        }
-        data.insert("size".into(), int(size)?);
+        let data = charged_row(key, parent, class, data)?;
         if old == Some(&data) {
             return Ok(false);
         }
@@ -695,13 +733,7 @@ impl Tx<'_> {
             &format!("audit/{owner}/{revision}"),
             &format!("detail/{owner}"),
             Class::Detail,
-            props([
-                ("actor", text(actor)),
-                ("action", text(action)),
-                ("revision", int(revision)?),
-                ("at", int(now)?),
-                ("pinned", Value::Bool(false)),
-            ]),
+            audit_data(actor, action, revision, now)?,
         )?;
         Ok(())
     }

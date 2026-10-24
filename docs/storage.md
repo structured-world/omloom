@@ -43,12 +43,23 @@ the operation, which cannot expire while unresolved.
 Work polling resumes after the last returned operation ID, including unresolved
 or deleted entries; an empty page completes the pass and the worker starts the
 next pass from the beginning. Polling does not claim work or grant dispatch.
-Dispatch first commits unknown effect knowledge under a target lease and epoch. An expired sender
+Dispatch first commits unknown effect knowledge under a target lease and epoch.
+An expired sender
 cannot settle work; taking over unknown work permits reconciliation only.
 Terminal settlement acknowledges work atomically and removes recovery arguments
 that no longer have a consumer. Minimal retry checkpoints have their own budget
 and do not disappear with recent activity detail. An expired request is refused,
 never interpreted as a new effect. No provider request is sent by this library.
+
+Admission reserves Detail rows and logical bytes for the terminal summary,
+terminal audit and a recovery transition, sized for the supported identifier
+bounds. Intermediate audits cannot consume this capacity. Entering reconciliation
+uses its reserved transition slot; returning to attention must reserve it again.
+Renewed claims in an unchanged reconciliation state update the lease without
+duplicating a transition audit. Lease charges include maximum owner-ID width.
+Settlement atomically replaces its reservation with actual retained detail.
+Usage includes these reservations; optional audit exhaustion cannot prevent
+recording an admitted effect's outcome under the current fence.
 
 ## Bounds, retention and restore
 
@@ -67,6 +78,10 @@ and a conservative property
 envelope, but are **application accounting**, not total filesystem allocation.
 Pinned detail and unresolved work count against their budgets. Admission fails
 atomically when it cannot fit; it does not evict safety state.
+
+This initial, unreleased storage format uses schema version 2. Databases from
+the earlier experimental layout are refused with `SchemaVersion`; they must
+not be reused or silently overwritten.
 
 The host's durable worker calls bounded cleanup with a resumable cursor. Pin
 changes conflict with cleanup through database CAS. Cleanup reports logical
