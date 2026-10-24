@@ -50,8 +50,15 @@ impl Store {
     }
     /// Import into a fresh database with dispatch durably disabled. A logical
     /// backup cannot prove current authority or completed external effects.
-    pub fn restore(path: &Path, image: &[u8], policy: Policy) -> Result<Self> {
-        if !policy.valid() || image.len() as u64 > policy.total_bytes {
+    /// The host supplies a separate encoded-input ceiling for its whole backup,
+    /// enforcing that ceiling before buffering the input as well.
+    pub fn restore(
+        path: &Path,
+        image: &[u8],
+        policy: Policy,
+        max_backup_bytes: u64,
+    ) -> Result<Self> {
+        if !policy.valid() || max_backup_bytes == 0 || image.len() as u64 > max_backup_bytes {
             return Err(Error::Limit);
         }
         let mut db = Database::open(path)?;

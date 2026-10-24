@@ -1,5 +1,68 @@
 use super::*;
 
+// A host-wide backup may exceed Omloom's logical quota without changing its stored policy.
+#[test]
+fn shared_database_backup_restores_with_the_original_application_quota() -> TestResult {
+    let source = tempfile::tempdir()?;
+    let destination = tempfile::tempdir()?;
+    let mut limits = policy();
+    limits.total_bytes = 16_384;
+    let db = coordinode_embed::Database::open(source.path())?;
+    let payload = "x".repeat(65_536);
+    db.execute_cypher_shared(
+        "CREATE (n:HostData {payload:$payload})",
+        Some(std::collections::HashMap::from([(
+            "payload".into(),
+            coordinode_core::graph::types::Value::String(payload.clone()),
+        )])),
+        None,
+        None,
+        None,
+    )?;
+    let store = Store::from_database(db, limits.clone())?;
+    let object = asset();
+    let target = target(&object);
+    store.save_asset(&admit(record::Body::Asset(object)), None, "admin", 1)?;
+    let mut image = Vec::new();
+    store.export(&mut image)?;
+    assert!(image.len() as u64 > limits.total_bytes);
+    let max_backup_bytes = image.len() as u64;
+    let refused = destination.path().join("over-budget");
+    for ceiling in [0, max_backup_bytes - 1] {
+        assert!(matches!(
+            Store::restore(&refused, &image, limits.clone(), ceiling),
+            Err(Error::Limit)
+        ));
+        assert!(
+            !refused.exists(),
+            "input admission must precede opening the database"
+        );
+    }
+    let usage = store.usage()?;
+    let restored = Store::restore(destination.path(), &image, limits, max_backup_bytes)?;
+    assert_eq!(restored.usage()?.bytes, usage.bytes);
+    assert!(restored.recovery_required()?);
+    assert_eq!(restored.asset(target)?.revision, 1);
+    let rows = restored
+        .diagnostic_database()
+        .execute_cypher_shared(
+            "MATCH (n:HostData) RETURN n.payload AS payload",
+            None,
+            None,
+            None,
+            None,
+        )?
+        .rows;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0]
+            .get("payload")
+            .and_then(coordinode_core::graph::types::Value::as_str),
+        Some(payload.as_str())
+    );
+    Ok(())
+}
+
 // Partial failure and operator attention preserve confirmed effects independently of success.
 #[test]
 fn partial_failure_preserves_confirmed_effect_knowledge() -> TestResult {

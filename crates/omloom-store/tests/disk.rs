@@ -251,7 +251,7 @@ fn old_backup_is_read_only_for_effects_across_reopen() -> TestResult {
         None,
         22,
     )?;
-    let restored = Store::restore(dest.path(), &bytes, policy())?;
+    let restored = Store::restore(dest.path(), &bytes, policy(), bytes.len() as u64)?;
     assert!(restored.recovery_required()?);
     assert!(matches!(
         restored.claim(id, "worker", 23, 30),

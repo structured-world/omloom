@@ -93,6 +93,10 @@ An old backup cannot prove that a provider effect has not already occurred.
 The backup API covers the supplied host database, including other namespaces.
 It requires host backup custody and is not an inventory export API. A combined
 identity-provider restore still requires that provider's qualification.
+Restore takes an explicit, positive maximum encoded backup size, independently
+of Omloom's logical application quota and stored policy identity. Oversized
+input is refused before opening the destination. The host must enforce the
+same input ceiling before buffering a file or network response.
 
 The pinned provider is not qualified for a hard total-owned-file ceiling. Its
 sampled endpoint limit omits growth that matters to this guarantee. Native Git
