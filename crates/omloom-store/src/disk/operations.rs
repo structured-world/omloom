@@ -276,7 +276,7 @@ impl Store {
         let lease_key = lease_key(target);
         let prior = tx.get(&lease_key)?;
         if let Some(p) = &prior {
-            if number(p, "until")? > now {
+            if p.get("settled") != Some(&Value::Bool(true)) && number(p, "until")? > now {
                 return Err(Error::Conflict);
             }
             let previous = string(p, "operation")?;

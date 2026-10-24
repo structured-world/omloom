@@ -1,5 +1,50 @@
 use super::*;
 
+// A settled target becomes available immediately, while the previous epoch stays fenced.
+#[test]
+fn settled_lease_does_not_delay_the_next_operation() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = Store::open(directory.path(), policy())?;
+    let object = asset();
+    let target = target(&object);
+    store.save_asset(&admit(record::Body::Asset(object)), None, "admin", 1)?;
+    let first = store.accept(&plan(target, &[]), 2)?;
+    let mut next_intent = plan(target, &[]);
+    next_intent.retry_key = "next";
+    let next = store.accept(&next_intent, 3)?;
+    let old_lease = store.claim(first, "first", 10, 100)?;
+    assert!(matches!(
+        store.claim(next, "second", 11, 200),
+        Err(Error::Conflict)
+    ));
+    store.prepare_dispatch(&old_lease, 1, 11)?;
+    store.reconcile(
+        &old_lease,
+        2,
+        OperationState::Succeeded,
+        EffectOutcome::Confirmed,
+        None,
+        12,
+    )?;
+    drop(store);
+    let store = Store::open(directory.path(), policy())?;
+    let lease = store.claim(next, "second", 13, 200)?;
+    assert!(lease.epoch > old_lease.epoch);
+    assert!(matches!(
+        store.reconcile(
+            &old_lease,
+            3,
+            OperationState::Succeeded,
+            EffectOutcome::Confirmed,
+            None,
+            14
+        ),
+        Err(Error::Conflict)
+    ));
+    store.prepare_dispatch(&lease, 1, 14)?;
+    Ok(())
+}
+
 // Concurrent admissions cannot reuse the same outcome space; cancellation releases it.
 #[test]
 fn concurrent_admissions_cannot_share_settlement_capacity() -> TestResult {
