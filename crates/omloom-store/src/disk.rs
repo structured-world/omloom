@@ -1,11 +1,11 @@
 use crate::{CLASSES, Class, Policy};
 use coordinode_core::{
     graph::{node::NodeId, types::Value},
-    schema::definition::{ConstraintKind, LabelSchema, PropertyDef, PropertyType},
+    schema::definition::{ConstraintKind, EdgeTypeSchema, LabelSchema, PropertyDef, PropertyType},
 };
 use coordinode_embed::{
-    Database, DatabaseError, Intent, LabelDeclaration, PackageConstraint, SchemaPackage,
-    TransactionId,
+    Database, DatabaseError, EdgeTypeDeclaration, Intent, LabelDeclaration, PackageConstraint,
+    SchemaPackage, TransactionId,
 };
 use omloom_contracts::{
     Record,
@@ -26,6 +26,9 @@ const MAX_CHILDREN: usize = 2048;
 mod inventory;
 mod lifecycle;
 mod operations;
+mod scans;
+pub use lifecycle::{ActivityEntry, Cleanup};
+pub use scans::ScanState;
 
 #[derive(Debug)]
 pub enum Error {
@@ -84,6 +87,8 @@ pub struct Page {
 
 /// Host-validated operation intent. Arguments are bounded domain values, never
 /// credentials. Caller identity is an opaque reference from the admitted session.
+/// Arguments include the action's confirmed non-secret recovery and authority
+/// references. The store never interprets a reference as authorization.
 pub struct Plan<'a> {
     pub target: AssetRef,
     pub inventory_revision: u64,
@@ -109,6 +114,9 @@ pub struct DurableOperation {
     pub revision: u64,
     pub provider_task: Option<String>,
     pub action: String,
+    pub caller: String,
+    pub inventory_revision: u64,
+    pub plan_digest: [u8; 32],
     pub arguments: Vec<wire::Field>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,7 +151,51 @@ fn props(items: impl IntoIterator<Item = (&'static str, Value)>) -> Properties {
     items.into_iter().map(|(k, v)| (k.into(), v)).collect()
 }
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        encoded.push(DIGITS[(byte >> 4) as usize] as char);
+        encoded.push(DIGITS[(byte & 15) as usize] as char);
+    }
+    encoded
+}
+fn hash_part(hash: &mut Sha256, value: &[u8]) {
+    hash.update((value.len() as u64).to_be_bytes());
+    hash.update(value);
+}
+fn hash_optional(hash: &mut Sha256, value: Option<&str>) {
+    if let Some(value) = value {
+        hash.update([1]);
+        hash_part(hash, value.as_bytes());
+    } else {
+        hash.update([0]);
+    }
+}
+fn hash_field(hash: &mut Sha256, value: &wire::Field) -> Result<()> {
+    hash_part(hash, value.name.as_bytes());
+    match value.value.as_ref().ok_or(Error::Invalid)? {
+        field::Value::Text(value) => {
+            hash.update([1]);
+            hash_part(hash, value.as_bytes());
+        }
+        field::Value::Integer(value) => {
+            hash.update([2]);
+            hash.update(value.to_be_bytes());
+        }
+        field::Value::Flag(value) => hash.update([3, u8::from(*value)]),
+        field::Value::Clear(0) => hash.update([4]),
+        _ => return Err(Error::Invalid),
+    }
+    Ok(())
+}
+fn digest_value(value: [u8; 32]) -> Value {
+    Value::Binary(value.to_vec())
+}
+fn stored_digest(p: &Properties) -> Result<[u8; 32]> {
+    match p.get("digest") {
+        Some(Value::Binary(value)) => value.as_slice().try_into().map_err(|_| Error::Corrupt),
+        _ => Err(Error::Corrupt),
+    }
 }
 fn token(s: &str) -> bool {
     !s.is_empty()
@@ -193,7 +245,12 @@ impl Store {
         if !policy.valid() {
             return Err(Error::Invalid);
         }
-        let store = Self::from_database(Database::open(path)?, policy)?;
+        let mut db = Database::open(path)?;
+        db.set_max_interactive_txn_bytes(16 * 1_048_576);
+        db.set_query_memory_limit(32 * 1_048_576)
+            .map_err(|_| Error::Invalid)?;
+        db.set_retention_window(Duration::from_secs(1));
+        let store = Self::from_database(db, policy)?;
         if path
             .join("RESTORE_REQUIRED")
             .try_exists()
@@ -209,12 +266,14 @@ impl Store {
         if !policy.valid() {
             return Err(Error::Invalid);
         }
-        db.set_max_interactive_txn_bytes(16 * 1_048_576);
-        db.set_query_memory_limit(32 * 1_048_576)
-            .map_err(|_| Error::Invalid)?;
-        db.set_retention_window(Duration::from_secs(1));
         let mut schema = LabelSchema::new_node_id("OmRow");
         schema.add_property(PropertyDef::new("key", PropertyType::String).not_null());
+        for name in ["candidate", "cursor", "snapshot"] {
+            schema.add_property(PropertyDef::new(name, PropertyType::String));
+        }
+        for name in ["completeness", "review_rows", "review_bytes"] {
+            schema.add_property(PropertyDef::new(name, PropertyType::Int));
+        }
         for name in [
             "parent",
             "policy",
@@ -234,7 +293,6 @@ impl Store {
             "operation",
             "caller",
             "action",
-            "digest",
             "provider_task",
             "worker",
             "actor",
@@ -274,12 +332,22 @@ impl Store {
                 PropertyType::Array(Box::new(PropertyType::Int)),
             ));
         }
+        schema.add_property(PropertyDef::new("digest", PropertyType::Binary));
         let publication = db.publish_schema(SchemaPackage {
             labels: vec![LabelDeclaration {
                 schema,
                 intent: Intent::Ensure,
             }],
-            edge_types: vec![],
+            edge_types: vec![
+                EdgeTypeDeclaration {
+                    schema: EdgeTypeSchema::new("OmRelationFrom"),
+                    intent: Intent::Ensure,
+                },
+                EdgeTypeDeclaration {
+                    schema: EdgeTypeSchema::new("OmRelationTo"),
+                    intent: Intent::Ensure,
+                },
+            ],
             constraints: vec![PackageConstraint {
                 name: Some("omloom_key".into()),
                 label: "OmRow".into(),
@@ -327,8 +395,13 @@ impl Store {
     }
     fn policy_identity(&self) -> String {
         let mut encoded = format!(
-            "v1/{}/{}/{}",
-            self.policy.total_bytes, self.policy.detail_age_ms, self.policy.batch_rows
+            "v1/{}/{}/{}/{}/{}/{}",
+            self.policy.total_bytes,
+            self.policy.detail_age_ms,
+            self.policy.batch_rows,
+            self.policy.review_age_ms,
+            self.policy.review_per_source.rows,
+            self.policy.review_per_source.bytes
         );
         use std::fmt::Write;
         for budget in &self.policy.classes {
@@ -545,6 +618,9 @@ impl Tx<'_> {
                         },
                 )
                 .ok_or(Error::Limit)?;
+        }
+        if parent == "relations" {
+            size = size.checked_add(384).ok_or(Error::Limit)?;
         }
         data.insert("size".into(), int(size)?);
         if old == Some(&data) {

@@ -9,7 +9,7 @@ enum Change<'a> {
     },
 }
 
-fn digest(plan: &Plan<'_>) -> Result<String> {
+fn digest(plan: &Plan<'_>, target: &Properties) -> Result<[u8; 32]> {
     bounded(plan.caller)?;
     bounded(plan.retry_key)?;
     if !token(plan.action) || plan.arguments.len() > 64 {
@@ -27,37 +27,27 @@ fn digest(plan: &Plan<'_>) -> Result<String> {
         }
     }
     let mut hash = Sha256::new();
-    fn part(hash: &mut Sha256, value: &[u8]) {
-        hash.update((value.len() as u64).to_be_bytes());
-        hash.update(value);
-    }
     hash.update(b"omloom/accepted-plan/v1");
     for value in [
-        plan.target.asset.to_string(),
-        plan.target.incarnation.to_string(),
-        plan.caller.into(),
-        plan.action.into(),
+        target
+            .get("asset")
+            .and_then(Value::as_str)
+            .ok_or(Error::Corrupt)?,
+        target
+            .get("incarnation")
+            .and_then(Value::as_str)
+            .ok_or(Error::Corrupt)?,
+        plan.caller,
+        plan.action,
     ] {
-        part(&mut hash, value.as_bytes());
+        hash_part(&mut hash, value.as_bytes());
     }
     hash.update(plan.inventory_revision.to_be_bytes());
     hash.update(plan.expires_at_ms.to_be_bytes());
-    for (name, field) in sorted {
-        part(&mut hash, name.as_bytes());
-        match field.value.as_ref().ok_or(Error::Invalid)? {
-            field::Value::Text(v) => {
-                hash.update([1]);
-                part(&mut hash, v.as_bytes());
-            }
-            field::Value::Integer(v) => {
-                hash.update([2]);
-                hash.update(v.to_be_bytes());
-            }
-            field::Value::Flag(v) => hash.update([3, u8::from(*v)]),
-            field::Value::Clear(_) => hash.update([4]),
-        }
+    for (_, field) in sorted {
+        hash_field(&mut hash, field)?;
     }
-    Ok(hex(&hash.finalize()))
+    Ok(hash.finalize().into())
 }
 fn checkpoint(plan: &Plan<'_>) -> String {
     let mut hash = Sha256::new();
@@ -92,7 +82,8 @@ impl Store {
         if now >= plan.expires_at_ms {
             return Err(Error::Expired);
         }
-        let hash = digest(plan)?;
+        let target_fields = target_props(plan.target);
+        let hash = digest(plan, &target_fields)?;
         let checkpoint = checkpoint(plan);
         let mut tx = self.begin()?;
         if tx.root.get("restored") == Some(&Value::Bool(true)) {
@@ -102,7 +93,7 @@ impl Store {
             if now >= number(&saved, "expires")? {
                 return Err(Error::Expired);
             }
-            if saved.get("digest") != Some(&text(hash)) {
+            if stored_digest(&saved)? != hash {
                 return Err(Error::Conflict);
             }
             return string(&saved, "operation")?
@@ -117,13 +108,13 @@ impl Store {
         }
         let id = OperationId::generate();
         let key = operation_key(id);
-        let mut operation = target_props(plan.target);
+        let mut operation = target_fields;
         operation.extend(props([
             ("operation", text(id.to_string())),
             ("caller", text(plan.caller)),
             ("action", text(plan.action)),
             ("inventory_revision", int(plan.inventory_revision)?),
-            ("digest", text(&hash)),
+            ("digest", digest_value(hash)),
             ("state", int(OperationState::Queued as u64)?),
             ("outcome", int(EffectOutcome::NotSent as u64)?),
             ("revision", int(1)?),
@@ -145,7 +136,7 @@ impl Store {
             Class::Checkpoint,
             props([
                 ("operation", text(id.to_string())),
-                ("digest", text(hash)),
+                ("digest", digest_value(hash)),
                 ("expires", int(plan.expires_at_ms)?),
             ]),
         )?;
@@ -182,6 +173,9 @@ impl Store {
                 .and_then(Value::as_str)
                 .map(str::to_owned),
             action: string(&p, "action")?,
+            caller: string(&p, "caller")?,
+            inventory_revision: number(&p, "inventory_revision")?,
+            plan_digest: stored_digest(&p)?,
             arguments,
         };
         tx.commit()?;

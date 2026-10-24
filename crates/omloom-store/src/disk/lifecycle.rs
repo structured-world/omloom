@@ -40,8 +40,8 @@ impl Store {
         tx.commit()?;
         Ok(output)
     }
-    /// Logical export to a caller-owned bounded destination. No credential or
-    /// SID state is part of this store. The destination owns staging/reclamation.
+    /// Privileged host database backup, including every namespace of an injected
+    /// database. Never expose this as an authorized inventory export endpoint.
     pub fn export<W: std::io::Write>(&self, writer: &mut W) -> Result<()> {
         let snapshot = self.db.engine().snapshot();
         export::export_binary(self.db.engine(), &self.db.interner()?, 1, &snapshot, writer)
@@ -120,17 +120,72 @@ impl Store {
     /// cursor; CAS makes concurrent workers and pin changes safe. This reports
     /// logical deletion only; engine physical reclamation is qualified separately.
     pub fn cleanup(&self, now: u64, after: Option<&str>) -> Result<Cleanup> {
+        self.cleanup_class(now, after, Class::Detail)
+    }
+    pub fn cleanup_reviews(&self, now: u64, after: Option<&str>) -> Result<Cleanup> {
+        self.cleanup_class(now, after, Class::Review)
+    }
+    fn cleanup_class(&self, now: u64, after: Option<&str>, class: Class) -> Result<Cleanup> {
         int(now)?;
-        if let Some(cursor) = after {
-            bounded(cursor)?;
+        let prefix = if class == Class::Review { "r:" } else { "d:" };
+        let resume = after
+            .map(|cursor| decode_cursor(cursor, prefix))
+            .transpose()?;
+        const QUERY: &str = "MATCH (n:OmRow) WHERE n.class IN $classes RETURN n.key AS key";
+        if !self.db.keyset_pageable(QUERY) {
+            return Err(Error::SchemaVersion);
         }
-        let tx = self.begin()?;
-        let rows=tx.query("MATCH (n:OmRow) WHERE n.class=$class AND n.key>$after RETURN properties(n) AS p, n.key AS ordering ORDER BY ordering LIMIT $limit",params([("class",int(Class::Detail as u64)?),("after",text(after.unwrap_or(""))),("limit",int(u64::from(self.policy.batch_rows))?)]))?;
-        let mut tx = tx;
+        let mut tx = self.begin()?;
+        // The native scan bounds inspected rows, including ineligible rows.
+        if tx.root.get("restored") == Some(&Value::Bool(true)) {
+            return Err(Error::RecoveryRequired);
+        }
+        // Re-read each selected key under the transaction and recheck pins;
+        // any intervening application mutation invalidates the root CAS.
+        let page = self.db.execute_cypher_paged(
+            QUERY,
+            params([("classes", Value::Array(vec![int(class as u64)?]))]),
+            None,
+            resume,
+            usize::from(self.policy.batch_rows),
+        )?;
         let mut removed = 0;
         let mut pinned = 0;
-        for p in &rows {
-            let at = number(p, "at")?;
+        let mut scopes: BTreeMap<String, (u64, u64)> = BTreeMap::new();
+        for row in &page.rows {
+            let key = row
+                .get("key")
+                .and_then(Value::as_str)
+                .ok_or(Error::Corrupt)?;
+            let Some(p) = tx.get(key)? else { continue };
+            if number(&p, "class")? != class as u64 {
+                continue;
+            }
+            if class == Class::Review {
+                if number(&p, "expires")? > now {
+                    continue;
+                }
+                let parent = p
+                    .get("parent")
+                    .and_then(Value::as_str)
+                    .ok_or(Error::Corrupt)?;
+                if parent.starts_with("candidate/")
+                    && let Some(current) = tx.get(parent)?
+                    && number(&current, "expires")? > now
+                {
+                    continue;
+                }
+                let scope = scopes.entry(string(&p, "connection")?).or_default();
+                scope.0 += 1;
+                scope.1 = scope
+                    .1
+                    .checked_add(number(&p, "size")?)
+                    .ok_or(Error::Limit)?;
+                tx.delete(key)?;
+                removed += 1;
+                continue;
+            }
+            let at = number(&p, "at")?;
             if now < at || now - at < self.policy.detail_age_ms {
                 continue;
             }
@@ -138,7 +193,7 @@ impl Store {
                 pinned += 1;
                 continue;
             }
-            let parent = string(p, "parent")?;
+            let parent = string(&p, "parent")?;
             if let Some(owner) = parent.strip_prefix("detail/operation/")
                 && let Some(operation) = tx.get(&format!("operation/{owner}"))?
                 && !operations::terminal(operations::state(&operation)?)
@@ -146,13 +201,16 @@ impl Store {
                 pinned += 1;
                 continue;
             }
-            tx.delete(&string(p, "key")?)?;
+            tx.delete(key)?;
             removed += 1;
         }
-        let cursor = if rows.len() == usize::from(self.policy.batch_rows) {
-            rows.last().map(|p| string(p, "key")).transpose()?
-        } else {
+        for (scope, (rows, bytes)) in scopes {
+            tx.review_removed(&scope, rows, bytes)?;
+        }
+        let cursor = if page.exhausted {
             None
+        } else {
+            page.last_key.map(|key| format!("{prefix}{}", hex(&key)))
         };
         tx.commit()?;
         Ok(Cleanup {
@@ -161,4 +219,24 @@ impl Store {
             cursor,
         })
     }
+}
+
+fn decode_cursor(cursor: &str, prefix: &str) -> Result<Vec<u8>> {
+    bounded(cursor)?;
+    let encoded = cursor.strip_prefix(prefix).ok_or(Error::Invalid)?;
+    if encoded.is_empty() || !encoded.len().is_multiple_of(2) {
+        return Err(Error::Invalid);
+    }
+    let mut bytes = Vec::with_capacity(encoded.len() / 2);
+    for chunk in encoded.as_bytes().as_chunks::<2>().0 {
+        fn digit(b: u8) -> Result<u8> {
+            match b {
+                b'0'..=b'9' => Ok(b - b'0'),
+                b'a'..=b'f' => Ok(b - b'a' + 10),
+                _ => Err(Error::Invalid),
+            }
+        }
+        bytes.push((digit(chunk[0])? << 4) | digit(chunk[1])?);
+    }
+    Ok(bytes)
 }

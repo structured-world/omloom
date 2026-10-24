@@ -24,6 +24,11 @@ fn retrieval(c: &mut Criterion) {
             }; CLASSES],
             total_bytes: 128 * 1_048_576,
             detail_age_ms: 1000,
+            review_age_ms: 500,
+            review_per_source: Budget {
+                rows: 512,
+                bytes: 2 * 1_048_576,
+            },
             batch_rows: 128,
         };
         let store = Store::open(directory.path(), policy).expect("open benchmark store");

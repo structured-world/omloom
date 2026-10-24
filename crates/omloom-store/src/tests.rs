@@ -10,6 +10,11 @@ fn policy_rejects_missing_or_unrepresentable_bounds() {
         }; CLASSES],
         total_bytes: 4096,
         detail_age_ms: 1,
+        review_age_ms: 1,
+        review_per_source: Budget {
+            rows: 128,
+            bytes: 1_048_576,
+        },
         batch_rows: 1,
     };
     assert!(policy.valid());

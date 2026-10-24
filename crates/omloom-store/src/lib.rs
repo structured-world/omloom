@@ -8,14 +8,15 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
 pub enum Class {
-    Inventory,
-    Evidence,
-    Pending,
-    Work,
-    Detail,
-    Checkpoint,
+    Inventory = 0,
+    Evidence = 1,
+    Pending = 2,
+    Work = 3,
+    Detail = 4,
+    Checkpoint = 5,
+    Review = 6,
 }
-pub const CLASSES: usize = 6;
+pub const CLASSES: usize = 7;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Budget {
@@ -30,6 +31,8 @@ pub struct Policy {
     pub classes: [Budget; CLASSES],
     pub total_bytes: u64,
     pub detail_age_ms: u64,
+    pub review_age_ms: u64,
+    pub review_per_source: Budget,
     pub batch_rows: u16,
 }
 impl Policy {
@@ -38,6 +41,12 @@ impl Policy {
             && self.total_bytes <= i64::MAX as u64
             && self.detail_age_ms > 0
             && self.detail_age_ms <= i64::MAX as u64
+            && self.review_age_ms > 0
+            && self.review_age_ms <= i64::MAX as u64
+            && self.review_per_source.rows > 0
+            && self.review_per_source.rows <= i64::MAX as u64
+            && self.review_per_source.bytes > 0
+            && self.review_per_source.bytes <= i64::MAX as u64
             && self.batch_rows > 0
             && self.batch_rows <= 128
             && self.classes.iter().all(|b| {

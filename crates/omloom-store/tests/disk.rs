@@ -1,3 +1,5 @@
+#[path = "disk/metrics.rs"]
+mod metrics;
 mod support;
 use omloom_contracts::{
     ids::*,
@@ -644,6 +646,36 @@ fn typed_relations_validate_endpoints_and_reopen() -> TestResult {
         "admin",
         2,
     )?;
+    let graph = store
+        .diagnostic_database()
+        .execute_cypher_shared(
+            "MATCH (a:OmRow {key:$key})-[:OmRelationFrom]->(r:OmRow)-[:OmRelationTo]->(b:OmRow) RETURN r.key AS key",
+            Some(std::collections::HashMap::from([(
+                "key".into(),
+                coordinode_core::graph::types::Value::String(format!("asset/{}", vm_target.asset)),
+            )])),
+            None,
+            None,
+            None,
+        )?
+        .rows;
+    assert_eq!(
+        graph.len(),
+        1,
+        "relations must use the database's native adjacency"
+    );
+    assert_eq!(store.relations(vm_target, 10)?.len(), 1);
+    let mut incompatible_host = host.clone();
+    incompatible_host.kind = omloom_contracts::wire::AssetKind::Site as i32;
+    assert!(matches!(
+        store.save_asset(
+            &admit(record::Body::Asset(incompatible_host)),
+            Some(1),
+            "admin",
+            3
+        ),
+        Err(Error::Conflict)
+    ));
     assert_eq!(store.relation(id)?.from, vm.target);
     relation.relation_id = RelationId::generate().to_string();
     relation.from = host.target.clone();
@@ -660,6 +692,65 @@ fn typed_relations_validate_endpoints_and_reopen() -> TestResult {
         store.relation(id)?.kind,
         omloom_contracts::wire::RelationKind::RunsOn as i32
     );
+    Ok(())
+}
+
+// Moving one relation must replace only its adjacency, preserving parallel identities.
+#[test]
+fn relation_moves_preserve_parallel_edges() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut vm = asset();
+    vm.kind = omloom_contracts::wire::AssetKind::VirtualMachine as i32;
+    let first = asset();
+    let second = asset();
+    for object in [&vm, &first, &second] {
+        store.save_asset(
+            &admit(record::Body::Asset(object.clone())),
+            None,
+            "admin",
+            1,
+        )?;
+    }
+    let mut relation = omloom_contracts::wire::Relation {
+        relation_id: RelationId::generate().to_string(),
+        from: vm.target.clone(),
+        to: first.target.clone(),
+        kind: omloom_contracts::wire::RelationKind::RunsOn as i32,
+        revision: 1,
+        authority_id: AuthorityId::generate().to_string(),
+    };
+    store.save_relation(
+        &admit(record::Body::Relation(relation.clone())),
+        None,
+        "admin",
+        2,
+    )?;
+    let mut parallel = relation.clone();
+    parallel.relation_id = RelationId::generate().to_string();
+    store.save_relation(
+        &admit(record::Body::Relation(parallel.clone())),
+        None,
+        "admin",
+        3,
+    )?;
+    relation.to = second.target.clone();
+    relation.revision = 2;
+    store.save_relation(
+        &admit(record::Body::Relation(relation.clone())),
+        Some(1),
+        "admin",
+        4,
+    )?;
+    assert_eq!(store.relations(target(&vm), 10)?.len(), 2);
+    assert_eq!(store.relations(target(&first), 10)?, vec![parallel]);
+    assert_eq!(store.relations(target(&second), 10)?, vec![relation]);
+    assert!(matches!(store.relations(target(&vm), 1), Err(Error::Limit)));
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    assert_eq!(store.relations(target(&vm), 10)?.len(), 2);
+    assert_eq!(store.relations(target(&first), 10)?.len(), 1);
+    assert_eq!(store.relations(target(&second), 10)?.len(), 1);
     Ok(())
 }
 
@@ -703,5 +794,311 @@ fn archive_reclaims_claims_without_releasing_unknown_effects() -> TestResult {
     ));
     let activity = store.activity(&format!("asset/{}", target.asset), 10)?;
     assert_eq!(activity[0].action, "inventory.archived");
+    Ok(())
+}
+
+// Checkpoints and review rows are atomic; partial/denied scans cannot delete inventory.
+#[test]
+fn scan_replay_epoch_and_preview_expiry_are_independent_of_inventory() -> TestResult {
+    use omloom_contracts::wire::{
+        AssetKind, Evidence, ScanBatch, ScanCandidate, ScanCompleteness, SourceObject,
+    };
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let asset = asset();
+    let target = target(&asset);
+    store.save_asset(&admit(record::Body::Asset(asset)), None, "admin", 1)?;
+    let connection = ConnectionId::generate();
+    let state = store.start_scan(connection, None)?;
+    let mut batch = ScanBatch {
+        scan_id: state.scan.to_string(),
+        connection_id: connection.to_string(),
+        prior_cursor: None,
+        cursor: "page-a".into(),
+        completeness: ScanCompleteness::Partial as i32,
+        snapshot_revision: None,
+        candidates: vec![ScanCandidate {
+            candidate_id: CandidateId::generate().to_string(),
+            source: Some(SourceObject {
+                object_kind: "qemu".into(),
+                object_id: "vm".into(),
+                incarnation_evidence: Some("lifetime-1".into()),
+            }),
+            kind: AssetKind::VirtualMachine as i32,
+            evidence: Some(Evidence {
+                source_id: SourceId::generate().to_string(),
+                source_revision: Some("source-a".into()),
+                observed_at_ms: 100,
+                valid_until_ms: 1000,
+                fields: vec![
+                    text_field("name", "review-only"),
+                    text_field("label", "same-page"),
+                ],
+            }),
+        }],
+    };
+    let page = admit(record::Body::Scan(batch.clone()));
+    store.ingest_scan(&page, 100)?;
+    let usage = store.usage()?;
+    store.ingest_scan(&page, 101)?;
+    let mut reordered = batch.clone();
+    reordered.candidates[0]
+        .evidence
+        .as_mut()
+        .expect("evidence")
+        .fields
+        .reverse();
+    store.ingest_scan(&admit(record::Body::Scan(reordered)), 101)?;
+    assert_eq!(store.usage()?, usage);
+    assert_eq!(
+        store.scan_state(connection)?.cursor.as_deref(),
+        Some("page-a")
+    );
+    assert_eq!(
+        store.candidate(connection, "qemu", "vm", 101)?.candidate_id,
+        batch.candidates[0].candidate_id
+    );
+    batch.prior_cursor = Some("page-a".into());
+    batch.cursor = "page-b".into();
+    batch.completeness = ScanCompleteness::AccessDenied as i32;
+    batch.candidates.clear();
+    store.ingest_scan(&admit(record::Body::Scan(batch)), 102)?;
+    assert_eq!(
+        store.scan_state(connection)?.completeness,
+        ScanCompleteness::AccessDenied
+    );
+    assert!(store.asset(target).is_ok());
+    let next = store.start_scan(connection, Some(state.epoch))?;
+    assert!(next.epoch > state.epoch);
+    assert!(matches!(
+        store.ingest_scan(&page, 103),
+        Err(Error::Conflict)
+    ));
+    assert!(matches!(
+        store.candidate(connection, "qemu", "vm", 103),
+        Err(Error::Expired)
+    ));
+    let mut cursor = None;
+    loop {
+        let cleanup = store.cleanup_reviews(1000, cursor.as_deref())?;
+        cursor = cleanup.cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    let current = store.scan_state(connection)?;
+    assert_eq!(current.review_rows, 0);
+    assert_eq!(current.review_bytes, 0);
+    assert!(store.asset(target).is_ok());
+    Ok(())
+}
+
+// A source quota refusal must not advance its cursor or retain half of a review page.
+#[test]
+fn scan_source_quota_refuses_whole_page() -> TestResult {
+    use omloom_contracts::wire::{
+        AssetKind, Evidence, ScanBatch, ScanCandidate, ScanCompleteness, SourceObject,
+    };
+    let dir = tempfile::tempdir()?;
+    let mut policy = policy();
+    policy.review_per_source.rows = 1;
+    let store = Store::open(dir.path(), policy)?;
+    let connection = ConnectionId::generate();
+    let state = store.start_scan(connection, None)?;
+    let before = store.usage()?;
+    let batch = ScanBatch {
+        scan_id: state.scan.to_string(),
+        connection_id: connection.to_string(),
+        prior_cursor: None,
+        cursor: "page".into(),
+        completeness: ScanCompleteness::Partial as i32,
+        snapshot_revision: None,
+        candidates: vec![ScanCandidate {
+            candidate_id: CandidateId::generate().to_string(),
+            source: Some(SourceObject {
+                object_kind: "qemu".into(),
+                object_id: "vm".into(),
+                incarnation_evidence: None,
+            }),
+            kind: AssetKind::VirtualMachine as i32,
+            evidence: Some(Evidence {
+                source_id: SourceId::generate().to_string(),
+                source_revision: None,
+                observed_at_ms: 100,
+                valid_until_ms: 1000,
+                fields: vec![text_field("name", "review")],
+            }),
+        }],
+    };
+    assert!(matches!(
+        store.ingest_scan(&admit(record::Body::Scan(batch)), 100),
+        Err(Error::Limit)
+    ));
+    assert_eq!(store.usage()?, before);
+    assert_eq!(store.scan_state(connection)?.cursor, None);
+    assert!(matches!(
+        store.candidate(connection, "qemu", "vm", 101),
+        Err(Error::Missing)
+    ));
+    Ok(())
+}
+
+// An injected database retains the host's MVCC policy for other owned namespaces.
+#[test]
+fn injected_database_preserves_host_retention() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let db = coordinode_embed::Database::open(dir.path())?;
+    db.set_retention_window(std::time::Duration::from_secs(60));
+    let store = Store::from_database(db, policy())?;
+    assert_eq!(
+        store.diagnostic_database().retention_window(),
+        std::time::Duration::from_secs(60)
+    );
+    Ok(())
+}
+
+// Bounded cleanup must progress across empty/ineligible pages after the MVCC window has elapsed.
+#[test]
+fn cleanup_after_idle_resumes_without_a_historical_snapshot() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let mut policy = policy();
+    policy.batch_rows = 2;
+    let store = Store::open(dir.path(), policy)?;
+    for _ in 0..5 {
+        store.save_asset(&admit(record::Body::Asset(asset())), None, "admin", 1)?;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    let mut cursor = None;
+    let mut removed = 0;
+    let mut pages = 0;
+    loop {
+        let report = store.cleanup(2000, cursor.as_deref())?;
+        removed += report.removed;
+        cursor = report.cursor;
+        pages += 1;
+        assert!(pages < 100);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(removed, 5);
+    assert!(pages > 1);
+    assert_eq!(store.assets(None, None, 10)?.assets.len(), 5);
+    Ok(())
+}
+
+// A new review window changes metadata, not the unchanged candidate value row.
+#[test]
+fn candidate_refresh_preserves_unchanged_value_storage() -> TestResult {
+    use omloom_contracts::wire::{
+        AssetKind, Evidence, ScanBatch, ScanCandidate, ScanCompleteness, SourceObject,
+    };
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let connection = ConnectionId::generate();
+    let state = store.start_scan(connection, None)?;
+    let mut batch = ScanBatch {
+        scan_id: state.scan.to_string(),
+        connection_id: connection.to_string(),
+        prior_cursor: None,
+        cursor: "page-1".into(),
+        completeness: ScanCompleteness::Partial as i32,
+        snapshot_revision: None,
+        candidates: vec![ScanCandidate {
+            candidate_id: CandidateId::generate().to_string(),
+            source: Some(SourceObject {
+                object_kind: "qemu".into(),
+                object_id: "vm".into(),
+                incarnation_evidence: None,
+            }),
+            kind: AssetKind::VirtualMachine as i32,
+            evidence: Some(Evidence {
+                source_id: SourceId::generate().to_string(),
+                source_revision: None,
+                observed_at_ms: 100,
+                valid_until_ms: 1000,
+                fields: vec![text_field("name", "same")],
+            }),
+        }],
+    };
+    store.ingest_scan(&admit(record::Body::Scan(batch.clone())), 100)?;
+    let rows = store
+        .diagnostic_database()
+        .execute_cypher_shared(
+            "MATCH (n:OmRow) WHERE n.field='name' RETURN n.key AS key",
+            None,
+            None,
+            None,
+            None,
+        )?
+        .rows;
+    let key = rows[0]
+        .get("key")
+        .and_then(coordinode_core::graph::types::Value::as_str)
+        .expect("review field");
+    let version = row_version(&store, key)?;
+    batch.prior_cursor = Some("page-1".into());
+    batch.cursor = "page-2".into();
+    batch.candidates[0]
+        .evidence
+        .as_mut()
+        .expect("evidence")
+        .observed_at_ms = 200;
+    store.ingest_scan(&admit(record::Body::Scan(batch)), 200)?;
+    assert_eq!(row_version(&store, key)?, version);
+    assert_eq!(
+        store
+            .candidate(connection, "qemu", "vm", 201)?
+            .observation
+            .expect("current observation")
+            .evidence
+            .expect("current evidence")
+            .observed_at_ms,
+        200
+    );
+    let mut cursor = None;
+    loop {
+        let report = store.cleanup_reviews(650, cursor.as_deref())?;
+        cursor = report.cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(
+        store
+            .candidate(connection, "qemu", "vm", 650)?
+            .observation
+            .expect("observation")
+            .evidence
+            .expect("evidence")
+            .fields[0],
+        text_field("name", "same")
+    );
+    Ok(())
+}
+
+// Reaccepting the same relation is not a meaningful change or a new audit event.
+#[test]
+fn identical_relation_has_no_history_or_writes() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = Store::open(directory.path(), policy())?;
+    let from = asset();
+    let mut to = asset();
+    to.kind = omloom_contracts::wire::AssetKind::Port as i32;
+    store.save_asset(&admit(record::Body::Asset(from.clone())), None, "admin", 1)?;
+    store.save_asset(&admit(record::Body::Asset(to.clone())), None, "admin", 1)?;
+    let relation = omloom_contracts::wire::Relation {
+        relation_id: RelationId::generate().to_string(),
+        from: from.target,
+        to: to.target,
+        kind: omloom_contracts::wire::RelationKind::HasPort as i32,
+        revision: 1,
+        authority_id: AuthorityId::generate().to_string(),
+    };
+    let record = admit(record::Body::Relation(relation));
+    store.save_relation(&record, None, "admin", 2)?;
+    let before = store.usage()?;
+    assert_eq!(store.save_relation(&record, Some(1), "admin", 3)?, 1);
+    assert_eq!(store.usage()?, before);
     Ok(())
 }

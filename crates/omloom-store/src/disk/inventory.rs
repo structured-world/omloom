@@ -35,7 +35,7 @@ pub(super) fn read_field(p: &Properties) -> Result<wire::Field> {
     })
 }
 
-fn field_matches(field: &wire::Field, p: &Properties) -> bool {
+pub(super) fn field_matches(field: &wire::Field, p: &Properties) -> bool {
     match field.value.as_ref() {
         Some(field::Value::Text(value)) => {
             p.get("vtype").and_then(Value::as_int) == Some(1)
@@ -163,6 +163,9 @@ impl Store {
         int(now)?;
         let key = asset_key(target);
         let mut tx = self.begin()?;
+        if tx.root.get("restored") == Some(&Value::Bool(true)) {
+            return Err(Error::RecoveryRequired);
+        }
         if projection.is_some_and(|r| number(&tx.root, "revision").ok() != Some(r)) {
             return Err(Error::Conflict);
         }
@@ -174,6 +177,15 @@ impl Store {
             _ => return Err(Error::Conflict),
         }
         let children = tx.children(&key)?;
+        if old
+            .as_ref()
+            .is_some_and(|p| p.get("kind").and_then(Value::as_int) != Some(i64::from(asset.kind)))
+        {
+            let attached=tx.query("MATCH (n:OmRow) WHERE n.parent='relations' AND (n.asset=$asset OR n.to_asset=$asset) RETURN properties(n) AS p LIMIT 1",params([("asset",text(target.asset.to_string()))]))?;
+            if !attached.is_empty() {
+                return Err(Error::Conflict);
+            }
+        }
         if asset.adoption == wire::Adoption::Archived as i32 {
             let old = old.as_ref().ok_or(Error::Invalid)?;
             let pending=tx.query("MATCH (n:OmRow) WHERE n.parent='operations' AND n.class=$class AND n.asset=$asset RETURN properties(n) AS p LIMIT 1",params([("class",int(Class::Pending as u64)?),("asset",text(target.asset.to_string()))]))?;
@@ -569,16 +581,54 @@ impl Store {
         if old.as_ref().map(|p| number(p, "revision")).transpose()? != expected {
             return Err(Error::Conflict);
         }
-        let revision = expected.unwrap_or(0).checked_add(1).ok_or(Error::Limit)?;
         let mut p = target_props(from);
         p.extend(props([
             ("to_asset", text(to.asset.to_string())),
             ("to_incarnation", text(to.incarnation.to_string())),
             ("kind", Value::Int(relation.kind.into())),
             ("authority", text(&relation.authority_id)),
-            ("revision", int(revision)?),
         ]));
-        tx.put(&key, "relations", Class::Inventory, p)?;
+        if old
+            .as_ref()
+            .is_some_and(|old| p.iter().all(|(key, value)| old.get(key) == Some(value)))
+        {
+            tx.commit()?;
+            return expected.ok_or(Error::Corrupt);
+        }
+        let revision = expected.unwrap_or(0).checked_add(1).ok_or(Error::Limit)?;
+        p.insert("revision".into(), int(revision)?);
+        let source_changed = old.as_ref().is_none_or(|old| {
+            old.get("asset") != p.get("asset") || old.get("incarnation") != p.get("incarnation")
+        });
+        let target_changed = old.as_ref().is_none_or(|old| {
+            old.get("to_asset") != p.get("to_asset")
+                || old.get("to_incarnation") != p.get("to_incarnation")
+        });
+        tx.put_against(&key, "relations", Class::Inventory, p, old.as_ref())?;
+        if source_changed {
+            if old.is_some() {
+                self.db.execute_in_transaction(
+                    tx.id.ok_or(Error::Corrupt)?,
+                    "MATCH (r:OmRow {key:$key})<-[e:OmRelationFrom]-() DELETE e",
+                    params([("key", text(&key))]),
+                )?;
+            }
+            self.db.execute_in_transaction(tx.id.ok_or(Error::Corrupt)?,"MATCH (a:OmRow {key:$from}), (r:OmRow {key:$key}) CREATE (a)-[:OmRelationFrom]->(r)",params([("from",text(asset_key(from))),("key",text(&key))]))?;
+        }
+        if target_changed {
+            if old.is_some() {
+                self.db.execute_in_transaction(
+                    tx.id.ok_or(Error::Corrupt)?,
+                    "MATCH (r:OmRow {key:$key})-[e:OmRelationTo]->() DELETE e",
+                    params([("key", text(&key))]),
+                )?;
+            }
+            self.db.execute_in_transaction(
+                tx.id.ok_or(Error::Corrupt)?,
+                "MATCH (r:OmRow {key:$key}), (b:OmRow {key:$to}) CREATE (r)-[:OmRelationTo]->(b)",
+                params([("to", text(asset_key(to))), ("key", text(&key))]),
+            )?;
+        }
         tx.audit(&key, actor, "relation.accepted", revision, now)?;
         tx.commit()?;
         Ok(revision)
@@ -588,19 +638,56 @@ impl Store {
         let p = self
             .read(&format!("relation/{id}"))?
             .ok_or(Error::Missing)?;
-        Ok(wire::Relation {
-            relation_id: id.to_string(),
-            from: Some(wire::AssetRef {
-                asset_id: string(&p, "asset")?,
-                incarnation: string(&p, "incarnation")?,
-            }),
-            to: Some(wire::AssetRef {
-                asset_id: string(&p, "to_asset")?,
-                incarnation: string(&p, "to_incarnation")?,
-            }),
-            kind: number(&p, "kind")? as i32,
-            revision: number(&p, "revision")?,
-            authority_id: string(&p, "authority")?,
-        })
+        relation_projection(&p)
     }
+    /// One bounded native adjacency expansion; excess results are explicitly
+    /// unavailable rather than an incomplete dependency set presented as complete.
+    pub fn relations(&self, target: AssetRef, limit: u16) -> Result<Vec<wire::Relation>> {
+        if limit == 0 || limit > 128 {
+            return Err(Error::Invalid);
+        }
+        let tx = self.begin()?;
+        tx.asset(target)?;
+        let mut result = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for query in [
+            "MATCH (a:OmRow {key:$asset})-[:OmRelationFrom]->(r:OmRow) RETURN properties(r) AS p LIMIT $limit",
+            "MATCH (a:OmRow {key:$asset})<-[:OmRelationTo]-(r:OmRow) RETURN properties(r) AS p LIMIT $limit",
+        ] {
+            let rows = tx.query(
+                query,
+                params([
+                    ("asset", text(asset_key(target))),
+                    ("limit", int(u64::from(limit) + 1)?),
+                ]),
+            )?;
+            for row in rows {
+                if seen.insert(string(&row, "key")?) {
+                    result.push(relation_projection(&row)?);
+                }
+            }
+            if result.len() > usize::from(limit) {
+                return Err(Error::Limit);
+            }
+        }
+        tx.commit()?;
+        Ok(result)
+    }
+}
+fn relation_projection(p: &Properties) -> Result<wire::Relation> {
+    let key = p.get("key").and_then(Value::as_str).ok_or(Error::Corrupt)?;
+    Ok(wire::Relation {
+        relation_id: key.strip_prefix("relation/").ok_or(Error::Corrupt)?.into(),
+        from: Some(wire::AssetRef {
+            asset_id: string(p, "asset")?,
+            incarnation: string(p, "incarnation")?,
+        }),
+        to: Some(wire::AssetRef {
+            asset_id: string(p, "to_asset")?,
+            incarnation: string(p, "to_incarnation")?,
+        }),
+        kind: number(p, "kind")? as i32,
+        revision: number(p, "revision")?,
+        authority_id: string(p, "authority")?,
+    })
 }
