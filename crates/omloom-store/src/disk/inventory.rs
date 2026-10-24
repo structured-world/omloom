@@ -35,15 +35,34 @@ pub(super) fn read_field(p: &Properties) -> Result<wire::Field> {
     })
 }
 
+fn field_matches(field: &wire::Field, p: &Properties) -> bool {
+    match field.value.as_ref() {
+        Some(field::Value::Text(value)) => {
+            p.get("vtype").and_then(Value::as_int) == Some(1)
+                && p.get("vtext").and_then(Value::as_str) == Some(value.as_str())
+        }
+        Some(field::Value::Integer(value)) => {
+            p.get("vtype").and_then(Value::as_int) == Some(2)
+                && p.get("vint").and_then(Value::as_int) == Some(*value)
+        }
+        Some(field::Value::Flag(value)) => {
+            p.get("vtype").and_then(Value::as_int) == Some(3)
+                && p.get("vflag").and_then(Value::as_bool) == Some(*value)
+        }
+        Some(field::Value::Clear(0)) => p.get("vtype").and_then(Value::as_int) == Some(4),
+        _ => false,
+    }
+}
+
 type EvidenceWindow<'a> = (Option<&'a str>, Option<&'a str>, u64, u64);
-fn validate_evidence(asset: &wire::Asset, children: &[Properties]) -> Result<()> {
+fn validate_evidence(
+    asset: &wire::Asset,
+    children: &[Properties],
+    by_key: &BTreeMap<&str, &Properties>,
+) -> Result<()> {
     fn borrow<'a>(p: &'a Properties, k: &str) -> Result<&'a str> {
         p.get(k).and_then(Value::as_str).ok_or(Error::Corrupt)
     }
-    let by_key: BTreeMap<&str, &Properties> = children
-        .iter()
-        .map(|p| Ok((borrow(p, "key")?, p)))
-        .collect::<Result<_>>()?;
     let mut claims: BTreeMap<(&str, &str, &str), EvidenceWindow<'_>> = BTreeMap::new();
     for p in children {
         let Some(Value::String(layer)) = p.get("layer") else {
@@ -194,7 +213,16 @@ impl Store {
         }) {
             return Err(Error::Conflict);
         }
-        validate_evidence(asset, &children)?;
+        let by_key: BTreeMap<&str, &Properties> = children
+            .iter()
+            .map(|p| {
+                Ok((
+                    p.get("key").and_then(Value::as_str).ok_or(Error::Corrupt)?,
+                    p,
+                ))
+            })
+            .collect::<Result<_>>()?;
+        validate_evidence(asset, &children, &by_key)?;
         let mut intent_changed = old.as_ref().is_none_or(|p| {
             p.get("kind") != Some(&Value::Int(asset.kind.into()))
                 || p.get("adoption") != Some(&Value::Int(asset.adoption.into()))
@@ -204,10 +232,18 @@ impl Store {
             let field = intended.field.as_ref().ok_or(Error::Invalid)?;
             let child = format!("{key}/intent/{}", field.name);
             keep.insert(child.clone());
+            let previous = by_key.get(child.as_str()).copied();
+            if previous.is_some_and(|p| {
+                field_matches(field, p)
+                    && p.get("authority").and_then(Value::as_str)
+                        == Some(intended.authority_id.as_str())
+            }) {
+                continue;
+            }
             let mut p = field_props(field)?;
             p.insert("layer".into(), text("intent"));
             p.insert("authority".into(), text(&intended.authority_id));
-            intent_changed |= tx.put(&child, &key, Class::Inventory, p)?;
+            intent_changed |= tx.put_against(&child, &key, Class::Inventory, p, previous)?;
         }
         for p in &children {
             if p.get("layer") == Some(&text("intent")) && !keep.contains(&string(p, "key")?) {
@@ -225,6 +261,17 @@ impl Store {
                 hex(object.object_id.as_bytes())
             );
             mapping_keys.insert(mapping.clone());
+            if let Some(previous) = by_key.get(mapping.as_str()) {
+                if previous.get("lifetime").and_then(Value::as_str)
+                    != object.incarnation_evidence.as_deref()
+                {
+                    return Err(Error::Conflict);
+                }
+                continue;
+            }
+            if tx.get(&mapping)?.is_some() {
+                return Err(Error::Conflict);
+            }
             let mut p = target_props(target);
             p.extend(props([
                 ("layer", text("mapping")),
@@ -236,13 +283,7 @@ impl Store {
                     text(object.incarnation_evidence.as_ref().ok_or(Error::Invalid)?),
                 ),
             ]));
-            if let Some(existing) = tx.get(&mapping)?
-                && (super::target(&existing)? != target
-                    || existing.get("lifetime") != p.get("lifetime"))
-            {
-                return Err(Error::Conflict);
-            }
-            intent_changed |= tx.put(&mapping, &key, Class::Inventory, p)?;
+            intent_changed |= tx.put_against(&mapping, &key, Class::Inventory, p, None)?;
         }
         for p in &children {
             if p.get("layer") == Some(&text("mapping"))
@@ -259,15 +300,33 @@ impl Store {
                 let evidence = observation.evidence.as_ref().ok_or(Error::Invalid)?;
                 for field in &evidence.fields {
                     let child = format!("{key}/{layer}/{}/{}", evidence.source_id, field.name);
-                    let mut value = field_props(field)?;
-                    value.extend(props([
-                        ("layer", text(layer)),
-                        ("source", text(&evidence.source_id)),
-                    ]));
-                    evidence_changed |= tx.put(&child, &key, Class::Evidence, value)?;
+                    let previous = by_key.get(child.as_str()).copied();
+                    if !previous.is_some_and(|p| field_matches(field, p)) {
+                        let mut value = field_props(field)?;
+                        value.extend(props([
+                            ("layer", text(layer)),
+                            ("source", text(&evidence.source_id)),
+                        ]));
+                        evidence_changed |=
+                            tx.put_against(&child, &key, Class::Evidence, value, previous)?;
+                    }
                     // A freshness-only refresh never rewrites the value row.
-                    evidence_changed |= tx.put(
-                        &format!("{child}/freshness"),
+                    let fresh_key = format!("{child}/freshness");
+                    let prior_fresh = by_key.get(fresh_key.as_str()).copied();
+                    if prior_fresh.is_some_and(|p| {
+                        p.get("source_revision").and_then(Value::as_str)
+                            == evidence.source_revision.as_deref()
+                            && p.get("scan").and_then(Value::as_str)
+                                == observation.scan_id.as_deref()
+                            && p.get("observed").and_then(Value::as_int)
+                                == i64::try_from(evidence.observed_at_ms).ok()
+                            && p.get("valid").and_then(Value::as_int)
+                                == i64::try_from(evidence.valid_until_ms).ok()
+                    }) {
+                        continue;
+                    }
+                    evidence_changed |= tx.put_against(
+                        &fresh_key,
                         &key,
                         Class::Evidence,
                         props([
@@ -284,15 +343,13 @@ impl Store {
                             ("observed", int(evidence.observed_at_ms)?),
                             ("valid", int(evidence.valid_until_ms)?),
                         ]),
+                        prior_fresh,
                     )?;
                 }
             }
         }
         if old.is_some() && evidence_changed && projection.is_none() {
             return Err(Error::Conflict);
-        }
-        if tx.children(&key)?.len() > MAX_CHILDREN {
-            return Err(Error::Limit);
         }
         let mut revision = match old.as_ref() {
             Some(p) => number(p, "revision")?,
@@ -301,14 +358,14 @@ impl Store {
         if intent_changed {
             revision = revision.checked_add(1).ok_or(Error::Limit)?;
         }
-        let mut data = target_props(target);
-        data.extend(props([
-            ("kind", Value::Int(asset.kind.into())),
-            ("adoption", Value::Int(asset.adoption.into())),
-            ("revision", int(revision)?),
-        ]));
-        tx.put(&key, "assets", Class::Inventory, data)?;
         if intent_changed {
+            let mut data = target_props(target);
+            data.extend(props([
+                ("kind", Value::Int(asset.kind.into())),
+                ("adoption", Value::Int(asset.adoption.into())),
+                ("revision", int(revision)?),
+            ]));
+            tx.put_against(&key, "assets", Class::Inventory, data, old.as_ref())?;
             tx.audit(&key, actor, "inventory.accepted", revision, now)?;
         }
         tx.commit()?;
@@ -390,7 +447,7 @@ impl Store {
                             .as_mut()
                             .ok_or(Error::Corrupt)?
                             .fields
-                            .push(read_field(p)?);
+                            .extend(evidence.fields);
                     } else {
                         groups.push(wire::Observation {
                             scan_id,

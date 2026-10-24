@@ -510,7 +510,20 @@ impl Tx<'_> {
         );
         Ok(())
     }
-    fn put(&mut self, key: &str, parent: &str, class: Class, mut data: Properties) -> Result<bool> {
+    fn put(&mut self, key: &str, parent: &str, class: Class, data: Properties) -> Result<bool> {
+        let old = self.get(key)?;
+        self.put_against(key, parent, class, data, old.as_ref())
+    }
+    /// A preimage already read at this transaction's snapshot can be reused:
+    /// the installation CAS guard protects it through the final commit.
+    fn put_against(
+        &mut self,
+        key: &str,
+        parent: &str,
+        class: Class,
+        mut data: Properties,
+        old: Option<&Properties>,
+    ) -> Result<bool> {
         if self.root.get("restored") == Some(&Value::Bool(true)) {
             return Err(Error::RecoveryRequired);
         }
@@ -534,11 +547,10 @@ impl Tx<'_> {
                 .ok_or(Error::Limit)?;
         }
         data.insert("size".into(), int(size)?);
-        let old = self.get(key)?;
-        if old.as_ref() == Some(&data) {
+        if old == Some(&data) {
             return Ok(false);
         }
-        self.counters(old.as_ref(), Some(&data))?;
+        self.counters(old, Some(&data))?;
         let query = if old.is_some() {
             "MATCH (n:OmRow {key:$key}) SET n = $p"
         } else {
