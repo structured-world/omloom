@@ -418,32 +418,55 @@ impl Store {
                 return Err(Error::Conflict);
             }
         } else {
-            let valid = match next {
-                OperationState::Reconciling | OperationState::NeedsAttention => {
-                    effect == EffectOutcome::Unknown && old_effect == EffectOutcome::Unknown
-                }
-                OperationState::Succeeded => {
-                    effect == EffectOutcome::Confirmed && old_effect == EffectOutcome::Unknown
-                }
-                OperationState::Failed => {
-                    effect == EffectOutcome::ConfirmedNoEffect
-                        && old_effect == EffectOutcome::Unknown
-                }
-                OperationState::Cancelled => {
-                    effect == EffectOutcome::NotSent
-                        && old_effect == EffectOutcome::NotSent
-                        && old == OperationState::Queued
-                }
-                _ => false,
+            // Effect knowledge is monotonic and separate from execution success.
+            let knowledge = match old_effect {
+                EffectOutcome::Unknown => matches!(
+                    effect,
+                    EffectOutcome::Unknown
+                        | EffectOutcome::Confirmed
+                        | EffectOutcome::ConfirmedNoEffect
+                ),
+                EffectOutcome::NotSent
+                | EffectOutcome::Confirmed
+                | EffectOutcome::ConfirmedNoEffect => effect == old_effect,
+                EffectOutcome::Unspecified => false,
             };
-            if !valid {
+            let valid = knowledge
+                && match next {
+                    OperationState::Reconciling | OperationState::NeedsAttention => {
+                        matches!(
+                            effect,
+                            EffectOutcome::Unknown
+                                | EffectOutcome::Confirmed
+                                | EffectOutcome::ConfirmedNoEffect
+                        )
+                    }
+                    OperationState::Succeeded => effect == EffectOutcome::Confirmed,
+                    OperationState::Failed => {
+                        matches!(
+                            effect,
+                            EffectOutcome::Confirmed | EffectOutcome::ConfirmedNoEffect
+                        ) || (effect == EffectOutcome::NotSent && old == OperationState::Queued)
+                    }
+                    OperationState::Cancelled => {
+                        effect == EffectOutcome::ConfirmedNoEffect
+                            || (effect == EffectOutcome::NotSent && old == OperationState::Queued)
+                    }
+                    _ => false,
+                };
+            if !valid
+                || (effect == EffectOutcome::NotSent
+                    && (provider_task.is_some() || operation.contains_key("provider_task")))
+            {
                 return Err(Error::UnsafeTransition);
             }
         }
         let revision = expected.checked_add(1).ok_or(Error::Limit)?;
         if terminal(next) {
             resize_settlement(&mut tx, &key, &mut operation, 0)?;
-        } else if next == OperationState::Reconciling {
+        } else if next == OperationState::Reconciling
+            || (next == OperationState::NeedsAttention && effect != EffectOutcome::Unknown)
+        {
             resize_settlement(&mut tx, &key, &mut operation, 2)?;
         } else if next == OperationState::NeedsAttention {
             resize_settlement(&mut tx, &key, &mut operation, 3)?;

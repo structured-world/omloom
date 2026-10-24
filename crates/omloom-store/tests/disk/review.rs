@@ -1,5 +1,55 @@
 use super::*;
 
+// Partial failure and operator attention preserve confirmed effects independently of success.
+#[test]
+fn partial_failure_preserves_confirmed_effect_knowledge() -> TestResult {
+    for attention in [false, true] {
+        let directory = tempfile::tempdir()?;
+        let store = Store::open(directory.path(), policy())?;
+        let object = asset();
+        let target = target(&object);
+        store.save_asset(&admit(record::Body::Asset(object)), None, "admin", 1)?;
+        let id = store.accept(&plan(target, &[]), 2)?;
+        let lease = store.claim(id, "worker", 10, 100)?;
+        store.prepare_dispatch(&lease, 1, 11)?;
+        if attention {
+            store.reconcile(
+                &lease,
+                2,
+                OperationState::NeedsAttention,
+                EffectOutcome::Confirmed,
+                Some("partial-task"),
+                12,
+            )?;
+            let before = store.usage()?;
+            for outcome in [EffectOutcome::Unknown, EffectOutcome::ConfirmedNoEffect] {
+                assert!(matches!(
+                    store.reconcile(&lease, 3, OperationState::NeedsAttention, outcome, None, 13),
+                    Err(Error::UnsafeTransition)
+                ));
+                assert_eq!(store.usage()?, before);
+            }
+        }
+        drop(store);
+        let store = Store::open(directory.path(), policy())?;
+        let revision = store.operation(id)?.revision;
+        store.reconcile(
+            &lease,
+            revision,
+            OperationState::Failed,
+            EffectOutcome::Confirmed,
+            Some("partial-task"),
+            14,
+        )?;
+        let operation = store.operation(id)?;
+        assert_eq!(operation.state, OperationState::Failed);
+        assert_eq!(operation.outcome, EffectOutcome::Confirmed);
+        assert_eq!(operation.provider_task.as_deref(), Some("partial-task"));
+        assert!(store.pending(None)?.is_empty());
+    }
+    Ok(())
+}
+
 // A settled target becomes available immediately, while the previous epoch stays fenced.
 #[test]
 fn settled_lease_does_not_delay_the_next_operation() -> TestResult {
