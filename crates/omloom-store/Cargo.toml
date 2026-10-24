@@ -19,6 +19,7 @@ omloom-contracts = { path = "../omloom-contracts", optional = true }
 sha2 = { version = "0.10", optional = true }
 
 [dev-dependencies]
+coordinode-storage = { git = "https://github.com/structured-world/coordinode", rev = "e94a13d922b25e4a53781511eb61c3819a1d18f5" }
 tempfile = "3"
 prost.workspace = true
 criterion = "0.8"

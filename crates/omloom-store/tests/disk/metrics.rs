@@ -72,6 +72,14 @@ fn disk_bytes_and_file_hashes_stay_stable_on_read_and_exact_replay() -> TestResu
     let record = admit(record::Body::Asset(asset.clone()));
     store.save_asset(&record, None, "admin", 1)?;
     store.diagnostic_database().persist()?;
+    // Persist wakes asynchronous compaction. Drain setup maintenance before
+    // hashing a steady-state read workload, without disabling production GC.
+    for partition in coordinode_storage::engine::partition::Partition::all() {
+        store
+            .diagnostic_database()
+            .engine()
+            .force_compaction(*partition)?;
+    }
     let before = disk_state(directory.path())?;
     let usage = store.usage()?;
     let mut times = Vec::with_capacity(200);
@@ -81,7 +89,14 @@ fn disk_bytes_and_file_hashes_stay_stable_on_read_and_exact_replay() -> TestResu
         times.push(start.elapsed());
         store.save_asset(&record, Some(1), "admin", 2)?;
     }
-    assert_eq!(disk_state(directory.path())?, before);
+    let after_reads = disk_state(directory.path())?;
+    if after_reads != before {
+        let retained = directory.keep();
+        panic!(
+            "read workload changed persisted files; fixture retained at {}",
+            retained.display()
+        );
+    }
     assert_eq!(store.usage()?, usage);
     times.sort_unstable();
     eprintln!(
