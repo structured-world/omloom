@@ -323,6 +323,12 @@ impl Store {
         }
         let old = state(&operation)?;
         let old_effect = outcome(&operation)?;
+        if let Some(task) = provider_task
+            && let Some(saved) = operation.get("provider_task")
+            && saved.as_str().ok_or(Error::Corrupt)? != task
+        {
+            return Err(Error::Conflict);
+        }
         if terminal(old) {
             return Err(Error::UnsafeTransition);
         }
