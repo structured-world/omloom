@@ -1,0 +1,33 @@
+[package]
+name = "omloom-store"
+description = "Disk-backed current inventory and durable operation storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["std"]
+std = ["dep:coordinode-embed", "dep:coordinode-core", "dep:omloom-contracts", "dep:sha2"]
+diagnostics = ["std"]
+
+[dependencies]
+coordinode-embed = { git = "https://github.com/structured-world/coordinode", rev = "e94a13d922b25e4a53781511eb61c3819a1d18f5", optional = true }
+coordinode-core = { git = "https://github.com/structured-world/coordinode", rev = "e94a13d922b25e4a53781511eb61c3819a1d18f5", optional = true }
+omloom-contracts = { path = "../omloom-contracts", optional = true }
+sha2 = { version = "0.10", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+prost.workspace = true
+criterion = "0.8"
+
+[[test]]
+name = "disk"
+required-features = ["diagnostics"]
+
+[[bench]]
+name = "retrieval"
+harness = false
+required-features = ["std"]

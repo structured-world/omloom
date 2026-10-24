@@ -2,7 +2,7 @@
 
 Infrastructure knowledge and operations.
 
-Validated inventory and operation contracts are under development. No runnable
+Inventory contracts and embedded persistence are under development. No runnable
 application or installable product release is available yet.
 
 ## Development
@@ -10,6 +10,8 @@ application or installable product release is available yet.
 See [contract development and verification](docs/contracts.md) for Rust,
 TypeScript and browser checks. Documentation checks: `scripts/check-docs.sh`
 (requires lychee). These checks do not certify an installable application.
+See [embedded storage](docs/storage.md) for the host API, durability boundaries
+and current provider limitations.
 
 ## License
 

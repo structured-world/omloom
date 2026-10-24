@@ -1,0 +1,631 @@
+use crate::{CLASSES, Class, Policy};
+use coordinode_core::{
+    graph::{node::NodeId, types::Value},
+    schema::definition::{ConstraintKind, LabelSchema, PropertyDef, PropertyType},
+};
+use coordinode_embed::{
+    Database, DatabaseError, Intent, LabelDeclaration, PackageConstraint, SchemaPackage,
+    TransactionId,
+};
+use omloom_contracts::{
+    Record,
+    ids::{AssetRef, OperationId},
+    wire::{self, EffectOutcome, OperationState, field, record},
+};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::Path,
+    time::Duration,
+};
+
+type Properties = BTreeMap<String, Value>;
+type Result<T> = std::result::Result<T, Error>;
+const ROOT: &str = "installation";
+const MAX_CHILDREN: usize = 2048;
+mod inventory;
+mod lifecycle;
+mod operations;
+
+#[derive(Debug)]
+pub enum Error {
+    Io(std::io::Error),
+    Export(Box<coordinode_embed::backup::export::ExportError>),
+    Restore(Box<coordinode_embed::backup::restore::RestoreError>),
+    Database(Box<DatabaseError>),
+    Invalid,
+    Conflict,
+    Missing,
+    Limit,
+    Corrupt,
+    SchemaVersion,
+    PolicyChanged,
+    Expired,
+    RecoveryRequired,
+    UnsafeTransition,
+}
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+impl std::error::Error for Error {}
+impl From<DatabaseError> for Error {
+    fn from(e: DatabaseError) -> Self {
+        match e {
+            DatabaseError::RevisionMismatch { .. }
+            | DatabaseError::UniqueViolation { .. }
+            | DatabaseError::TransactionConflict { .. } => Self::Conflict,
+            other => Self::Database(Box::new(other)),
+        }
+    }
+}
+
+/// An owned database namespace. Open once per process, share by reference/Arc.
+/// Concurrent hosts must share a supported replicated Database, not independently
+/// open the same directory. All exclusion and counters are database transactions.
+pub struct Store {
+    db: Database,
+    policy: Policy,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssetSummary {
+    pub target: AssetRef,
+    pub kind: wire::AssetKind,
+    pub revision: u64,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct Page {
+    pub revision: u64,
+    pub assets: Vec<AssetSummary>,
+    pub next: Option<String>,
+}
+
+/// Host-validated operation intent. Arguments are bounded domain values, never
+/// credentials. Caller identity is an opaque reference from the admitted session.
+pub struct Plan<'a> {
+    pub target: AssetRef,
+    pub inventory_revision: u64,
+    pub caller: &'a str,
+    pub action: &'a str,
+    pub arguments: &'a [wire::Field],
+    pub retry_key: &'a str,
+    pub expires_at_ms: u64,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lease {
+    pub operation: OperationId,
+    pub worker: String,
+    pub epoch: u64,
+    pub until_ms: u64,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct DurableOperation {
+    pub id: OperationId,
+    pub target: AssetRef,
+    pub state: OperationState,
+    pub outcome: EffectOutcome,
+    pub revision: u64,
+    pub provider_task: Option<String>,
+    pub action: String,
+    pub arguments: Vec<wire::Field>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Usage {
+    pub rows: [u64; CLASSES],
+    pub bytes: [u64; CLASSES],
+    pub revision: u64,
+}
+
+fn text(s: impl Into<String>) -> Value {
+    Value::String(s.into())
+}
+fn int(n: u64) -> Result<Value> {
+    Ok(Value::Int(i64::try_from(n).map_err(|_| Error::Invalid)?))
+}
+fn string(p: &Properties, k: &str) -> Result<String> {
+    p.get(k)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or(Error::Corrupt)
+}
+fn number(p: &Properties, k: &str) -> Result<u64> {
+    p.get(k)
+        .and_then(Value::as_int)
+        .and_then(|n| u64::try_from(n).ok())
+        .ok_or(Error::Corrupt)
+}
+fn params(p: impl IntoIterator<Item = (&'static str, Value)>) -> Option<HashMap<String, Value>> {
+    Some(p.into_iter().map(|(k, v)| (k.into(), v)).collect())
+}
+fn props(items: impl IntoIterator<Item = (&'static str, Value)>) -> Properties {
+    items.into_iter().map(|(k, v)| (k.into(), v)).collect()
+}
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+fn token(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 64
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_.:-".contains(&b))
+}
+fn bounded(s: &str) -> Result<()> {
+    if s.is_empty() || s.len() > 256 {
+        Err(Error::Invalid)
+    } else {
+        Ok(())
+    }
+}
+fn asset_key(target: AssetRef) -> String {
+    format!("asset/{}", target.asset)
+}
+fn operation_key(id: OperationId) -> String {
+    format!("operation/{id}")
+}
+fn target_props(target: AssetRef) -> Properties {
+    props([
+        ("asset", text(target.asset.to_string())),
+        ("incarnation", text(target.incarnation.to_string())),
+    ])
+}
+fn target(p: &Properties) -> Result<AssetRef> {
+    Ok(AssetRef {
+        asset: string(p, "asset")?.parse().map_err(|_| Error::Corrupt)?,
+        incarnation: string(p, "incarnation")?
+            .parse()
+            .map_err(|_| Error::Corrupt)?,
+    })
+}
+
+fn unpack(rows: Vec<Properties>) -> Result<Vec<Properties>> {
+    rows.into_iter()
+        .map(|mut row| match row.remove("p") {
+            Some(Value::Map(p)) => Ok(p),
+            _ => Err(Error::Corrupt),
+        })
+        .collect()
+}
+
+impl Store {
+    pub fn open(path: &Path, policy: Policy) -> Result<Self> {
+        if !policy.valid() {
+            return Err(Error::Invalid);
+        }
+        let store = Self::from_database(Database::open(path)?, policy)?;
+        if path
+            .join("RESTORE_REQUIRED")
+            .try_exists()
+            .map_err(Error::Io)?
+        {
+            store.disable_restored_dispatch()?;
+        }
+        Ok(store)
+    }
+
+    /// Also accepts a host-owned replicated database using the same transaction API.
+    pub fn from_database(mut db: Database, policy: Policy) -> Result<Self> {
+        if !policy.valid() {
+            return Err(Error::Invalid);
+        }
+        db.set_max_interactive_txn_bytes(16 * 1_048_576);
+        db.set_query_memory_limit(32 * 1_048_576)
+            .map_err(|_| Error::Invalid)?;
+        db.set_retention_window(Duration::from_secs(1));
+        let mut schema = LabelSchema::new_node_id("OmRow");
+        schema.add_property(PropertyDef::new("key", PropertyType::String).not_null());
+        for name in [
+            "parent",
+            "policy",
+            "asset",
+            "incarnation",
+            "layer",
+            "authority",
+            "connection",
+            "object_kind",
+            "object_id",
+            "lifetime",
+            "field",
+            "source",
+            "claim",
+            "source_revision",
+            "scan",
+            "operation",
+            "caller",
+            "action",
+            "digest",
+            "provider_task",
+            "worker",
+            "actor",
+            "to_asset",
+            "to_incarnation",
+            "vtext",
+        ] {
+            schema.add_property(PropertyDef::new(name, PropertyType::String));
+        }
+        for name in [
+            "schema",
+            "revision",
+            "class",
+            "size",
+            "kind",
+            "adoption",
+            "observed",
+            "valid",
+            "inventory_revision",
+            "state",
+            "outcome",
+            "at",
+            "expires",
+            "epoch",
+            "until",
+            "vtype",
+            "vint",
+        ] {
+            schema.add_property(PropertyDef::new(name, PropertyType::Int));
+        }
+        for name in ["restored", "pinned", "vflag", "settled"] {
+            schema.add_property(PropertyDef::new(name, PropertyType::Bool));
+        }
+        for name in ["counts", "sizes"] {
+            schema.add_property(PropertyDef::new(
+                name,
+                PropertyType::Array(Box::new(PropertyType::Int)),
+            ));
+        }
+        let publication = db.publish_schema(SchemaPackage {
+            labels: vec![LabelDeclaration {
+                schema,
+                intent: Intent::Ensure,
+            }],
+            edge_types: vec![],
+            constraints: vec![PackageConstraint {
+                name: Some("omloom_key".into()),
+                label: "OmRow".into(),
+                properties: vec!["key".into()],
+                kind: ConstraintKind::Unique,
+                scope: None,
+                on_duplicate_rename: None,
+            }],
+        })?;
+        if !db
+            .await_schema(&publication, Duration::from_secs(20))?
+            .all_ready()
+        {
+            return Err(Error::SchemaVersion);
+        }
+        for (name, property) in [("omloom_parent", "parent"), ("omloom_class", "class")] {
+            match db.execute_cypher(&format!("CREATE INDEX {name} ON :OmRow({property})")) {
+                Ok(_) => {}
+                Err(DatabaseError::CatalogObjectExists {
+                    object: coordinode_embed::CatalogObject::Index,
+                    name: existing,
+                }) if existing == name => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let store = Self { db, policy };
+        if store.read(ROOT)?.is_none() {
+            let root = store.new_root()?;
+            store.db.execute_cypher_shared(
+                "CREATE (n:OmRow {key:$key}) SET n += $p",
+                params([("key", text(ROOT)), ("p", Value::Map(root))]),
+                None,
+                None,
+                None,
+            )?;
+        }
+        let root = store.read(ROOT)?.ok_or(Error::Corrupt)?;
+        if number(&root, "schema")? != 1 {
+            return Err(Error::SchemaVersion);
+        }
+        if string(&root, "policy")? != store.policy_identity() {
+            return Err(Error::PolicyChanged);
+        }
+        Ok(store)
+    }
+    fn policy_identity(&self) -> String {
+        let mut encoded = format!(
+            "v1/{}/{}/{}",
+            self.policy.total_bytes, self.policy.detail_age_ms, self.policy.batch_rows
+        );
+        use std::fmt::Write;
+        for budget in &self.policy.classes {
+            write!(&mut encoded, "/{}/{}", budget.rows, budget.bytes)
+                .expect("formatting into String");
+        }
+        encoded
+    }
+    fn new_root(&self) -> Result<Properties> {
+        Ok(props([
+            ("key", text(ROOT)),
+            ("schema", int(1)?),
+            ("revision", int(1)?),
+            ("policy", text(self.policy_identity())),
+            ("restored", Value::Bool(false)),
+            ("counts", Value::Array(vec![Value::Int(0); CLASSES])),
+            ("sizes", Value::Array(vec![Value::Int(0); CLASSES])),
+        ]))
+    }
+    fn read(&self, key: &str) -> Result<Option<Properties>> {
+        let result = self.db.execute_cypher_shared(
+            "MATCH (n:OmRow {key:$key}) RETURN properties(n) AS p",
+            params([("key", text(key))]),
+            None,
+            None,
+            None,
+        )?;
+        Ok(unpack(result.rows)?.pop())
+    }
+    fn begin(&self) -> Result<Tx<'_>> {
+        // Read the version before beginning the snapshot. Any intervening commit
+        // then fails this guard; a newer version cannot bless an older snapshot.
+        let rows = self
+            .db
+            .execute_cypher_shared(
+                "MATCH (n:OmRow {key:'installation'}) RETURN id(n) AS id",
+                None,
+                None,
+                None,
+                None,
+            )?
+            .rows;
+        let raw = rows
+            .first()
+            .and_then(|r| r.get("id"))
+            .and_then(Value::as_int)
+            .ok_or(Error::Corrupt)?;
+        let id = NodeId::from_raw(u64::try_from(raw).map_err(|_| Error::Corrupt)?);
+        let version = self.db.node_version(id)?;
+        let tx = self.db.begin_transaction()?;
+        let result = (|| {
+            self.db.expect_node_version(tx, id, version)?;
+            let mut rows = unpack(self.db.execute_in_transaction(
+                tx,
+                "MATCH (n:OmRow {key:'installation'}) RETURN properties(n) AS p",
+                None,
+            )?)?;
+            let root = rows.pop().ok_or(Error::Corrupt)?;
+            Ok(Tx {
+                store: self,
+                id: Some(tx),
+                root,
+                changed: false,
+            })
+        })();
+        if result.is_err() {
+            self.db.rollback_transaction(tx)?;
+        }
+        result
+    }
+    pub fn usage(&self) -> Result<Usage> {
+        usage(&self.read(ROOT)?.ok_or(Error::Corrupt)?)
+    }
+    pub fn query_plan(&self) -> Result<String> {
+        Ok(self
+            .db
+            .explain_cypher("MATCH (n:OmRow {key:'asset/example'}) RETURN n")?)
+    }
+    /// Opt-in inspection for consumer tests; no default-build instrumentation.
+    #[cfg(feature = "diagnostics")]
+    pub fn diagnostic_database(&self) -> &Database {
+        &self.db
+    }
+}
+
+fn usage(root: &Properties) -> Result<Usage> {
+    fn array(root: &Properties, key: &str) -> Result<[u64; CLASSES]> {
+        let Some(Value::Array(values)) = root.get(key) else {
+            return Err(Error::Corrupt);
+        };
+        let mut output = [0; CLASSES];
+        if values.len() != CLASSES {
+            return Err(Error::Corrupt);
+        }
+        for (out, value) in output.iter_mut().zip(values) {
+            *out = value
+                .as_int()
+                .and_then(|n| u64::try_from(n).ok())
+                .ok_or(Error::Corrupt)?;
+        }
+        Ok(output)
+    }
+    Ok(Usage {
+        rows: array(root, "counts")?,
+        bytes: array(root, "sizes")?,
+        revision: number(root, "revision")?,
+    })
+}
+
+struct Tx<'a> {
+    store: &'a Store,
+    id: Option<TransactionId>,
+    root: Properties,
+    changed: bool,
+}
+impl Tx<'_> {
+    fn query(&self, q: &str, p: Option<HashMap<String, Value>>) -> Result<Vec<Properties>> {
+        unpack(
+            self.store
+                .db
+                .execute_in_transaction(self.id.ok_or(Error::Corrupt)?, q, p)?,
+        )
+    }
+    fn get(&self, key: &str) -> Result<Option<Properties>> {
+        Ok(self
+            .query(
+                "MATCH (n:OmRow {key:$key}) RETURN properties(n) AS p",
+                params([("key", text(key))]),
+            )?
+            .pop())
+    }
+    fn children(&self, parent: &str) -> Result<Vec<Properties>> {
+        let rows = self.query(
+            "MATCH (n:OmRow) WHERE n.parent=$parent RETURN properties(n) AS p LIMIT 2049",
+            params([("parent", text(parent))]),
+        )?;
+        if rows.len() > MAX_CHILDREN {
+            return Err(Error::Limit);
+        }
+        Ok(rows)
+    }
+    fn counters(&mut self, old: Option<&Properties>, new: Option<&Properties>) -> Result<()> {
+        let mut usage = usage(&self.root)?;
+        for (row, adding) in [(old, false), (new, true)] {
+            if let Some(row) = row {
+                let class = usize::try_from(number(row, "class")?).map_err(|_| Error::Corrupt)?;
+                if class >= CLASSES {
+                    return Err(Error::Corrupt);
+                }
+                let size = number(row, "size")?;
+                if adding {
+                    usage.rows[class] = usage.rows[class].checked_add(1).ok_or(Error::Limit)?;
+                    usage.bytes[class] =
+                        usage.bytes[class].checked_add(size).ok_or(Error::Limit)?;
+                } else {
+                    usage.rows[class] = usage.rows[class].checked_sub(1).ok_or(Error::Corrupt)?;
+                    usage.bytes[class] =
+                        usage.bytes[class].checked_sub(size).ok_or(Error::Corrupt)?;
+                }
+            }
+        }
+        let mut total = 0u64;
+        for (index, budget) in self.store.policy.classes.iter().enumerate() {
+            if usage.rows[index] > budget.rows || usage.bytes[index] > budget.bytes {
+                return Err(Error::Limit);
+            }
+            total = total.checked_add(usage.bytes[index]).ok_or(Error::Limit)?;
+        }
+        if total > self.store.policy.total_bytes {
+            return Err(Error::Limit);
+        }
+        self.root.insert(
+            "counts".into(),
+            Value::Array(usage.rows.into_iter().map(int).collect::<Result<_>>()?),
+        );
+        self.root.insert(
+            "sizes".into(),
+            Value::Array(usage.bytes.into_iter().map(int).collect::<Result<_>>()?),
+        );
+        Ok(())
+    }
+    fn put(&mut self, key: &str, parent: &str, class: Class, mut data: Properties) -> Result<bool> {
+        if self.root.get("restored") == Some(&Value::Bool(true)) {
+            return Err(Error::RecoveryRequired);
+        }
+        data.insert("key".into(), text(key));
+        data.insert("parent".into(), text(parent));
+        data.insert("class".into(), int(class as u64)?);
+        // Conservative application charge: bounded scalar bytes plus per-property
+        // envelope. It deliberately does not masquerade as physical file usage.
+        let mut size = 128u64;
+        for (name, value) in &data {
+            size = size
+                .checked_add(
+                    name.len() as u64
+                        + 64
+                        + match value {
+                            Value::String(s) => s.len() as u64,
+                            Value::Binary(b) => b.len() as u64,
+                            _ => 16,
+                        },
+                )
+                .ok_or(Error::Limit)?;
+        }
+        data.insert("size".into(), int(size)?);
+        let old = self.get(key)?;
+        if old.as_ref() == Some(&data) {
+            return Ok(false);
+        }
+        self.counters(old.as_ref(), Some(&data))?;
+        let query = if old.is_some() {
+            "MATCH (n:OmRow {key:$key}) SET n = $p"
+        } else {
+            "CREATE (n:OmRow {key:$key}) SET n = $p"
+        };
+        self.store.db.execute_in_transaction(
+            self.id.ok_or(Error::Corrupt)?,
+            query,
+            params([("key", text(key)), ("p", Value::Map(data))]),
+        )?;
+        self.changed = true;
+        Ok(true)
+    }
+    fn delete(&mut self, key: &str) -> Result<()> {
+        if self.root.get("restored") == Some(&Value::Bool(true)) {
+            return Err(Error::RecoveryRequired);
+        }
+        if let Some(old) = self.get(key)? {
+            self.counters(Some(&old), None)?;
+            self.store.db.execute_in_transaction(
+                self.id.ok_or(Error::Corrupt)?,
+                "MATCH (n:OmRow {key:$key}) DELETE n",
+                params([("key", text(key))]),
+            )?;
+            self.changed = true;
+        }
+        Ok(())
+    }
+    fn commit(mut self) -> Result<u64> {
+        let mut revision = number(&self.root, "revision")?;
+        if self.changed {
+            revision = revision.checked_add(1).ok_or(Error::Limit)?;
+            self.root.insert("revision".into(), int(revision)?);
+            self.store.db.execute_in_transaction(
+                self.id.ok_or(Error::Corrupt)?,
+                "MATCH (n:OmRow {key:'installation'}) SET n = $p",
+                params([("p", Value::Map(core::mem::take(&mut self.root)))]),
+            )?;
+            self.store
+                .db
+                .commit_transaction(self.id.take().ok_or(Error::Corrupt)?)?;
+        } else {
+            self.store
+                .db
+                .rollback_transaction(self.id.take().ok_or(Error::Corrupt)?)?;
+        }
+        Ok(revision)
+    }
+    fn asset(&self, target: AssetRef) -> Result<Properties> {
+        let p = self.get(&asset_key(target))?.ok_or(Error::Missing)?;
+        if crate::disk::target(&p)? != target {
+            return Err(Error::Conflict);
+        }
+        Ok(p)
+    }
+    fn audit(
+        &mut self,
+        owner: &str,
+        actor: &str,
+        action: &str,
+        revision: u64,
+        now: u64,
+    ) -> Result<()> {
+        bounded(actor)?;
+        self.put(
+            &format!("audit/{owner}/{revision}"),
+            &format!("detail/{owner}"),
+            Class::Detail,
+            props([
+                ("actor", text(actor)),
+                ("action", text(action)),
+                ("revision", int(revision)?),
+                ("at", int(now)?),
+                ("pinned", Value::Bool(false)),
+            ]),
+        )?;
+        Ok(())
+    }
+}
+impl Drop for Tx<'_> {
+    fn drop(&mut self) {
+        if let Some(id) = self.id.take() {
+            // Explicit paths report errors. Drop is only exception cleanup and
+            // must not panic while an original database error is being returned.
+            if let Err(error) = self.store.db.rollback_transaction(id) {
+                eprintln!("transaction cleanup failed: {error}");
+            }
+        }
+    }
+}
