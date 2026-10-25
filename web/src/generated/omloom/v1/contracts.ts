@@ -786,7 +786,14 @@ export enum AssetKind {
     /**
      * @generated from protobuf enum value: ASSET_KIND_ADDRESS_GROUP = 20;
      */
-    ADDRESS_GROUP = 20
+    ADDRESS_GROUP = 20,
+    /**
+     * Current source-attributed address fact with optional network knowledge.
+     * This identity is not a canonical allocation and never reserves an address.
+     *
+     * @generated from protobuf enum value: ASSET_KIND_ADDRESS_REFERENCE = 21;
+     */
+    ADDRESS_REFERENCE = 21
 }
 /**
  * @generated from protobuf enum omloom.v1.NullValue

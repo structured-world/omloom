@@ -5,6 +5,7 @@ use prost::Message;
 #[test]
 fn application_frame_has_owned_memory_and_strict_preflight() {
     let bytes = api::Request {
+        working: None,
         command: Some(api::request::Command::Query(api::Query {
             limit: 25,
             search: "edge".into(),
@@ -49,6 +50,7 @@ fn repeated_empty_messages_cannot_amplify_small_frames() {
     };
     let bytes = api::Request {
         command: Some(api::request::Command::Bulk(bulk)),
+        working: None,
     }
     .encode_to_vec();
     let budget = MemoryBudget::new(16 * 1_048_576);

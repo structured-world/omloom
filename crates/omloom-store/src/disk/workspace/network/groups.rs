@@ -24,6 +24,7 @@ impl Store {
         &self,
         context: &Context,
         request: api::Network,
+        working: &api::WorkingContext,
         now: u64,
     ) -> Result<api::Reply> {
         if !request.cidr.is_empty()
@@ -40,6 +41,7 @@ impl Store {
         }
         let target = parse_target(request.target.as_ref())?;
         let mut tx = self.begin()?;
+        tx.check_network_context(context, working, &request)?;
         let old = tx.workspace_group_member_owner(context, target, request.expected)?;
         let sharing = api::SharedUse::try_from(request.sharing).map_err(|_| Error::Invalid)?;
         if !matches!(sharing, api::SharedUse::Vrrp | api::SharedUse::Anycast) {
@@ -96,6 +98,7 @@ impl Store {
                     name: "name".into(),
                     value: Some(field::Value::Text(request.name)),
                 }],
+                parent: None,
             },
             now,
         )?;

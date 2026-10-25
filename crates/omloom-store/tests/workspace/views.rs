@@ -28,6 +28,7 @@ fn concurrent_migration_and_edit_keep_one_interpretation_after_restore() -> Test
             expected: Some(1),
             kind: K::Device as i32,
             changes: vec![text_field(&definition.id, "42")],
+            parent: None,
         }),
     )?;
     definition.r#type = api::FieldType::Integer as i32;
@@ -43,6 +44,7 @@ fn concurrent_migration_and_edit_keep_one_interpretation_after_restore() -> Test
         expected: Some(2),
         kind: K::Device as i32,
         changes: vec![text_field("name", "edited")],
+        parent: None,
     };
     let barrier = std::sync::Barrier::new(2);
     let outcomes = std::thread::scope(|scope| {
@@ -323,6 +325,7 @@ fn renamed_definition_keeps_filter_interpretation() -> TestResult {
             expected: Some(1),
             kind: K::Device as i32,
             changes: vec![text_field(&definition.id, "operations")],
+            parent: None,
         }),
     )?;
     let mut q = query();
@@ -373,6 +376,7 @@ fn migration_requires_data_rights_and_does_not_write_noops() -> TestResult {
             expected: Some(1),
             kind: K::Device as i32,
             changes: vec![text_field(&definition.id, "backup")],
+            parent: None,
         }),
     )?;
     let before = store.usage()?;
@@ -439,6 +443,7 @@ fn applicability_migration_previews_removal_without_silent_data_loss() -> TestRe
                 expected: Some(1),
                 kind: kind as i32,
                 changes: vec![text_field(&definition.id, "backup")],
+                parent: None,
             }),
         )?;
     }

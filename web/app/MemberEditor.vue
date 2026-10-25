@@ -2,21 +2,22 @@
 import { ref, onMounted } from 'vue';
 import Dialog from './Dialog.vue';
 import { call, model, display, key, AssetKind } from './api';
-const props = defineProps<{ detail: model.Detail }>();
+const props = defineProps<{ detail: model.Detail; working: model.WorkingContext }>();
 const emit = defineEmits<{ close: []; saved: [] }>();
 const items = ref<model.Item[]>([]); const selected = ref(''); const priority = ref<number>(); const error = ref('');
 const search = ref(''); const next = ref<string>();
+const revision = ref<bigint>();
 const isVrrp = props.detail.item?.fields.some(f => f.name === 'sharing' && display(f) === 'SHARED_USE_VRRP');
 async function load(cursor?: string) { try {
-  const r = await call({ oneofKind: 'query', query: model.Query.create({ limit: 100, columns: ['name'], kinds: [AssetKind.INTERFACE], search: search.value, cursor }) });
+  const r = await call({ oneofKind: 'query', query: model.Query.create({ roots: props.working.roots, limit: 100, columns: ['name'], kinds: [AssetKind.INTERFACE], search: search.value, cursor }) });
   if (r.oneofKind !== 'page') throw Error('Unexpected interface response');
-  items.value = r.page.items; next.value = r.page.next; selected.value = '';
+  items.value = r.page.items; next.value = r.page.next; selected.value = ''; revision.value = r.page.revision;
 } catch (e) { error.value = String(e); } }
 onMounted(() => load());
 async function save() {
   try {
     const target = items.value.find(i => key(i.target) === selected.value)?.target;
-    await call({ oneofKind: 'member', member: model.Member.create({ address: props.detail.item?.target, expected: props.detail.item?.revision, expectedGroup: props.detail.group?.revision, interface: target, priority: priority.value }) }); emit('saved');
+    await call({ oneofKind: 'member', member: model.Member.create({ address: props.detail.item?.target, expected: props.detail.item?.revision, expectedGroup: props.detail.group?.revision, interface: target, priority: priority.value }) }, model.WorkingContext.create({ ...props.working, expected: revision.value })); emit('saved');
   } catch (e) { error.value = String(e); }
 }
 </script>

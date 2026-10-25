@@ -5,11 +5,13 @@ use omloom_contracts::{ids::*, workspace as api};
 use prost::Message;
 use std::collections::BTreeSet;
 
+mod addresses;
 mod assets;
 mod definitions;
 mod exchange;
 mod network;
 mod views;
+mod working;
 
 pub const MAX_PAGE: usize = 100;
 pub const MAX_BULK: usize = 128;
@@ -19,6 +21,35 @@ pub const MAX_CSV: usize = 256 * 1024;
 pub const MAX_FIELDS: usize = 32;
 pub const MAX_DEFINITIONS: usize = 128;
 const EXPLICIT_CLEAR: i32 = wire::NullValue::NullValue as i32;
+
+pub(super) fn upgrade_network_order(store: &Store) -> Result<()> {
+    loop {
+        let mut tx = store.begin()?;
+        let rows = tx.query("MATCH (n:OmRow {parent:'networks'}) WHERE n.cidr IS NOT NULL AND n.ip_order IS NULL RETURN properties(n) AS p LIMIT 128",None)?;
+        if rows.is_empty() {
+            tx.commit()?;
+            return Ok(());
+        }
+        for old in rows {
+            let block: ipnet::IpNet = string(&old, "cidr")?.parse().map_err(|_| Error::Corrupt)?;
+            let mut data = old.clone();
+            super::operations::strip_envelope(&mut data);
+            data.insert(
+                "ip_order".into(),
+                text(network::address_order(block.addr())),
+            );
+            data.insert("prefix_len".into(), int(u64::from(block.prefix_len()))?);
+            tx.put_projection(
+                &string(&old, "key")?,
+                "networks",
+                Class::Inventory,
+                data,
+                Some(&old),
+            )?;
+        }
+        tx.commit()?;
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Scope {
@@ -68,6 +99,12 @@ impl Context {
         self.grants.iter().any(|g| Self::matches(g, target, kind))
     }
     fn field(&self, target: AssetRef, kind: i32, field: &str, write: bool) -> bool {
+        if kind == wire::AssetKind::AddressReference as i32
+            && field == "name"
+            && !self.field(target, kind, "address", write)
+        {
+            return false;
+        }
         self.grants.iter().any(|g| {
             Self::matches(g, target, kind)
                 && if write {
@@ -174,6 +211,7 @@ impl Store {
             return Err(Error::Invalid);
         }
         use api::request::Command as C;
+        let working = request.working;
         match request.command.ok_or(Error::Invalid)? {
             C::Identity(_) => Ok(reply(api::reply::Result::Identity(api::Identity {
                 name: context.actor.clone(),
@@ -186,11 +224,20 @@ impl Store {
                 .workspace_query(context, query)
                 .map(|p| reply(api::reply::Result::Page(p))),
             C::Read(read) => self
-                .workspace_read(context, read)
+                .workspace_read(context, read, working.as_ref().ok_or(Error::Invalid)?)
                 .map(|d| reply(api::reply::Result::Detail(d))),
-            C::Write(write) => self.workspace_write(context, write, now),
-            C::Bulk(bulk) => self.workspace_bulk(context, bulk, now),
-            C::Relation(relation) => self.workspace_relation(context, relation, now),
+            C::Write(write) => {
+                self.workspace_write(context, write, working.as_ref().ok_or(Error::Invalid)?, now)
+            }
+            C::Bulk(bulk) => {
+                self.workspace_bulk(context, bulk, working.as_ref().ok_or(Error::Invalid)?, now)
+            }
+            C::Relation(relation) => self.workspace_relation(
+                context,
+                relation,
+                working.as_ref().ok_or(Error::Invalid)?,
+                now,
+            ),
             C::Definitions(_) => self
                 .workspace_definitions(context)
                 .map(|items| reply(api::reply::Result::Definitions(api::Definitions { items }))),
@@ -200,10 +247,34 @@ impl Store {
                 .workspace_views(context)
                 .map(|items| reply(api::reply::Result::Views(api::Views { items }))),
             C::SaveView(view) => self.workspace_save_view(context, view, now),
-            C::Import(import) => self.workspace_import(context, import, now),
+            C::Import(import) => self.workspace_import(
+                context,
+                import,
+                working.as_ref().ok_or(Error::Invalid)?,
+                now,
+            ),
             C::Export(export) => self.workspace_export(context, export),
-            C::Network(network) => self.workspace_network(context, network, now),
-            C::Member(member) => self.workspace_member(context, member, now),
+            C::Network(network) => self.workspace_network(
+                context,
+                network,
+                working.as_ref().ok_or(Error::Invalid)?,
+                now,
+            ),
+            C::Member(member) => self.workspace_member(
+                context,
+                member,
+                working.as_ref().ok_or(Error::Invalid)?,
+                now,
+            ),
+            C::Prepare(prepare) => {
+                self.workspace_prepare(context, working.as_ref().ok_or(Error::Invalid)?, prepare)
+            }
+            C::Address(address) => self.workspace_address(
+                context,
+                address,
+                working.as_ref().ok_or(Error::Invalid)?,
+                now,
+            ),
         }
     }
 

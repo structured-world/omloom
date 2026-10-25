@@ -56,6 +56,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             &context,
             api::Request {
                 command: Some(command),
+                working: Some(api::WorkingContext::default()),
             },
             100,
         )

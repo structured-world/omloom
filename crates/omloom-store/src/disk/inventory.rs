@@ -528,131 +528,8 @@ impl Store {
         let Some(record::Body::Relation(relation)) = &record.wire().body else {
             return Err(Error::Invalid);
         };
-        let from = AssetRef::try_from(relation.from.as_ref().ok_or(Error::Invalid)?)
-            .map_err(|_| Error::Invalid)?;
-        let to = AssetRef::try_from(relation.to.as_ref().ok_or(Error::Invalid)?)
-            .map_err(|_| Error::Invalid)?;
         let mut tx = self.begin()?;
-        let from_row = tx.asset(from)?;
-        let to_row = tx.asset(to)?;
-        if number(&from_row, "adoption")? != wire::Adoption::Adopted as u64
-            || number(&to_row, "adoption")? != wire::Adoption::Adopted as u64
-        {
-            return Err(Error::Invalid);
-        }
-        use wire::{AssetKind as A, RelationKind as R};
-        let from_kind =
-            A::try_from(number(&from_row, "kind")? as i32).map_err(|_| Error::Corrupt)?;
-        let to_kind = A::try_from(number(&to_row, "kind")? as i32).map_err(|_| Error::Corrupt)?;
-        let kind = R::try_from(relation.kind).map_err(|_| Error::Invalid)?;
-        let compatible = match kind {
-            R::InstalledIn => matches!(
-                (from_kind, to_kind),
-                (A::Device, A::Rack)
-                    | (A::Rack, A::Site | A::Location)
-                    | (A::Location, A::Site | A::Location)
-            ),
-            R::Contains => matches!((from_kind, to_kind), (A::Device, A::Device)),
-            R::HasPort => matches!((from_kind, to_kind), (A::Device, A::Port)),
-            R::Carries => matches!((from_kind, to_kind), (A::Port, A::Interface)),
-            R::ConnectedTo => matches!(
-                (from_kind, to_kind),
-                (A::Port, A::Cable) | (A::Cable, A::Port)
-            ),
-            R::AssignedTo => matches!((from_kind, to_kind), (A::IpAddress, A::Interface)),
-            R::RunsOn => matches!(
-                (from_kind, to_kind),
-                (A::VirtualMachine, A::Device) | (A::Service, A::Device | A::VirtualMachine)
-            ),
-            R::StoredOn => matches!((from_kind, to_kind), (A::VirtualMachine, A::Storage)),
-            R::On => matches!(
-                (from_kind, to_kind),
-                (A::Storage | A::Vrf, A::Device) | (A::Interface, A::Vlan | A::L2Domain | A::Vrf)
-            ),
-            R::Uses => matches!(
-                (from_kind, to_kind),
-                (A::Device, A::Interface) | (A::Vrf, A::AddressSpace)
-            ),
-            R::PoweredBy => matches!(
-                (from_kind, to_kind),
-                (A::Device, A::Port) | (A::Port, A::PowerFeed)
-            ),
-            R::Manages => matches!(
-                (from_kind, to_kind),
-                (A::Device, A::Device) | (A::Service, A::Device | A::VirtualMachine)
-            ),
-            R::MemberOf => matches!(
-                (from_kind, to_kind),
-                (A::Interface, A::Lag) | (A::Device, A::Cluster)
-            ),
-            R::DependsOn => matches!((from_kind, to_kind), (A::Service, A::Service | A::Device)),
-            R::Unspecified => false,
-        };
-        if !compatible {
-            return Err(Error::Invalid);
-        }
-        let key = format!("relation/{}", relation.relation_id);
-        let old = tx.get(&key)?;
-        if old.as_ref().map(|p| number(p, "revision")).transpose()? != expected {
-            return Err(Error::Conflict);
-        }
-        let placement = match kind {
-            R::InstalledIn => Some((from, to)),
-            R::Contains | R::HasPort => Some((to, from)),
-            _ => None,
-        };
-        if let Some((child, parent)) = placement {
-            tx.check_physical_parent(child, parent, &key)?;
-        }
-        let mut p = target_props(from);
-        p.extend(props([
-            ("to_asset", text(to.asset.to_string())),
-            ("to_incarnation", text(to.incarnation.to_string())),
-            ("kind", Value::Int(relation.kind.into())),
-            ("authority", text(&relation.authority_id)),
-        ]));
-        if old
-            .as_ref()
-            .is_some_and(|old| p.iter().all(|(key, value)| old.get(key) == Some(value)))
-        {
-            tx.commit()?;
-            return expected.ok_or(Error::Corrupt);
-        }
-        let revision = expected.unwrap_or(0).checked_add(1).ok_or(Error::Limit)?;
-        p.insert("revision".into(), int(revision)?);
-        let source_changed = old.as_ref().is_none_or(|old| {
-            old.get("asset") != p.get("asset") || old.get("incarnation") != p.get("incarnation")
-        });
-        let target_changed = old.as_ref().is_none_or(|old| {
-            old.get("to_asset") != p.get("to_asset")
-                || old.get("to_incarnation") != p.get("to_incarnation")
-        });
-        tx.put_against(&key, "relations", Class::Inventory, p, old.as_ref())?;
-        if source_changed {
-            if old.is_some() {
-                self.db.execute_in_transaction(
-                    tx.id.ok_or(Error::Corrupt)?,
-                    "MATCH (r:OmRow {key:$key})<-[e:OmRelationFrom]-() DELETE e",
-                    params([("key", text(&key))]),
-                )?;
-            }
-            self.db.execute_in_transaction(tx.id.ok_or(Error::Corrupt)?,"MATCH (a:OmRow {key:$from}), (r:OmRow {key:$key}) CREATE (a)-[:OmRelationFrom]->(r)",params([("from",text(asset_key(from))),("key",text(&key))]))?;
-        }
-        if target_changed {
-            if old.is_some() {
-                self.db.execute_in_transaction(
-                    tx.id.ok_or(Error::Corrupt)?,
-                    "MATCH (r:OmRow {key:$key})-[e:OmRelationTo]->() DELETE e",
-                    params([("key", text(&key))]),
-                )?;
-            }
-            self.db.execute_in_transaction(
-                tx.id.ok_or(Error::Corrupt)?,
-                "MATCH (r:OmRow {key:$key}), (b:OmRow {key:$to}) CREATE (r)-[:OmRelationTo]->(b)",
-                params([("to", text(asset_key(to))), ("key", text(&key))]),
-            )?;
-        }
-        tx.audit(&key, actor, "relation.accepted", revision, now)?;
+        let revision = tx.save_typed_relation(relation, expected, actor, now)?;
         tx.commit()?;
         Ok(revision)
     }
@@ -697,7 +574,7 @@ impl Store {
         Ok(result)
     }
 }
-fn relation_projection(p: &Properties) -> Result<wire::Relation> {
+pub(super) fn relation_projection(p: &Properties) -> Result<wire::Relation> {
     let key = p.get("key").and_then(Value::as_str).ok_or(Error::Corrupt)?;
     Ok(wire::Relation {
         relation_id: key.strip_prefix("relation/").ok_or(Error::Corrupt)?.into(),
@@ -716,6 +593,95 @@ fn relation_projection(p: &Properties) -> Result<wire::Relation> {
 }
 
 impl Tx<'_> {
+    pub(super) fn save_typed_relation(
+        &mut self,
+        relation: &wire::Relation,
+        expected: Option<u64>,
+        actor: &str,
+        now: u64,
+    ) -> Result<u64> {
+        let from = AssetRef::try_from(relation.from.as_ref().ok_or(Error::Invalid)?)
+            .map_err(|_| Error::Invalid)?;
+        let to = AssetRef::try_from(relation.to.as_ref().ok_or(Error::Invalid)?)
+            .map_err(|_| Error::Invalid)?;
+        let from_row = self.asset(from)?;
+        let to_row = self.asset(to)?;
+        if number(&from_row, "adoption")? != wire::Adoption::Adopted as u64
+            || number(&to_row, "adoption")? != wire::Adoption::Adopted as u64
+        {
+            return Err(Error::Invalid);
+        }
+        let from_kind = wire::AssetKind::try_from(number(&from_row, "kind")? as i32)
+            .map_err(|_| Error::Corrupt)?;
+        let to_kind = wire::AssetKind::try_from(number(&to_row, "kind")? as i32)
+            .map_err(|_| Error::Corrupt)?;
+        let kind = wire::RelationKind::try_from(relation.kind).map_err(|_| Error::Invalid)?;
+        if !compatible(from_kind, to_kind, kind) {
+            return Err(Error::Invalid);
+        }
+        let key = format!("relation/{}", relation.relation_id);
+        let old = self.get(&key)?;
+        if old.as_ref().map(|p| number(p, "revision")).transpose()? != expected {
+            return Err(Error::Conflict);
+        }
+        let placement = match kind {
+            wire::RelationKind::InstalledIn => Some((from, to)),
+            wire::RelationKind::Contains | wire::RelationKind::HasPort => Some((to, from)),
+            _ => None,
+        };
+        if let Some((child, parent)) = placement {
+            self.check_physical_parent(child, parent, &key)?;
+        }
+        let mut data = target_props(from);
+        data.extend(props([
+            ("to_asset", text(to.asset.to_string())),
+            ("to_incarnation", text(to.incarnation.to_string())),
+            ("kind", Value::Int(relation.kind.into())),
+            ("authority", text(&relation.authority_id)),
+        ]));
+        if old
+            .as_ref()
+            .is_some_and(|prior| data.iter().all(|(k, v)| prior.get(k) == Some(v)))
+        {
+            return expected.ok_or(Error::Corrupt);
+        }
+        let revision = expected.unwrap_or(0).checked_add(1).ok_or(Error::Limit)?;
+        data.insert("revision".into(), int(revision)?);
+        let source_changed = old.as_ref().is_none_or(|p| {
+            p.get("asset") != data.get("asset") || p.get("incarnation") != data.get("incarnation")
+        });
+        let target_changed = old.as_ref().is_none_or(|p| {
+            p.get("to_asset") != data.get("to_asset")
+                || p.get("to_incarnation") != data.get("to_incarnation")
+        });
+        self.put_against(&key, "relations", Class::Inventory, data, old.as_ref())?;
+        if source_changed {
+            if old.is_some() {
+                self.store.db.execute_in_transaction(
+                    self.id.ok_or(Error::Corrupt)?,
+                    "MATCH (r:OmRow {key:$key})<-[e:OmRelationFrom]-() DELETE e",
+                    params([("key", text(&key))]),
+                )?;
+            }
+            self.store.db.execute_in_transaction(self.id.ok_or(Error::Corrupt)?, "MATCH (a:OmRow {key:$from}), (r:OmRow {key:$key}) CREATE (a)-[:OmRelationFrom]->(r)", params([("from", text(asset_key(from))), ("key", text(&key))]))?;
+        }
+        if target_changed {
+            if old.is_some() {
+                self.store.db.execute_in_transaction(
+                    self.id.ok_or(Error::Corrupt)?,
+                    "MATCH (r:OmRow {key:$key})-[e:OmRelationTo]->() DELETE e",
+                    params([("key", text(&key))]),
+                )?;
+            }
+            self.store.db.execute_in_transaction(
+                self.id.ok_or(Error::Corrupt)?,
+                "MATCH (r:OmRow {key:$key}), (a:OmRow {key:$to}) CREATE (r)-[:OmRelationTo]->(a)",
+                params([("to", text(asset_key(to))), ("key", text(&key))]),
+            )?;
+        }
+        self.audit(&key, actor, "relation.accepted", revision, now)?;
+        Ok(revision)
+    }
     fn physical_parent(&self, child: AssetRef, skip: &str) -> Result<Option<AssetRef>> {
         let mut parents = Vec::with_capacity(2);
         for (query, kinds, incoming) in [
@@ -784,5 +750,55 @@ impl Tx<'_> {
             current = self.physical_parent(node, skip)?;
         }
         Ok(())
+    }
+}
+
+pub(super) fn compatible(
+    from: wire::AssetKind,
+    to: wire::AssetKind,
+    kind: wire::RelationKind,
+) -> bool {
+    use wire::{AssetKind as K, RelationKind as R};
+    match kind {
+        R::InstalledIn => matches!(
+            (from, to),
+            (K::Device, K::Rack | K::Site | K::Location)
+                | (K::Rack, K::Site | K::Location)
+                | (K::Location, K::Site | K::Location)
+        ),
+        R::Contains => matches!(
+            (from, to),
+            (K::Device, K::Device | K::Interface | K::AddressReference)
+                | (
+                    K::VirtualMachine | K::Interface,
+                    K::Interface | K::AddressReference
+                )
+                | (K::Service, K::AddressReference)
+        ),
+        R::HasPort => matches!((from, to), (K::Device, K::Port)),
+        R::Carries => matches!((from, to), (K::Port, K::Interface)),
+        R::ConnectedTo => matches!((from, to), (K::Port, K::Cable) | (K::Cable, K::Port)),
+        R::AssignedTo => matches!((from, to), (K::IpAddress, K::Interface)),
+        R::RunsOn => matches!(
+            (from, to),
+            (K::VirtualMachine, K::Device) | (K::Service, K::Device | K::VirtualMachine)
+        ),
+        R::StoredOn => matches!((from, to), (K::VirtualMachine, K::Storage)),
+        R::On => matches!(
+            (from, to),
+            (K::Storage | K::Vrf, K::Device) | (K::Interface, K::Vlan | K::L2Domain | K::Vrf)
+        ),
+        R::Uses => matches!(
+            (from, to),
+            (K::Device, K::Interface) | (K::Vrf, K::AddressSpace)
+        ),
+        R::PoweredBy => matches!((from, to), (K::Device, K::Port) | (K::Port, K::PowerFeed)),
+        R::Manages => matches!(
+            (from, to),
+            (K::Device, K::Device) | (K::Service, K::Device | K::VirtualMachine)
+        ),
+        R::MemberOf => matches!((from, to), (K::Interface, K::Lag) | (K::Device, K::Cluster)),
+        R::DependsOn => matches!((from, to), (K::Service, K::Service | K::Device)),
+        R::Unspecified => false,
     }
 }

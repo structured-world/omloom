@@ -18,19 +18,293 @@ async function host(directory, fixture = 'operator', grants) {
   return { url, async stop() { if (child.exitCode !== null || child.signalCode !== null) return; const exit = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGINT'); await exit; } };
 }
 async function create(page, name, kind = 'DEVICE') {
+  // These fixtures create independent roots. Child creation has its own scoped journey.
+  const close = page.getByRole('button', { name: 'Close resource details', exact: true });
+  if (await close.isVisible()) { await close.click(); await expect(page.getByRole('region', { name: 'Resource details' })).toBeHidden(); }
   await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: kind.toLowerCase().replaceAll('_', ' ') }, { timeout: 5000 });
   await dialog.getByLabel('Name', { exact: true }).fill(name, { timeout: 5000 });
   await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
   await expect(dialog).toBeHidden();
-  await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
-  await page.getByRole('button', { name, exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name, exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Resource details' })).toBeVisible();
   const hash = new URL(page.url()).hash;
   const params = new URLSearchParams(hash.slice(hash.indexOf('?') + 1));
   return { asset_id: params.get('asset'), incarnation: params.get('incarnation') };
 }
+
+test('phone creates local components and returns through the original context', async ({ page }) => {
+  // Child creation must not become a global peer or require upstream network knowledge.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-local-phone-'));
+  const server = await host(dir);
+  try {
+    page.setDefaultTimeout(5000);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(server.url);
+    const vm = await create(page, 'Guest under review', 'VIRTUAL_MACHINE');
+    await page.getByLabel('Resource perspective', { exact: true }).selectOption({ label: 'Network' }, { timeout: 5000 });
+    await expect(page.getByRole('button', { name: 'Allocate IP / prefix', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('Inside Guest under review');
+    await expect(dialog.getByLabel('Resource kind', { exact: true }).locator('option').filter({ hasText: /^virtual machine$/ })).toHaveCount(0);
+    await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'interface' });
+    await dialog.getByLabel('Name', { exact: true }).fill('eth0');
+    await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('eth0');
+    await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+    await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'address reference' });
+    await dialog.getByLabel('IP address', { exact: true }).fill('192.0.2.10');
+    await expect(dialog.getByLabel('Address space', { exact: true })).toHaveCount(0);
+    await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('192.0.2.10');
+    await page.reload();
+    await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('192.0.2.10');
+    await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('eth0');
+    await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
+    expect(new URLSearchParams(new URL(page.url()).hash.split('?')[1]).get('asset')).toBe(vm.asset_id);
+    await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('Guest under review');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: 'test-results/local-components-phone.png', fullPage: true });
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('inventory choices apply together, cancel cleanly and keep the list compact', async ({ page }) => {
+  // Native multi-selects clipped options and consumed the search area; choices need a deliberate review step.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-choices-ui-'));
+  const server = await host(dir);
+  try {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.goto(server.url);
+    await create(page, 'Rack host');
+    await create(page, 'Build guest', 'VIRTUAL_MACHINE');
+    await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
+    await page.getByRole('button', { name: 'Resource kinds', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByRole('checkbox', { name: 'device', exact: true }).check();
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Build guest', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Resource kinds', exact: true }).click();
+    await dialog.getByRole('checkbox', { name: 'device', exact: true }).check();
+    await dialog.getByRole('button', { name: 'Apply selection', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Build guest', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Rack host', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Columns', exact: true }).click();
+    await dialog.getByRole('checkbox', { name: 'Serial number', exact: true }).check();
+    await dialog.getByRole('button', { name: 'Apply selection', exact: true }).click();
+    await expect(page.getByRole('columnheader', { name: 'serial', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Columns', exact: true }).click();
+    for (const name of ['Name', 'Description', 'Serial number']) await dialog.getByRole('checkbox', { name, exact: true }).uncheck();
+    await expect(dialog.getByRole('button', { name: 'Apply selection', exact: true })).toBeDisabled();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('button', { name: 'Columns', exact: true })).toBeFocused();
+    await expect(page.locator('select[multiple]')).toHaveCount(0);
+    const searchBox = await page.getByLabel('Search inventory').boundingBox();
+    const table = await page.locator('table').boundingBox();
+    expect(searchBox.width).toBeGreaterThan(280);
+    expect(table.y).toBeLessThan(380);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.getByRole('button', { name: 'Rack host', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Resource details' })).toBeVisible();
+    const inventory = await page.getByRole('region', { name: 'Inventory', exact: true }).boundingBox();
+    const detail = await page.getByRole('region', { name: 'Resource details' }).boundingBox();
+    expect(detail.x).toBeGreaterThanOrEqual(inventory.x + inventory.width);
+    await page.screenshot({ path: 'test-results/inventory-wide-inspector.png', fullPage: true });
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('peer connection review preserves the resource context through edit and removal', async ({ page }) => {
+  // Local details must never silently expose peers or edit an unseen old endpoint.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-peer-ui-')); const server = await host(dir);
+  try {
+    await page.goto(server.url);
+    await create(page,'Application','SERVICE');
+    const backup = await create(page,'Backup','SERVICE');
+    const archive = await create(page,'Archive','SERVICE');
+    await page.getByRole('button',{name:'Close resource details',exact:true}).click();
+    await page.getByLabel('Search inventory').fill('Application'); await page.getByRole('button',{name:'Search',exact:true}).click();
+    await page.getByRole('button',{name:'Application',exact:true}).click(); const original = page.url();
+    await page.getByRole('button',{name:'Connections in broader scope',exact:true}).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByRole('button',{name:'Choose connection endpoints',exact:true}).click();
+    await dialog.getByLabel('Other endpoint',{exact:true}).selectOption(`${backup.asset_id}/${backup.incarnation}`);
+    await dialog.getByRole('button',{name:'Review connection',exact:true}).click();
+    await dialog.getByLabel('Relationship',{exact:true}).selectOption({label:'depends on'});
+    await dialog.getByRole('button',{name:'Back',exact:true}).click();
+    await expect(dialog.getByLabel('Other endpoint',{exact:true})).toHaveValue(`${backup.asset_id}/${backup.incarnation}`);
+    await dialog.getByRole('button',{name:'Review connection',exact:true}).click();
+    await dialog.getByRole('button',{name:'Add relationship',exact:true}).click(); await expect(dialog).toBeHidden();
+    await expect(page).toHaveURL(original);
+    await expect(page.getByRole('region',{name:'Resource details'})).not.toContainText('Backup');
+    await page.getByRole('button',{name:'Connections in broader scope',exact:true}).click();
+    await dialog.getByRole('button',{name:'Review existing connections',exact:true}).click();
+    await expect(dialog).toContainText('Backup');
+    await dialog.getByRole('button',{name:'Change connection',exact:true}).click();
+    await dialog.getByLabel('Other endpoint',{exact:true}).selectOption(`${archive.asset_id}/${archive.incarnation}`);
+    await dialog.getByRole('button',{name:'Review connection',exact:true}).click();
+    await dialog.getByRole('button',{name:'Save reviewed relationship',exact:true}).click(); await expect(dialog).toBeHidden();
+    await page.getByRole('button',{name:'Connections in broader scope',exact:true}).click();
+    await dialog.getByRole('button',{name:'Review existing connections',exact:true}).click();
+    await expect(dialog).toContainText('Archive'); await expect(dialog).not.toContainText('Backup');
+    await dialog.getByRole('button',{name:'Review removal',exact:true}).click();
+    await dialog.getByRole('button',{name:'Remove reviewed relationship',exact:true}).click(); await expect(dialog).toBeHidden();
+    await page.reload(); await expect(page).toHaveURL(original);
+    await page.getByRole('button',{name:'Connections in broader scope',exact:true}).click();
+    await dialog.getByRole('button',{name:'Review existing connections',exact:true}).click();
+    await expect(dialog).toContainText('No connections are visible');
+    await page.screenshot({path:'test-results/peer-context-desktop.png',fullPage:true});
+  } finally { await server.stop(); await rm(dir,{recursive:true,force:true}); }
+});
+
+test('address mapping reviews a new allocation and commits its explicit assignment together', async ({ page }) => {
+  // Preparing a new canonical address must not allocate before the final mapping review.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-binding-ui-')); let server = await host(dir);
+  try {
+    await page.goto(server.url); await create(page,'Real namespace','ADDRESS_SPACE');
+    const iface = await create(page,'Guest eth0','INTERFACE');
+    await page.getByRole('button',{name:'+ Create resource',exact:true}).click();
+    let dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Resource kind',{exact:true}).selectOption({label:'address reference'});
+    await dialog.getByLabel('IP address',{exact:true}).fill('192.0.2.80');
+    await dialog.getByRole('button',{name:'More known details',exact:true}).click();
+    await dialog.getByLabel('Address meaning change',{exact:true}).selectOption('set');
+    await dialog.getByLabel('Address meaning',{exact:true}).selectOption({label:'configured'});
+    await dialog.getByRole('button',{name:'Save known address',exact:true}).click(); await expect(dialog).toBeHidden();
+    await page.getByRole('button',{name:'Resolve address in broader scope',exact:true}).click();
+    dialog = page.getByRole('dialog',{name:'Resolve address in broader scope',exact:true});
+    await dialog.getByRole('button',{name:'Choose allocation context',exact:true}).click();
+    await dialog.getByRole('button',{name:'Prepare new allocation',exact:true}).click();
+    const allocation = page.getByRole('dialog',{name:'Allocate network resource',exact:true});
+    await allocation.getByLabel('Name',{exact:true}).fill('Guest allocation');
+    await allocation.getByLabel('Address / prefix',{exact:true}).fill('192.0.2.80/32');
+    await allocation.getByLabel('Address space',{exact:true}).selectOption({label:await allocation.getByLabel('Address space',{exact:true}).locator('option').filter({hasText:'Real namespace'}).textContent()});
+    await allocation.getByRole('button',{name:'Review allocation',exact:true}).click(); await expect(allocation).toBeHidden();
+    await expect(dialog).toContainText('commit together');
+    await dialog.getByLabel('Intended assignment',{exact:true}).selectOption(`${iface.asset_id}/${iface.incarnation}`);
+    await dialog.getByRole('button',{name:'Apply reviewed mapping',exact:true}).click(); await expect(dialog).toBeHidden();
+    await expect(page.getByRole('region',{name:'Resource details'}).locator('dt').filter({hasText:/^binding$/})).toHaveCount(1);
+    const hash = new URL(page.url()).hash; await server.stop(); server = await host(dir); await page.goto(server.url+hash);
+    await expect(page.getByRole('region',{name:'Resource details'})).toContainText('192.0.2.80');
+    await page.goto(server.url); await page.getByRole('button',{name:'Guest allocation',exact:true}).click();
+    await expect(page.getByRole('button',{name:`Interface ${iface.asset_id.slice(-8)}`,exact:true})).toBeVisible();
+  } finally { await server.stop(); await rm(dir,{recursive:true,force:true}); }
+});
+
+test('prefix context allocates and retrieves children without reselecting its namespace', async ({ page }) => {
+  // The containing prefix is an explicit allocation context, not an inherited VRF.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-ui-')); const server = await host(dir);
+  try {
+    await page.goto(server.url); await create(page,'Namespace under review','ADDRESS_SPACE');
+    await page.getByRole('navigation',{name:'Views'}).getByRole('button',{name:'Network',exact:true}).click();
+    await page.getByRole('button',{name:'Allocate IP / prefix',exact:true}).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('Within Namespace under review');
+    await expect(dialog.getByLabel('Address space',{exact:true})).toHaveCount(0);
+    await dialog.getByLabel('Kind',{exact:true}).selectOption({label:'Prefix'});
+    await dialog.getByLabel('Name',{exact:true}).fill('Guest subnet');
+    await dialog.getByLabel('Address / prefix',{exact:true}).fill('2001:db8:1::/64');
+    await dialog.getByRole('button',{name:'Allocate',exact:true}).click(); await expect(dialog).toBeHidden();
+    await page.getByRole('button',{name:'Guest subnet',exact:true}).click();
+    await page.getByRole('button',{name:'Allocate IP / prefix',exact:true}).click();
+    await expect(dialog).toContainText('Within Guest subnet');
+    await dialog.getByLabel('Name',{exact:true}).fill('Guest address');
+    await dialog.getByLabel('Address / prefix',{exact:true}).fill('2001:db8:1::10/128');
+    await dialog.getByRole('button',{name:'Allocate',exact:true}).click(); await expect(dialog).toBeHidden();
+    await page.getByLabel('Search inventory').fill('2001:db8:1::10');
+    await page.getByRole('button',{name:'Search',exact:true}).click();
+    await expect(page.getByRole('button',{name:'Guest address',exact:true})).toBeVisible();
+    await page.reload(); await expect(page.getByRole('button',{name:'Guest address',exact:true})).toBeVisible();
+  } finally { await server.stop(); await rm(dir,{recursive:true,force:true}); }
+});
+
+test('workspace creation starts with the relevant resource type', async ({ page }) => {
+  // Views share inventory but should not make every creation start as a physical device.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-context-ui-'));
+  const server = await host(dir);
+  try {
+    await page.goto(server.url);
+    for (const [view, kind] of [['Virtualization', 'virtual machine'], ['Services', 'service'], ['Hardware', 'device']]) {
+      await page.getByRole('navigation', { name: 'Views' }).getByRole('button', { name: view, exact: true }).click();
+      await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+      await expect(page.getByRole('dialog').getByLabel('Resource kind', { exact: true }).locator('option:checked')).toHaveText(kind);
+      await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
+    }
+    await page.getByRole('navigation', { name: 'Views' }).getByRole('button', { name: 'Network', exact: true }).click();
+    await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+    await expect(page.getByRole('dialog').getByRole('heading', { name: 'Record known address', exact: true })).toBeVisible();
+    await page.getByRole('dialog').getByLabel('IP address', { exact: true }).fill('192.0.2.17');
+    await expect(page.getByRole('dialog').getByLabel('Address space', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('dialog').getByLabel('Routing context', { exact: true })).toHaveCount(0);
+    await page.getByRole('dialog').getByRole('button', { name: 'Save known address', exact: true }).click();
+    await expect(page.getByRole('dialog')).toBeHidden();
+    await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('192.0.2.17');
+    await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
+    await page.getByRole('button', { name: 'Allocate IP / prefix', exact: true }).click();
+    await expect(page.getByRole('dialog').getByRole('heading', { name: 'Allocate network resource', exact: true })).toBeVisible();
+    await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill('Pending address');
+    await page.getByRole('dialog').getByRole('button', { name: 'Create address space', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Create resource', exact: true }).getByLabel('Name', { exact: true }).fill('Local network scope');
+    await page.getByRole('dialog', { name: 'Create resource', exact: true }).getByRole('button', { name: 'Save resource', exact: true }).click();
+    await expect(page.getByRole('dialog').getByRole('heading', { name: 'Allocate network resource', exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog').getByLabel('Address space', { exact: true }).locator('option').filter({ hasText: 'Local network scope' })).toHaveCount(1);
+    await expect(page.getByRole('dialog').getByLabel('Name', { exact: true })).toHaveValue('Pending address');
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('phone inventory opens a dedicated detail and returns to the same search', async ({ page }) => {
+  // A phone should not require scrolling past the desktop table to inspect or edit its selected asset.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-phone-ui-'));
+  const server = await host(dir);
+  try {
+    await page.goto(server.url);
+    await create(page, 'Field router');
+    for (const name of ['Field node A', 'Field node B', 'Field node C', 'Field node D']) await create(page, name);
+    await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByRole('button', { name: 'Import CSV', exact: true })).toBeHidden();
+    await page.getByRole('button', { name: 'More', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Import CSV', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Refresh inventory', exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('button', { name: 'More', exact: true })).toHaveAttribute('aria-expanded', 'false');
+    expect((await page.locator('tbody tr').first().boundingBox()).y).toBeLessThan(560);
+    await page.getByLabel('Search inventory').fill('Field');
+    await page.getByRole('button', { name: 'Search', exact: true }).click();
+    await page.getByRole('checkbox', { name: 'Select Field router', exact: true }).check();
+    await page.getByRole('button', { name: 'Field router', exact: true }).scrollIntoViewIfNeeded();
+    const listPosition = await page.evaluate(() => scrollY);
+    expect(listPosition).toBeGreaterThan(0);
+    await page.getByRole('button', { name: 'Field router', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Inventory', exact: true })).toBeHidden();
+    await expect(page.getByRole('region', { name: 'Resource details' })).toBeVisible();
+    await page.screenshot({ path: 'test-results/phone-resource-detail.png', fullPage: true });
+    await page.getByRole('button', { name: 'Edit resource', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Description change', { exact: true }).selectOption('set');
+    await dialog.getByLabel('Description', { exact: true }).fill('Checked on site');
+    await page.screenshot({ path: 'test-results/phone-edit-resource.png', fullPage: true });
+    await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('Checked on site');
+    await page.getByRole('button', { name: 'Back to inventory', exact: true }).click();
+    await expect(page.getByLabel('Search inventory')).toHaveValue('Field');
+    await expect.poll(() => page.evaluate(() => scrollY)).toBe(listPosition);
+    await expect(page.getByRole('checkbox', { name: 'Select Field router', exact: true })).toBeChecked();
+    await expect(page.getByRole('button', { name: 'Field router', exact: true })).toBeVisible();
+    await page.getByLabel('Sort resources', { exact: true }).selectOption('name:desc');
+    await page.getByLabel('Select phone page', { exact: true }).check();
+    await expect(page.getByText('5 selected on this page', { exact: false })).toBeVisible();
+    await page.getByRole('button', { name: 'Clear selection', exact: true }).click();
+    await page.screenshot({ path: 'test-results/phone-inventory-list.png', fullPage: true });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.reload();
+    await expect(page.getByLabel('Search inventory')).toHaveValue('Field');
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
 
 test('shared gateway addresses use one durable group and intended participant set', async ({ page }) => {
   // One group spans two IPs; the UI must send its revision when editing through either address.
@@ -41,6 +315,7 @@ test('shared gateway addresses use one durable group and intended participant se
     await create(page, 'Tenant addresses', 'ADDRESS_SPACE');
     await create(page, 'Edge LAN', 'L2_DOMAIN');
     await create(page, 'Router uplink', 'INTERFACE');
+    await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
     await page.getByRole('navigation', { name: 'Views' }).getByRole('button', { name: 'Network', exact: false }).click();
     for (const [index, name] of ['Gateway A', 'Gateway B'].entries()) {
       await page.getByRole('button', { name: 'Allocate IP / prefix', exact: true }).click();
@@ -67,6 +342,7 @@ test('shared gateway addresses use one durable group and intended participant se
     await dialog.getByLabel('Intended priority', { exact: true }).fill('255');
     await dialog.getByRole('button', { name: 'Assign participant', exact: true }).click();
     await expect(dialog).toBeHidden();
+    await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
     await page.getByRole('button', { name: 'Gateway B', exact: true }).click();
     await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('Intended priority 255');
     const hash = new URL(page.url()).hash;
@@ -75,6 +351,7 @@ test('shared gateway addresses use one durable group and intended participant se
     await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('Intended priority 255');
     await page.getByRole('button', { name: 'Remove participant', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Remove participant', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
     await page.getByRole('button', { name: 'Gateway A', exact: true }).click();
     await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('Shared group:');
     await expect(page.getByRole('button', { name: 'Remove participant', exact: true })).toHaveCount(0);
@@ -90,6 +367,7 @@ test('team publication previews its audience and saved adjustments reset without
     await page.goto(server.url);
     await create(page, 'Private hypervisor');
     await create(page, 'Team VM', 'VIRTUAL_MACHINE');
+    await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
     await page.getByLabel('Search inventory').fill('Private');
     await page.getByRole('button', { name: 'Search', exact: true }).click();
     await page.getByRole('button', { name: 'Save view', exact: true }).click();
@@ -131,6 +409,7 @@ test('real disk inventory supports editing, context, private saves and restart',
     await expect(page.getByRole('heading', { name: 'Start with the infrastructure you know' })).toBeVisible();
     await create(page, 'Edge router');
     await create(page, 'Build worker', 'VIRTUAL_MACHINE');
+    await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
     await page.getByRole('button', { name: 'Edge router', exact: true }).click();
     await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('Stable identity');
     const originalUrl = page.url();
@@ -177,13 +456,18 @@ test('departments share one backup host while namespace and host projections rem
     const serviceStorage = await create(page, 'Engineering backup namespace', 'STORAGE');
     for (const storage of [devopsStorage, serviceStorage]) {
       await page.goto(`${server.url}/#/?asset=${storage.asset_id}&incarnation=${storage.incarnation}`);
-      await page.getByRole('button', { name: 'Add relationship', exact: true }).click();
+      await page.getByRole('button', { name: 'Connections in broader scope', exact: true }).click();
       const dialog = page.getByRole('dialog');
+      await dialog.getByRole('button', { name: 'Choose connection endpoints', exact: true }).click();
+      await dialog.getByRole('combobox', { name: 'Other endpoint', exact: true }).selectOption(`${backup.asset_id}/${backup.incarnation}`);
+      await dialog.getByRole('button', { name: 'Review connection', exact: true }).click();
       await dialog.getByRole('combobox', { name: 'Relationship', exact: true }).selectOption({ label: 'on' }, { timeout: 5000 });
-      await dialog.getByRole('combobox', { name: 'Destination', exact: true }).selectOption(`${backup.asset_id}/${backup.incarnation}`);
       await dialog.getByRole('button', { name: 'Add relationship', exact: true }).click();
       await expect(dialog).toBeHidden();
-      await expect(page.getByRole('region', { name: 'Resource details' })).toContainText(backup.asset_id.slice(-8));
+      await page.getByRole('button', { name: 'Connections in broader scope', exact: true }).click();
+      await dialog.getByRole('button', { name: 'Review existing connections', exact: true }).click();
+      await expect(dialog).toContainText('Shared backup host');
+      await dialog.getByRole('button', { name: 'Return to resource', exact: true }).click();
     }
     const grant = targets => ({ selection: { scope: 'targets', targets }, read: { mode: 'all' }, write: { mode: 'all' }, writable: true });
     const operationsFile = join(dir, 'operations.json');
@@ -250,6 +534,7 @@ test('selected roots survive view changes, personal save and reload', async ({ p
     await create(page, 'First scope host');
     await create(page, 'Second scope VM', 'VIRTUAL_MACHINE');
     await create(page, 'Outside selection');
+    await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
     await page.getByRole('checkbox', { name: 'Select First scope host', exact: true }).check();
     await page.getByRole('checkbox', { name: 'Select Second scope VM', exact: true }).check();
     await page.getByRole('button', { name: 'Use selected as scope', exact: true }).click({ timeout: 5000 });

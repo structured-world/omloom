@@ -1,0 +1,107 @@
+/* Inventory is the primary workspace; controls share a compact, readable rhythm. */
+.shell { grid-template-columns: 196px minmax(0, 1fr); }
+.sidebar { padding: 22px 14px; }
+.brand { margin-bottom: 26px; }
+main { padding: 0 24px 32px; }
+.topbar { height: 44px; margin-bottom: 12px; }
+.workspace-head { flex-direction: row; align-items: center; gap: 10px; margin-bottom: 12px; }
+.workspace-head .actions button { font-size: 12px; padding: 7px 10px; }
+h1 { font-size: 26px; letter-spacing: -.6px; margin: 0; }
+.scopebar { padding: 7px 12px; margin-bottom: 12px; gap: 10px; }
+.workspace-content { display: grid; gap: 18px; align-items: start; }
+.inventory-toolbar { display: flex; flex-wrap: wrap; gap: 10px; padding: 12px; border-bottom: 1px solid #e6ecee; }
+.inventory-toolbar .search { flex: 1 1 100%; min-width: 0; }
+.query-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.query-tools .check { padding: 8px; font-size: 13px; }
+.table-meta { padding: 10px 12px; flex-wrap: wrap; gap: 8px; }
+.table-meta > div { justify-content: start; gap: 6px; }
+.table-meta button { padding: 6px 10px; }
+td, th { padding: 11px 12px; }
+.selection { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+.empty { padding: 30px 20px; }
+.empty > span { margin-bottom: 10px; }
+.pagination { padding: 12px; gap: 12px; flex-wrap: wrap; }
+.detail { margin-top: 0; padding: 18px; min-width: 0; }
+.detail header { flex-wrap: wrap; }
+.detail h2 { overflow-wrap: anywhere; }
+.detail .actions button { font-size: 12px; }
+.back-to-list { display: none; }
+.phone-list-tools { display: none; }
+.phone-more { display: none; }
+.phone-refresh { display: none; }
+.phone-context { display: none; }
+.secondary-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+dialog fieldset.choice-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; }
+.choice-list label.check { min-height: 40px; padding: 6px; font-size: 14px; overflow-wrap: anywhere; }
+dialog input, dialog select { min-height: 40px; }
+dialog input[type=checkbox] { min-height: 16px; }
+@media (min-width: 1350px) {
+  .workspace-content.split { grid-template-columns: minmax(0, 1fr) 380px; }
+  .split .detail { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; }
+  .split .detail dl { grid-template-columns: 105px minmax(0, 1fr); }
+}
+@media (min-width: 701px) and (max-width: 1349px) {
+  .split .detail { grid-row: 1; }
+  .workspace-head { flex-wrap: wrap; }
+}
+@media (max-width: 700px) {
+  .shell { display: block; }
+  .sidebar { padding: 10px 12px; }
+  .brand { font-size: 22px; margin-bottom: 8px; }
+  .sidebar nav button { min-height: 44px; font-size: 12px; }
+  .sidebar .saved-link { min-height: 44px; }
+  main { padding: 0 12px 24px; }
+  .topbar { display: none; }
+  .workspace-head { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 12px 0; }
+  .workspace-head h1 { font-size: 22px; }
+  .workspace-head .actions { gap: 6px; }
+  .workspace-actions { position: relative; }
+  .phone-more { display: inline-block; }
+  .phone-refresh { display: block; }
+  .phone-context { display: grid; gap: 12px; margin: 16px 0; padding: 12px; border: 1px solid #d5e0e3; border-radius: 8px; }
+  .phone-context label { display: grid; gap: 6px; }
+  .phone-context li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .secondary-actions { display: none; }
+  .secondary-actions.open { display: grid; position: absolute; top: calc(100% + 6px); right: 0; min-width: 170px; padding: 6px; border: 1px solid #cbd6d9; border-radius: 5px; background: #fff; box-shadow: 0 8px 24px #102e3a25; z-index: 2; }
+  .secondary-actions button { text-align: left; }
+  .workspace-head .primary { order: -1; }
+  button, input, select { min-height: 44px; }
+  input[type=checkbox] { min-height: 20px; width: 20px; height: 20px; }
+  .scopebar { margin-bottom: 12px; }
+  .inventory-toolbar { padding: 10px; }
+  .inventory-toolbar .search { width: 100%; }
+  .search input { font-size: 16px; width: 100%; }
+  .query-tools { gap: 6px; }
+  .query-tools button, .query-tools .check { font-size: 12px; }
+  .table-meta { display: flex; align-items: center; }
+  .table-meta > div { margin-top: 0; }
+  .table-scroll { overflow: visible; }
+  .phone-list-tools { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12px; }
+  .phone-list-tools label { display: flex; align-items: center; gap: 8px; }
+  table, tbody { display: block; white-space: normal; }
+  thead { display: none; }
+  tbody tr { display: grid; grid-template-columns: 32px minmax(0, 1fr); padding: 12px; border-top: 1px solid #e1e8eb; }
+  tbody td { grid-column: 2; padding: 2px 0; border: 0; overflow-wrap: anywhere; }
+  tbody td:first-child { grid-column: 1; grid-row: 1 / span 10; padding-top: 10px; }
+  tbody .resource-link { font-size: 16px; text-align: left; }
+  tbody .identity-link { min-height: 44px; }
+  tbody td.empty-field, .has-name tbody td:last-child { display: none; }
+  tbody td[data-label]:not(:has(.resource-link))::before { content: attr(data-label) ': '; color: #657b85; font-size: 12px; }
+  .has-detail .inventory, .has-detail .scopebar, .has-detail .workspace-head .actions, .has-detail .sidebar { display: none; }
+  .has-detail .workspace-head { margin-bottom: 10px; }
+  .has-detail h1 { font-size: 16px; color: #657b85; }
+  .has-detail .topbar { margin-bottom: 8px; }
+  .back-to-list { display: inline-flex; margin-bottom: 16px; }
+  .detail { padding: 14px; }
+  .detail header { flex-direction: column; }
+  .detail dl { grid-template-columns: 100px minmax(0, 1fr); }
+  .section-title { align-items: start; flex-wrap: wrap; gap: 10px; }
+  dialog { width: 100%; max-width: 100%; height: 100dvh; max-height: 100dvh; margin: 0; border: 0; border-radius: 0; overflow: auto; }
+  dialog header { position: sticky; top: 0; background: #fff; z-index: 1; padding: 12px 16px; }
+  dialog header h2 { font-size: 20px; }
+  dialog header button { min-width: 44px; }
+  dialog form { padding: 16px; }
+  dialog input, dialog select, dialog textarea { font-size: 16px; }
+  dialog footer { position: sticky; bottom: -16px; margin: 20px -16px -16px; padding: 12px 16px max(12px, env(safe-area-inset-bottom)); background: #fff; z-index: 1; }
+  dialog fieldset.choice-list { grid-template-columns: 1fr; }
+}

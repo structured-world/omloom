@@ -5,6 +5,7 @@ import { ServiceType } from "@protobuf-ts/runtime-rpc";
 import { MessageType } from "@protobuf-ts/runtime";
 import { Observation } from "./contracts";
 import { Relation } from "./contracts";
+import { RelationKind } from "./contracts";
 import { AssetKind } from "./contracts";
 import { AssetRef } from "./contracts";
 import { Field } from "./contracts";
@@ -102,6 +103,126 @@ export interface Query {
      * @generated from protobuf field: bool unplaced = 11
      */
     unplaced: boolean;
+    /**
+     * Explicit resource perspective within roots, rechecked by the server. Only
+     * its local components are projected; upstream topology is not inferred.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef focus = 12
+     */
+    focus?: AssetRef;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.WorkingContext
+ */
+export interface WorkingContext {
+    /**
+     * User-selected enclosing roots. Empty explicitly selects all permitted
+     * inventory; this selector never supplies resource or field authority.
+     *
+     * @generated from protobuf field: repeated omloom.v1.AssetRef roots = 1
+     */
+    roots: AssetRef[];
+    /**
+     * Current local resource, if any. Creation refines it; peer edits require an
+     * explicit context encompassing both endpoints without this local focus.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef focus = 2
+     */
+    focus?: AssetRef;
+    /**
+     * Application revision reviewed for scoped mutations. Required with roots
+     * or focus; omit for retrieval. The server rechecks membership at commit.
+     *
+     * @generated from protobuf field: optional uint64 expected = 3
+     */
+    expected?: bigint;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.Prepare
+ */
+export interface Prepare {
+    /**
+     * User-selected presentation used to suggest applicable creation actions;
+     * the server derives actual parent, kind and field permissions independently.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.View view = 1
+     */
+    view: View;
+    /**
+     * Explicit relationship source selected in the working context; supply both
+     * endpoints to obtain their actual permitted typed relationship choices.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef from = 2
+     */
+    from?: AssetRef;
+    /**
+     * Explicit relationship destination; neither endpoint expands the selector.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef to = 3
+     */
+    to?: AssetRef;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.Creation
+ */
+export interface Creation {
+    /**
+     * Server-qualified resource kind available at this exact parent/context.
+     *
+     * @generated from protobuf field: omloom.v1.AssetKind kind = 1
+     */
+    kind: AssetKind;
+    /**
+     * Actual parent and its permitted name, absent for standalone inventory.
+     * The user selects one returned parent when the scope contains several.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.Item parent = 2
+     */
+    parent?: Item;
+    /**
+     * Applicable writable built-ins and stable company field identities. Omitted
+     * fields are preserved; a parent grants neither their values nor permissions.
+     *
+     * @generated from protobuf field: repeated string fields = 3
+     */
+    fields: string[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.Actions
+ */
+export interface Actions {
+    /**
+     * Server-derived bounded creation choices, never a client authority assertion.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.Creation creations = 1
+     */
+    creations: Creation[];
+    /**
+     * Exact application revision of the prepared choices, echoed for mutations.
+     *
+     * @generated from protobuf field: uint64 revision = 2
+     */
+    revision: bigint;
+    /**
+     * Typed relationship kinds applicable to the requested exact endpoint pair.
+     *
+     * @generated from protobuf field: repeated omloom.v1.RelationKind relationships = 3
+     */
+    relationships: RelationKind[];
+    /**
+     * Writable fields of the focused existing resource, absent without a focus.
+     * These are server-derived form inputs, never inherited from its parent.
+     *
+     * @generated from protobuf field: repeated string fields = 4
+     */
+    fields: string[];
+    /**
+     * Explicit allocation choices within the selected namespace/prefix or L2
+     * domain. Separate from recording locally known address facts.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.Creation allocations = 5
+     */
+    allocations: Creation[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Item
@@ -219,6 +340,13 @@ export interface Detail {
      * @generated from protobuf field: optional omloom.workspace.v1.Item group = 7
      */
     group?: Item;
+    /**
+     * Minimal permitted endpoint labels for the returned relations, fetched in
+     * one bounded batch. These are projections of existing identities, not copies.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.Item related = 8
+     */
+    related: Item[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Participant
@@ -282,6 +410,13 @@ export interface Write {
      * @generated from protobuf field: repeated omloom.v1.Field changes = 4
      */
     changes: Field[];
+    /**
+     * Explicit existing parent selected for creation in an enclosing context.
+     * The server derives the typed attachment and commits it with the child.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef parent = 5
+     */
+    parent?: AssetRef;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Bulk
@@ -618,6 +753,121 @@ export interface Import {
      * @generated from protobuf field: string source = 5
      */
     source: string;
+    /**
+     * Explicit parent selected for new imported rows; updates retain their
+     * existing attachment. Preview and acceptance check the same working context.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef parent = 6
+     */
+    parent?: AssetRef;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.Address
+ */
+export interface Address {
+    /**
+     * Existing known-address reference for conditional editing, absent to record
+     * a new fact. Equal IP bytes never identify an existing reference implicitly.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef target = 1
+     */
+    target?: AssetRef;
+    /**
+     * Revision read for this reference, required for edits and absent on creation.
+     *
+     * @generated from protobuf field: optional uint64 expected = 2
+     */
+    expected?: bigint;
+    /**
+     * User-known IPv4/IPv6 literal, without an invented mask or forwarding context.
+     * Required on creation; omission preserves it on edit without echoing a
+     * field the caller may not read. A scoped literal uses the zone field.
+     *
+     * @generated from protobuf field: optional string address = 3
+     */
+    address?: string;
+    /**
+     * Known assignment prefix length. Absent means unknown on creation and
+     * preserves the current value on edit; zero is a real /0.
+     *
+     * @generated from protobuf field: optional uint32 prefix_length = 4
+     */
+    prefixLength?: number;
+    /**
+     * User-selected meaning; configured and destination facts cannot substitute
+     * for one another or prove current reachability or allocation authority.
+     * Absence means unspecified on creation and preserves the meaning on edit.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.AddressMeaning meaning = 5
+     */
+    meaning?: AddressMeaning;
+    /**
+     * Known host-local IPv6 zone label, preserved when omitted on edit.
+     * It is not a portable routing/L2 identity.
+     *
+     * @generated from protobuf field: optional string zone = 6
+     */
+    zone?: string;
+    /**
+     * Actual parent/subject for a new fact, absent for standalone inventory.
+     * No device or interface is invented when the source did not supply one.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef parent = 7
+     */
+    parent?: AssetRef;
+    /**
+     * Explicit canonical IPAM identity selected in a reviewed broader context.
+     * Omission preserves a binding; clearing is an explicit separate edit.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef binding = 8
+     */
+    binding?: AssetRef;
+    /**
+     * Explicit removal of a prior binding, incompatible with a new binding.
+     *
+     * @generated from protobuf field: bool clear_binding = 9
+     */
+    clearBinding: boolean;
+    /**
+     * Explicitly make the assignment mask unknown; incompatible with prefix_length.
+     *
+     * @generated from protobuf field: bool clear_prefix_length = 10
+     */
+    clearPrefixLength: boolean;
+    /**
+     * Explicitly remove the known host-local zone; incompatible with zone.
+     *
+     * @generated from protobuf field: bool clear_zone = 11
+     */
+    clearZone: boolean;
+    /**
+     * Explicit optional description/company-field changes. Omitted fields remain
+     * untouched; name is derived from the known address and cannot be supplied.
+     *
+     * @generated from protobuf field: repeated omloom.v1.Field changes = 12
+     */
+    changes: Field[];
+    /**
+     * Explicit reviewed new canonical allocation, mutually exclusive with binding.
+     * Its namespace, uniqueness and optional assignment commit with this mapping.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.Network allocation = 13
+     */
+    allocation?: Network;
+    /**
+     * Explicit intended assignment to an existing permitted interface. Omitted
+     * means bind knowledge only, never infer an assignment from an address fact.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef interface = 14
+     */
+    interface?: AssetRef;
+    /**
+     * Intended participant priority for an explicitly selected VRRP assignment.
+     * This is not observed election state and is absent for ordinary assignment.
+     *
+     * @generated from protobuf field: optional uint32 priority = 15
+     */
+    priority?: number;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.ImportRow
@@ -769,6 +1019,14 @@ export interface Network {
      * @generated from protobuf field: optional uint64 previous_group_revision = 16
      */
     previousGroupRevision?: bigint;
+    /**
+     * Selected allocation container for creation. The server derives its real
+     * namespace/link and checks prefix containment without inheriting grants.
+     * Required for scoped creation; omitted when editing an existing allocation.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef parent = 17
+     */
+    parent?: AssetRef;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Member
@@ -937,6 +1195,14 @@ export interface Empty {
  */
 export interface Request {
     /**
+     * Explicit working selector for resource details, prepared actions and every
+     * inventory mutation/import. Query/export use Query roots/focus instead.
+     * Absence is rejected for mutation, never interpreted as global authority.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.WorkingContext working = 18
+     */
+    working?: WorkingContext;
+    /**
      * Exactly one user intention; no derived authorization, counts or status inputs.
      *
      * @generated from protobuf oneof: command
@@ -1062,6 +1328,22 @@ export interface Request {
          */
         export: Export;
     } | {
+        oneofKind: "prepare";
+        /**
+         * Prepare actual context-specific creation kinds, parents and writable fields.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.Prepare prepare = 16
+         */
+        prepare: Prepare;
+    } | {
+        oneofKind: "address";
+        /**
+         * Record or reconcile a known address without requiring allocation topology.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.Address address = 17
+         */
+        address: Address;
+    } | {
         oneofKind: undefined;
     };
 }
@@ -1147,6 +1429,14 @@ export interface Reply {
          */
         migrationPreview: MigrationPreview;
     } | {
+        oneofKind: "actions";
+        /**
+         * Applicable context-specific actions under the current application revision.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.Actions actions = 10
+         */
+        actions: Actions;
+    } | {
         oneofKind: undefined;
     };
 }
@@ -1221,6 +1511,23 @@ export enum SharedUse {
      */
     UNSPECIFIED = 3
 }
+/**
+ * @generated from protobuf enum omloom.workspace.v1.AddressMeaning
+ */
+export enum AddressMeaning {
+    /**
+     * @generated from protobuf enum value: ADDRESS_MEANING_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: ADDRESS_MEANING_CONFIGURED = 1;
+     */
+    CONFIGURED = 1,
+    /**
+     * @generated from protobuf enum value: ADDRESS_MEANING_DESTINATION = 2;
+     */
+    DESTINATION = 2
+}
 // @generated message type with reflection information, may provide speed optimized methods
 class Predicate$Type extends MessageType<Predicate> {
     constructor() {
@@ -1249,7 +1556,8 @@ class Query$Type extends MessageType<Query> {
             { no: 8, name: "descending", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
             { no: 9, name: "cursor", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 10, name: "limit", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
-            { no: 11, name: "unplaced", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+            { no: 11, name: "unplaced", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 12, name: "focus", kind: "message", T: () => AssetRef }
         ]);
     }
 }
@@ -1257,6 +1565,64 @@ class Query$Type extends MessageType<Query> {
  * @generated MessageType for protobuf message omloom.workspace.v1.Query
  */
 export const Query = new Query$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class WorkingContext$Type extends MessageType<WorkingContext> {
+    constructor() {
+        super("omloom.workspace.v1.WorkingContext", [
+            { no: 1, name: "roots", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AssetRef },
+            { no: 2, name: "focus", kind: "message", T: () => AssetRef },
+            { no: 3, name: "expected", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.WorkingContext
+ */
+export const WorkingContext = new WorkingContext$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class Prepare$Type extends MessageType<Prepare> {
+    constructor() {
+        super("omloom.workspace.v1.Prepare", [
+            { no: 1, name: "view", kind: "enum", T: () => ["omloom.workspace.v1.View", View, "VIEW_"] },
+            { no: 2, name: "from", kind: "message", T: () => AssetRef },
+            { no: 3, name: "to", kind: "message", T: () => AssetRef }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.Prepare
+ */
+export const Prepare = new Prepare$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class Creation$Type extends MessageType<Creation> {
+    constructor() {
+        super("omloom.workspace.v1.Creation", [
+            { no: 1, name: "kind", kind: "enum", T: () => ["omloom.v1.AssetKind", AssetKind, "ASSET_KIND_"] },
+            { no: 2, name: "parent", kind: "message", T: () => Item },
+            { no: 3, name: "fields", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.Creation
+ */
+export const Creation = new Creation$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class Actions$Type extends MessageType<Actions> {
+    constructor() {
+        super("omloom.workspace.v1.Actions", [
+            { no: 1, name: "creations", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Creation },
+            { no: 2, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 3, name: "relationships", kind: "enum", repeat: 1 /*RepeatType.PACKED*/, T: () => ["omloom.v1.RelationKind", RelationKind, "RELATION_KIND_"] },
+            { no: 4, name: "fields", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
+            { no: 5, name: "allocations", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Creation }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.Actions
+ */
+export const Actions = new Actions$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class Item$Type extends MessageType<Item> {
     constructor() {
@@ -1309,7 +1675,8 @@ class Detail$Type extends MessageType<Detail> {
             { no: 4, name: "imported", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Observation },
             { no: 5, name: "participants", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Participant },
             { no: 6, name: "participants_complete", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
-            { no: 7, name: "group", kind: "message", T: () => Item }
+            { no: 7, name: "group", kind: "message", T: () => Item },
+            { no: 8, name: "related", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Item }
         ]);
     }
 }
@@ -1350,7 +1717,8 @@ class Write$Type extends MessageType<Write> {
             { no: 1, name: "target", kind: "message", T: () => AssetRef },
             { no: 2, name: "expected", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 3, name: "kind", kind: "enum", T: () => ["omloom.v1.AssetKind", AssetKind, "ASSET_KIND_"] },
-            { no: 4, name: "changes", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Field }
+            { no: 4, name: "changes", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Field },
+            { no: 5, name: "parent", kind: "message", T: () => AssetRef }
         ]);
     }
 }
@@ -1507,7 +1875,8 @@ class Import$Type extends MessageType<Import> {
             { no: 2, name: "mappings", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Mapping },
             { no: 3, name: "kind", kind: "enum", T: () => ["omloom.v1.AssetKind", AssetKind, "ASSET_KIND_"] },
             { no: 4, name: "preview", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
-            { no: 5, name: "source", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+            { no: 5, name: "source", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 6, name: "parent", kind: "message", T: () => AssetRef }
         ]);
     }
 }
@@ -1515,6 +1884,32 @@ class Import$Type extends MessageType<Import> {
  * @generated MessageType for protobuf message omloom.workspace.v1.Import
  */
 export const Import = new Import$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class Address$Type extends MessageType<Address> {
+    constructor() {
+        super("omloom.workspace.v1.Address", [
+            { no: 1, name: "target", kind: "message", T: () => AssetRef },
+            { no: 2, name: "expected", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 3, name: "address", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "prefix_length", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ },
+            { no: 5, name: "meaning", kind: "enum", opt: true, T: () => ["omloom.workspace.v1.AddressMeaning", AddressMeaning, "ADDRESS_MEANING_"] },
+            { no: 6, name: "zone", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 7, name: "parent", kind: "message", T: () => AssetRef },
+            { no: 8, name: "binding", kind: "message", T: () => AssetRef },
+            { no: 9, name: "clear_binding", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 10, name: "clear_prefix_length", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 11, name: "clear_zone", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 12, name: "changes", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Field },
+            { no: 13, name: "allocation", kind: "message", T: () => Network },
+            { no: 14, name: "interface", kind: "message", T: () => AssetRef },
+            { no: 15, name: "priority", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.Address
+ */
+export const Address = new Address$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class ImportRow$Type extends MessageType<ImportRow> {
     constructor() {
@@ -1562,7 +1957,8 @@ class Network$Type extends MessageType<Network> {
             { no: 13, name: "group", kind: "message", T: () => AssetRef },
             { no: 14, name: "group_name", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 15, name: "expected_group", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
-            { no: 16, name: "previous_group_revision", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
+            { no: 16, name: "previous_group_revision", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 17, name: "parent", kind: "message", T: () => AssetRef }
         ]);
     }
 }
@@ -1681,6 +2077,7 @@ export const Empty = new Empty$Type();
 class Request$Type extends MessageType<Request> {
     constructor() {
         super("omloom.workspace.v1.Request", [
+            { no: 18, name: "working", kind: "message", T: () => WorkingContext },
             { no: 1, name: "identity", kind: "message", oneof: "command", T: () => Empty },
             { no: 2, name: "query", kind: "message", oneof: "command", T: () => Query },
             { no: 3, name: "read", kind: "message", oneof: "command", T: () => Read },
@@ -1695,7 +2092,9 @@ class Request$Type extends MessageType<Request> {
             { no: 12, name: "import", kind: "message", oneof: "command", T: () => Import },
             { no: 13, name: "network", kind: "message", oneof: "command", T: () => Network },
             { no: 14, name: "member", kind: "message", oneof: "command", T: () => Member },
-            { no: 15, name: "export", kind: "message", oneof: "command", T: () => Export }
+            { no: 15, name: "export", kind: "message", oneof: "command", T: () => Export },
+            { no: 16, name: "prepare", kind: "message", oneof: "command", T: () => Prepare },
+            { no: 17, name: "address", kind: "message", oneof: "command", T: () => Address }
         ]);
     }
 }
@@ -1715,7 +2114,8 @@ class Reply$Type extends MessageType<Reply> {
             { no: 6, name: "views", kind: "message", oneof: "result", T: () => Views },
             { no: 7, name: "preview", kind: "message", oneof: "result", T: () => Preview },
             { no: 8, name: "download", kind: "message", oneof: "result", T: () => Download },
-            { no: 9, name: "migration_preview", kind: "message", oneof: "result", T: () => MigrationPreview }
+            { no: 9, name: "migration_preview", kind: "message", oneof: "result", T: () => MigrationPreview },
+            { no: 10, name: "actions", kind: "message", oneof: "result", T: () => Actions }
         ]);
     }
 }

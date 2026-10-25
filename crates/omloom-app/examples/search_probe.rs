@@ -12,6 +12,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Store::open_with_query_memory(Path::new(&data), omloom_app::policy(), 128 * 1_048_576)?;
     let context = omloom_app::fixture("operator")?;
     let request = api::Request {
+        working: None,
         command: Some(api::request::Command::Query(api::Query {
             search: search.clone(),
             limit: 25,

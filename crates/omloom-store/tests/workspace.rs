@@ -6,6 +6,8 @@ use omloom_contracts::{
 };
 use omloom_store::{Error, Store, workspace::*};
 use support::*;
+#[path = "workspace/contexts.rs"]
+mod contexts;
 #[path = "workspace/groups.rs"]
 mod groups;
 #[path = "workspace/views.rs"]
@@ -37,6 +39,7 @@ fn call(
             context,
             api::Request {
                 command: Some(command),
+                working: Some(api::WorkingContext::default()),
             },
             100,
         )?
@@ -217,6 +220,7 @@ fn current_inventory_query_reopen_and_conflict() -> TestResult {
         expected: Some(1),
         kind: K::Device as i32,
         changes: vec![text_field("name", "edge-router")],
+        parent: None,
     };
     call(
         &store,
@@ -259,6 +263,7 @@ fn search_pages_deduplicate_before_limit_and_preserve_order() -> TestResult {
                 expected: Some(1),
                 kind: K::Device as i32,
                 changes: vec![text_field("description", "shared-description")],
+                parent: None,
             }),
         )?;
         expected.push(target.asset_id);
@@ -318,6 +323,7 @@ fn scopes_and_search_do_not_disclose_hidden_fields() -> TestResult {
             expected: Some(1),
             kind: K::VirtualMachine as i32,
             changes: vec![text_field("description", "private-contract")],
+            parent: None,
         }),
     )?;
     let mut limited = operator();
@@ -363,6 +369,7 @@ fn typed_search_branches_do_not_suppress_each_other_with_missing_properties() ->
             expected: Some(1),
             kind: K::Device as i32,
             changes: vec![text_field("description", "true")],
+            parent: None,
         }),
     )?;
     let typed = create(&store, &context, K::Device, "typed")?;
@@ -397,6 +404,7 @@ fn typed_search_branches_do_not_suppress_each_other_with_missing_properties() ->
                     name,
                     value: Some(value),
                 }],
+                parent: None,
             }),
         )?;
     }
@@ -435,7 +443,8 @@ fn supplied_missing_target_cannot_create_inventory() -> TestResult {
                 target: forged,
                 expected: None,
                 kind: K::Device as i32,
-                changes: vec![text_field("name", "forged")]
+                changes: vec![text_field("name", "forged")],
+                parent: None,
             })
         ),
         Err(Error::Missing)
@@ -587,6 +596,7 @@ fn typed_definition_migration_updates_asset_revision() -> TestResult {
             expected: Some(1),
             kind: K::Device as i32,
             changes: vec![text_field(&d.id, "42")],
+            parent: None,
         }),
     )?;
     d.r#type = api::FieldType::Integer as i32;
@@ -801,6 +811,7 @@ fn editing_preserves_partial_source_evidence_without_writes() -> TestResult {
             expected: Some(1),
             kind: K::Device as i32,
             changes: vec![text_field("name", "accepted name")],
+            parent: None,
         }),
     )?;
     assert_eq!(row_version(&store, &evidence_key)?, before);
@@ -922,7 +933,8 @@ fn archived_identity_cannot_be_edited_back_to_live() -> TestResult {
                 target: original.target,
                 expected: Some(2),
                 kind: K::Device as i32,
-                changes: vec![text_field("name", "revived")]
+                changes: vec![text_field("name", "revived")],
+                parent: None,
             })
         ),
         Err(Error::Conflict)

@@ -47,6 +47,45 @@ view retains the selected root. Details, filters, columns and selection are
 addressable through the URL. Unplaced selects the absence of accepted physical
 placement, not absence of observations or a claim of available capacity.
 
+Resource kinds and Columns open checkbox selections with Apply and Cancel;
+changing a draft choice does not change the query. At least one data column is
+required. On phones the resource list uses cards with page selection and sorting.
+Opening a resource shows a separate detail screen; Back to inventory preserves
+the query, page, selection and list position. Editing and selection forms use
+the full phone screen. More exposes secondary phone actions. Wide screens place
+the selected detail beside the list.
+
+Creation first follows the current resource or selected roots, then the view.
+A VM offers interfaces and known address facts, rather than another VM or
+upstream network topology. New children and their required attachment commit
+together. Several possible parents require an explicit choice. Without a
+selected resource, Virtualization starts with a VM, Services with a service and
+Hardware or Overview with a device. A context never supplies grants or copies
+its parent's property values.
+
+Network offers recording a known IP independently of allocation. A bare IPv4
+or IPv6 address needs no name, mask, namespace or VRF. Optional configured
+versus destination meaning, assignment mask and host-local IPv6 zone remain
+unknown unless supplied. Equal addresses on unrelated resources stay separate.
+Allocate IP / prefix is a separate action in an address space or prefix;
+Create address space returns without losing the allocation draft.
+An explicit prefix container supplies its declared namespace and enforces its
+range. It does not supply routing or an interface configuration mask.
+
+Connections in broader scope explicitly selects both endpoints before offering
+their supported relationship meanings. Editing or removing a connection checks
+the previous endpoints as well. Returning preserves the local resource/query;
+local details do not expose a peer's underlay. Address reconciliation similarly
+reviews a canonical mapping. A new allocation, optional explicit intended
+interface assignment and mapping commit atomically. A conflict keeps the
+original known fact; it does not merge machines or enable shared use.
+
+On phones, the detail screen provides a perspective selector, local resource
+creation and a bounded child list. Back follows the resource trail, then returns
+to the original inventory query and selection.
+These create accepted inventory records, not real provider resources. External
+provisioning and connection adapters are not implemented by this fixture host.
+
 Company fields have stable identities and explicit types, applicable resource
 kinds, choice values and search inclusion. Renaming preserves field identity.
 A type or applicability change requires a validated migration before applying

@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue';
 import Dialog from './Dialog.vue';
 import { call, model, typedField, display, key } from './api';
-const props = defineProps<{ items: model.Item[]; revision: bigint; definitions: model.Definition[] }>();
+const props = defineProps<{ items: model.Item[]; revision: bigint; definitions: model.Definition[]; working: model.WorkingContext }>();
 const emit = defineEmits<{ close: []; saved: [] }>();
 const name = ref('description'); const mode = ref('preserve'); const value = ref(''); const error = ref('');
 const fields = computed(() => [{ id: 'description', name: 'Description', type: model.FieldType.TEXT }, { id: 'serial', name: 'Serial number', type: model.FieldType.TEXT }, ...props.definitions.filter(d => !d.retired && props.items.every(i => d.kinds.includes(i.kind)))]);
@@ -11,7 +11,7 @@ async function apply(remove = false) {
   try {
     if (!field.value) throw Error('Select an applicable field');
     const changes = remove || mode.value === 'preserve' ? [] : [typedField(name.value, field.value.type, value.value, mode.value === 'clear')];
-    await call({ oneofKind: 'bulk', bulk: { targets: props.items.flatMap(i => i.target ? [i.target] : []), expected: props.revision, remove, changes } }); emit('saved');
+    await call({ oneofKind: 'bulk', bulk: { targets: props.items.flatMap(i => i.target ? [i.target] : []), expected: props.revision, remove, changes } }, props.working); emit('saved');
   } catch (e) { error.value = String(e); }
 }
 </script>

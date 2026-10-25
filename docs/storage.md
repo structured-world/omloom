@@ -9,7 +9,10 @@ The [local development host](inventory.md) instead supplies explicitly selected
 synthetic contexts for test-owned data. These qualify application projection
 without claiming identity-provider enforcement.
 
-The backend pins CoordiNode 0.9.0 registry packages and a consumer lockfile. Its
+The backend pins CoordiNode Git revision
+`2c7c9d55fd8cfe0eb9737f9de92cf2b111f0fcc2` and a consumer lockfile. This source
+revision corrects nullable Boolean and correlated conditional lookup semantics
+required by inventory queries. It is not a published embedded release. Its
 filesystem capability requires the `std` feature. Policy types also compile
 without default features on a bare-metal target. A host can supply a supported
 replicated Database instead of opening a local directory. Never concurrently
@@ -82,9 +85,11 @@ envelope, but are **application accounting**, not total filesystem allocation.
 Pinned detail and unresolved work count against their budgets. Admission fails
 atomically when it cannot fit; it does not evict safety state.
 
-This initial, unreleased storage format uses schema version 2. Databases from
-the earlier experimental layout are refused with `SchemaVersion`; they must
-not be reused or silently overwritten.
+This unreleased storage format uses schema version 3. Version 2 databases
+upgrade in bounded restartable batches, adding normalized current IP ordering
+and prefix length for namespace/range retrieval. No inventory history is added.
+The upgrade keeps restore fences and admission accounting. Earlier experimental
+layouts are refused with `SchemaVersion`, never silently overwritten.
 
 The host's durable worker calls bounded cleanup with a resumable cursor. Pin
 changes conflict with cleanup through database CAS. Cleanup reports logical
@@ -101,13 +106,12 @@ of Omloom's logical application quota and stored policy identity. Oversized
 input is refused before opening the destination. The host must enforce the
 same input ceiling before buffering a file or network response.
 
-The pinned provider is not qualified for a hard total-owned-file ceiling. Its
-sampled endpoint limit omits growth that matters to this guarantee. Independent
-disk tests still reproduce that failure on 0.9.0; registry publication does not
-establish a physical cap. The backend's normal/build dependency graph excludes
-the former Git workspace development helper and its `alloca` C dependency.
-Benchmark tooling still uses `alloca` through the test-only Criterion dependency;
-it is outside the production backend graph. No SD-card support, power-loss
+The pinned provider is not independently qualified here for a hard
+total-owned-file ceiling. Earlier consumer tests reproduced a physical cap
+failure on registry 0.9.0; changing the source pin does not establish that
+guarantee. The Git dependency graph includes the workspace development helper
+and its `alloca`/C build path, unlike the registry package. No pure-Rust closure,
+SD-card support, power-loss
 certification or production deployment support matrix is claimed.
 
 Run `sh scripts/check-contracts.sh` for generation, builds, storage/contract

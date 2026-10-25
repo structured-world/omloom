@@ -1,14 +1,14 @@
 import { GrpcWebFetchTransport } from '@protobuf-ts/grpcweb-transport';
-import { Request, Workspace, FieldType, type Reply } from '../src/generated/omloom/v1/workspace';
+import { Request, Workspace, FieldType, type Reply, type WorkingContext } from '../src/generated/omloom/v1/workspace';
 import { AssetKind, NullValue, type Field, type AssetRef } from '../src/generated/omloom/v1/contracts';
 export * as model from '../src/generated/omloom/v1/workspace';
 export { AssetKind, RelationKind, NullValue } from '../src/generated/omloom/v1/contracts';
 export type { Field, AssetRef, Relation } from '../src/generated/omloom/v1/contracts';
 const transport = new GrpcWebFetchTransport({ baseUrl: location.origin, format: 'binary' });
-export async function call(command: Request['command']): Promise<Reply['result']> {
+export async function call(command: Request['command'], working?: WorkingContext): Promise<Reply['result']> {
   const method = Workspace.methods[0];
   if (!method) throw Error('Workspace service metadata is missing');
-  const { response } = await transport.unary<Request, Reply>(method, Request.create({ command }), transport.mergeOptions({ timeout: 15_000 }));
+  const { response } = await transport.unary<Request, Reply>(method, Request.create({ command, working }), transport.mergeOptions({ timeout: 15_000 }));
   return response.result;
 }
 export function text(name: string, value: string): Field { return { name, value: { oneofKind: 'text', text: value } }; }

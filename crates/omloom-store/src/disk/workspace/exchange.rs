@@ -18,7 +18,7 @@ fn csv_value(name: &str, value: &str, definitions: &[api::Definition]) -> Result
     let kind = definitions.iter().find(|d| d.id == name).map(|d| d.r#type);
     let value = if value == "<clear>" {
         field::Value::Clear(EXPLICIT_CLEAR)
-    } else if kind == Some(api::FieldType::Integer as i32) {
+    } else if kind == Some(api::FieldType::Integer as i32) || name == "prefix_length" {
         field::Value::Integer(value.parse().map_err(|_| Error::Invalid)?)
     } else if kind == Some(api::FieldType::Boolean as i32) {
         match value {
@@ -47,6 +47,7 @@ impl Store {
         &self,
         context: &Context,
         request: api::Import,
+        working: &api::WorkingContext,
         now: u64,
     ) -> Result<api::Reply> {
         if let Some(id) = request.preview {
@@ -56,6 +57,7 @@ impl Store {
             }
             let key = format!("preview/{id}");
             let mut tx = self.begin()?;
+            tx.selection(context, working, true)?;
             let row = tx.get(&key)?.ok_or(Error::Expired)?;
             if string(&row, "owner")? != context.actor {
                 return Err(Error::Denied);
@@ -64,6 +66,14 @@ impl Store {
                 return Err(Error::Expired);
             }
             if number(&row, "revision")? != number(&tx.root, "revision")? {
+                return Err(Error::Conflict);
+            }
+            let mut selector = working.clone();
+            selector.expected = None;
+            if !row.contains_key("working") {
+                return Err(Error::Expired);
+            }
+            if binary(&row, "working")? != selector.encode_to_vec() {
                 return Err(Error::Conflict);
             }
             let source = string(&row, "source")?;
@@ -76,7 +86,7 @@ impl Store {
                     .get(&format!("{key}/{}", line.row))?
                     .ok_or(Error::Corrupt)?;
                 let external = string(&mapping, "object_id")?;
-                let target = tx.workspace_write(context, change, now)?;
+                let target = tx.context_write(context, change, working, now)?;
                 let mut data = target_props(target);
                 data.insert("source".into(), text(&source));
                 tx.put(
@@ -126,6 +136,7 @@ impl Store {
             mapping.push((index, selected.field.as_str()));
         }
         let mut tx = self.begin()?;
+        let selection = tx.selection(context, working, true)?;
         let base = number(&tx.root, "revision")?;
         let mut rows = Vec::new();
         let mut external_ids = BTreeSet::new();
@@ -149,6 +160,9 @@ impl Store {
                 let prior = tx.get(&mapping_key(&context.actor, &request.source, &external))?;
                 let target = prior.as_ref().map(super::super::target).transpose()?;
                 let existing = target.map(|t| tx.visible_asset(context, t)).transpose()?;
+                if let Some(target) = target {
+                    selection.contains(target, &tx)?;
+                }
                 let kind = existing
                     .as_ref()
                     .map(|p| number(p, "kind").map(|n| n as i32))
@@ -171,6 +185,9 @@ impl Store {
                     diagnostic = "resource kind (use reviewed network allocation)".into();
                     return Err(Error::Invalid);
                 }
+                if target.is_none() {
+                    tx.creation_parent(context, working, request.parent.as_ref(), typed_kind)?;
+                }
                 let expected = existing
                     .as_ref()
                     .map(|p| number(p, "revision"))
@@ -192,15 +209,22 @@ impl Store {
                         Ok(field)
                     })
                     .collect::<Result<_>>()?;
-                Ok((
-                    external,
-                    api::Write {
-                        target: target.map(target_wire),
-                        expected,
-                        kind,
-                        changes: fields,
+                let change = api::Write {
+                    target: target.map(target_wire),
+                    expected,
+                    kind,
+                    changes: fields,
+                    parent: if target.is_none() {
+                        request.parent.clone()
+                    } else {
+                        None
                     },
-                ))
+                };
+                if typed_kind == wire::AssetKind::AddressReference {
+                    diagnostic = "address facts (IP family, mask and local zone; resolve canonical mappings separately)".into();
+                    tx.preview_address(&change)?;
+                }
+                Ok((external, change))
             })();
             match parsed {
                 Ok((external, change)) => rows.push((external, api::ImportRow { row: row_number, change: Some(change), diagnostic: String::new() })),
@@ -229,6 +253,8 @@ impl Store {
             preview.id = Some(id);
             preview.revision = base.checked_add(1).ok_or(Error::Limit)?;
             let bytes = preview.encode_to_vec();
+            let mut selector = working.clone();
+            selector.expected = None;
             if bytes.len() > MAX_CSV {
                 return Err(Error::Limit);
             }
@@ -242,6 +268,7 @@ impl Store {
                     ("revision", int(preview.revision)?),
                     ("expires", int(expires)?),
                     ("query", Value::Binary(bytes)),
+                    ("working", Value::Binary(selector.encode_to_vec())),
                 ]),
             )?;
             for (external, row) in &rows {

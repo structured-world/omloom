@@ -6,7 +6,13 @@ pub(super) mod groups;
 pub(super) fn identity(target: AssetRef) -> String {
     format!("{}/{}", target.asset, target.incarnation)
 }
-fn link_local(address: IpAddr) -> bool {
+pub(super) fn address_order(address: IpAddr) -> String {
+    match address {
+        IpAddr::V4(ip) => format!("4/{:08x}", u32::from(ip)),
+        IpAddr::V6(ip) => format!("6/{:032x}", u128::from(ip)),
+    }
+}
+pub(super) fn link_local(address: IpAddr) -> bool {
     match address {
         IpAddr::V6(ip) => (ip.segments()[0] & 0xffc0) == 0xfe80,
         IpAddr::V4(ip) => ip.is_link_local(),
@@ -81,7 +87,8 @@ impl Store {
     fn workspace_vlan(
         &self,
         context: &Context,
-        request: api::Network,
+        mut request: api::Network,
+        working: &api::WorkingContext,
         now: u64,
     ) -> Result<api::Reply> {
         if request.address_space.is_some()
@@ -97,11 +104,13 @@ impl Store {
         {
             return Err(Error::Invalid);
         }
-        let link = parse_target(request.link.as_ref())?;
         let Some(vid @ 1..=4094) = request.vlan_id else {
             return Err(Error::Invalid);
         };
         let mut tx = self.begin()?;
+        tx.resolve_allocation_parent(context, working, &mut request)?;
+        tx.check_network_context(context, working, &request)?;
+        let link = parse_target(request.link.as_ref())?;
         if number(&tx.visible_asset(context, link)?, "kind")? != wire::AssetKind::L2Domain as u64 {
             return Err(Error::Invalid);
         }
@@ -115,6 +124,7 @@ impl Store {
                     name: "name".into(),
                     value: Some(field::Value::Text(request.name)),
                 }],
+                parent: None,
             },
             now,
         )?;
@@ -154,23 +164,40 @@ impl Store {
     pub(super) fn workspace_network(
         &self,
         context: &Context,
-        mut request: api::Network,
+        request: api::Network,
+        working: &api::WorkingContext,
         now: u64,
     ) -> Result<api::Reply> {
         use wire::AssetKind as K;
         let kind = K::try_from(request.kind).map_err(|_| Error::Invalid)?;
         if kind == K::AddressGroup {
-            return self.workspace_group_settings(context, request, now);
+            return self.workspace_group_settings(context, request, working, now);
         }
         if kind == K::Vlan {
-            return self.workspace_vlan(context, request, now);
+            return self.workspace_vlan(context, request, working, now);
         }
+        let mut tx = self.begin()?;
+        let targets = self.workspace_network_in(&mut tx, context, request, working, now)?;
+        Ok(mutation(tx.commit()?, targets))
+    }
+
+    pub(super) fn workspace_network_in(
+        &self,
+        tx: &mut Tx<'_>,
+        context: &Context,
+        mut request: api::Network,
+        working: &api::WorkingContext,
+        now: u64,
+    ) -> Result<Vec<wire::AssetRef>> {
+        use wire::AssetKind as K;
+        let kind = K::try_from(request.kind).map_err(|_| Error::Invalid)?;
         if !matches!(kind, K::IpAddress | K::Prefix) {
             return Err(Error::Invalid);
         }
         if request.vlan_id.is_some() {
             return Err(Error::Invalid);
         }
+        tx.resolve_allocation_parent(context, working, &mut request)?;
         let space = parse_target(request.address_space.as_ref())?;
         let routing = request
             .routing
@@ -189,7 +216,7 @@ impl Store {
         {
             return Err(Error::Invalid);
         }
-        let mut tx = self.begin()?;
+        tx.check_network_context(context, working, &request)?;
         let group = tx.workspace_shared_group(context, &mut request, family, now)?;
         let link = request
             .link
@@ -266,6 +293,7 @@ impl Store {
                     name: "name".into(),
                     value: Some(field::Value::Text(request.name)),
                 }],
+                parent: None,
             },
             now,
         )?;
@@ -354,6 +382,8 @@ impl Store {
         data.extend(props([
             ("address_space", text(identity(space))),
             ("cidr", text(network.to_string())),
+            ("ip_order", text(address_order(network.addr()))),
+            ("prefix_len", int(u64::from(network.prefix_len()))?),
             ("namespace", text(&owner_key)),
             ("sharing", text(sharing.as_str_name())),
         ]));
@@ -388,18 +418,37 @@ impl Store {
         if let Some(group) = group {
             targets.push(target_wire(group));
         }
-        Ok(mutation(tx.commit()?, targets))
+        Ok(targets)
     }
 
     pub(super) fn workspace_member(
         &self,
         context: &Context,
         member: api::Member,
+        working: &api::WorkingContext,
         now: u64,
     ) -> Result<api::Reply> {
+        let mut tx = self.begin()?;
+        let owner = self.workspace_member_in(&mut tx, context, member, working, now)?;
+        Ok(mutation(tx.commit()?, vec![target_wire(owner)]))
+    }
+
+    pub(super) fn workspace_member_in(
+        &self,
+        tx: &mut Tx<'_>,
+        context: &Context,
+        member: api::Member,
+        working: &api::WorkingContext,
+        now: u64,
+    ) -> Result<AssetRef> {
         let address = parse_target(member.address.as_ref())?;
         let interface = parse_target(member.interface.as_ref())?;
-        let mut tx = self.begin()?;
+        let selection = tx.selection(context, working, true)?;
+        if selection.focus.is_some() {
+            return Err(Error::Denied);
+        }
+        selection.contains(address, tx)?;
+        selection.contains(interface, tx)?;
         let row = tx.visible_asset(context, address)?;
         if number(&row, "revision")? != member.expected {
             return Err(Error::Conflict);
@@ -442,6 +491,7 @@ impl Store {
                 (network, address)
             }
         };
+        selection.contains(owner, tx)?;
         let parent = format!("members/{}", identity(owner));
         let key = format!("{parent}/{}", identity(interface));
         let old = tx.get(&key)?;
@@ -494,7 +544,7 @@ impl Store {
         if changed {
             tx.workspace_advance(owner, &context.actor, "network.participant", now)?;
         }
-        Ok(mutation(tx.commit()?, vec![target_wire(owner)]))
+        Ok(owner)
     }
 
     pub(super) fn workspace_network_fields(
@@ -520,10 +570,16 @@ impl Store {
                 "sharing",
                 "vrid",
                 "vlan_id",
+                "address",
+                "prefix_length",
+                "meaning",
+                "zone",
+                "binding",
+                "name",
             ]
             .map(str::to_owned);
             fields.extend(
-                projection(row, &columns)?
+                addresses::visible_projection(context, row, &columns)?
                     .into_iter()
                     .filter(|f| context.field(target, kind, &f.name, false)),
             );
@@ -608,6 +664,155 @@ impl Store {
     }
 }
 impl Tx<'_> {
+    fn resolve_allocation_parent(
+        &self,
+        context: &Context,
+        working: &api::WorkingContext,
+        request: &mut api::Network,
+    ) -> Result<()> {
+        let selection = self.selection(context, working, true)?;
+        if request.target.is_some() {
+            if request.parent.is_some() {
+                return Err(Error::Invalid);
+            }
+            return Ok(());
+        }
+        let parent = request
+            .parent
+            .as_deref()
+            .map(|p| parse_target(Some(p)))
+            .transpose()?;
+        if selection.focus.is_some() && parent != selection.focus {
+            return Err(Error::Invalid);
+        }
+        if !working.roots.is_empty() && parent.is_none() {
+            return Err(Error::Invalid);
+        }
+        let Some(parent) = parent else {
+            return Ok(());
+        };
+        selection.contains(parent, self)?;
+        let row = self.visible_asset(context, parent)?;
+        let kind = number(&row, "kind")? as i32;
+        if !context.field(parent, kind, "relations", true) {
+            return Err(Error::Denied);
+        }
+        let (space, link) = match wire::AssetKind::try_from(kind).map_err(|_| Error::Corrupt)? {
+            wire::AssetKind::AddressSpace
+                if request.kind == wire::AssetKind::IpAddress as i32
+                    || request.kind == wire::AssetKind::Prefix as i32 =>
+            {
+                (Some(parent), None)
+            }
+            wire::AssetKind::Prefix
+                if request.kind == wire::AssetKind::IpAddress as i32
+                    || request.kind == wire::AssetKind::Prefix as i32 =>
+            {
+                if !context.field(parent, kind, "cidr", false)
+                    || !context.field(parent, kind, "address_space", false)
+                {
+                    return Err(Error::Denied);
+                }
+                let network = self
+                    .get(&format!("network/{}", identity(parent)))?
+                    .ok_or(Error::Missing)?;
+                let block: IpNet = string(&network, "cidr")?
+                    .parse()
+                    .map_err(|_| Error::Corrupt)?;
+                let proposed: IpNet = request.cidr.parse().map_err(|_| Error::Invalid)?;
+                if !block.contains(&proposed.addr())
+                    || (request.kind == wire::AssetKind::Prefix as i32
+                        && proposed.prefix_len() < block.prefix_len())
+                {
+                    return Err(Error::Invalid);
+                }
+                (
+                    Some(groups::reference(&string(&network, "address_space")?)?),
+                    if link_local(block.addr()) {
+                        Some(groups::reference(&string(&network, "link_scope")?)?)
+                    } else {
+                        None
+                    },
+                )
+            }
+            wire::AssetKind::L2Domain if request.kind == wire::AssetKind::Vlan as i32 => {
+                (None, Some(parent))
+            }
+            _ => return Err(Error::Invalid),
+        };
+        for (provided, derived) in [
+            (&mut request.address_space, space),
+            (&mut request.link, link),
+        ] {
+            if let Some(derived) = derived {
+                if provided
+                    .as_ref()
+                    .is_some_and(|p| parse_target(Some(p)).ok() != Some(derived))
+                {
+                    return Err(Error::Conflict);
+                }
+                *provided = Some(target_wire(derived));
+            }
+        }
+        Ok(())
+    }
+    pub(super) fn check_network_context(
+        &self,
+        context: &Context,
+        working: &api::WorkingContext,
+        request: &api::Network,
+    ) -> Result<()> {
+        let selection = self.selection(context, working, true)?;
+        for reference in [
+            request.target.as_ref(),
+            request.address_space.as_ref(),
+            request.link.as_ref(),
+            request.routing.as_ref(),
+            request.group.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if request.target.is_none()
+                && request.parent.is_some()
+                && request.address_space.as_ref() == Some(reference)
+            {
+                continue;
+            }
+            if request.target.is_none()
+                && request.link.as_ref() == Some(reference)
+                && let Some(parent) = request.parent.as_deref()
+                && let Some(row) = self.get(&format!(
+                    "network/{}",
+                    identity(parse_target(Some(parent))?)
+                ))?
+                && row.get("link_scope") == Some(&text(identity(parse_target(Some(reference))?)))
+                && link_local(
+                    string(&row, "cidr")?
+                        .parse::<IpNet>()
+                        .map_err(|_| Error::Corrupt)?
+                        .addr(),
+                )
+            {
+                continue;
+            }
+            selection.contains(parse_target(Some(reference))?, self)?;
+        }
+        if let Some(target) = &request.target {
+            let target = parse_target(Some(target))?;
+            if let Some(old) = self.get(&format!("network/{}", identity(target)))? {
+                for field in ["address_space", "link_scope", "routing_context", "group"] {
+                    if let Some(value) = old.get(field) {
+                        selection.contains(
+                            groups::reference(value.as_str().ok_or(Error::Corrupt)?)?,
+                            self,
+                        )?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
     pub(super) fn workspace_advance(
         &mut self,
         target: AssetRef,

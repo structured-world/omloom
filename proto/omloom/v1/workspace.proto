@@ -61,6 +61,55 @@ message Query {
   uint32 limit = 10;
   // Explicit selection of objects without a confirmed physical placement.
   bool unplaced = 11;
+  // Explicit resource perspective within roots, rechecked by the server. Only
+  // its local components are projected; upstream topology is not inferred.
+  optional omloom.v1.AssetRef focus = 12;
+}
+
+message WorkingContext {
+  // User-selected enclosing roots. Empty explicitly selects all permitted
+  // inventory; this selector never supplies resource or field authority.
+  repeated omloom.v1.AssetRef roots = 1;
+  // Current local resource, if any. Creation refines it; peer edits require an
+  // explicit context encompassing both endpoints without this local focus.
+  optional omloom.v1.AssetRef focus = 2;
+  // Application revision reviewed for scoped mutations. Required with roots
+  // or focus; omit for retrieval. The server rechecks membership at commit.
+  optional uint64 expected = 3;
+}
+message Prepare {
+  // User-selected presentation used to suggest applicable creation actions;
+  // the server derives actual parent, kind and field permissions independently.
+  View view = 1;
+  // Explicit relationship source selected in the working context; supply both
+  // endpoints to obtain their actual permitted typed relationship choices.
+  optional omloom.v1.AssetRef from = 2;
+  // Explicit relationship destination; neither endpoint expands the selector.
+  optional omloom.v1.AssetRef to = 3;
+}
+message Creation {
+  // Server-qualified resource kind available at this exact parent/context.
+  omloom.v1.AssetKind kind = 1;
+  // Actual parent and its permitted name, absent for standalone inventory.
+  // The user selects one returned parent when the scope contains several.
+  optional Item parent = 2;
+  // Applicable writable built-ins and stable company field identities. Omitted
+  // fields are preserved; a parent grants neither their values nor permissions.
+  repeated string fields = 3;
+}
+message Actions {
+  // Server-derived bounded creation choices, never a client authority assertion.
+  repeated Creation creations = 1;
+  // Exact application revision of the prepared choices, echoed for mutations.
+  uint64 revision = 2;
+  // Typed relationship kinds applicable to the requested exact endpoint pair.
+  repeated omloom.v1.RelationKind relationships = 3;
+  // Writable fields of the focused existing resource, absent without a focus.
+  // These are server-derived form inputs, never inherited from its parent.
+  repeated string fields = 4;
+  // Explicit allocation choices within the selected namespace/prefix or L2
+  // domain. Separate from recording locally known address facts.
+  repeated Creation allocations = 5;
 }
 message Item {
   // Server-owned stable local asset identity and lifetime.
@@ -102,6 +151,9 @@ message Detail {
   // Visible typed shared-address group and its independent edit revision.
   // Omitted when unshared or inaccessible; omission never proves no other participants.
   optional Item group = 7;
+  // Minimal permitted endpoint labels for the returned relations, fetched in
+  // one bounded batch. These are projections of existing identities, not copies.
+  repeated Item related = 8;
 }
 message Participant {
   // Stable local interface identity selected for this canonical address.
@@ -124,6 +176,9 @@ message Write {
   omloom.v1.AssetKind kind = 3;
   // Explicit set/clear changes. Omitted fields are preserved, not cleared.
   repeated omloom.v1.Field changes = 4;
+  // Explicit existing parent selected for creation in an enclosing context.
+  // The server derives the typed attachment and commits it with the child.
+  optional omloom.v1.AssetRef parent = 5;
 }
 message Bulk {
   // Explicit bounded target identities reviewed by the user.
@@ -242,6 +297,60 @@ message Import {
   // Explicit source name within the current actor's import configuration;
   // new source objects require an external_id CSV column for repeat-safe mapping.
   string source = 5;
+  // Explicit parent selected for new imported rows; updates retain their
+  // existing attachment. Preview and acceptance check the same working context.
+  optional omloom.v1.AssetRef parent = 6;
+}
+
+enum AddressMeaning {
+  ADDRESS_MEANING_UNSPECIFIED = 0;
+  ADDRESS_MEANING_CONFIGURED = 1;
+  ADDRESS_MEANING_DESTINATION = 2;
+}
+message Address {
+  // Existing known-address reference for conditional editing, absent to record
+  // a new fact. Equal IP bytes never identify an existing reference implicitly.
+  optional omloom.v1.AssetRef target = 1;
+  // Revision read for this reference, required for edits and absent on creation.
+  optional uint64 expected = 2;
+  // User-known IPv4/IPv6 literal, without an invented mask or forwarding context.
+  // Required on creation; omission preserves it on edit without echoing a
+  // field the caller may not read. A scoped literal uses the zone field.
+  optional string address = 3;
+  // Known assignment prefix length. Absent means unknown on creation and
+  // preserves the current value on edit; zero is a real /0.
+  optional uint32 prefix_length = 4;
+  // User-selected meaning; configured and destination facts cannot substitute
+  // for one another or prove current reachability or allocation authority.
+  // Absence means unspecified on creation and preserves the meaning on edit.
+  optional AddressMeaning meaning = 5;
+  // Known host-local IPv6 zone label, preserved when omitted on edit.
+  // It is not a portable routing/L2 identity.
+  optional string zone = 6;
+  // Actual parent/subject for a new fact, absent for standalone inventory.
+  // No device or interface is invented when the source did not supply one.
+  optional omloom.v1.AssetRef parent = 7;
+  // Explicit canonical IPAM identity selected in a reviewed broader context.
+  // Omission preserves a binding; clearing is an explicit separate edit.
+  optional omloom.v1.AssetRef binding = 8;
+  // Explicit removal of a prior binding, incompatible with a new binding.
+  bool clear_binding = 9;
+  // Explicitly make the assignment mask unknown; incompatible with prefix_length.
+  bool clear_prefix_length = 10;
+  // Explicitly remove the known host-local zone; incompatible with zone.
+  bool clear_zone = 11;
+  // Explicit optional description/company-field changes. Omitted fields remain
+  // untouched; name is derived from the known address and cannot be supplied.
+  repeated omloom.v1.Field changes = 12;
+  // Explicit reviewed new canonical allocation, mutually exclusive with binding.
+  // Its namespace, uniqueness and optional assignment commit with this mapping.
+  optional Network allocation = 13;
+  // Explicit intended assignment to an existing permitted interface. Omitted
+  // means bind knowledge only, never infer an assignment from an address fact.
+  optional omloom.v1.AssetRef interface = 14;
+  // Intended participant priority for an explicitly selected VRRP assignment.
+  // This is not observed election state and is absent for ordinary assignment.
+  optional uint32 priority = 15;
 }
 message ImportRow {
   // One-based source row used to locate errors without losing input context.
@@ -296,6 +405,10 @@ message Network {
   // Reviewed revision of the address's previous group when leaving it. Separate
   // from the selected group's revision because these are independent objects.
   optional uint64 previous_group_revision = 16;
+  // Selected allocation container for creation. The server derives its real
+  // namespace/link and checks prefix containment without inheriting grants.
+  // Required for scoped creation; omitted when editing an existing allocation.
+  optional omloom.v1.AssetRef parent = 17;
 }
 message Member {
   // Canonical address or typed address-group identity selected for this edit.
@@ -355,6 +468,10 @@ message Mutation {
 }
 message Empty {}
 message Request {
+  // Explicit working selector for resource details, prepared actions and every
+  // inventory mutation/import. Query/export use Query roots/focus instead.
+  // Absence is rejected for mutation, never interpreted as global authority.
+  optional WorkingContext working = 18;
   // Exactly one user intention; no derived authorization, counts or status inputs.
   oneof command {
     // Read the host-selected synthetic actor and fixture capabilities.
@@ -387,6 +504,10 @@ message Request {
     Member member = 14;
     // Export the current authorized projection under one application revision.
     Export export = 15;
+    // Prepare actual context-specific creation kinds, parents and writable fields.
+    Prepare prepare = 16;
+    // Record or reconcile a known address without requiring allocation topology.
+    Address address = 17;
   }
 }
 message Reply {
@@ -410,5 +531,7 @@ message Reply {
     Download download = 8;
     // Bounded validation coverage; never a saved migration history or partial apply.
     MigrationPreview migration_preview = 9;
+    // Applicable context-specific actions under the current application revision.
+    Actions actions = 10;
   }
 }

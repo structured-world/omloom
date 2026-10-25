@@ -439,6 +439,52 @@ impl Tx<'_> {
             return Err(Error::Invalid);
         }
         match value.name.as_str() {
+            "serial"
+                if !matches!(
+                    wire::AssetKind::try_from(kind),
+                    Ok(wire::AssetKind::Device
+                        | wire::AssetKind::Rack
+                        | wire::AssetKind::Port
+                        | wire::AssetKind::Cable)
+                ) =>
+            {
+                Err(Error::Invalid)
+            }
+            "name" | "serial" if kind == wire::AssetKind::AddressReference as i32 => {
+                Err(Error::Invalid)
+            }
+            "address" | "prefix_length" | "meaning" | "zone" | "binding"
+                if kind == wire::AssetKind::AddressReference as i32 =>
+            {
+                match (value.name.as_str(), value.value.as_ref()) {
+                    ("address", Some(field::Value::Text(s)))
+                        if s.parse::<std::net::IpAddr>().is_ok() =>
+                    {
+                        Ok(())
+                    }
+                    ("prefix_length", Some(field::Value::Integer(0..=128))) => Ok(()),
+                    ("meaning", Some(field::Value::Text(s)))
+                        if api::AddressMeaning::from_str_name(s).is_some() =>
+                    {
+                        Ok(())
+                    }
+                    ("zone", Some(field::Value::Text(s)))
+                        if !s.is_empty() && s.len() <= 64 && !s.chars().any(char::is_control) =>
+                    {
+                        Ok(())
+                    }
+                    ("binding", Some(field::Value::Text(s)))
+                        if super::network::groups::reference(s).is_ok() =>
+                    {
+                        Ok(())
+                    }
+                    (
+                        "prefix_length" | "zone" | "binding",
+                        Some(field::Value::Clear(EXPLICIT_CLEAR)),
+                    ) => Ok(()),
+                    _ => Err(Error::Invalid),
+                }
+            }
             "name" | "description" | "serial" => match value.value.as_ref() {
                 Some(field::Value::Text(s))
                     if s.len() <= (if value.name == "name" { 160 } else { 2048 })

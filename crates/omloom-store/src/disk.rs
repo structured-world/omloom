@@ -22,7 +22,7 @@ use std::{
 type Properties = BTreeMap<String, Value>;
 type Result<T> = std::result::Result<T, Error>;
 const ROOT: &str = "installation";
-const SCHEMA_VERSION: u64 = 2;
+const SCHEMA_VERSION: u64 = 3;
 const MAX_CHILDREN: usize = 2048;
 mod inventory;
 mod lifecycle;
@@ -367,6 +367,11 @@ impl Store {
             "routing_context",
             "sharing",
             "group",
+            "address",
+            "meaning",
+            "zone",
+            "binding",
+            "ip_order",
         ] {
             schema.add_property(PropertyDef::new(name, PropertyType::String));
         }
@@ -397,6 +402,7 @@ impl Store {
             "prefix_len",
             "family",
             "vlan_id",
+            "prefix_length",
         ] {
             schema.add_property(PropertyDef::new(name, PropertyType::Int));
         }
@@ -418,6 +424,7 @@ impl Store {
         }
         schema.add_property(PropertyDef::new("digest", PropertyType::Binary));
         schema.add_property(PropertyDef::new("query", PropertyType::Binary));
+        schema.add_property(PropertyDef::new("working", PropertyType::Binary));
         for name in ["choices", "audiences", "editors", "columns"] {
             schema.add_property(PropertyDef::new(
                 name,
@@ -428,11 +435,50 @@ impl Store {
             "kinds",
             PropertyType::Array(Box::new(PropertyType::Int)),
         ));
+        let mut intent = Intent::Ensure;
+        if let Some(current) = db.label_schemas()?.into_iter().find(|s| s.name == "OmRow")
+            && current.properties != schema.properties
+        {
+            let root = db.execute_cypher_shared(
+                "MATCH (n:OmRow {key:'installation'}) RETURN n.`schema` AS version",
+                None,
+                None,
+                None,
+                None,
+            )?;
+            if root.rows.first().and_then(|row| row.get("version")) != Some(&Value::Int(2))
+                || current.mode != schema.mode
+                || current.placement != schema.placement
+                || current.temporal != schema.temporal
+                || current
+                    .properties
+                    .iter()
+                    .any(|(key, value)| schema.properties.get(key) != Some(value))
+                || schema
+                    .properties
+                    .keys()
+                    .filter(|key| !current.properties.contains_key(*key))
+                    .any(|key| {
+                        ![
+                            "address",
+                            "meaning",
+                            "zone",
+                            "binding",
+                            "ip_order",
+                            "prefix_length",
+                            "working",
+                        ]
+                        .contains(&key.as_str())
+                    })
+            {
+                return Err(Error::SchemaVersion);
+            }
+            intent = Intent::Change {
+                expected_revision: current.schema_revision,
+            };
+        }
         let publication = db.publish_schema(SchemaPackage {
-            labels: vec![LabelDeclaration {
-                schema,
-                intent: Intent::Ensure,
-            }],
+            labels: vec![LabelDeclaration { schema, intent }],
             edge_types: vec![
                 EdgeTypeDeclaration {
                     schema: EdgeTypeSchema::new("OmRelationFrom"),
@@ -484,11 +530,23 @@ impl Store {
             )?;
         }
         let root = store.read(ROOT)?.ok_or(Error::Corrupt)?;
-        if number(&root, "schema")? != SCHEMA_VERSION {
+        let version = number(&root, "schema")?;
+        if version != 2 && version != SCHEMA_VERSION {
             return Err(Error::SchemaVersion);
         }
         if string(&root, "policy")? != store.policy_identity() {
             return Err(Error::PolicyChanged);
+        }
+        if version == 2 {
+            workspace::upgrade_network_order(&store)?;
+            // One-direction admission of scoped address facts. Older readers
+            // must refuse the new kind; unbound old previews expire on acceptance.
+            let mut tx = store.begin()?;
+            if number(&tx.root, "schema")? == 2 {
+                tx.root.insert("schema".into(), int(SCHEMA_VERSION)?);
+                tx.changed = true;
+            }
+            tx.commit()?;
         }
         // CoordiNode stores a member-local recovery guard before an index's
         // first use. Prepare our fixed indexes before exposing a ready store.
@@ -734,6 +792,18 @@ impl Tx<'_> {
         if self.root.get("restored") == Some(&Value::Bool(true)) {
             return Err(Error::RecoveryRequired);
         }
+        self.put_projection(key, parent, class, data, old)
+    }
+    /// Format migration can rebuild derived columns while the restored
+    /// installation remains fenced against domain mutations and dispatch.
+    fn put_projection(
+        &mut self,
+        key: &str,
+        parent: &str,
+        class: Class,
+        data: Properties,
+        old: Option<&Properties>,
+    ) -> Result<bool> {
         let data = charged_row(key, parent, class, data)?;
         if old == Some(&data) {
             return Ok(false);

@@ -17,6 +17,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed={workspace}");
     prost_build::Config::new()
         .extern_path(".omloom.v1", "crate::wire")
+        .boxed(".omloom.workspace.v1.Network.parent")
+        .boxed(".omloom.workspace.v1.Address.allocation")
+        .boxed(".omloom.workspace.v1.Address.interface")
         .file_descriptor_set_path(&descriptor)
         .compile_protos(&[workspace], &["../../proto"])?;
     let set = FileDescriptorSet::decode(fs::read(descriptor)?.as_slice())?;

@@ -47,6 +47,25 @@ fn visible_clause_for(
     values: &mut HashMap<String, Value>,
     alias: &str,
 ) -> String {
+    let visible = visible_clause_raw(context, field, values, alias);
+    if field != Some("name") || visible == "false" {
+        return visible;
+    }
+    let address = visible_clause_raw(context, Some("address"), values, alias);
+    if address == "true" {
+        return visible;
+    }
+    format!(
+        "({visible} AND ({alias}.kind<>{} OR {address}))",
+        wire::AssetKind::AddressReference as i32
+    )
+}
+fn visible_clause_raw(
+    context: &Context,
+    field: Option<&str>,
+    values: &mut HashMap<String, Value>,
+    alias: &str,
+) -> String {
     if context
         .grants
         .iter()
@@ -66,7 +85,7 @@ fn visible_clause_for(
         format!("({})", clauses.join(" OR "))
     }
 }
-fn kind_for_view(view: api::View) -> &'static [wire::AssetKind] {
+pub(super) fn kind_for_view(view: api::View) -> &'static [wire::AssetKind] {
     use wire::AssetKind as K;
     match view {
         api::View::Overview => &[],
@@ -91,6 +110,7 @@ fn kind_for_view(view: api::View) -> &'static [wire::AssetKind] {
             K::Cable,
             K::Lag,
             K::AddressGroup,
+            K::AddressReference,
         ],
         api::View::Virtualization => &[K::VirtualMachine, K::Device, K::Cluster, K::Storage],
         api::View::Services => &[K::Service, K::Device, K::VirtualMachine, K::Storage],
@@ -180,6 +200,7 @@ impl Store {
         let mut entry = "MATCH (a:OmRow {parent:'assets'})".to_owned();
         let mut bindings = vec!["a".to_owned()];
         let mut predicate_joins = Vec::new();
+        let mut network_scope = false;
         let view_kinds = kind_for_view(view);
         if !view_kinds.is_empty() {
             clauses.push(format!(
@@ -219,15 +240,63 @@ impl Store {
                 )
             ));
         }
-        if !query.roots.is_empty() {
-            let roots = self.workspace_scope(context, &query.roots)?;
-            clauses.push(format!(
+        let working = api::WorkingContext {
+            roots: query.roots.clone(),
+            focus: query.focus.clone(),
+            expected: None,
+        };
+        let selection = tx.selection(context, &working, false)?;
+        if let Some(roots) = &selection.members {
+            let mut selected = vec![format!(
                 "a.key IN {}",
                 parameter(
                     &mut values,
                     Value::Array(roots.iter().map(|t| text(asset_key(*t))).collect())
                 )
-            ));
+            )];
+            let mut networks = Vec::new();
+            let namespace_visible = visible_clause(context, Some("address_space"), &mut values);
+            for scope in &selection.networks {
+                use working::NetworkScope as N;
+                let space = match scope {
+                    N::Space(space) | N::Prefix { space, .. } => *space,
+                };
+                let mut terms = vec![format!(
+                    "ns.address_space={}",
+                    parameter(&mut values, text(network::identity(space)))
+                )];
+                if let N::Prefix { block, link, .. } = scope {
+                    terms.push(visible_clause(context, Some("cidr"), &mut values));
+                    terms.push(format!(
+                        "ns.ip_order>={} AND ns.ip_order<={}",
+                        parameter(&mut values, text(network::address_order(block.network()))),
+                        parameter(&mut values, text(network::address_order(block.broadcast())))
+                    ));
+                    terms.push(format!(
+                        "(a.kind<>{} OR ns.prefix_len>={})",
+                        wire::AssetKind::Prefix as i32,
+                        block.prefix_len()
+                    ));
+                    if let Some(link) = link {
+                        terms.push(visible_clause(context, Some("link_scope"), &mut values));
+                        terms.push(format!(
+                            "ns.link_scope={}",
+                            parameter(&mut values, text(network::identity(*link)))
+                        ));
+                    }
+                }
+                networks.push(format!("({})", terms.join(" AND ")));
+            }
+            if !networks.is_empty() {
+                network_scope = true;
+                selected.push(format!(
+                    "(a.kind IN [{},{}] AND {namespace_visible} AND ({}))",
+                    wire::AssetKind::IpAddress as i32,
+                    wire::AssetKind::Prefix as i32,
+                    networks.join(" OR ")
+                ));
+            }
+            clauses.push(format!("({})", selected.join(" OR ")));
         }
         if query.unplaced {
             // An accepted physical placement alone removes an object from Unplaced.
@@ -239,12 +308,19 @@ impl Store {
                 clauses.push(format!("a.asset={}", parameter(&mut values, text(&term))));
             } else if let Ok(ip) = term.parse::<std::net::IpAddr>() {
                 entry = format!(
-                    "MATCH (ip:OmRow {{parent:'networks'}}) WHERE ip.cidr STARTS WITH {} MATCH (a:OmRow) WHERE a.key='asset/'+ip.asset",
-                    parameter(&mut values, text(format!("{ip}/")))
+                    "MATCH (ip:OmRow {{parent:'networks'}}) WHERE ip.cidr STARTS WITH {} OR ip.address={} MATCH (a:OmRow) WHERE a.key='asset/'+ip.asset",
+                    parameter(&mut values, text(format!("{ip}/"))),
+                    parameter(&mut values, text(ip.to_string()))
                 );
                 clauses.push("ip.incarnation=a.incarnation".into());
                 bindings.push("ip".into());
-                clauses.push(visible_clause(context, Some("cidr"), &mut values));
+                let canonical = visible_clause(context, Some("cidr"), &mut values);
+                let reference = visible_clause(context, Some("address"), &mut values);
+                clauses.push(format!(
+                    "((a.kind={} AND {reference}) OR (a.kind<>{} AND {canonical}))",
+                    wire::AssetKind::AddressReference as i32,
+                    wire::AssetKind::AddressReference as i32
+                ));
             } else {
                 let mut searchable = vec![
                     "name".to_owned(),
@@ -300,6 +376,10 @@ impl Store {
                     format!("({})", search_scopes.join(" OR "))
                 });
             }
+        }
+        if network_scope {
+            predicate_joins.push(format!(" WITH {}, 'network/'+a.asset+'/'+a.incarnation AS scope_key OPTIONAL MATCH (ns:OmRow) WHERE ns.key=scope_key",bindings.join(", ")));
+            bindings.push("ns".into());
         }
         // Separate MATCH clauses make the key equality an indexed correlated
         // lookup. A comma-separated pattern materializes a Cartesian product.
@@ -467,7 +547,7 @@ impl Store {
         for row in &networks {
             let owner = target(row)?;
             let key = asset_key(owner);
-            let mut values = network::projection(row, &query.columns)?;
+            let mut values = addresses::visible_projection(context, row, &query.columns)?;
             if query.columns.iter().any(|field| field == "vrid")
                 && let Some(group) = network::groups::group_of(row)?
                 && let Some(settings) = group_metadata.get(&group)
@@ -524,73 +604,17 @@ impl Store {
         })
     }
 
-    fn workspace_scope(
+    pub(super) fn workspace_read(
         &self,
         context: &Context,
-        roots: &[wire::AssetRef],
-    ) -> Result<BTreeSet<AssetRef>> {
-        let mut selected = BTreeSet::new();
-        let mut pending = Vec::new();
-        for root in roots {
-            pending.push(parse_target(Some(root))?);
-        }
-        while let Some(current) = pending.pop() {
-            if selected.contains(&current) {
-                continue;
-            }
-            if selected.len() >= 1024 {
-                return Err(Error::Limit);
-            }
-            let asset = self.asset(current)?;
-            if asset.adoption != wire::Adoption::Adopted as i32 {
-                return Err(Error::Missing);
-            }
-            if !context.readable(current, asset.kind) {
-                return Err(Error::Denied);
-            }
-            selected.insert(current);
-            if !context.field(current, asset.kind, "relations", false) {
-                continue;
-            }
-            for relation in self.relations(current, 128)? {
-                let kind =
-                    wire::RelationKind::try_from(relation.kind).map_err(|_| Error::Corrupt)?;
-                let from = parse_target(relation.from.as_ref())?;
-                let to = parse_target(relation.to.as_ref())?;
-                let child = match kind {
-                    wire::RelationKind::InstalledIn
-                    | wire::RelationKind::RunsOn
-                    | wire::RelationKind::On
-                        if to == current =>
-                    {
-                        Some(from)
-                    }
-                    wire::RelationKind::Contains
-                    | wire::RelationKind::HasPort
-                    | wire::RelationKind::Carries
-                        if from == current =>
-                    {
-                        Some(to)
-                    }
-                    _ => None,
-                };
-                if let Some(child) = child {
-                    let asset = self.asset(child)?;
-                    if asset.adoption == wire::Adoption::Adopted as i32
-                        && context.readable(child, asset.kind)
-                        && context.field(child, asset.kind, "relations", false)
-                    {
-                        pending.push(child);
-                    }
-                }
-            }
-        }
-        Ok(selected)
-    }
-
-    pub(super) fn workspace_read(&self, context: &Context, read: api::Read) -> Result<api::Detail> {
+        read: api::Read,
+        working: &api::WorkingContext,
+    ) -> Result<api::Detail> {
         let basis = self.usage()?.revision;
         let target = parse_target(read.target.as_ref())?;
+        let tx = self.begin()?;
+        let selection = tx.selection(context, working, false)?;
+        selection.contains(target, &tx)?;
         let asset = self.asset(target)?;
         if asset.adoption != wire::Adoption::Adopted as i32 {
             return Err(Error::Missing);
@@ -605,14 +629,70 @@ impl Store {
             .filter(|f| context.field(target, asset.kind, &f.name, false))
             .collect();
         let mut relations = Vec::new();
-        for relation in self.relations(target, 128)? {
+        let mut related_keys = BTreeSet::new();
+        let (candidates, adjacent) = if context.field(target, asset.kind, "relations", false) {
+            tx.adjacent(target)?
+        } else {
+            (Vec::new(), BTreeMap::new())
+        };
+        for relation in candidates {
             let from = parse_target(relation.from.as_ref())?;
             let to = parse_target(relation.to.as_ref())?;
-            if context.field(from, self.asset(from)?.kind, "relations", false)
-                && context.field(to, self.asset(to)?.kind, "relations", false)
+            let other = if from == target { to } else { from };
+            let row = adjacent.get(&other).ok_or(Error::Corrupt)?;
+            let other_kind = wire::AssetKind::try_from(number(row, "kind")? as i32)
+                .map_err(|_| Error::Corrupt)?;
+            if number(row, "adoption")? != wire::Adoption::Adopted as u64
+                || !context.readable(other, other_kind as i32)
+                || !context.field(other, other_kind as i32, "relations", false)
             {
-                relations.push(relation);
+                continue;
             }
+            let local = working::refines(
+                target,
+                wire::AssetKind::try_from(asset.kind).map_err(|_| Error::Corrupt)?,
+                other_kind,
+                relation.kind,
+                from,
+                to,
+            );
+            if !local {
+                if working.focus.is_some() {
+                    continue;
+                }
+                match selection.contains(other, &tx) {
+                    Ok(()) => {}
+                    Err(Error::Denied) => continue,
+                    Err(error) => return Err(error),
+                }
+            }
+            related_keys.insert(other);
+            relations.push(relation);
+        }
+        let mut related = Vec::with_capacity(related_keys.len());
+        for (target, row) in adjacent {
+            if !related_keys.contains(&target) {
+                continue;
+            }
+            let kind = number(&row, "kind")? as i32;
+            let fields = if context.field(target, kind, "name", false) {
+                row.get("name")
+                    .and_then(Value::as_str)
+                    .map(|s| wire::Field {
+                        name: "name".into(),
+                        value: Some(field::Value::Text(s.into())),
+                    })
+                    .into_iter()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            related.push(api::Item {
+                target: Some(target_wire(target)),
+                kind,
+                revision: number(&row, "revision")?,
+                fields,
+            });
         }
         let redact = |observations: Vec<wire::Observation>| {
             observations
@@ -632,6 +712,7 @@ impl Store {
         };
         let (participants, participants_complete, group) =
             self.workspace_network_fields(context, target, asset.kind, &mut fields)?;
+        tx.commit()?;
         if self.usage()?.revision != basis {
             return Err(Error::Expired);
         }
@@ -648,6 +729,7 @@ impl Store {
             participants,
             participants_complete,
             group,
+            related,
         })
     }
 
@@ -655,16 +737,18 @@ impl Store {
         &self,
         context: &Context,
         write: api::Write,
+        working: &api::WorkingContext,
         now: u64,
     ) -> Result<api::Reply> {
         let mut tx = self.begin()?;
-        let target = tx.workspace_write(context, write, now)?;
+        let target = tx.context_write(context, write, working, now)?;
         Ok(mutation(tx.commit()?, vec![target_wire(target)]))
     }
     pub(super) fn workspace_bulk(
         &self,
         context: &Context,
         bulk: api::Bulk,
+        working: &api::WorkingContext,
         now: u64,
     ) -> Result<api::Reply> {
         if bulk.targets.is_empty()
@@ -674,12 +758,14 @@ impl Store {
             return Err(Error::Invalid);
         }
         let mut tx = self.begin()?;
+        let selection = tx.selection(context, working, true)?;
         if number(&tx.root, "revision")? != bulk.expected {
             return Err(Error::Conflict);
         }
         let mut seen = BTreeSet::new();
         for target in &bulk.targets {
             let target = parse_target(Some(target))?;
+            selection.contains(target, &tx)?;
             if !seen.insert(target) {
                 return Err(Error::Invalid);
             }
@@ -687,24 +773,78 @@ impl Store {
             if bulk.remove {
                 tx.workspace_remove(context, target, &row, now)?;
             } else {
-                tx.workspace_write(
+                tx.context_write(
                     context,
                     api::Write {
                         target: Some(target_wire(target)),
                         expected: Some(number(&row, "revision")?),
                         kind: number(&row, "kind")? as i32,
                         changes: bulk.changes.clone(),
+                        parent: None,
                     },
+                    working,
                     now,
                 )?;
             }
         }
         Ok(mutation(tx.commit()?, bulk.targets))
     }
+}
+
+impl Tx<'_> {
+    pub(super) fn context_write(
+        &mut self,
+        context: &Context,
+        write: api::Write,
+        working: &api::WorkingContext,
+        now: u64,
+    ) -> Result<AssetRef> {
+        if write.kind == wire::AssetKind::AddressReference as i32 {
+            if write.changes.is_empty() || write.changes.len() > MAX_FIELDS {
+                return Err(Error::Invalid);
+            }
+            let mut seen = BTreeSet::new();
+            for field in &write.changes {
+                if !seen.insert(&field.name) {
+                    return Err(Error::Invalid);
+                }
+                self.validate_field(write.kind, field)?;
+            }
+            return self.workspace_address(
+                context,
+                super::addresses::from_write(write)?,
+                working,
+                now,
+            );
+        }
+        let parent = if write.target.is_none() {
+            self.creation_parent(
+                context,
+                working,
+                write.parent.as_ref(),
+                wire::AssetKind::try_from(write.kind).map_err(|_| Error::Invalid)?,
+            )?
+        } else {
+            if write.parent.is_some() {
+                return Err(Error::Invalid);
+            }
+            self.selection(context, working, true)?
+                .contains(parse_target(write.target.as_ref())?, self)?;
+            None
+        };
+        let kind = wire::AssetKind::try_from(write.kind).map_err(|_| Error::Invalid)?;
+        let target = self.workspace_write(context, write, now)?;
+        self.attach_created(context, target, kind, parent, now)?;
+        Ok(target)
+    }
+}
+
+impl Store {
     pub(super) fn workspace_relation(
         &self,
         context: &Context,
         request: api::Relationship,
+        working: &api::WorkingContext,
         now: u64,
     ) -> Result<api::Reply> {
         let mut relation = request.relation.ok_or(Error::Invalid)?;
@@ -712,6 +852,7 @@ impl Store {
             return Err(Error::Invalid);
         }
         let mut tx = self.begin()?;
+        let selection = tx.selection(context, working, true)?;
         let authority = tx.workspace_authority()?;
         if relation.revision == 0 {
             if !relation.relation_id.is_empty()
@@ -723,27 +864,26 @@ impl Store {
             relation.relation_id = RelationId::generate().to_string();
         } else {
             let id: RelationId = relation.relation_id.parse().map_err(|_| Error::Invalid)?;
-            let existing = self.relation(id)?;
+            let row = tx.get(&format!("relation/{id}"))?.ok_or(Error::Missing)?;
+            let existing = super::super::inventory::relation_projection(&row)?;
             if existing.revision != relation.revision || existing.authority_id != authority {
                 return Err(Error::Conflict);
             }
-            for reference in [existing.from.as_ref(), existing.to.as_ref()] {
-                let target = parse_target(reference)?;
-                let row = tx.asset(target)?;
-                let kind = number(&row, "kind")? as i32;
-                if !context.readable(target, kind)
-                    || !context.field(target, kind, "relations", true)
-                {
-                    return Err(Error::Denied);
-                }
-            }
+            tx.check_relationship(context, &selection, &existing)?;
             if request.remove {
                 let key = format!("relation/{id}");
-                self.db.execute_in_transaction(
-                    tx.id.ok_or(Error::Corrupt)?,
-                    "MATCH (r:OmRow {key:$key})-[e]-() DELETE e",
-                    params([("key", text(&key))]),
-                )?;
+                // Each relation owns one edge in each direction. Delete those
+                // exact attachments before removing their metadata row.
+                for query in [
+                    "MATCH (r:OmRow {key:$key})<-[e:OmRelationFrom]-() DELETE e",
+                    "MATCH (r:OmRow {key:$key})-[e:OmRelationTo]->() DELETE e",
+                ] {
+                    self.db.execute_in_transaction(
+                        tx.id.ok_or(Error::Corrupt)?,
+                        query,
+                        params([("key", text(&key))]),
+                    )?;
+                }
                 tx.delete(&key)?;
                 tx.audit(
                     &key,
@@ -756,13 +896,19 @@ impl Store {
             }
         }
         relation.authority_id = authority;
-        tx.commit()?;
-        let from = parse_target(relation.from.as_ref())?;
-        let to = parse_target(relation.to.as_ref())?;
-        for target in [from, to] {
-            let asset = self.asset(target)?;
-            if !context.field(target, asset.kind, "relations", true) {
-                return Err(Error::Denied);
+        let (from, to) = tx.check_relationship(context, &selection, &relation)?;
+        if relation.revision == 0 {
+            for existing in tx.working_relations(from)? {
+                if existing.from == relation.from
+                    && existing.to == relation.to
+                    && existing.kind == relation.kind
+                    && existing.authority_id == relation.authority_id
+                {
+                    return Ok(mutation(
+                        tx.commit()?,
+                        vec![target_wire(from), target_wire(to)],
+                    ));
+                }
             }
         }
         let expected = if relation.revision == 0 {
@@ -771,19 +917,9 @@ impl Store {
             Some(relation.revision)
         };
         relation.revision = expected.unwrap_or(0).checked_add(1).ok_or(Error::Limit)?;
-        let bytes = wire::Record {
-            body: Some(record::Body::Relation(relation)),
-        }
-        .encode_to_vec();
-        let admitted = omloom_contracts::decode(
-            &bytes,
-            omloom_contracts::Limits::default(),
-            &omloom_contracts::MemoryBudget::new(4 * 1_048_576),
-        )
-        .map_err(|_| Error::Invalid)?;
-        self.save_relation(&admitted, expected, &context.actor, now)?;
+        tx.save_typed_relation(&relation, expected, &context.actor, now)?;
         Ok(mutation(
-            self.usage()?.revision,
+            tx.commit()?,
             vec![target_wire(from), target_wire(to)],
         ))
     }
@@ -901,7 +1037,7 @@ impl Tx<'_> {
         self.audit(&key, &context.actor, "inventory.accepted", revision, now)?;
         Ok(target)
     }
-    fn workspace_authority(&mut self) -> Result<String> {
+    pub(super) fn workspace_authority(&mut self) -> Result<String> {
         match self.get("workspace/authority")? {
             Some(p) => string(&p, "authority"),
             None => {
@@ -937,7 +1073,7 @@ impl Tx<'_> {
             return Err(Error::Conflict);
         }
         let scope = format!("{}/{}", target.asset, target.incarnation);
-        let references = self.query("MATCH (n:OmRow {parent:'networks'}) WHERE $scope IN [n.address_space,n.link_scope,n.routing_context,n.group] RETURN properties(n) AS p LIMIT 1", params([("scope", text(&scope))]))?;
+        let references = self.query("MATCH (n:OmRow {parent:'networks'}) WHERE $scope IN [n.address_space,n.link_scope,n.routing_context,n.group,n.binding] RETURN properties(n) AS p LIMIT 1", params([("scope", text(&scope))]))?;
         if !references.is_empty() {
             return Err(Error::Conflict);
         }
@@ -955,7 +1091,9 @@ impl Tx<'_> {
             if !members.is_empty() {
                 return Err(Error::Conflict);
             }
-            self.delete(&string(&network, "namespace")?)?;
+            if let Some(namespace) = network.get("namespace") {
+                self.delete(namespace.as_str().ok_or(Error::Corrupt)?)?;
+            }
             if let Some(group) = network::groups::group_of(&network)? {
                 let root = self.asset(group)?;
                 self.workspace_group_member_owner(
@@ -1029,6 +1167,11 @@ fn network_column(name: &str) -> bool {
         "sharing",
         "vrid",
         "vlan_id",
+        "address",
+        "prefix_length",
+        "meaning",
+        "zone",
+        "binding",
     ]
     .contains(&name)
 }
@@ -1044,6 +1187,11 @@ pub(super) fn validate_column(name: &str, definitions: &[api::Definition]) -> Re
         "sharing",
         "vrid",
         "vlan_id",
+        "address",
+        "prefix_length",
+        "meaning",
+        "zone",
+        "binding",
     ]
     .contains(&name)
         || definitions.iter().any(|d| d.id == name && !d.retired)
@@ -1057,6 +1205,11 @@ pub(super) fn validate_predicate(
     predicate: &api::Predicate,
     definitions: &[api::Definition],
 ) -> Result<()> {
+    // Mapping identities are explicitly reviewed in the reconciliation flow,
+    // not searchable text that could reveal an undisclosable canonical target.
+    if predicate.field == "binding" {
+        return Err(Error::Invalid);
+    }
     validate_column(&predicate.field, definitions)?;
     if let Some(definition) = definitions.iter().find(|d| d.id == predicate.field) {
         if predicate.definition_generation != Some(definition.generation) {
@@ -1072,10 +1225,14 @@ pub(super) fn validate_predicate(
         }
         match predicate.value.as_ref().and_then(|v| v.value.as_ref()) {
             Some(field::Value::Integer(_))
-                if predicate.field == "vrid" || predicate.field == "vlan_id" => {}
+                if predicate.field == "vrid"
+                    || predicate.field == "vlan_id"
+                    || predicate.field == "prefix_length" => {}
             Some(field::Value::Text(s))
-                if s.len() <= 2048 && predicate.field != "vrid" && predicate.field != "vlan_id" => {
-            }
+                if s.len() <= 2048
+                    && predicate.field != "vrid"
+                    && predicate.field != "vlan_id"
+                    && predicate.field != "prefix_length" => {}
             Some(field::Value::Clear(EXPLICIT_CLEAR)) if !network_column(&predicate.field) => {}
             _ => return Err(Error::Invalid),
         }
