@@ -157,6 +157,18 @@ fn search_pages_deduplicate_before_limit_and_preserve_order() -> TestResult {
         q.cursor = Some(cursor);
     }
     assert_eq!(actual, expected);
+    q.cursor = None;
+    q.predicates.push(api::Predicate {
+        field: "description".into(),
+        value: Some(text_field("description", "shared-description")),
+        definition_generation: None,
+    });
+    let api::reply::Result::Page(page) = call(&store, &context, api::request::Command::Query(q))?
+    else {
+        panic!("page");
+    };
+    assert_eq!(page.total, 5);
+    assert_eq!(page.items.len(), 2);
     Ok(())
 }
 

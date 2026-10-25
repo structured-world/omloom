@@ -39,6 +39,13 @@ fn visible_clause(
     field: Option<&str>,
     values: &mut HashMap<String, Value>,
 ) -> String {
+    if context
+        .grants
+        .iter()
+        .any(|g| field.is_none_or(|f| g.read.contains(f)) && matches!(g.scope, Scope::All))
+    {
+        return "true".into();
+    }
     let clauses: Vec<_> = context
         .grants
         .iter()
@@ -223,7 +230,7 @@ impl Store {
                 clauses.push(format!("a.asset={}", parameter(&mut values, text(&term))));
             } else if let Ok(ip) = term.parse::<std::net::IpAddr>() {
                 entry = format!(
-                    "MATCH (ip:OmRow {{parent:'networks'}}) WHERE ip.cidr STARTS WITH {} MATCH (a:OmRow) WHERE a.key='asset/'+ip.asset WITH a, ip",
+                    "MATCH (ip:OmRow {{parent:'networks'}}) WHERE ip.cidr STARTS WITH {} MATCH (a:OmRow) WHERE a.key='asset/'+ip.asset",
                     parameter(&mut values, text(format!("{ip}/")))
                 );
                 clauses.push("ip.incarnation=a.incarnation".into());
@@ -258,21 +265,31 @@ impl Store {
                     ));
                 }
                 entry = format!(
-                    "MATCH (s:OmRow {{layer:'intent'}}) WHERE ({}) MATCH (a:OmRow) WHERE a.key=s.parent WITH a, s",
+                    "MATCH (s:OmRow {{layer:'intent'}}) WHERE s.field IN {} AND ({}) MATCH (a:OmRow) WHERE a.key=s.parent",
+                    parameter(&mut values, strings(&searchable)),
                     value_matches.join(" OR ")
                 );
                 bindings.push("s".into());
                 let search_scopes: Vec<_> = searchable
                     .iter()
-                    .map(|f| {
+                    .filter_map(|f| {
                         let allowed = visible_clause(context, Some(f), &mut values);
-                        format!(
-                            "(s.field={} AND {allowed})",
-                            parameter(&mut values, text(f))
-                        )
+                        if allowed == "false" {
+                            return None;
+                        }
+                        let field = format!("s.field={}", parameter(&mut values, text(f)));
+                        Some(if allowed == "true" {
+                            field
+                        } else {
+                            format!("({field} AND {allowed})")
+                        })
                     })
                     .collect();
-                clauses.push(format!("({})", search_scopes.join(" OR ")));
+                clauses.push(if search_scopes.is_empty() {
+                    "false".into()
+                } else {
+                    format!("({})", search_scopes.join(" OR "))
+                });
             }
         }
         // Separate MATCH clauses make the key equality an indexed correlated
@@ -290,10 +307,7 @@ impl Store {
                     parameter(&mut values, text(&predicate.field))
                 )
             };
-            predicate_joins.push(format!(
-                " MATCH ({alias}:OmRow) WHERE {alias}.key={lookup} WITH {}",
-                bindings.join(", ")
-            ));
+            predicate_joins.push(format!(" MATCH ({alias}:OmRow) WHERE {alias}.key={lookup}"));
             clauses.push(visible_clause(context, Some(&predicate.field), &mut values));
             let value = predicate.value.as_ref().ok_or(Error::Invalid)?;
             if network {
@@ -312,6 +326,7 @@ impl Store {
                 clauses.push(value_clause(value, &alias, &mut values)?);
             }
         }
+        clauses.retain(|clause| clause != "true");
         let base = format!(
             "{entry}{} WITH {} WHERE {}",
             predicate_joins.join(""),
