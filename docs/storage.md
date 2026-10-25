@@ -6,7 +6,7 @@ current identity and permission evidence before calling it. A database record,
 caller string or UUID grants no authority. Identity-provider integration is a
 separate component; this library does not implement login or role assignment.
 
-The backend uses immutable Git dependencies and a consumer lockfile. Its
+The backend pins CoordiNode 0.9.0 registry packages and a consumer lockfile. Its
 filesystem capability requires the `std` feature. Policy types also compile
 without default features on a bare-metal target. A host can supply a supported
 replicated Database instead of opening a local directory. Never concurrently
@@ -99,10 +99,12 @@ input is refused before opening the destination. The host must enforce the
 same input ceiling before buffering a file or network response.
 
 The pinned provider is not qualified for a hard total-owned-file ceiling. Its
-sampled endpoint limit omits growth that matters to this guarantee. Native Git
-dependency builds also include an upstream development helper with C code;
-this source graph is not qualified as a pure Rust dependency graph. Neither
-limitation is represented as a passing check. No SD-card support, power-loss
+sampled endpoint limit omits growth that matters to this guarantee. Independent
+disk tests still reproduce that failure on 0.9.0; registry publication does not
+establish a physical cap. The backend's normal/build dependency graph excludes
+the former Git workspace development helper and its `alloca` C dependency.
+Benchmark tooling still uses `alloca` through the test-only Criterion dependency;
+it is outside the production backend graph. No SD-card support, power-loss
 certification or production deployment support matrix is claimed.
 
 Run `sh scripts/check-contracts.sh` for generation, builds, storage/contract
