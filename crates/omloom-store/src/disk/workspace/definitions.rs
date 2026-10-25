@@ -96,7 +96,7 @@ fn date(s: &str) -> bool {
     };
     year > 0 && day > 0 && day <= days
 }
-fn validate_value(d: &api::Definition, value: &wire::Field) -> Result<()> {
+pub(super) fn validate_value(d: &api::Definition, value: &wire::Field) -> Result<()> {
     use api::FieldType as T;
     match value.value.as_ref().ok_or(Error::Invalid)? {
         field::Value::Clear(0) => Ok(()),

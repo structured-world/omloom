@@ -35,3 +35,7 @@ required-features = ["diagnostics"]
 name = "retrieval"
 harness = false
 required-features = ["std"]
+
+[[example]]
+name = "workspace_bench"
+required-features = ["diagnostics"]

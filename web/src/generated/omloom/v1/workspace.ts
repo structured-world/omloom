@@ -72,7 +72,7 @@ export interface Query {
      */
     columns: string[];
     /**
-     * User-selected supported ordering: name, kind or address, with stable ID ties.
+     * User-selected supported ordering: name or kind, with stable ID ties.
      *
      * @generated from protobuf field: string sort = 7
      */

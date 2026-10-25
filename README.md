@@ -2,8 +2,8 @@
 
 Infrastructure knowledge and operations.
 
-Inventory contracts and embedded persistence are under development. No runnable
-application or installable product release is available yet.
+Inventory contracts, embedded persistence and a local development workspace are
+under development. No installable product release is available yet.
 
 ## Development
 
@@ -12,6 +12,8 @@ TypeScript and browser checks. Documentation checks: `scripts/check-docs.sh`
 (requires lychee). These checks do not certify an installable application.
 See [embedded storage](docs/storage.md) for the host API, durability boundaries
 and current provider limitations.
+See [the local inventory workspace](docs/inventory.md) for the explicit fixture
+host, browser workflow and its development-only boundary.
 
 ## License
 

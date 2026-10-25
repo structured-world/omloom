@@ -50,7 +50,7 @@ message Query {
   repeated Predicate predicates = 5;
   // Requested built-in/definition fields; omission uses the documented name column.
   repeated string columns = 6;
-  // User-selected supported ordering: name, kind or address, with stable ID ties.
+  // User-selected supported ordering: name or kind, with stable ID ties.
   string sort = 7;
   // Requested direction of the selected sort, with the same stable tie ordering.
   bool descending = 8;

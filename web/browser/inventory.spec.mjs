@@ -1,11 +1,13 @@
 import { test, expect } from '@playwright/test';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-async function host(directory, fixture = 'operator') {
-  const child = spawn('target/debug/omloom-dev', ['--data', directory, '--ui', 'dist/app', '--fixture', fixture], { stdio: ['ignore', 'pipe', 'pipe'] });
+async function host(directory, fixture = 'operator', grants) {
+  const args = ['--data', directory, '--ui', 'dist/app', '--fixture', fixture];
+  if (grants) args.push('--grants', grants);
+  const child = spawn('target/debug/omloom-dev', args, { stdio: ['ignore', 'pipe', 'pipe'] });
   const url = await new Promise((resolve, reject) => {
     let output = '';
     const timer = setTimeout(() => { child.kill('SIGINT'); reject(Error(`Host startup timed out: ${output}`)); }, 20_000);
@@ -13,7 +15,7 @@ async function host(directory, fixture = 'operator') {
     child.stderr.on('data', chunk => { output += chunk; });
     child.once('exit', code => { clearTimeout(timer); reject(Error(`Host exited ${code}: ${output}`)); });
   });
-  return { url, async stop() { const exit = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGINT'); await exit; } };
+  return { url, async stop() { if (child.exitCode !== null || child.signalCode !== null) return; const exit = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGINT'); await exit; } };
 }
 async function create(page, name, kind = 'DEVICE') {
   await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
@@ -23,6 +25,11 @@ async function create(page, name, kind = 'DEVICE') {
   await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
   await expect(dialog).toBeHidden();
   await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
+  await page.getByRole('button', { name, exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Resource details' })).toBeVisible();
+  const hash = new URL(page.url()).hash;
+  const params = new URLSearchParams(hash.slice(hash.indexOf('?') + 1));
+  return { asset_id: params.get('asset'), incarnation: params.get('incarnation') };
 }
 
 test('real disk inventory supports editing, context, private saves and restart', async ({ page }) => {
@@ -61,6 +68,50 @@ test('real disk inventory supports editing, context, private saves and restart',
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible();
     await page.screenshot({ path: 'test-results/inventory-mobile.png', fullPage: true });
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('departments share one backup host while namespace and host projections remain separate', async ({ page }) => {
+  // Grant files are generated from actual returned IDs and selected by the host,
+  // never by browser headers, query parameters or synthetic copies of a host.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-departments-'));
+  let server = await host(join(dir, 'db'));
+  try {
+    await page.goto(server.url);
+    const backup = await create(page, 'Shared backup host');
+    const devops = await create(page, 'DevOps hypervisor');
+    const engineer = await create(page, 'Service engineering host');
+    const vm = await create(page, 'Development VM', 'VIRTUAL_MACHINE');
+    const support = await create(page, 'Service VM', 'VIRTUAL_MACHINE');
+    const devopsStorage = await create(page, 'Operations backup namespace', 'STORAGE');
+    const serviceStorage = await create(page, 'Engineering backup namespace', 'STORAGE');
+    const grant = targets => ({ selection: { scope: 'targets', targets }, read: { mode: 'all' }, write: { mode: 'all' }, writable: true });
+    const operationsFile = join(dir, 'operations.json');
+    const engineeringFile = join(dir, 'engineering.json');
+    const developerFile = join(dir, 'developer.json');
+    await writeFile(operationsFile, JSON.stringify([grant([backup, devops, vm, devopsStorage])]));
+    await writeFile(engineeringFile, JSON.stringify([grant([backup, engineer, support, serviceStorage])]));
+    await writeFile(developerFile, JSON.stringify([grant([vm])]));
+    await server.stop(); server = await host(join(dir, 'db'), 'devops', operationsFile);
+    await page.goto(server.url);
+    await expect(page.getByRole('button', { name: 'Shared backup host', exact: true })).toHaveCount(1);
+    await expect(page.getByRole('button', { name: 'Operations backup namespace', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Engineering backup namespace', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Service engineering host', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Shared backup host', exact: true }).click();
+    expect(new URLSearchParams(new URL(page.url()).hash.split('?')[1]).get('asset')).toBe(backup.asset_id);
+    await server.stop(); server = await host(join(dir, 'db'), 'engineer', engineeringFile);
+    await page.goto(server.url);
+    await expect(page.getByRole('button', { name: 'Shared backup host', exact: true })).toHaveCount(1);
+    await expect(page.getByRole('button', { name: 'Engineering backup namespace', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Operations backup namespace', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'DevOps hypervisor', exact: true })).toHaveCount(0);
+    await server.stop(); server = await host(join(dir, 'db'), 'developer', developerFile);
+    await page.goto(server.url);
+    await expect(page.getByRole('button', { name: 'Development VM', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Shared backup host', exact: true })).toHaveCount(0);
+    await page.goto(`${server.url}/#/?kind=3&actor=fixture-operator`);
+    await expect(page.getByRole('button', { name: 'Shared backup host', exact: true })).toHaveCount(0);
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
 

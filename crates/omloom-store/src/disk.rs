@@ -283,12 +283,18 @@ fn unpack(rows: Vec<Properties>) -> Result<Vec<Properties>> {
 
 impl Store {
     pub fn open(path: &Path, policy: Policy) -> Result<Self> {
+        Self::open_with_query_memory(path, policy, 32 * 1_048_576)
+    }
+
+    /// Opens the same durable store with an explicit host-selected statement
+    /// memory ceiling. This is independent of admission and owned disk limits.
+    pub fn open_with_query_memory(path: &Path, policy: Policy, bytes: u64) -> Result<Self> {
         if !policy.valid() {
             return Err(Error::Invalid);
         }
         let mut db = Database::open(path)?;
         db.set_max_interactive_txn_bytes(16 * 1_048_576);
-        db.set_query_memory_limit(32 * 1_048_576)
+        db.set_query_memory_limit(bytes)
             .map_err(|_| Error::Invalid)?;
         db.set_retention_window(Duration::from_secs(1));
         let store = Self::from_database(db, policy)?;

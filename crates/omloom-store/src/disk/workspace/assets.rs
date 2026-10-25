@@ -154,7 +154,9 @@ impl Store {
             "a.parent='assets'".to_owned(),
             visible_clause(context, None, &mut values),
         ];
-        let mut matches = vec!["(a:OmRow)".to_owned()];
+        let mut entry = "MATCH (a:OmRow)".to_owned();
+        let mut bindings = vec!["a".to_owned()];
+        let mut predicate_joins = Vec::new();
         let view_kinds = kind_for_view(view);
         if !view_kinds.is_empty() {
             clauses.push(format!(
@@ -208,28 +210,17 @@ impl Store {
             // An accepted physical placement alone removes an object from Unplaced.
             clauses.push("NOT EXISTS { MATCH (a)-[:OmRelationFrom]->(placement:OmRow) WHERE placement.kind=1 }".into());
         }
-        for (index, predicate) in query.predicates.iter().enumerate() {
-            validate_predicate(predicate, &definitions)?;
-            let alias = format!("f{index}");
-            matches.push(format!("({alias}:OmRow)"));
-            clauses.push(format!(
-                "{alias}.parent=a.key AND {alias}.layer='intent' AND {alias}.field={}",
-                parameter(&mut values, text(&predicate.field))
-            ));
-            clauses.push(visible_clause(context, Some(&predicate.field), &mut values));
-            clauses.push(value_clause(
-                predicate.value.as_ref().ok_or(Error::Invalid)?,
-                &alias,
-                &mut values,
-            )?);
-        }
         if !query.search.trim().is_empty() {
             let term = query.search.trim().to_lowercase();
             if term.parse::<AssetId>().is_ok() {
                 clauses.push(format!("a.asset={}", parameter(&mut values, text(&term))));
             } else if let Ok(ip) = term.parse::<std::net::IpAddr>() {
-                matches.push("(ip:OmRow)".into());
-                clauses.push(format!("ip.parent='networks' AND ip.asset=a.asset AND ip.incarnation=a.incarnation AND ip.cidr STARTS WITH {}", parameter(&mut values, text(format!("{ip}/")))));
+                entry = format!(
+                    "MATCH (ip:OmRow) WHERE ip.parent='networks' AND ip.cidr STARTS WITH {} MATCH (a:OmRow) WHERE a.key='asset/'+ip.asset WITH a, ip",
+                    parameter(&mut values, text(format!("{ip}/")))
+                );
+                clauses.push("ip.incarnation=a.incarnation".into());
+                bindings.push("ip".into());
                 clauses.push(visible_clause(context, Some("cidr"), &mut values));
             } else {
                 let mut searchable = vec![
@@ -243,8 +234,6 @@ impl Store {
                         .filter(|d| d.searchable && !d.retired)
                         .map(|d| d.id.clone()),
                 );
-                matches.push("(s:OmRow)".into());
-                clauses.push("s.parent=a.key AND s.layer='intent'".into());
                 let mut value_matches = vec![format!(
                     "(s.vtype=1 AND toLower(s.vtext) CONTAINS {})",
                     parameter(&mut values, text(&term))
@@ -261,7 +250,11 @@ impl Store {
                         parameter(&mut values, Value::Bool(term == "true"))
                     ));
                 }
-                clauses.push(format!("({})", value_matches.join(" OR ")));
+                entry = format!(
+                    "MATCH (s:OmRow) WHERE s.layer='intent' AND ({}) MATCH (a:OmRow) WHERE a.key=s.parent WITH a, s",
+                    value_matches.join(" OR ")
+                );
+                bindings.push("s".into());
                 let search_scopes: Vec<_> = searchable
                     .iter()
                     .map(|f| {
@@ -275,9 +268,47 @@ impl Store {
                 clauses.push(format!("({})", search_scopes.join(" OR ")));
             }
         }
+        // Separate MATCH clauses make the key equality an indexed correlated
+        // lookup. A comma-separated pattern materializes a Cartesian product.
+        for (index, predicate) in query.predicates.iter().enumerate() {
+            validate_predicate(predicate, &definitions)?;
+            let alias = format!("f{index}");
+            bindings.push(alias.clone());
+            let network = network_column(&predicate.field);
+            let lookup = if network {
+                "'network/'+a.asset+'/'+a.incarnation".to_owned()
+            } else {
+                format!(
+                    "a.key+'/intent/'+{}",
+                    parameter(&mut values, text(&predicate.field))
+                )
+            };
+            predicate_joins.push(format!(
+                " MATCH ({alias}:OmRow) WHERE {alias}.key={lookup} WITH {}",
+                bindings.join(", ")
+            ));
+            clauses.push(visible_clause(context, Some(&predicate.field), &mut values));
+            let value = predicate.value.as_ref().ok_or(Error::Invalid)?;
+            if network {
+                let operand = match value.value.as_ref() {
+                    Some(field::Value::Text(s)) => text(s),
+                    Some(field::Value::Integer(n)) => Value::Int(*n),
+                    _ => return Err(Error::Invalid),
+                };
+                clauses.push(format!(
+                    "{alias}.{}={}",
+                    predicate.field,
+                    parameter(&mut values, operand)
+                ));
+            } else {
+                clauses.push(format!("{alias}.layer='intent'"));
+                clauses.push(value_clause(value, &alias, &mut values)?);
+            }
+        }
         let base = format!(
-            "MATCH {} WHERE {}",
-            matches.join(", "),
+            "{entry}{} WITH {} WHERE {}",
+            predicate_joins.join(""),
+            bindings.join(", "),
             clauses.join(" AND ")
         );
         let count = tx.raw(
@@ -642,6 +673,23 @@ impl Tx<'_> {
         write: api::Write,
         now: u64,
     ) -> Result<AssetRef> {
+        self.workspace_write_inner(context, write, now, false)
+    }
+    pub(super) fn workspace_network_write(
+        &mut self,
+        context: &Context,
+        write: api::Write,
+        now: u64,
+    ) -> Result<AssetRef> {
+        self.workspace_write_inner(context, write, now, true)
+    }
+    fn workspace_write_inner(
+        &mut self,
+        context: &Context,
+        write: api::Write,
+        now: u64,
+        network: bool,
+    ) -> Result<AssetRef> {
         let target = write
             .target
             .as_ref()
@@ -650,6 +698,15 @@ impl Tx<'_> {
             .unwrap_or_else(new_target);
         let kind = wire::AssetKind::try_from(write.kind).map_err(|_| Error::Invalid)?;
         if kind == wire::AssetKind::Unspecified {
+            return Err(Error::Invalid);
+        }
+        if write.target.is_none()
+            && !network
+            && matches!(
+                kind,
+                wire::AssetKind::IpAddress | wire::AssetKind::Prefix | wire::AssetKind::Vlan
+            )
+        {
             return Err(Error::Invalid);
         }
         let key = asset_key(target);
@@ -814,6 +871,18 @@ fn query_fingerprint(query: &api::Query, context: &Context) -> String {
     digest.update(format!("{:?}", context.grants).as_bytes());
     format!("{:x}", digest.finalize())
 }
+fn network_column(name: &str) -> bool {
+    [
+        "cidr",
+        "address_space",
+        "link_scope",
+        "routing_context",
+        "sharing",
+        "vrid",
+        "vlan_id",
+    ]
+    .contains(&name)
+}
 pub(super) fn validate_column(name: &str, definitions: &[api::Definition]) -> Result<()> {
     if [
         "name",
@@ -843,6 +912,23 @@ pub(super) fn validate_predicate(
     if let Some(definition) = definitions.iter().find(|d| d.id == predicate.field) {
         if predicate.definition_revision != Some(definition.revision) {
             return Err(Error::Incomplete);
+        }
+        super::definitions::validate_value(
+            definition,
+            predicate.value.as_ref().ok_or(Error::Invalid)?,
+        )?;
+    } else {
+        if predicate.definition_revision.is_some() {
+            return Err(Error::Invalid);
+        }
+        match predicate.value.as_ref().and_then(|v| v.value.as_ref()) {
+            Some(field::Value::Integer(_))
+                if predicate.field == "vrid" || predicate.field == "vlan_id" => {}
+            Some(field::Value::Text(s))
+                if s.len() <= 2048 && predicate.field != "vrid" && predicate.field != "vlan_id" => {
+            }
+            Some(field::Value::Clear(0)) if !network_column(&predicate.field) => {}
+            _ => return Err(Error::Invalid),
         }
     }
     if predicate

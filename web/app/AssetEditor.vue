@@ -27,7 +27,7 @@ async function save() {
 </script>
 <template><Dialog :title="item ? 'Edit resource' : 'Create resource'" @close="emit('close')"><form @submit.prevent="save">
 <p class="hint">Changes affect accepted inventory. Observations and import proposals remain separate.</p>
-<label for="resource-kind">Resource kind</label><select id="resource-kind" v-model="kind" :disabled="!!item"><option v-for="k in kinds" :key="k" :value="k">{{ label(k) }}</option></select>
+<label for="resource-kind">Resource kind</label><select id="resource-kind" v-model="kind" :disabled="!!item"><option v-for="k in kinds" :key="k" :value="k" :disabled="!item && [AssetKind.IP_ADDRESS, AssetKind.PREFIX, AssetKind.VLAN].includes(k)">{{ label(k) }}{{ !item && [AssetKind.IP_ADDRESS, AssetKind.PREFIX, AssetKind.VLAN].includes(k) ? ' (use Network allocation)' : '' }}</option></select>
 <template v-for="f in fields" :key="f.id"><div v-if="!('kinds' in f) || f.kinds.includes(kind)" class="field-edit">
 <label :for="`value-${f.id}`">{{ f.name }}</label><select v-model="modes[f.id]" :aria-label="`${f.name} change`"><option value="preserve">Preserve</option><option value="set">Set</option><option v-if="f.id !== 'name'" value="clear">Clear explicitly</option></select>
 <select v-if="f.type === model.FieldType.BOOLEAN" :id="`value-${f.id}`" v-model="values[f.id]" :disabled="modes[f.id] !== 'set'"><option value="true">True</option><option value="false">False</option></select>

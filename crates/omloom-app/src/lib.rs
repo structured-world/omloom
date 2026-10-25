@@ -16,6 +16,7 @@ use tokio::sync::Semaphore;
 use tonic::{Code, Request, Response, Status};
 use tonic_types::{ErrorDetails, StatusExt};
 pub mod codec;
+pub mod fixtures;
 
 pub mod transport {
     tonic::include_proto!("omloom.workspace.v1");
@@ -42,11 +43,12 @@ pub fn fixture(name: &str) -> Result<Context, &'static str> {
     let (scope, writable, schema_admin, teams) = match name {
         "operator" => (Scope::All, true, true, vec!["operations", "engineering"]),
         "developer" => (
-            Scope::Kinds(vec![AssetKind::VirtualMachine, AssetKind::Service]),
+            Scope::Kinds(vec![AssetKind::VirtualMachine]),
             true,
             false,
             vec!["development"],
         ),
+        "devops" => (Scope::All, true, false, vec!["operations"]),
         "engineer" => (
             Scope::Kinds(vec![
                 AssetKind::Device,
@@ -58,7 +60,7 @@ pub fn fixture(name: &str) -> Result<Context, &'static str> {
             vec!["engineering"],
         ),
         "viewer" => (Scope::All, false, false, vec!["operations"]),
-        _ => return Err("Select operator, developer, engineer or viewer"),
+        _ => return Err("Select operator, developer, devops, engineer or viewer"),
     };
     Ok(Context {
         actor: format!("fixture-{name}"),
@@ -149,6 +151,38 @@ impl Application {
             store: Arc::new(store),
             context,
             work: Arc::new(Semaphore::new(8)),
+        }
+    }
+    /// One bounded page per interval. Cursors advance only after a successful
+    /// transaction; restarting safely rescans rather than losing cleanup work.
+    pub async fn maintain(self, mut shutdown: tokio::sync::watch::Receiver<bool>) {
+        let mut detail = None;
+        let mut review = None;
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            tokio::select! {
+                result = shutdown.changed() => { if result.is_err() || *shutdown.borrow() { break; } }
+                _ = interval.tick() => {
+                    let Ok(permit) = Arc::clone(&self.work).try_acquire_owned() else { continue };
+                    let store = Arc::clone(&self.store);
+                    let previous_detail = detail.clone();
+                    let previous_review = review.clone();
+                    let result = tokio::task::spawn_blocking(move || {
+                        let _permit = permit;
+                        let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| Error::Invalid)?.as_millis();
+                        let now = u64::try_from(now).map_err(|_| Error::Invalid)?;
+                        let d = store.cleanup(now, previous_detail.as_deref())?;
+                        let r = store.cleanup_reviews(now, previous_review.as_deref())?;
+                        store.workspace_cleanup_definitions(16)?;
+                        Ok::<_, Error>((d.cursor, r.cursor))
+                    }).await;
+                    match result {
+                        Ok(Ok((d, r))) => { detail = d; review = r; }
+                        Ok(Err(error)) => eprintln!("Cleanup did not complete; cursor retained: {error}"),
+                        Err(error) => eprintln!("Cleanup task failed; cursor retained: {error}"),
+                    }
+                }
+            }
         }
     }
 }

@@ -100,7 +100,7 @@ impl Store {
         if number(&tx.visible_asset(context, link)?, "kind")? != wire::AssetKind::L2Domain as u64 {
             return Err(Error::Invalid);
         }
-        let target = tx.workspace_write(
+        let target = tx.workspace_network_write(
             context,
             api::Write {
                 target: request.target,
@@ -240,7 +240,7 @@ impl Store {
             .map(|t| parse_target(Some(t)))
             .transpose()?;
         request.name = request.name.trim().to_owned();
-        let target = tx.workspace_write(
+        let target = tx.workspace_network_write(
             context,
             api::Write {
                 target: old_target.map(target_wire),

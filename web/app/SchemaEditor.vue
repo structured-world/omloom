@@ -24,7 +24,7 @@ async function save(apply = false) {
 <template><Dialog title="Company fields" @close="emit('close')"><form @submit.prevent="save(false)" @input="preview = undefined" @change="preview = undefined">
 <label>Definition<select v-model="selected" @change="load"><option value="">New field</option><option v-for="d in definitions" :key="d.id" :value="d.id">{{ d.name }}{{ d.retired ? ' (retired)' : '' }}</option></select></label>
 <label>Name<input v-model="draft.name" required maxlength="100"></label><label>Help<textarea v-model="draft.description" maxlength="1000" /></label>
-<label>Type<select v-model="draft.type" @change="preview = undefined"><option v-for="t in [0,1,2,3,4]" :key="t" :value="t">{{ model.FieldType[t]?.replace('FIELD_TYPE_', '').toLowerCase() }}</option></select></label>
+<label for="definition-type">Type</label><select id="definition-type" v-model="draft.type" @change="preview = undefined"><option v-for="t in Object.values(model.FieldType).filter((t): t is number => typeof t === 'number')" :key="t" :value="t">{{ model.FieldType[t]?.toLowerCase() }}</option></select>
 <label v-if="draft.type === model.FieldType.CHOICE">Choices, one per line<textarea v-model="choices" /></label>
 <fieldset><legend>Applies to</legend><label v-for="k in kinds" :key="k" class="check"><input v-model="draft.kinds" type="checkbox" :value="k">{{ label(k) }}</label></fieldset>
 <label class="check"><input v-model="draft.searchable" type="checkbox">Include values in descriptive search</label>

@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import Dialog from './Dialog.vue';
-import { call, model, kinds, label, display } from './api';
+import { call, model, kinds, label, display, AssetKind } from './api';
 const props = defineProps<{ definitions: model.Definition[] }>();
 const emit = defineEmits<{ close: []; saved: [] }>();
-const csv = ref(''); const source = ref(''); const kind = ref(3); const preview = ref<model.Preview>(); const error = ref('');
+const csv = ref(''); const source = ref(''); const kind = ref(AssetKind.DEVICE); const preview = ref<model.Preview>(); const error = ref('');
 const mappings = ref([{ source: 'name', field: 'name' }]);
 const destinations = computed(() => [{ id: 'name', name: 'Name' }, { id: 'description', name: 'Description' }, { id: 'serial', name: 'Serial number' }, ...props.definitions.filter(d => !d.retired)]);
 async function run(apply: boolean) {

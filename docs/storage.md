@@ -5,6 +5,9 @@ not a server, authentication endpoint or installer. Applications must obtain
 current identity and permission evidence before calling it. A database record,
 caller string or UUID grants no authority. Identity-provider integration is a
 separate component; this library does not implement login or role assignment.
+The [local development host](inventory.md) instead supplies explicitly selected
+synthetic contexts for test-owned data. These qualify application projection
+without claiming identity-provider enforcement.
 
 The backend pins CoordiNode 0.9.0 registry packages and a consumer lockfile. Its
 filesystem capability requires the `std` feature. Policy types also compile

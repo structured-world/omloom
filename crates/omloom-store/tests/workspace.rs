@@ -6,6 +6,8 @@ use omloom_contracts::{
 };
 use omloom_store::{Error, Store, workspace::*};
 use support::*;
+#[path = "workspace/views.rs"]
+mod views;
 
 fn operator() -> Context {
     Context {
