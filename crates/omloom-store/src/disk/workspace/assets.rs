@@ -5,11 +5,11 @@ fn parameter(values: &mut HashMap<String, Value>, value: Value) -> String {
     values.insert(name.clone(), value);
     format!("${name}")
 }
-fn scope_clause(scope: &Scope, values: &mut HashMap<String, Value>) -> String {
+fn scope_clause(scope: &Scope, values: &mut HashMap<String, Value>, alias: &str) -> String {
     match scope {
         Scope::All => "true".into(),
         Scope::Kinds(kinds) => format!(
-            "a.kind IN {}",
+            "{alias}.kind IN {}",
             parameter(
                 values,
                 Value::Array(kinds.iter().map(|k| Value::Int(*k as i32 as i64)).collect())
@@ -20,7 +20,7 @@ fn scope_clause(scope: &Scope, values: &mut HashMap<String, Value>) -> String {
                 .iter()
                 .map(|t| {
                     format!(
-                        "(a.key={} AND a.incarnation={})",
+                        "({alias}.key={} AND {alias}.incarnation={})",
                         parameter(values, text(asset_key(*t))),
                         parameter(values, text(t.incarnation.to_string()))
                     )
@@ -39,6 +39,14 @@ fn visible_clause(
     field: Option<&str>,
     values: &mut HashMap<String, Value>,
 ) -> String {
+    visible_clause_for(context, field, values, "a")
+}
+fn visible_clause_for(
+    context: &Context,
+    field: Option<&str>,
+    values: &mut HashMap<String, Value>,
+    alias: &str,
+) -> String {
     if context
         .grants
         .iter()
@@ -50,7 +58,7 @@ fn visible_clause(
         .grants
         .iter()
         .filter(|g| field.is_none_or(|f| g.read.contains(f)))
-        .map(|g| scope_clause(&g.scope, values))
+        .map(|g| scope_clause(&g.scope, values, alias))
         .collect();
     if clauses.is_empty() {
         "false".into()
@@ -82,6 +90,7 @@ fn kind_for_view(view: api::View) -> &'static [wire::AssetKind] {
             K::Port,
             K::Cable,
             K::Lag,
+            K::AddressGroup,
         ],
         api::View::Virtualization => &[K::VirtualMachine, K::Device, K::Cluster, K::Storage],
         api::View::Services => &[K::Service, K::Device, K::VirtualMachine, K::Storage],
@@ -249,18 +258,18 @@ impl Store {
                         .map(|d| d.id.clone()),
                 );
                 let mut value_matches = vec![format!(
-                    "(s.vtype=1 AND toLower(s.vtext) CONTAINS {})",
+                    "(CASE WHEN s.vtype=1 THEN toLower(s.vtext) CONTAINS {} ELSE false END)",
                     parameter(&mut values, text(&term))
                 )];
                 if let Ok(integer) = term.parse::<i64>() {
                     value_matches.push(format!(
-                        "(s.vtype=2 AND s.vint={})",
+                        "(CASE WHEN s.vtype=2 THEN s.vint={} ELSE false END)",
                         parameter(&mut values, Value::Int(integer))
                     ));
                 }
                 if term == "true" || term == "false" {
                     value_matches.push(format!(
-                        "(s.vtype=3 AND s.vflag={})",
+                        "(CASE WHEN s.vtype=3 THEN s.vflag={} ELSE false END)",
                         parameter(&mut values, Value::Bool(term == "true"))
                     ));
                 }
@@ -297,17 +306,42 @@ impl Store {
         for (index, predicate) in query.predicates.iter().enumerate() {
             validate_predicate(predicate, &definitions)?;
             let alias = format!("f{index}");
-            bindings.push(alias.clone());
             let network = network_column(&predicate.field);
             let lookup = if network {
-                "'network/'+a.asset+'/'+a.incarnation".to_owned()
+                format!(
+                    "CASE WHEN a.kind={} THEN 'group/'+a.asset+'/'+a.incarnation ELSE 'network/'+a.asset+'/'+a.incarnation END",
+                    wire::AssetKind::AddressGroup as i32
+                )
             } else {
                 format!(
                     "a.key+'/intent/'+{}",
                     parameter(&mut values, text(&predicate.field))
                 )
             };
-            predicate_joins.push(format!(" MATCH ({alias}:OmRow) WHERE {alias}.key={lookup}"));
+            // Bind conditional keys before point MATCH so every branch uses
+            // the same correlated indexed access path.
+            if network {
+                predicate_joins.push(format!(" WITH {}, {lookup} AS nk{index} MATCH ({alias}:OmRow) WHERE {alias}.key=nk{index}", bindings.join(", ")));
+            } else {
+                predicate_joins.push(format!(" MATCH ({alias}:OmRow) WHERE {alias}.key={lookup}"));
+            }
+            bindings.push(alias.clone());
+            let value_alias = if predicate.field == "vrid" {
+                let group_alias = format!("g{index}");
+                let root_alias = format!("ga{index}");
+                predicate_joins.push(format!(" WITH {}, CASE WHEN a.kind={} THEN {alias}.key ELSE 'group/'+{alias}.group END AS gk{index} MATCH ({group_alias}:OmRow) WHERE {group_alias}.key=gk{index} MATCH ({root_alias}:OmRow) WHERE {root_alias}.key='asset/'+{group_alias}.asset", bindings.join(", "), wire::AssetKind::AddressGroup as i32));
+                bindings.extend([group_alias.clone(), root_alias.clone()]);
+                clauses.push(format!("{root_alias}.incarnation={group_alias}.incarnation AND {root_alias}.adoption={}", wire::Adoption::Adopted as i32));
+                clauses.push(visible_clause_for(
+                    context,
+                    Some("vrid"),
+                    &mut values,
+                    &root_alias,
+                ));
+                group_alias
+            } else {
+                alias.clone()
+            };
             clauses.push(visible_clause(context, Some(&predicate.field), &mut values));
             let value = predicate.value.as_ref().ok_or(Error::Invalid)?;
             if network {
@@ -317,7 +351,7 @@ impl Store {
                     _ => return Err(Error::Invalid),
                 };
                 clauses.push(format!(
-                    "{alias}.{}={}",
+                    "{value_alias}.{}={}",
                     predicate.field,
                     parameter(&mut values, operand)
                 ));
@@ -391,16 +425,55 @@ impl Store {
         }
         let network_keys = rows
             .iter()
-            .map(|p| target(p).map(|t| text(format!("network/{}/{}", t.asset, t.incarnation))))
+            .map(|p| {
+                target(p).and_then(|t| {
+                    Ok(text(format!(
+                        "{}/{}",
+                        if number(p, "kind")? == wire::AssetKind::AddressGroup as u64 {
+                            "group"
+                        } else {
+                            "network"
+                        },
+                        network::identity(t)
+                    )))
+                })
+            })
             .collect::<Result<Vec<_>>>()?;
         let networks = tx.query(
             "UNWIND $keys AS key MATCH (n:OmRow) WHERE n.key=key RETURN properties(n) AS p LIMIT 101",
             params([("keys", Value::Array(network_keys))]),
         )?;
+        let mut group_metadata = BTreeMap::new();
+        if query.columns.iter().any(|field| field == "vrid") {
+            let group_refs = networks
+                .iter()
+                .map(network::groups::group_of)
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .flatten()
+                .filter(|t| {
+                    context.readable(*t, wire::AssetKind::AddressGroup as i32)
+                        && context.field(*t, wire::AssetKind::AddressGroup as i32, "vrid", false)
+                })
+                .map(|t| text(network::identity(t)))
+                .collect::<Vec<_>>();
+            if !group_refs.is_empty() {
+                let settings = tx.query("UNWIND $groups AS selected MATCH (g:OmRow) WHERE g.key='group/'+selected MATCH (a:OmRow) WHERE a.key='asset/'+g.asset WITH a,g WHERE a.incarnation=g.incarnation AND a.adoption=$adopted RETURN properties(g) AS p LIMIT 101", params([("groups", Value::Array(group_refs)), ("adopted", Value::Int(wire::Adoption::Adopted as i32 as i64))]))?;
+                for row in settings {
+                    group_metadata.insert(target(&row)?, row);
+                }
+            }
+        }
         for row in &networks {
             let owner = target(row)?;
             let key = asset_key(owner);
-            let values = network::projection(row, &query.columns)?;
+            let mut values = network::projection(row, &query.columns)?;
+            if query.columns.iter().any(|field| field == "vrid")
+                && let Some(group) = network::groups::group_of(row)?
+                && let Some(settings) = group_metadata.get(&group)
+            {
+                values.extend(network::projection(settings, &["vrid".into()])?);
+            }
             if let Some(root) = rows.iter().find(|p| p.get("key") == Some(&text(&key))) {
                 let kind = number(root, "kind")? as i32;
                 for value in values {
@@ -476,6 +549,9 @@ impl Store {
                 return Err(Error::Denied);
             }
             selected.insert(current);
+            if !context.field(current, asset.kind, "relations", false) {
+                continue;
+            }
             for relation in self.relations(current, 128)? {
                 let kind =
                     wire::RelationKind::try_from(relation.kind).map_err(|_| Error::Corrupt)?;
@@ -502,6 +578,7 @@ impl Store {
                     let asset = self.asset(child)?;
                     if asset.adoption == wire::Adoption::Adopted as i32
                         && context.readable(child, asset.kind)
+                        && context.field(child, asset.kind, "relations", false)
                     {
                         pending.push(child);
                     }
@@ -531,8 +608,8 @@ impl Store {
         for relation in self.relations(target, 128)? {
             let from = parse_target(relation.from.as_ref())?;
             let to = parse_target(relation.to.as_ref())?;
-            if context.readable(from, self.asset(from)?.kind)
-                && context.readable(to, self.asset(to)?.kind)
+            if context.field(from, self.asset(from)?.kind, "relations", false)
+                && context.field(to, self.asset(to)?.kind, "relations", false)
             {
                 relations.push(relation);
             }
@@ -553,7 +630,7 @@ impl Store {
                 })
                 .collect()
         };
-        let (participants, participants_complete) =
+        let (participants, participants_complete, group) =
             self.workspace_network_fields(context, target, asset.kind, &mut fields)?;
         if self.usage()?.revision != basis {
             return Err(Error::Expired);
@@ -570,6 +647,7 @@ impl Store {
             imported: redact(asset.imported),
             participants,
             participants_complete,
+            group,
         })
     }
 
@@ -749,7 +827,10 @@ impl Tx<'_> {
             && !network
             && matches!(
                 kind,
-                wire::AssetKind::IpAddress | wire::AssetKind::Prefix | wire::AssetKind::Vlan
+                wire::AssetKind::IpAddress
+                    | wire::AssetKind::Prefix
+                    | wire::AssetKind::Vlan
+                    | wire::AssetKind::AddressGroup
             )
         {
             return Err(Error::Invalid);
@@ -856,11 +937,15 @@ impl Tx<'_> {
             return Err(Error::Conflict);
         }
         let scope = format!("{}/{}", target.asset, target.incarnation);
-        let references = self.query("MATCH (n:OmRow) WHERE n.parent='networks' AND (n.address_space=$scope OR n.link_scope=$scope OR n.routing_context=$scope) RETURN properties(n) AS p LIMIT 1", params([("scope", text(&scope))]))?;
+        let references = self.query("MATCH (n:OmRow {parent:'networks'}) WHERE $scope IN [n.address_space,n.link_scope,n.routing_context,n.group] RETURN properties(n) AS p LIMIT 1", params([("scope", text(&scope))]))?;
         if !references.is_empty() {
             return Err(Error::Conflict);
         }
-        let memberships = self.query("MATCH (n:OmRow) WHERE n.group IS NOT NULL AND n.asset=$asset AND n.incarnation=$incarnation RETURN properties(n) AS p LIMIT 1", params([("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string()))]))?;
+        let groups = self.query("MATCH (n:OmRow {parent:'address-groups'}) WHERE n.link_scope=$scope RETURN properties(n) AS p LIMIT 1", params([("scope", text(&scope))]))?;
+        if !groups.is_empty() {
+            return Err(Error::Conflict);
+        }
+        let memberships = self.query("MATCH (n:OmRow) WHERE n.parent STARTS WITH 'members/' AND n.asset=$asset AND n.incarnation=$incarnation RETURN properties(n) AS p LIMIT 1", params([("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string()))]))?;
         if !memberships.is_empty() {
             return Err(Error::Conflict);
         }
@@ -871,10 +956,26 @@ impl Tx<'_> {
                 return Err(Error::Conflict);
             }
             self.delete(&string(&network, "namespace")?)?;
-            if let Some(group) = network.get("group").and_then(Value::as_str) {
-                self.delete(group)?;
+            if let Some(group) = network::groups::group_of(&network)? {
+                let root = self.asset(group)?;
+                self.workspace_group_member_owner(
+                    context,
+                    group,
+                    Some(number(&root, "revision")?),
+                )?;
+                self.workspace_advance(group, &context.actor, "group.addresses", now)?;
             }
             self.delete(&network_key)?;
+        }
+        let group_key = format!("group/{scope}");
+        if let Some(group) = self.get(&group_key)? {
+            if !self.children(&format!("members/{scope}"))?.is_empty() {
+                return Err(Error::Conflict);
+            }
+            if let Some(namespace) = group.get("namespace").and_then(Value::as_str) {
+                self.delete(namespace)?;
+            }
+            self.delete(&group_key)?;
         }
         for child in self.children(&key)? {
             let child_key = string(&child, "key")?;

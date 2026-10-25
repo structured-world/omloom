@@ -134,8 +134,10 @@ impl Store {
                 return Err(Error::Limit);
             }
             let row_number = (index + 2) as u32;
+            let mut diagnostic = "CSV record".to_owned();
             let parsed = (|| {
                 let line = line.map_err(|_| Error::Invalid)?;
+                diagnostic = "column 'external_id'".into();
                 let external = line.get(external_index).ok_or(Error::Invalid)?.to_owned();
                 if external.is_empty()
                     || external.len() > 256
@@ -143,6 +145,7 @@ impl Store {
                 {
                     return Err(Error::Invalid);
                 }
+                diagnostic = "source identity and current scope".into();
                 let prior = tx.get(&mapping_key(&context.actor, &request.source, &external))?;
                 let target = prior.as_ref().map(super::super::target).transpose()?;
                 let existing = target.map(|t| tx.visible_asset(context, t)).transpose()?;
@@ -151,17 +154,44 @@ impl Store {
                     .map(|p| number(p, "kind").map(|n| n as i32))
                     .transpose()?
                     .unwrap_or(request.kind);
+                diagnostic = "resource kind".into();
+                let typed_kind = wire::AssetKind::try_from(kind).map_err(|_| Error::Invalid)?;
+                if typed_kind == wire::AssetKind::Unspecified {
+                    return Err(Error::Invalid);
+                }
+                if target.is_none()
+                    && matches!(
+                        typed_kind,
+                        wire::AssetKind::IpAddress
+                            | wire::AssetKind::Prefix
+                            | wire::AssetKind::Vlan
+                            | wire::AssetKind::AddressGroup
+                    )
+                {
+                    diagnostic = "resource kind (use reviewed network allocation)".into();
+                    return Err(Error::Invalid);
+                }
                 let expected = existing
                     .as_ref()
                     .map(|p| number(p, "revision"))
                     .transpose()?;
+                let write_target = target.unwrap_or_else(new_target);
                 let fields: Vec<_> = mapping
                     .iter()
                     .map(|(index, name)| {
-                        csv_value(name, line.get(*index).ok_or(Error::Invalid)?, &definitions)
+                        diagnostic =
+                            format!("column '{}'", headers.get(*index).ok_or(Error::Invalid)?);
+                        let field =
+                            csv_value(name, line.get(*index).ok_or(Error::Invalid)?, &definitions)?;
+                        tx.require_changes(
+                            context,
+                            write_target,
+                            kind,
+                            std::slice::from_ref(&field),
+                        )?;
+                        Ok(field)
                     })
                     .collect::<Result<_>>()?;
-                tx.require_changes(context, target.unwrap_or_else(new_target), kind, &fields)?;
                 Ok((
                     external,
                     api::Write {
@@ -174,7 +204,7 @@ impl Store {
             })();
             match parsed {
                 Ok((external, change)) => rows.push((external, api::ImportRow { row: row_number, change: Some(change), diagnostic: String::new() })),
-                Err(error) => rows.push((String::new(), api::ImportRow { row: row_number, change: None, diagnostic: format!("Row {row_number}: {error}. Check external_id, field mapping, value type and current scope.") })),
+                Err(error) => rows.push((String::new(), api::ImportRow { row: row_number, change: None, diagnostic: format!("Row {row_number}, {diagnostic}: {error}. Review the mapping, declared type and current scope.") })),
             }
         }
         if rows.is_empty() {

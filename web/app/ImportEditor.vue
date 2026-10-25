@@ -18,7 +18,7 @@ async function run(apply: boolean) {
 <template><Dialog title="Import inventory" @close="emit('close')"><form @submit.prevent="run(false)">
 <p class="hint">Map only the fields you intend to accept. Omitted fields are preserved; use &lt;clear&gt; to clear explicitly. The external_id column identifies rows within this personal source.</p>
 <label>Source name<input v-model="source" required maxlength="100" @input="preview = undefined"></label>
-<label>New resource kind<select v-model="kind" @change="preview = undefined"><option v-for="k in kinds" :key="k" :value="k">{{ label(k) }}</option></select></label>
+<label>New resource kind<select v-model="kind" @change="preview = undefined"><option v-for="k in kinds" :key="k" :value="k" :disabled="[AssetKind.IP_ADDRESS, AssetKind.PREFIX, AssetKind.VLAN, AssetKind.ADDRESS_GROUP].includes(k)">{{ label(k) }}{{ [AssetKind.IP_ADDRESS, AssetKind.PREFIX, AssetKind.VLAN, AssetKind.ADDRESS_GROUP].includes(k) ? ' (use Network allocation)' : '' }}</option></select></label>
 <label>CSV<textarea v-model="csv" required rows="7" maxlength="262144" placeholder="external_id,name&#10;router-1,Edge router" @input="preview = undefined" /></label>
 <div v-for="(mapping, i) in mappings" :key="i" class="row"><label>CSV column<input v-model="mapping.source" required @input="preview = undefined"></label><label>Inventory field<select v-model="mapping.field" @change="preview = undefined"><option v-for="d in destinations" :key="d.id" :value="d.id">{{ d.name }}</option></select></label><button v-if="i" type="button" @click="mappings.splice(i, 1); preview = undefined">Remove</button></div>
 <button v-if="mappings.length < 32" type="button" @click="mappings.push({ source: '', field: 'description' }); preview = undefined">Add mapping</button>

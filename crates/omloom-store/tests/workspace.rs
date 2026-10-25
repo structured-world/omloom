@@ -6,6 +6,8 @@ use omloom_contracts::{
 };
 use omloom_store::{Error, Store, workspace::*};
 use support::*;
+#[path = "workspace/groups.rs"]
+mod groups;
 #[path = "workspace/views.rs"]
 mod views;
 
@@ -62,6 +64,134 @@ fn query() -> api::Query {
         columns: vec!["name".into()],
         ..Default::default()
     }
+}
+
+// A malformed mapped value identifies its column without retaining a rejected preview.
+#[test]
+fn csv_errors_identify_the_failing_field_without_writes() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let context = operator();
+    let api::reply::Result::Definitions(created) = call(
+        &store,
+        &context,
+        api::request::Command::Definition(api::Definition {
+            name: "Capacity".into(),
+            r#type: api::FieldType::Integer as i32,
+            kinds: vec![K::Device as i32],
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("definition");
+    };
+    let before = store.usage()?;
+    let api::reply::Result::Preview(preview) = call(
+        &store,
+        &context,
+        api::request::Command::Import(api::Import {
+            csv: "external_id,name,capacity\none,router,not-a-number\n".into(),
+            source: "test".into(),
+            kind: K::Device as i32,
+            mappings: vec![
+                api::Mapping {
+                    source: "name".into(),
+                    field: "name".into(),
+                },
+                api::Mapping {
+                    source: "capacity".into(),
+                    field: created.items[0].id.clone(),
+                },
+            ],
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("preview");
+    };
+    assert!(preview.id.is_none());
+    assert!(
+        preview.rows[0].diagnostic.contains("column 'capacity'"),
+        "{}",
+        preview.rows[0].diagnostic
+    );
+    assert!(!preview.rows[0].diagnostic.contains("not-a-number"));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// A preview must reject creation modes that require reviewed network allocation.
+#[test]
+fn csv_preview_does_not_promise_unsupported_network_creation() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let before = store.usage()?;
+    let api::reply::Result::Preview(preview) = call(
+        &store,
+        &operator(),
+        api::request::Command::Import(api::Import {
+            csv: "external_id,name\none,address\n".into(),
+            source: "test".into(),
+            kind: K::IpAddress as i32,
+            mappings: vec![api::Mapping {
+                source: "name".into(),
+                field: "name".into(),
+            }],
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("preview");
+    };
+    assert!(preview.id.is_none());
+    assert!(preview.rows[0].diagnostic.contains("network allocation"));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// Readable endpoints do not disclose a relationship whose field is hidden.
+#[test]
+fn relationship_disclosure_and_scope_require_field_permission() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let context = operator();
+    let host = create(&store, &context, K::Device, "host")?;
+    let vm = create(&store, &context, K::VirtualMachine, "guest")?;
+    call(
+        &store,
+        &context,
+        api::request::Command::Relation(api::Relationship {
+            relation: Some(wire::Relation {
+                from: Some(vm),
+                to: Some(host.clone()),
+                kind: wire::RelationKind::RunsOn as i32,
+                ..Default::default()
+            }),
+            remove: false,
+        }),
+    )?;
+    let mut restricted = context;
+    restricted.grants[0].read = Fields::Selected(vec!["name".into()]);
+    let api::reply::Result::Detail(detail) = call(
+        &store,
+        &restricted,
+        api::request::Command::Read(api::Read {
+            target: Some(host.clone()),
+        }),
+    )?
+    else {
+        panic!("detail");
+    };
+    assert!(detail.relations.is_empty());
+    let mut scoped = query();
+    scoped.roots = vec![host];
+    let api::reply::Result::Page(page) =
+        call(&store, &restricted, api::request::Command::Query(scoped))?
+    else {
+        panic!("page");
+    };
+    assert_eq!(page.total, 1);
+    Ok(())
 }
 
 // Retrieval and repeated input must preserve durable usage; stale edits cannot win.
@@ -214,6 +344,79 @@ fn scopes_and_search_do_not_disclose_hidden_fields() -> TestResult {
             panic!("page")
         };
         assert_eq!(page.total, 0);
+    }
+    Ok(())
+}
+
+// A numeric or boolean term may match either text or an explicitly searchable typed value.
+#[test]
+fn typed_search_branches_do_not_suppress_each_other_with_missing_properties() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let context = operator();
+    let text = create(&store, &context, K::Device, "42")?;
+    call(
+        &store,
+        &context,
+        api::request::Command::Write(api::Write {
+            target: Some(text),
+            expected: Some(1),
+            kind: K::Device as i32,
+            changes: vec![text_field("description", "true")],
+        }),
+    )?;
+    let typed = create(&store, &context, K::Device, "typed")?;
+    for (kind, value) in [
+        (api::FieldType::Integer, wire::field::Value::Integer(42)),
+        (api::FieldType::Boolean, wire::field::Value::Flag(true)),
+    ] {
+        let api::reply::Result::Definitions(definitions) = call(
+            &store,
+            &context,
+            api::request::Command::Definition(api::Definition {
+                name: format!("{kind:?}"),
+                kinds: vec![K::Device as i32],
+                r#type: kind as i32,
+                searchable: true,
+                ..Default::default()
+            }),
+        )?
+        else {
+            panic!("definition");
+        };
+        let name = definitions.items[0].id.clone();
+        let expected = store.asset(AssetRef::try_from(&typed)?)?.revision;
+        call(
+            &store,
+            &context,
+            api::request::Command::Write(api::Write {
+                target: Some(typed.clone()),
+                expected: Some(expected),
+                kind: K::Device as i32,
+                changes: vec![wire::Field {
+                    name,
+                    value: Some(value),
+                }],
+            }),
+        )?;
+    }
+    for term in ["42", "true"] {
+        let mut q = query();
+        q.search = term.into();
+        let api::reply::Result::Page(page) =
+            call(&store, &context, api::request::Command::Query(q.clone()))?
+        else {
+            panic!("page");
+        };
+        assert_eq!(page.total, 2, "term={term}");
+        let mut limited = context.clone();
+        limited.grants[0].read = Fields::Selected(vec!["name".into()]);
+        let api::reply::Result::Page(page) =
+            call(&store, &limited, api::request::Command::Query(q))?
+        else {
+            panic!("page");
+        };
+        assert_eq!(page.total, if term == "42" { 1 } else { 0 });
     }
     Ok(())
 }
@@ -510,8 +713,19 @@ fn link_local_scopes_and_shared_conversion() -> TestResult {
     conversion.expected = Some(revision);
     conversion.sharing = api::SharedUse::Vrrp as i32;
     conversion.vrid = Some(7);
+    conversion.group_name = "reviewed gateway group".into();
     call(&store, &context, api::request::Command::Network(conversion))?;
     let revision = store.asset(AssetRef::try_from(&target)?)?.revision;
+    let api::reply::Result::Detail(group_detail) = call(
+        &store,
+        &context,
+        api::request::Command::Read(api::Read {
+            target: Some(target.clone()),
+        }),
+    )?
+    else {
+        panic!("group");
+    };
     call(
         &store,
         &context,
@@ -520,6 +734,7 @@ fn link_local_scopes_and_shared_conversion() -> TestResult {
             interface: Some(other),
             expected: revision,
             priority: Some(100),
+            expected_group: Some(group_detail.group.expect("reviewed group").revision),
             ..Default::default()
         }),
     )?;

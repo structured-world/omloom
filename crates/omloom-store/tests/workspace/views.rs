@@ -1,5 +1,115 @@
 use super::*;
 
+// Migration and an inventory edit share one database CAS boundary; restore cannot expose half a schema change.
+#[test]
+fn concurrent_migration_and_edit_keep_one_interpretation_after_restore() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let context = operator();
+    let host = create(&store, &context, K::Device, "host")?;
+    let api::reply::Result::Definitions(created) = call(
+        &store,
+        &context,
+        api::request::Command::Definition(api::Definition {
+            name: "Capacity".into(),
+            kinds: vec![K::Device as i32],
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("definition");
+    };
+    let mut definition = created.items[0].clone();
+    call(
+        &store,
+        &context,
+        api::request::Command::Write(api::Write {
+            target: Some(host.clone()),
+            expected: Some(1),
+            kind: K::Device as i32,
+            changes: vec![text_field(&definition.id, "42")],
+        }),
+    )?;
+    definition.r#type = api::FieldType::Integer as i32;
+    let migration = api::Migration {
+        definition: Some(definition.clone()),
+        expected: store.usage()?.revision,
+        apply: true,
+        convert_types: true,
+        ..Default::default()
+    };
+    let edit = api::Write {
+        target: Some(host.clone()),
+        expected: Some(2),
+        kind: K::Device as i32,
+        changes: vec![text_field("name", "edited")],
+    };
+    let barrier = std::sync::Barrier::new(2);
+    let outcomes = std::thread::scope(|scope| {
+        let first = scope.spawn(|| {
+            barrier.wait();
+            call(
+                &store,
+                &context,
+                api::request::Command::Migration(migration),
+            )
+        });
+        let second = scope.spawn(|| {
+            barrier.wait();
+            call(&store, &context, api::request::Command::Write(edit))
+        });
+        [
+            first.join().expect("migration worker"),
+            second.join().expect("edit worker"),
+        ]
+    });
+    assert_eq!(outcomes.iter().filter(|r| r.is_ok()).count(), 1);
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|r| matches!(r, Err(Error::Conflict)))
+            .count(),
+        1
+    );
+    let api::reply::Result::Definitions(current) = call(
+        &store,
+        &context,
+        api::request::Command::Definitions(api::Empty {}),
+    )?
+    else {
+        panic!("definitions");
+    };
+    let current = current.items[0].clone();
+    let asset = store.asset(AssetRef::try_from(&host)?)?;
+    let field = asset
+        .intended
+        .iter()
+        .find_map(|v| v.field.as_ref().filter(|f| f.name == definition.id))
+        .expect("value");
+    if outcomes[0].is_ok() {
+        assert_eq!(current.r#type, api::FieldType::Integer as i32);
+        assert_eq!(field.value, Some(wire::field::Value::Integer(42)));
+    } else {
+        assert_eq!(current.r#type, api::FieldType::Text as i32);
+        assert_eq!(field.value, Some(wire::field::Value::Text("42".into())));
+    }
+    let mut bytes = Vec::new();
+    store.export(&mut bytes)?;
+    let destination = tempfile::tempdir()?;
+    let restored = Store::restore(destination.path(), &bytes, policy(), bytes.len() as u64)?;
+    assert_eq!(restored.asset(AssetRef::try_from(&host)?)?, asset);
+    let api::reply::Result::Definitions(after) = call(
+        &restored,
+        &context,
+        api::request::Command::Definitions(api::Empty {}),
+    )?
+    else {
+        panic!("definitions");
+    };
+    assert_eq!(after.items[0], current);
+    Ok(())
+}
+
 // Definition visibility is separate from data permission and publication is an explicit mutation.
 #[test]
 fn personal_publication_and_shared_edit_conflicts() -> TestResult {

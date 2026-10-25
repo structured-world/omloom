@@ -39,6 +39,20 @@ test('empty optional integer is not silently accepted as zero', async ({ page })
     await expect(dialog).toBeHidden();
     await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('Capacity');
     await expect(page.getByRole('region', { name: 'Resource details' }).locator('dd').filter({ hasText: /^0$/ })).toHaveCount(1);
+    // Bulk edits use the same typed contract and leave every unselected field intact.
+    await page.getByRole('checkbox', { name: 'Select Typed resource', exact: true }).check();
+    await page.getByRole('button', { name: 'Review bulk change', exact: true }).click();
+    dialog = page.getByRole('dialog');
+    await dialog.getByRole('combobox', { name: 'Field', exact: true }).selectOption({ label: 'Capacity' }, { timeout: 5000 });
+    await dialog.getByRole('combobox', { name: 'Change', exact: true }).selectOption('set', { timeout: 5000 });
+    await dialog.getByRole('button', { name: 'Apply reviewed change', exact: true }).click();
+    await expect(dialog.getByRole('alert')).toContainText('Empty input is not zero');
+    await dialog.getByLabel('Value', { exact: true }).fill('42');
+    await dialog.getByRole('button', { name: 'Apply reviewed change', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await page.reload();
+    await expect(page.getByRole('region', { name: 'Resource details' }).locator('dd').filter({ hasText: /^42$/ })).toHaveCount(1);
+    await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: 'Typed resource', exact: true })).toBeVisible();
     // Applicability removal is separately reviewed; it cannot silently erase a value.
     await page.getByRole('button', { name: 'Company fields', exact: true }).click();
     dialog = page.getByRole('dialog');

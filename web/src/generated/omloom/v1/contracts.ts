@@ -782,7 +782,11 @@ export enum AssetKind {
     /**
      * @generated from protobuf enum value: ASSET_KIND_L2_DOMAIN = 19;
      */
-    L2_DOMAIN = 19
+    L2_DOMAIN = 19,
+    /**
+     * @generated from protobuf enum value: ASSET_KIND_ADDRESS_GROUP = 20;
+     */
+    ADDRESS_GROUP = 20
 }
 /**
  * @generated from protobuf enum omloom.v1.NullValue

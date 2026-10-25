@@ -99,6 +99,9 @@ message Detail {
   repeated Participant participants = 5;
   // True only when every intended participant is disclosable in this context.
   bool participants_complete = 6;
+  // Visible typed shared-address group and its independent edit revision.
+  // Omitted when unshared or inaccessible; omission never proves no other participants.
+  optional Item group = 7;
 }
 message Participant {
   // Stable local interface identity selected for this canonical address.
@@ -281,9 +284,22 @@ message Network {
   bool next_available = 11;
   // Explicit 802.1Q VLAN identifier (1-4094), meaningful only with a selected L2 domain.
   optional uint32 vlan_id = 12;
+  // Explicit existing shared group selected by the user. Its mechanism and VRRP
+  // parameters are server-owned: omit group_name, link/vrid (for VRRP) and use
+  // SHARED_USE_UNSPECIFIED when selecting it. Interface rights are not inherited.
+  optional omloom.v1.AssetRef group = 13;
+  // User-chosen name of a new VRRP/anycast group. Required only when creating
+  // that group, never a label-based lookup or automatic merge with an existing one.
+  string group_name = 14;
+  // Reviewed revision of the selected existing group, omitted for a new group.
+  optional uint64 expected_group = 15;
+  // Reviewed revision of the address's previous group when leaving it. Separate
+  // from the selected group's revision because these are independent objects.
+  optional uint64 previous_group_revision = 16;
 }
 message Member {
-  // Canonical existing address identity; memberships never duplicate that address.
+  // Canonical address or typed address-group identity selected for this edit.
+  // Memberships never duplicate an address or create a second participant list.
   omloom.v1.AssetRef address = 1;
   // User-selected participant interface identity, rechecked against actual kind/scope.
   omloom.v1.AssetRef interface = 2;
@@ -293,6 +309,9 @@ message Member {
   bool remove = 4;
   // VRRP intended priority; no priority is interpreted as observed active status.
   optional uint32 priority = 5;
+  // Current group revision reviewed via an address. Required for a shared
+  // address, omitted for exclusive assignment or a direct group edit.
+  optional uint64 expected_group = 6;
 }
 message Export {
   // Explicit currently permitted query and requested columns to export.

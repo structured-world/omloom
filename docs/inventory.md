@@ -71,6 +71,13 @@ An ordinary address is unique in its address space; link-local identities also
 include the selected link. Prefixes retain their mask and may be nested. Next
 available allocation is atomic and does not enumerate IPv6 hosts. Shared use
 requires an explicit VRRP or anycast mechanism and typed interface participants.
+Each shared group has its own stable identity, revision and participant set.
+Several canonical addresses can select the same group. Editing membership
+through one address checks the group's revision and affects its other addresses;
+an address edit cannot silently overwrite a concurrent group change. VRRP
+protocol identity is scoped by L2 domain, address family and VRID, independently
+of the group's stable identity. VRID changes update the group once; address
+cards and filters read that current value rather than stored copies.
 Removing a participant does not release the address. Intended priority is not
 evidence of an active gateway. Restricted participant coverage remains explicit.
 
@@ -79,9 +86,13 @@ evidence of an active gateway. Restricted participant coverage remains explicit.
 An import names a personal source and explicitly maps selected columns. Each
 row requires `external_id`; repeats update that source identity rather than
 creating name-based duplicates. Omitted columns preserve fields; `<clear>` is
-an explicit clear. Invalid rows retain row-level diagnostics and cannot be
+an explicit clear. Invalid rows identify the failing row and mapped column without
+echoing its value or persisting a rejected preview; invalid input cannot be
 partially accepted. A valid preview expires, and applying it rechecks the current
 application revision, actor scope and field types. Raw CSV history is not saved.
+New IPs, prefixes, VLANs and shared groups use the network allocation form,
+which checks their typed scopes and uniqueness. The generic CSV preview rejects
+these creation modes instead of promising a change that cannot be accepted.
 
 Export applies the current object and field projection before counts and output.
 Spreadsheet-safe CSV protects formula-leading cells; the typed API can request

@@ -1,6 +1,6 @@
 import { GrpcWebFetchTransport } from '@protobuf-ts/grpcweb-transport';
-import { Request, Workspace, type Reply } from '../src/generated/omloom/v1/workspace';
-import { AssetKind, type Field, type AssetRef } from '../src/generated/omloom/v1/contracts';
+import { Request, Workspace, FieldType, type Reply } from '../src/generated/omloom/v1/workspace';
+import { AssetKind, NullValue, type Field, type AssetRef } from '../src/generated/omloom/v1/contracts';
 export * as model from '../src/generated/omloom/v1/workspace';
 export { AssetKind, RelationKind, NullValue } from '../src/generated/omloom/v1/contracts';
 export type { Field, AssetRef, Relation } from '../src/generated/omloom/v1/contracts';
@@ -12,6 +12,18 @@ export async function call(command: Request['command']): Promise<Reply['result']
   return response.result;
 }
 export function text(name: string, value: string): Field { return { name, value: { oneofKind: 'text', text: value } }; }
+export function typedField(name: string, type: FieldType, value: string, clear = false): Field {
+  if (clear) return { name, value: { oneofKind: 'clear', clear: NullValue.NULL_VALUE } };
+  if (type === FieldType.INTEGER) {
+    if (!/^-?(0|[1-9][0-9]*)$/.test(value)) throw Error('Enter an integer explicitly. Empty input is not zero.');
+    return { name, value: { oneofKind: 'integer', integer: BigInt(value) } };
+  }
+  if (type === FieldType.BOOLEAN) {
+    if (value !== 'true' && value !== 'false') throw Error('Select true or false explicitly.');
+    return { name, value: { oneofKind: 'flag', flag: value === 'true' } };
+  }
+  return text(name, value);
+}
 export function display(field: Field | undefined): string {
   if (field?.value.oneofKind === 'clear') return '(cleared)';
   if (field?.value.oneofKind === 'text' && field.value.text === '') return '(empty)';

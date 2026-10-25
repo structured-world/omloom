@@ -212,6 +212,13 @@ export interface Detail {
      * @generated from protobuf field: bool participants_complete = 6
      */
     participantsComplete: boolean;
+    /**
+     * Visible typed shared-address group and its independent edit revision.
+     * Omitted when unshared or inaccessible; omission never proves no other participants.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.Item group = 7
+     */
+    group?: Item;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Participant
@@ -734,13 +741,42 @@ export interface Network {
      * @generated from protobuf field: optional uint32 vlan_id = 12
      */
     vlanId?: number;
+    /**
+     * Explicit existing shared group selected by the user. Its mechanism and VRRP
+     * parameters are server-owned: omit group_name, link/vrid (for VRRP) and use
+     * SHARED_USE_UNSPECIFIED when selecting it. Interface rights are not inherited.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef group = 13
+     */
+    group?: AssetRef;
+    /**
+     * User-chosen name of a new VRRP/anycast group. Required only when creating
+     * that group, never a label-based lookup or automatic merge with an existing one.
+     *
+     * @generated from protobuf field: string group_name = 14
+     */
+    groupName: string;
+    /**
+     * Reviewed revision of the selected existing group, omitted for a new group.
+     *
+     * @generated from protobuf field: optional uint64 expected_group = 15
+     */
+    expectedGroup?: bigint;
+    /**
+     * Reviewed revision of the address's previous group when leaving it. Separate
+     * from the selected group's revision because these are independent objects.
+     *
+     * @generated from protobuf field: optional uint64 previous_group_revision = 16
+     */
+    previousGroupRevision?: bigint;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Member
  */
 export interface Member {
     /**
-     * Canonical existing address identity; memberships never duplicate that address.
+     * Canonical address or typed address-group identity selected for this edit.
+     * Memberships never duplicate an address or create a second participant list.
      *
      * @generated from protobuf field: omloom.v1.AssetRef address = 1
      */
@@ -769,6 +805,13 @@ export interface Member {
      * @generated from protobuf field: optional uint32 priority = 5
      */
     priority?: number;
+    /**
+     * Current group revision reviewed via an address. Required for a shared
+     * address, omitted for exclusive assignment or a direct group edit.
+     *
+     * @generated from protobuf field: optional uint64 expected_group = 6
+     */
+    expectedGroup?: bigint;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Export
@@ -1265,7 +1308,8 @@ class Detail$Type extends MessageType<Detail> {
             { no: 3, name: "observed", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Observation },
             { no: 4, name: "imported", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Observation },
             { no: 5, name: "participants", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Participant },
-            { no: 6, name: "participants_complete", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+            { no: 6, name: "participants_complete", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 7, name: "group", kind: "message", T: () => Item }
         ]);
     }
 }
@@ -1514,7 +1558,11 @@ class Network$Type extends MessageType<Network> {
             { no: 9, name: "vrid", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ },
             { no: 10, name: "name", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 11, name: "next_available", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
-            { no: 12, name: "vlan_id", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ }
+            { no: 12, name: "vlan_id", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ },
+            { no: 13, name: "group", kind: "message", T: () => AssetRef },
+            { no: 14, name: "group_name", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 15, name: "expected_group", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 16, name: "previous_group_revision", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
         ]);
     }
 }
@@ -1530,7 +1578,8 @@ class Member$Type extends MessageType<Member> {
             { no: 2, name: "interface", kind: "message", T: () => AssetRef },
             { no: 3, name: "expected", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 4, name: "remove", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
-            { no: 5, name: "priority", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ }
+            { no: 5, name: "priority", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ },
+            { no: 6, name: "expected_group", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
         ]);
     }
 }

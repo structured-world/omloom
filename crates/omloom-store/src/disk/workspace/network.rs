@@ -1,8 +1,9 @@
 use super::*;
 use ipnet::IpNet;
 use std::net::IpAddr;
+pub(super) mod groups;
 
-fn identity(target: AssetRef) -> String {
+pub(super) fn identity(target: AssetRef) -> String {
     format!("{}/{}", target.asset, target.incarnation)
 }
 fn link_local(address: IpAddr) -> bool {
@@ -88,6 +89,10 @@ impl Store {
             || !request.cidr.is_empty()
             || request.vrid.is_some()
             || request.next_available
+            || request.group.is_some()
+            || !request.group_name.is_empty()
+            || request.expected_group.is_some()
+            || request.previous_group_revision.is_some()
             || request.sharing != api::SharedUse::Exclusive as i32
         {
             return Err(Error::Invalid);
@@ -154,6 +159,9 @@ impl Store {
     ) -> Result<api::Reply> {
         use wire::AssetKind as K;
         let kind = K::try_from(request.kind).map_err(|_| Error::Invalid)?;
+        if kind == K::AddressGroup {
+            return self.workspace_group_settings(context, request, now);
+        }
         if kind == K::Vlan {
             return self.workspace_vlan(context, request, now);
         }
@@ -164,25 +172,31 @@ impl Store {
             return Err(Error::Invalid);
         }
         let space = parse_target(request.address_space.as_ref())?;
-        let link = request
-            .link
-            .as_ref()
-            .map(|r| parse_target(Some(r)))
-            .transpose()?;
         let routing = request
             .routing
             .as_ref()
             .map(|r| parse_target(Some(r)))
             .transpose()?;
-        let sharing = api::SharedUse::try_from(request.sharing).map_err(|_| Error::Invalid)?;
-        if sharing == api::SharedUse::Unspecified {
-            return Err(Error::Invalid);
-        }
-        let mut network: IpNet = request.cidr.parse().map_err(|_| Error::Invalid)?;
         if request.cidr.len() > 64 {
             return Err(Error::Invalid);
         }
+        let mut network: IpNet = request.cidr.parse().map_err(|_| Error::Invalid)?;
+        let family = if network.addr().is_ipv4() { 4u64 } else { 6 };
+        if kind == K::Prefix
+            && (request.group.is_some()
+                || !request.group_name.is_empty()
+                || request.sharing != api::SharedUse::Exclusive as i32)
+        {
+            return Err(Error::Invalid);
+        }
         let mut tx = self.begin()?;
+        let group = tx.workspace_shared_group(context, &mut request, family, now)?;
+        let link = request
+            .link
+            .as_ref()
+            .map(|r| parse_target(Some(r)))
+            .transpose()?;
+        let sharing = api::SharedUse::try_from(request.sharing).map_err(|_| Error::Invalid)?;
         for (target, expected_kind) in [
             (Some(space), K::AddressSpace),
             (link, K::L2Domain),
@@ -221,12 +235,14 @@ impl Store {
         if kind == K::Prefix {
             network = network.trunc();
         }
-        let family = if network.addr().is_ipv4() { 4u64 } else { 6 };
         if link_local(network.addr()) && link.is_none() {
             return Err(Error::Invalid);
         }
         if sharing == api::SharedUse::Vrrp {
-            if kind != K::IpAddress || link.is_none() || !matches!(request.vrid, Some(1..=255)) {
+            if kind != K::IpAddress
+                || link.is_none()
+                || (request.group.is_none() && !matches!(request.vrid, Some(1..=255)))
+            {
                 return Err(Error::Invalid);
             }
         } else if request.vrid.is_some()
@@ -271,45 +287,67 @@ impl Store {
         if sharing == api::SharedUse::Exclusive && members.len() > 1 {
             return Err(Error::Conflict);
         }
-        if old.as_ref().is_some_and(|p| {
-            !members.is_empty()
-                && (p.get("address_space") != Some(&text(identity(space)))
-                    || p.get("cidr") != Some(&text(network.to_string()))
-                    || p.get("link_scope") != link.map(|t| text(identity(t))).as_ref())
-        }) {
-            return Err(Error::Conflict);
-        }
-        let protocol_key = if sharing == api::SharedUse::Vrrp {
-            Some(format!(
-                "gateway/{}/{family}/{}",
-                identity(link.ok_or(Error::Invalid)?),
-                request.vrid.ok_or(Error::Invalid)?
-            ))
-        } else {
-            None
-        };
-        if let Some(key) = &protocol_key
-            && let Some(owner) = tx.get(key)?
-            && !same_target(&owner, target)
+        if !members.is_empty()
+            && old
+                .as_ref()
+                .is_some_and(|p| p.get("namespace") != Some(&text(&owner_key)))
         {
             return Err(Error::Conflict);
         }
-        if old.as_ref().is_some_and(|p| {
-            p.get("sharing") == Some(&text(api::SharedUse::Exclusive.as_str_name()))
-        }) && sharing == api::SharedUse::Vrrp
+        let previous_group = old.as_ref().map(groups::group_of).transpose()?.flatten();
+        let mut changed_groups = BTreeSet::new();
+        if let Some(previous) = previous_group
+            && Some(previous) != group
         {
-            // RFC 9568 section 6.1: the existing address owner has priority 255.
+            tx.workspace_group_member_owner(context, previous, request.previous_group_revision)?;
+            changed_groups.insert(previous);
+        } else if request.previous_group_revision.is_some()
+            || (previous_group.is_none()
+                && request.group.is_none()
+                && request.expected_group.is_some())
+        {
+            return Err(Error::Invalid);
+        }
+        if let Some(group) = group {
+            let parent = format!("members/{}", identity(group));
+            let current = tx.children(&parent)?;
             for member in &members {
-                let mut data = member.clone();
-                super::super::operations::strip_envelope(&mut data);
-                data.insert("priority".into(), int(255)?);
-                tx.put_against(
-                    &string(member, "key")?,
-                    &string(member, "parent")?,
+                let interface = super::super::target(member)?;
+                tx.visible_asset(context, interface)?;
+                if !context.field(
+                    interface,
+                    wire::AssetKind::Interface as i32,
+                    "network",
+                    true,
+                ) {
+                    return Err(Error::Denied);
+                }
+                if current.len() >= 128 && !current.iter().any(|p| same_target(p, interface)) {
+                    return Err(Error::Limit);
+                }
+                // RFC 9568 section 6.1: a converted address owner retains 255.
+                if sharing == api::SharedUse::Vrrp
+                    && current.iter().any(|p| {
+                        p.get("priority") == Some(&Value::Int(255)) && !same_target(p, interface)
+                    })
+                {
+                    return Err(Error::Conflict);
+                }
+                let mut data = target_props(interface);
+                data.insert("group".into(), text(identity(group)));
+                if sharing == api::SharedUse::Vrrp {
+                    data.insert("priority".into(), Value::Int(255));
+                }
+                tx.put(
+                    &format!("{parent}/{}", identity(interface)),
+                    &parent,
                     Class::Inventory,
                     data,
-                    Some(member),
                 )?;
+                tx.delete(&string(member, "key")?)?;
+            }
+            if request.group.is_some() && (previous_group != Some(group) || !members.is_empty()) {
+                changed_groups.insert(group);
             }
         }
         let mut data = target_props(target);
@@ -318,8 +356,6 @@ impl Store {
             ("cidr", text(network.to_string())),
             ("namespace", text(&owner_key)),
             ("sharing", text(sharing.as_str_name())),
-            ("family", int(family)?),
-            ("prefix_len", int(u64::from(network.prefix_len()))?),
         ]));
         if let Some(link) = link {
             data.insert("link_scope".into(), text(identity(link)));
@@ -327,19 +363,8 @@ impl Store {
         if let Some(routing) = routing {
             data.insert("routing_context".into(), text(identity(routing)));
         }
-        if let Some(vrid) = request.vrid {
-            data.insert("vrid".into(), int(u64::from(vrid))?);
-        }
-        if let Some(key) = &protocol_key {
-            data.insert("group".into(), text(key));
-        }
-        if let Some(previous) = old
-            .as_ref()
-            .and_then(|p| p.get("group"))
-            .and_then(Value::as_str)
-            && protocol_key.as_deref() != Some(previous)
-        {
-            tx.delete(previous)?;
+        if let Some(group) = group {
+            data.insert("group".into(), text(identity(group)));
         }
         if old
             .as_ref()
@@ -353,18 +378,17 @@ impl Store {
             Class::Inventory,
             target_props(target),
         )?;
-        if let Some(key) = protocol_key {
-            tx.put(
-                &key,
-                "gateway-groups",
-                Class::Inventory,
-                target_props(target),
-            )?;
-        }
         if tx.put_against(&key, "networks", Class::Inventory, data, old.as_ref())? {
             tx.workspace_advance(target, &context.actor, "network.accepted", now)?;
         }
-        Ok(mutation(tx.commit()?, vec![target_wire(target)]))
+        let mut targets = vec![target_wire(target)];
+        for changed in changed_groups {
+            tx.workspace_advance(changed, &context.actor, "group.addresses", now)?;
+        }
+        if let Some(group) = group {
+            targets.push(target_wire(group));
+        }
+        Ok(mutation(tx.commit()?, targets))
     }
 
     pub(super) fn workspace_member(
@@ -380,7 +404,8 @@ impl Store {
         if number(&row, "revision")? != member.expected {
             return Err(Error::Conflict);
         }
-        if number(&row, "kind")? != wire::AssetKind::IpAddress as u64
+        let direct_group = number(&row, "kind")? == wire::AssetKind::AddressGroup as u64;
+        if (!direct_group && number(&row, "kind")? != wire::AssetKind::IpAddress as u64)
             || number(&tx.visible_asset(context, interface)?, "kind")?
                 != wire::AssetKind::Interface as u64
         {
@@ -392,10 +417,32 @@ impl Store {
                 return Err(Error::Denied);
             }
         }
-        let network = tx
-            .get(&format!("network/{}", identity(address)))?
-            .ok_or(Error::Missing)?;
-        let parent = format!("members/{}", identity(address));
+        let (network, owner) = if direct_group {
+            if member.expected_group.is_some() {
+                return Err(Error::Invalid);
+            }
+            (
+                tx.get(&format!("group/{}", identity(address)))?
+                    .ok_or(Error::Corrupt)?,
+                address,
+            )
+        } else {
+            let network = tx
+                .get(&format!("network/{}", identity(address)))?
+                .ok_or(Error::Missing)?;
+            if let Some(group) = groups::group_of(&network)? {
+                (
+                    tx.workspace_group_member_owner(context, group, member.expected_group)?,
+                    group,
+                )
+            } else {
+                if member.expected_group.is_some() {
+                    return Err(Error::Invalid);
+                }
+                (network, address)
+            }
+        };
+        let parent = format!("members/{}", identity(owner));
         let key = format!("{parent}/{}", identity(interface));
         let old = tx.get(&key)?;
         let members = tx.children(&parent)?;
@@ -421,6 +468,14 @@ impl Store {
         {
             return Err(Error::Invalid);
         }
+        if !member.remove
+            && member.priority == Some(255)
+            && members
+                .iter()
+                .any(|p| p.get("priority") == Some(&Value::Int(255)) && !same_target(p, interface))
+        {
+            return Err(Error::Conflict);
+        }
         let changed = if member.remove {
             if old.is_some() {
                 tx.delete(&key)?;
@@ -430,16 +485,16 @@ impl Store {
             }
         } else {
             let mut data = target_props(interface);
-            data.insert("group".into(), text(identity(address)));
+            data.insert("group".into(), text(identity(owner)));
             if let Some(priority) = member.priority {
                 data.insert("priority".into(), int(u64::from(priority))?);
             }
             tx.put_against(&key, &parent, Class::Inventory, data, old.as_ref())?
         };
         if changed {
-            tx.workspace_advance(address, &context.actor, "network.participant", now)?;
+            tx.workspace_advance(owner, &context.actor, "network.participant", now)?;
         }
-        Ok(mutation(tx.commit()?, vec![target_wire(address)]))
+        Ok(mutation(tx.commit()?, vec![target_wire(owner)]))
     }
 
     pub(super) fn workspace_network_fields(
@@ -448,9 +503,15 @@ impl Store {
         target: AssetRef,
         kind: i32,
         fields: &mut Vec<wire::Field>,
-    ) -> Result<(Vec<api::Participant>, bool)> {
+    ) -> Result<(Vec<api::Participant>, bool, Option<api::Item>)> {
         let tx = self.begin()?;
-        if let Some(row) = tx.get(&format!("network/{}", identity(target)))? {
+        let direct_group = kind == wire::AssetKind::AddressGroup as i32;
+        let row = tx.get(&format!(
+            "{}/{}",
+            if direct_group { "group" } else { "network" },
+            identity(target)
+        ))?;
+        if let Some(row) = &row {
             let columns = [
                 "cidr",
                 "address_space",
@@ -462,18 +523,69 @@ impl Store {
             ]
             .map(str::to_owned);
             fields.extend(
-                projection(&row, &columns)?
+                projection(row, &columns)?
                     .into_iter()
                     .filter(|f| context.field(target, kind, &f.name, false)),
             );
         }
-        let members = tx.children(&format!("members/{}", identity(target)))?;
+        let group = if direct_group {
+            None
+        } else {
+            row.as_ref().map(groups::group_of).transpose()?.flatten()
+        };
+        let mut summary = None;
         let mut participants = Vec::new();
         let mut complete = context.field(target, kind, "network", false);
+        if let Some(group) = group {
+            let root = tx.asset(group)?;
+            let group_kind = wire::AssetKind::AddressGroup as i32;
+            if !context.readable(group, group_kind)
+                || number(&root, "adoption")? != wire::Adoption::Adopted as u64
+            {
+                tx.commit()?;
+                return Ok((participants, false, None));
+            }
+            let settings = tx
+                .get(&format!("group/{}", identity(group)))?
+                .ok_or(Error::Corrupt)?;
+            if context.field(target, kind, "vrid", false)
+                && context.field(group, group_kind, "vrid", false)
+            {
+                fields.extend(projection(&settings, &["vrid".into()])?);
+            }
+            let mut group_fields = projection(
+                &settings,
+                &[
+                    "sharing".into(),
+                    "link_scope".into(),
+                    "vrid".into(),
+                    "family".into(),
+                ],
+            )?;
+            if context.field(group, group_kind, "name", false) {
+                group_fields.push(wire::Field {
+                    name: "name".into(),
+                    value: Some(field::Value::Text(string(&root, "name")?)),
+                });
+            }
+            group_fields.retain(|field| context.field(group, group_kind, &field.name, false));
+            if complete {
+                summary = Some(api::Item {
+                    target: Some(target_wire(group)),
+                    kind: group_kind,
+                    revision: number(&root, "revision")?,
+                    fields: group_fields,
+                });
+            }
+            complete &= context.field(group, group_kind, "network", false);
+        }
+        let owner = group.unwrap_or(target);
+        let members = tx.children(&format!("members/{}", identity(owner)))?;
+        let membership_visible = complete;
         for row in members {
             let interface = super::super::target(&row)?;
             if !context.readable(interface, wire::AssetKind::Interface as i32)
-                || !context.field(target, kind, "network", false)
+                || !membership_visible
             {
                 complete = false;
                 continue;
@@ -492,7 +604,7 @@ impl Store {
             });
         }
         tx.commit()?;
-        Ok((participants, complete))
+        Ok((participants, complete, summary))
     }
 }
 impl Tx<'_> {

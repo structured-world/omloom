@@ -32,6 +32,96 @@ async function create(page, name, kind = 'DEVICE') {
   return { asset_id: params.get('asset'), incarnation: params.get('incarnation') };
 }
 
+test('shared gateway addresses use one durable group and intended participant set', async ({ page }) => {
+  // One group spans two IPs; the UI must send its revision when editing through either address.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-ipam-ui-'));
+  let server = await host(dir);
+  try {
+    await page.goto(server.url);
+    await create(page, 'Tenant addresses', 'ADDRESS_SPACE');
+    await create(page, 'Edge LAN', 'L2_DOMAIN');
+    await create(page, 'Router uplink', 'INTERFACE');
+    await page.getByRole('navigation', { name: 'Views' }).getByRole('button', { name: 'Network', exact: false }).click();
+    for (const [index, name] of ['Gateway A', 'Gateway B'].entries()) {
+      await page.getByRole('button', { name: 'Allocate IP / prefix', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByLabel('Name', { exact: true }).fill(name);
+      await dialog.getByLabel('Address / prefix', { exact: true }).fill(`192.0.2.${index + 1}/24`);
+      await dialog.getByLabel('Address space', { exact: true }).selectOption({ label: await dialog.getByLabel('Address space', { exact: true }).locator('option').filter({ hasText: 'Tenant addresses' }).textContent() });
+      await dialog.getByLabel('Address use', { exact: true }).selectOption({ label: 'Explicit VRRP group' });
+      if (index === 0) {
+        await dialog.getByLabel('L2 domain', { exact: true }).selectOption({ label: await dialog.getByLabel('L2 domain', { exact: true }).locator('option').filter({ hasText: 'Edge LAN' }).textContent() });
+        await dialog.getByLabel('New group name', { exact: true }).fill('Edge routers');
+        await dialog.getByLabel('VRID', { exact: true }).fill('7');
+      } else {
+        await dialog.getByLabel('Group selection', { exact: true }).selectOption('existing');
+        await dialog.getByLabel('Shared address group', { exact: true }).selectOption({ label: await dialog.getByLabel('Shared address group', { exact: true }).locator('option').filter({ hasText: 'Edge routers' }).textContent() });
+      }
+      await dialog.getByRole('button', { name: 'Allocate', exact: true }).click();
+      await expect(dialog).toBeHidden();
+    }
+    await page.getByRole('button', { name: 'Gateway A', exact: true }).click();
+    await page.getByRole('button', { name: 'Assign participant', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Interface', { exact: true }).selectOption({ label: await dialog.getByLabel('Interface', { exact: true }).locator('option').filter({ hasText: 'Router uplink' }).textContent() });
+    await dialog.getByLabel('Intended priority', { exact: true }).fill('255');
+    await dialog.getByRole('button', { name: 'Assign participant', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await page.getByRole('button', { name: 'Gateway B', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('Intended priority 255');
+    const hash = new URL(page.url()).hash;
+    await server.stop(); server = await host(dir);
+    await page.goto(server.url + hash);
+    await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('Intended priority 255');
+    await page.getByRole('button', { name: 'Remove participant', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Remove participant', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Gateway A', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('Shared group:');
+    await expect(page.getByRole('button', { name: 'Remove participant', exact: true })).toHaveCount(0);
+    await page.screenshot({ path: 'test-results/shared-address-group.png', fullPage: true });
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('team publication previews its audience and saved adjustments reset without granting data', async ({ page }) => {
+  // The publication preview has no durable effect until confirmed; a different fixture sees only its own data scope.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-view-ui-'));
+  let server = await host(dir);
+  try {
+    await page.goto(server.url);
+    await create(page, 'Private hypervisor');
+    await create(page, 'Team VM', 'VIRTUAL_MACHINE');
+    await page.getByLabel('Search inventory').fill('Private');
+    await page.getByRole('button', { name: 'Search', exact: true }).click();
+    await page.getByRole('button', { name: 'Save view', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Name', { exact: true }).fill('Hypervisor selection');
+    await dialog.getByRole('checkbox', { name: 'operations', exact: true }).check();
+    await dialog.getByRole('checkbox', { name: 'operations may edit this definition', exact: true }).check();
+    await dialog.getByRole('button', { name: 'Preview publication', exact: true }).click();
+    await expect(dialog).toContainText('Publish the name, selected roots, predicates and columns to operations');
+    await expect(page.getByRole('button', { name: '♧ Hypervisor selection', exact: true })).toHaveCount(0);
+    await dialog.getByRole('button', { name: 'Publish reviewed definition', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await page.getByRole('button', { name: '♧ Hypervisor selection', exact: true }).click();
+    await page.getByLabel('Search inventory').fill('Team');
+    await page.getByRole('button', { name: 'Search', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Team VM', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Reset adjustments', exact: true }).click();
+    await expect(page.getByLabel('Search inventory')).toHaveValue('Private');
+    await page.getByLabel('Find saved views').fill('missing');
+    await expect(page.getByRole('button', { name: '♧ Hypervisor selection', exact: true })).toHaveCount(0);
+    await page.getByLabel('Find saved views').fill('Hypervisor');
+    await expect(page.getByRole('button', { name: '♧ Hypervisor selection', exact: true })).toBeVisible();
+    const limited = join(dir, 'view-reader.json');
+    await writeFile(limited, JSON.stringify([{ selection: { scope: 'kinds', kinds: ['ASSET_KIND_VIRTUAL_MACHINE'] }, read: { mode: 'all' }, write: { mode: 'all' }, writable: true }]));
+    await server.stop(); server = await host(dir, 'devops', limited);
+    await page.goto(server.url);
+    await page.getByRole('button', { name: '♧ Hypervisor selection', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Private hypervisor', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('region', { name: 'Inventory' })).toContainText('0 resources');
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('real disk inventory supports editing, context, private saves and restart', async ({ page }) => {
   // Exercise the actual UI and grpc-web host, then reopen the same database.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-ui-'));
