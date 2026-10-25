@@ -173,6 +173,29 @@ message Migration {
   // Explicit consent to deterministic text/integer/boolean/date conversions;
   // invalid conversions still reject the entire reviewed migration.
   bool convert_types = 5;
+  // Explicit consent to remove accepted local values from kinds excluded by
+  // the next applicability set. Source observations and proposals are untouched.
+  bool remove_inapplicable = 6;
+}
+message MigrationIssue {
+  // Server-selected authorized resource with an invalid current value.
+  omloom.v1.AssetRef target = 1;
+  // Current accepted value requiring repair or an explicit conversion rule.
+  omloom.v1.Field value = 2;
+  // Actionable validation explanation, without provider payloads or secrets.
+  string diagnostic = 3;
+}
+message MigrationPreview {
+  // Application revision read atomically for this non-persistent preview.
+  uint64 revision = 1;
+  // Total accepted values checked, including explicit applicability removals.
+  uint64 affected = 2;
+  // Accepted values that would be removed under the explicit requested policy.
+  uint64 removed = 3;
+  // Total invalid values. A nonzero count prevents the entire migration.
+  uint64 invalid = 4;
+  // At most 32 authorized examples; invalid reports total coverage separately.
+  repeated MigrationIssue issues = 5;
 }
 message SavedView {
   // Server-generated stable view UUID; empty means create a new personal view.
@@ -366,5 +389,7 @@ message Reply {
     Preview preview = 7;
     // Bounded authorized CSV, distinguished by the requested output contract.
     Download download = 8;
+    // Bounded validation coverage; never a saved migration history or partial apply.
+    MigrationPreview migration_preview = 9;
   }
 }

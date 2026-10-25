@@ -28,6 +28,8 @@ mod inventory;
 mod lifecycle;
 mod operations;
 mod scans;
+#[cfg(test)]
+mod tests;
 pub mod workspace;
 pub use lifecycle::{ActivityEntry, Cleanup};
 pub use scans::ScanState;
@@ -63,6 +65,9 @@ impl From<DatabaseError> for Error {
             DatabaseError::RevisionMismatch { .. }
             | DatabaseError::UniqueViolation { .. }
             | DatabaseError::TransactionConflict { .. } => Self::Conflict,
+            DatabaseError::Budget(coordinode_core::budget::BudgetStop::Memory { .. }) => {
+                Self::Limit
+            }
             other => Self::Database(Box::new(other)),
         }
     }
@@ -419,12 +424,10 @@ impl Store {
                 PropertyType::Array(Box::new(PropertyType::String)),
             ));
         }
-        for name in ["kinds"] {
-            schema.add_property(PropertyDef::new(
-                name,
-                PropertyType::Array(Box::new(PropertyType::Int)),
-            ));
-        }
+        schema.add_property(PropertyDef::new(
+            "kinds",
+            PropertyType::Array(Box::new(PropertyType::Int)),
+        ));
         let publication = db.publish_schema(SchemaPackage {
             labels: vec![LabelDeclaration {
                 schema,

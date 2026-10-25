@@ -31,6 +31,10 @@ criterion = "0.8"
 name = "disk"
 required-features = ["diagnostics"]
 
+[[test]]
+name = "workspace"
+required-features = ["diagnostics"]
+
 [[bench]]
 name = "retrieval"
 harness = false

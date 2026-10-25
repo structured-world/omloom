@@ -13,12 +13,8 @@ pub struct Received {
     pub(crate) admitted: WorkspaceRequest,
     _slot: SemaphorePermit<'static>,
 }
-pub struct WorkspaceCodec;
-impl Default for WorkspaceCodec {
-    fn default() -> Self {
-        Self
-    }
-}
+#[derive(Default)]
+pub struct WorkspaceCodec {}
 impl Codec for WorkspaceCodec {
     type Encode = Reply;
     type Decode = Received;

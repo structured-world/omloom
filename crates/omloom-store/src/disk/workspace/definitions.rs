@@ -266,26 +266,18 @@ impl Store {
         }
         // One bounded atomic migration. Failure/crash leaves definition and values
         // together on their prior generation, requiring no application history.
-        let values = tx.query("MATCH (n:OmRow) WHERE n.layer='intent' AND n.field=$field RETURN properties(n) AS p LIMIT 10001", params([("field", text(&next.id))]))?;
+        let values = tx.query("MATCH (n:OmRow {layer:'intent'}) WHERE n.field=$field RETURN properties(n) AS p LIMIT 10001", params([("field", text(&next.id))]))?;
         if values.len() > 10_000 {
             return Err(Error::Limit);
         }
         let mut staged = Vec::with_capacity(values.len());
         let mut bytes = 0usize;
+        let mut preview = api::MigrationPreview {
+            revision: migration.expected,
+            affected: values.len() as u64,
+            ..Default::default()
+        };
         for row in &values {
-            let value = super::super::inventory::read_field(row)?;
-            let replacement = convert(
-                &value,
-                &next,
-                &migration.conversions,
-                migration.convert_types,
-            )?;
-            bytes = bytes
-                .checked_add(replacement.encoded_len() + 512)
-                .ok_or(Error::Limit)?;
-            if bytes > 8 * 1_048_576 {
-                return Err(Error::Limit);
-            }
             let parent = string(row, "parent")?;
             let asset = tx.get(&parent)?.ok_or(Error::Corrupt)?;
             let target = super::super::target(&asset)?;
@@ -295,17 +287,64 @@ impl Store {
             {
                 return Err(Error::Denied);
             }
-            if !next.kinds.contains(&(number(&asset, "kind")? as i32)) {
-                return Err(Error::Invalid);
+            let value = super::super::inventory::read_field(row)?;
+            let applicable = next.kinds.contains(&kind);
+            let replacement = if !applicable && migration.remove_inapplicable {
+                preview.removed += 1;
+                None
+            } else {
+                let converted = if applicable {
+                    convert(
+                        &value,
+                        &next,
+                        &migration.conversions,
+                        migration.convert_types,
+                    )
+                } else {
+                    Err(Error::Invalid)
+                };
+                match converted {
+                    Ok(value) => Some(value),
+                    Err(Error::Invalid) => {
+                        preview.invalid += 1;
+                        if preview.issues.len() < 32 {
+                            preview.issues.push(api::MigrationIssue {
+                                target: Some(target_wire(target)),
+                                value: Some(value),
+                                diagnostic: if applicable {
+                                    "Repair this value or supply an explicit valid conversion.".into()
+                                } else {
+                                    "This resource kind is excluded. Explicitly review removal or retain its applicability.".into()
+                                },
+                            });
+                        }
+                        None
+                    }
+                    Err(error) => return Err(error),
+                }
+            };
+            bytes = bytes
+                .checked_add(replacement.as_ref().map_or(0, Message::encoded_len) + 512)
+                .ok_or(Error::Limit)?;
+            if bytes > 8 * 1_048_576 {
+                return Err(Error::Limit);
             }
             staged.push(replacement);
         }
         let affected = staged.len() as u64;
+        if !migration.apply {
+            tx.commit()?;
+            return Ok(reply(api::reply::Result::MigrationPreview(preview)));
+        }
+        if preview.invalid != 0 {
+            return Err(Error::Invalid);
+        }
         if next == previous
-            && values
-                .iter()
-                .zip(&staged)
-                .all(|(row, value)| super::super::inventory::field_matches(value, row))
+            && values.iter().zip(&staged).all(|(row, value)| {
+                value
+                    .as_ref()
+                    .is_some_and(|value| super::super::inventory::field_matches(value, row))
+            })
         {
             return Ok(reply(api::reply::Result::Mutation(api::Mutation {
                 revision: tx.commit()?,
@@ -315,18 +354,23 @@ impl Store {
         }
         if migration.apply {
             for (row, value) in values.iter().zip(&staged) {
-                let mut data = super::super::inventory::field_props(value)?;
-                data.extend(props([
-                    ("layer", text("intent")),
-                    ("authority", text(string(row, "authority")?)),
-                ]));
-                let changed = tx.put_against(
-                    &string(row, "key")?,
-                    &string(row, "parent")?,
-                    Class::Inventory,
-                    data,
-                    Some(row),
-                )?;
+                let changed = if let Some(value) = value {
+                    let mut data = super::super::inventory::field_props(value)?;
+                    data.extend(props([
+                        ("layer", text("intent")),
+                        ("authority", text(string(row, "authority")?)),
+                    ]));
+                    tx.put_against(
+                        &string(row, "key")?,
+                        &string(row, "parent")?,
+                        Class::Inventory,
+                        data,
+                        Some(row),
+                    )?
+                } else {
+                    tx.delete(&string(row, "key")?)?;
+                    true
+                };
                 let parent = string(row, "parent")?;
                 let asset = tx.get(&parent)?.ok_or(Error::Corrupt)?;
                 if changed || meaning_changed {

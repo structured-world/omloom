@@ -12,12 +12,22 @@ const editor = ref<'' | 'asset' | 'schema' | 'import' | 'view' | 'network' | 'bu
 const selected = ref<string[]>([]); const search = ref(''); const relationTo = ref(''); const relationKind = ref(RelationKind.INSTALLED_IN); const relationCandidates = ref<model.Item[]>([]);
 const bulkName = ref('description'); const bulkValue = ref(''); const bulkMode = ref('set');
 const presentations = [{ id: model.View.OVERVIEW, name: 'Overview', symbol: '▦' }, { id: model.View.NETWORK, name: 'Network', symbol: '⇄' }, { id: model.View.HARDWARE, name: 'Hardware', symbol: '▤' }, { id: model.View.VIRTUALIZATION, name: 'Virtualization', symbol: '◫' }, { id: model.View.SERVICES, name: 'Services', symbol: '◇' }];
+function parameters(name: string): string[] {
+  const value = route.query[name];
+  if (value === undefined) return [];
+  return (Array.isArray(value) ? value : [value]).map(String);
+}
+function roots(): AssetRef[] {
+  const ids = parameters('scope'); const incarnations = parameters('scopeInc');
+  if (ids.length !== incarnations.length) return [{ assetId: '', incarnation: '' }];
+  return ids.map((assetId, index) => ({ assetId, incarnation: incarnations[index]! }));
+}
 const query = computed(() => model.Query.create({
   view: Number(route.query.view ?? 0), search: String(route.query.search ?? ''),
-  kinds: route.query.kind ? [Number(route.query.kind)] : [], columns: String(route.query.columns ?? 'name,description').split(','),
+  kinds: parameters('kind').map(Number), columns: String(route.query.columns ?? 'name,description').split(','),
   sort: String(route.query.sort ?? 'name'), descending: route.query.desc === '1', unplaced: route.query.unplaced === '1', limit: 25,
   cursor: typeof route.query.cursor === 'string' ? route.query.cursor : undefined,
-  roots: route.query.scope && route.query.scopeInc ? [{ assetId: String(route.query.scope), incarnation: String(route.query.scopeInc) }] : [],
+  roots: roots(),
   predicates: parsePredicates(),
 }));
 function parsePredicates(): model.Predicate[] {
@@ -48,7 +58,11 @@ async function read(target: AssetRef) {
   const result = await call({ oneofKind: 'read', read: { target } });
   if (result.oneofKind === 'detail') detail.value = result.detail;
 }
-async function change(values: Record<string, string | undefined>) { await router.push({ path: '/', query: { ...route.query, cursor: undefined, ...values } }); }
+async function change(values: Record<string, string | string[] | undefined>) { await router.push({ path: '/', query: { ...route.query, cursor: undefined, ...values } }); }
+async function selectedScope() {
+  const targets = selectedItems.value.flatMap(i => i.target ? [i.target] : []);
+  await change({ scope: targets.map(t => t.assetId), scopeInc: targets.map(t => t.incarnation), asset: undefined, incarnation: undefined });
+}
 async function filters(predicates: model.Predicate[]) {
   const json = model.Query.toJson(model.Query.create({ predicates }));
   if (!json || typeof json !== 'object' || Array.isArray(json)) throw Error('Invalid query definition');
@@ -60,10 +74,10 @@ function create() { editing.value = undefined; editor.value = 'asset'; }
 function edit() { editing.value = detail.value?.item; editor.value = 'asset'; }
 async function useView(v: model.SavedView) {
   if (!v.query) return;
-  const q = v.query; const root = q.roots[0];
+  const q = v.query;
   const json = model.Query.toJson(q);
   const filter = q.predicates.length && json && typeof json === 'object' && !Array.isArray(json) ? JSON.stringify(json.predicates) : undefined;
-  await router.push({ path: '/', query: { view: String(q.view), search: q.search || undefined, columns: q.columns.join(','), sort: q.sort, desc: q.descending ? '1' : undefined, unplaced: q.unplaced ? '1' : undefined, kind: q.kinds[0]?.toString(), scope: root?.assetId, scopeInc: root?.incarnation, filter, saved: v.id } });
+  await router.push({ path: '/', query: { view: String(q.view), search: q.search || undefined, columns: q.columns.join(','), sort: q.sort, desc: q.descending ? '1' : undefined, unplaced: q.unplaced ? '1' : undefined, kind: q.kinds.map(String), scope: q.roots.map(t => t.assetId), scopeInc: q.roots.map(t => t.incarnation), filter, saved: v.id } });
 }
 async function exportCsv() {
   try {
@@ -105,12 +119,12 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <div class="fixture"><span class="status-dot" />Local development<strong>{{ identity?.name ?? 'Connecting…' }}</strong><small>Fixture scope: {{ identity?.fixture }}</small></div></aside>
 <main><header class="topbar"><div class="breadcrumb">Workspace <span>/</span> {{ currentTitle }}</div><button @click="load" :disabled="loading">↻ Refresh</button></header>
 <div class="workspace-head"><div><p class="eyebrow">CURRENT INVENTORY</p><h1>{{ currentTitle }}</h1><p class="subtitle">Explore infrastructure in the context that matters.</p></div><div class="actions"><button @click="exportCsv">Export CSV</button><button v-if="identity?.writable" @click="editor = 'import'">Import CSV</button><button v-if="identity?.writable" class="primary" @click="create">+ Create resource</button></div></div>
-<div class="scopebar"><span class="scope-label">SCOPE</span><button v-if="query.roots.length" @click="change({ scope: undefined, scopeInc: undefined })">Selected root + permitted descendants <span aria-hidden="true">×</span></button><span v-else>All permitted infrastructure</span><small>Changing views preserves this scope.</small></div>
+<div class="scopebar"><span class="scope-label">SCOPE</span><button v-if="query.roots.length" @click="change({ scope: undefined, scopeInc: undefined })">{{ query.roots.length }} selected roots + permitted descendants <span aria-hidden="true">×</span></button><span v-else>All permitted infrastructure</span><small>Changing views preserves this scope.</small></div>
 <p v-if="notice" class="notice" role="status">{{ notice }}<button aria-label="Dismiss notice" @click="notice = ''">×</button></p><p v-if="error" class="error" role="alert">{{ error }}<button @click="change({ cursor: undefined })">Reload selection</button></p>
 <section class="inventory" aria-label="Inventory"><div class="filters"><form class="search" @submit.prevent="change({ search: search || undefined })"><span aria-hidden="true">⌕</span><input v-model="search" aria-label="Search inventory" placeholder="Search names, identifiers, selected descriptions…" maxlength="256"><button>Search</button></form><select aria-label="Resource kind filter" :value="query.kinds[0] ?? ''" @change="change({ kind: ($event.target as HTMLSelectElement).value || undefined })"><option value="">All resource kinds</option><option v-for="k in kinds" :key="k" :value="k">{{ label(k) }}</option></select><label class="check"><input :checked="query.unplaced" type="checkbox" @change="change({ unplaced: ($event.target as HTMLInputElement).checked ? '1' : undefined })">Unplaced</label><button v-if="identity?.schemaAdmin" @click="editor = 'schema'">Company fields</button></div>
 <div class="table-meta"><span>{{ page.total.toString() }} resources<span v-if="loading"> · Loading…</span></span><div><label>Columns<select multiple aria-label="Visible columns" :value="query.columns" @change="change({ columns: Array.from(($event.target as HTMLSelectElement).selectedOptions, o => o.value).join(',') || 'name' })"><option v-for="f in [{id:'name',name:'Name'},{id:'description',name:'Description'},{id:'serial',name:'Serial number'},...definitions.filter(d => !d.retired)]" :key="f.id" :value="f.id">{{ f.name }}</option></select></label><button @click="editor = 'view'">Save view</button><button v-if="activeView" @click="useView(activeView)">Reset adjustments</button><button v-if="identity?.writable && query.view === model.View.NETWORK" @click="allocate">Allocate IP / prefix</button><button @click="editor = 'filter'">Add filter</button></div></div>
 <div v-if="query.predicates.length" class="selection"><span v-for="(p, index) in query.predicates" :key="index" class="chip">{{ definitions.find(d => d.id === p.field)?.name ?? p.field }} = {{ display(p.value) }}<button :aria-label="`Remove filter ${index + 1}`" @click="filters(query.predicates.filter((_, i) => i !== index))">×</button></span></div>
-<div v-if="selected.length" class="selection">{{ selected.length }} selected on this page<button v-if="identity?.writable" @click="editor = 'bulk'">Review bulk change</button><button @click="selected = []">Clear selection</button></div>
+<div v-if="selected.length" class="selection">{{ selected.length }} selected on this page<button @click="selectedScope">Use selected as scope</button><button v-if="identity?.writable" @click="editor = 'bulk'">Review bulk change</button><button @click="selected = []">Clear selection</button></div>
 <div class="table-scroll"><table><thead><tr><th class="select-col"><input aria-label="Select visible page" type="checkbox" :checked="!!page.items.length && selected.length === page.items.length" @change="selected = ($event.target as HTMLInputElement).checked ? page.items.map(i => key(i.target)) : []"></th><th>Resource kind</th><th v-for="c in columnLabels" :key="c.id"><button @click="change({ sort: c.id === 'name' ? 'name' : 'kind', desc: query.descending ? undefined : '1' })">{{ c.name }} <span v-if="(c.id === 'name' && query.sort === 'name')">{{ query.descending ? '↓' : '↑' }}</span></button></th><th>Identity</th></tr></thead><tbody><tr v-for="i in page.items" :key="key(i.target)" :class="{ focused: key(i.target) === key(detail?.item?.target) }"><td><input v-model="selected" type="checkbox" :value="key(i.target)" :aria-label="`Select ${display(i.fields.find(f => f.name === 'name'))}`"></td><td><span class="kind-tag">{{ label(i.kind) }}</span></td><td v-for="c in columnLabels" :key="c.id"><button v-if="c.id === 'name'" class="resource-link" @click="open(i.target)">{{ display(i.fields.find(f => f.name === c.id)) || 'Unnamed resource' }}</button><span v-else>{{ display(i.fields.find(f => f.name === c.id)) || '·' }}</span></td><td><button class="identity-link" @click="open(i.target)">{{ i.target?.assetId.slice(-8) }} ↗</button></td></tr></tbody></table></div>
 <div v-if="!page.items.length && !loading && !error" class="empty"><span aria-hidden="true">▦</span><h2>{{ query.search || query.kinds.length || query.roots.length ? 'No resources match this selection' : 'Start with the infrastructure you know' }}</h2><p>{{ query.search ? 'Try another term or change the scope. Search only includes fields you may read.' : 'Create a resource or preview a CSV import. Each object keeps its own stable identity.' }}</p><button v-if="identity?.writable" class="primary" @click="create">Create resource</button></div>
 <footer class="pagination"><span>Current accepted state · revision {{ page.revision.toString() }}</span><div><button v-if="query.cursor" @click="change({ cursor: undefined })">First page</button><button :disabled="!page.next" @click="change({ cursor: page.next })">Next page →</button></div></footer></section>

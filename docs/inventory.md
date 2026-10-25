@@ -53,6 +53,12 @@ A type or applicability change requires a validated migration before applying
 the definition and current values together. No default backfill or automatic
 index per definition is created. Retired definitions with no remaining values
 are reclaimed by bounded maintenance; their identifiers cannot be reused.
+Migration previews show the affected and invalid value counts, with at most
+32 authorized examples requiring repair. Narrowing applicability preserves
+existing values unless the operator explicitly reviews their removal. Applying
+a migration rechecks the application revision and all affected data permissions;
+it changes accepted local values together or leaves them unchanged. Provider
+observations and import proposals keep their source interpretation.
 
 Saved views are personal initially. Team publication separately previews the
 definition disclosed, including roots and predicates. Definition audiences and

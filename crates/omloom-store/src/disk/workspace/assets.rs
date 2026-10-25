@@ -319,7 +319,7 @@ impl Store {
             clauses.join(" AND ")
         );
         let count = tx.raw(
-            &format!("{base} RETURN count(DISTINCT a) AS total"),
+            &format!("{base} RETURN count(DISTINCT a.key) AS total"),
             values.clone(),
         )?;
         let total = count
@@ -340,11 +340,23 @@ impl Store {
         let limit = query.limit;
         values.insert("offset".into(), int(offset)?);
         values.insert("limit".into(), int(u64::from(limit))?);
-        let rows = tx.query(&format!("{base} RETURN DISTINCT properties(a) AS p, {sort} AS ordering, a.key AS tie ORDER BY ordering {direction}, tie ASC SKIP $offset LIMIT $limit"), Some(values))?;
-        let keys: Vec<_> = rows
+        let selected = tx.raw(&format!("{base} RETURN DISTINCT a.key AS key, {sort} AS ordering ORDER BY ordering {direction}, key ASC SKIP $offset LIMIT $limit"), values)?;
+        let keys: Vec<_> = selected
             .iter()
             .map(|p| string(p, "key").map(text))
             .collect::<Result<_>>()?;
+        let fetched = tx.query(
+            "UNWIND $keys AS key MATCH (a:OmRow) WHERE a.key=key RETURN properties(a) AS p LIMIT 101",
+            params([("keys", Value::Array(keys.clone()))]),
+        )?;
+        let mut by_key = fetched
+            .into_iter()
+            .map(|row| Ok((string(&row, "key")?, row)))
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        let rows = selected
+            .iter()
+            .map(|item| by_key.remove(&string(item, "key")?).ok_or(Error::Corrupt))
+            .collect::<Result<Vec<_>>>()?;
         let fields = tx.query("UNWIND $keys AS owner UNWIND $fields AS name MATCH (f:OmRow) WHERE f.key=owner+'/intent/'+name RETURN properties(f) AS p LIMIT 4097", params([
             ("keys", Value::Array(keys)), ("fields", strings(&query.columns)),
         ]))?;

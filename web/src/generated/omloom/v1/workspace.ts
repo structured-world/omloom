@@ -423,6 +423,71 @@ export interface Migration {
      * @generated from protobuf field: bool convert_types = 5
      */
     convertTypes: boolean;
+    /**
+     * Explicit consent to remove accepted local values from kinds excluded by
+     * the next applicability set. Source observations and proposals are untouched.
+     *
+     * @generated from protobuf field: bool remove_inapplicable = 6
+     */
+    removeInapplicable: boolean;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.MigrationIssue
+ */
+export interface MigrationIssue {
+    /**
+     * Server-selected authorized resource with an invalid current value.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef target = 1
+     */
+    target?: AssetRef;
+    /**
+     * Current accepted value requiring repair or an explicit conversion rule.
+     *
+     * @generated from protobuf field: omloom.v1.Field value = 2
+     */
+    value?: Field;
+    /**
+     * Actionable validation explanation, without provider payloads or secrets.
+     *
+     * @generated from protobuf field: string diagnostic = 3
+     */
+    diagnostic: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.MigrationPreview
+ */
+export interface MigrationPreview {
+    /**
+     * Application revision read atomically for this non-persistent preview.
+     *
+     * @generated from protobuf field: uint64 revision = 1
+     */
+    revision: bigint;
+    /**
+     * Total accepted values checked, including explicit applicability removals.
+     *
+     * @generated from protobuf field: uint64 affected = 2
+     */
+    affected: bigint;
+    /**
+     * Accepted values that would be removed under the explicit requested policy.
+     *
+     * @generated from protobuf field: uint64 removed = 3
+     */
+    removed: bigint;
+    /**
+     * Total invalid values. A nonzero count prevents the entire migration.
+     *
+     * @generated from protobuf field: uint64 invalid = 4
+     */
+    invalid: bigint;
+    /**
+     * At most 32 authorized examples; invalid reports total coverage separately.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.MigrationIssue issues = 5
+     */
+    issues: MigrationIssue[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.SavedView
@@ -1031,6 +1096,14 @@ export interface Reply {
          */
         download: Download;
     } | {
+        oneofKind: "migrationPreview";
+        /**
+         * Bounded validation coverage; never a saved migration history or partial apply.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.MigrationPreview migration_preview = 9
+         */
+        migrationPreview: MigrationPreview;
+    } | {
         oneofKind: undefined;
     };
 }
@@ -1298,7 +1371,8 @@ class Migration$Type extends MessageType<Migration> {
             { no: 2, name: "conversions", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Conversion },
             { no: 3, name: "expected", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 4, name: "apply", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
-            { no: 5, name: "convert_types", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+            { no: 5, name: "convert_types", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 6, name: "remove_inapplicable", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
         ]);
     }
 }
@@ -1306,6 +1380,36 @@ class Migration$Type extends MessageType<Migration> {
  * @generated MessageType for protobuf message omloom.workspace.v1.Migration
  */
 export const Migration = new Migration$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class MigrationIssue$Type extends MessageType<MigrationIssue> {
+    constructor() {
+        super("omloom.workspace.v1.MigrationIssue", [
+            { no: 1, name: "target", kind: "message", T: () => AssetRef },
+            { no: 2, name: "value", kind: "message", T: () => Field },
+            { no: 3, name: "diagnostic", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.MigrationIssue
+ */
+export const MigrationIssue = new MigrationIssue$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class MigrationPreview$Type extends MessageType<MigrationPreview> {
+    constructor() {
+        super("omloom.workspace.v1.MigrationPreview", [
+            { no: 1, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 2, name: "affected", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 3, name: "removed", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 4, name: "invalid", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 5, name: "issues", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => MigrationIssue }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.MigrationPreview
+ */
+export const MigrationPreview = new MigrationPreview$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class SavedView$Type extends MessageType<SavedView> {
     constructor() {
@@ -1561,7 +1665,8 @@ class Reply$Type extends MessageType<Reply> {
             { no: 5, name: "definitions", kind: "message", oneof: "result", T: () => Definitions },
             { no: 6, name: "views", kind: "message", oneof: "result", T: () => Views },
             { no: 7, name: "preview", kind: "message", oneof: "result", T: () => Preview },
-            { no: 8, name: "download", kind: "message", oneof: "result", T: () => Download }
+            { no: 8, name: "download", kind: "message", oneof: "result", T: () => Download },
+            { no: 9, name: "migration_preview", kind: "message", oneof: "result", T: () => MigrationPreview }
         ]);
     }
 }

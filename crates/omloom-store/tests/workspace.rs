@@ -112,6 +112,54 @@ fn current_inventory_query_reopen_and_conflict() -> TestResult {
     Ok(())
 }
 
+// Multiple matching fields must neither duplicate resources nor destabilize page ties.
+#[test]
+fn search_pages_deduplicate_before_limit_and_preserve_order() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let context = operator();
+    let mut expected = Vec::new();
+    for _ in 0..5 {
+        let target = create(&store, &context, K::Device, "shared-name")?;
+        call(
+            &store,
+            &context,
+            api::request::Command::Write(api::Write {
+                target: Some(target.clone()),
+                expected: Some(1),
+                kind: K::Device as i32,
+                changes: vec![text_field("description", "shared-description")],
+            }),
+        )?;
+        expected.push(target.asset_id);
+    }
+    expected.sort();
+    let mut q = query();
+    q.search = "shared".into();
+    q.limit = 2;
+    let mut actual = Vec::new();
+    loop {
+        let api::reply::Result::Page(page) =
+            call(&store, &context, api::request::Command::Query(q.clone()))?
+        else {
+            panic!("page");
+        };
+        assert_eq!(page.total, 5);
+        assert!(page.items.len() <= 2);
+        actual.extend(
+            page.items
+                .into_iter()
+                .map(|item| item.target.expect("identity").asset_id),
+        );
+        let Some(cursor) = page.next else {
+            break;
+        };
+        q.cursor = Some(cursor);
+    }
+    assert_eq!(actual, expected);
+    Ok(())
+}
+
 // Scope and field projection must precede search, count and requested-column output.
 #[test]
 fn scopes_and_search_do_not_disclose_hidden_fields() -> TestResult {
@@ -336,6 +384,7 @@ fn typed_definition_migration_updates_asset_revision() -> TestResult {
             apply: true,
             convert_types: true,
             conversions: Vec::new(),
+            remove_inapplicable: false,
         }),
     )?;
     assert_eq!(store.asset(AssetRef::try_from(&target)?)?.revision, 3);

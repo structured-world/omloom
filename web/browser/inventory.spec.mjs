@@ -150,3 +150,33 @@ test('CSV preview validates before acceptance and scope is selected by the serve
     await expect(page.getByRole('button', { name: 'Company fields', exact: true })).toHaveCount(0);
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
+
+test('selected roots survive view changes, personal save and reload', async ({ page }) => {
+  // Saving a set of roots must not discard every root after the first or broaden scope.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-root-set-'));
+  const server = await host(dir);
+  try {
+    await page.goto(server.url);
+    await create(page, 'First scope host');
+    await create(page, 'Second scope VM', 'VIRTUAL_MACHINE');
+    await create(page, 'Outside selection');
+    await page.getByRole('checkbox', { name: 'Select First scope host', exact: true }).check();
+    await page.getByRole('checkbox', { name: 'Select Second scope VM', exact: true }).check();
+    await page.getByRole('button', { name: 'Use selected as scope', exact: true }).click({ timeout: 5000 });
+    await expect(page.getByRole('button', { name: 'Outside selection', exact: true })).toHaveCount(0);
+    await page.getByRole('navigation', { name: 'Views' }).getByRole('button', { name: 'Services', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'First scope host', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Second scope VM', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Save view', exact: true }).click();
+    await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill('Two selected roots');
+    await page.getByRole('button', { name: 'Save personal view', exact: true }).click();
+    await expect(page.getByRole('dialog')).toBeHidden();
+    await page.goto(server.url);
+    await expect(page.getByRole('button', { name: 'Outside selection', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '◦ Two selected roots', exact: true }).click();
+    await page.reload();
+    await expect(page.getByRole('button', { name: 'First scope host', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Second scope VM', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Outside selection', exact: true })).toHaveCount(0);
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});

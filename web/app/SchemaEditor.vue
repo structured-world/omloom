@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { ref, reactive } from 'vue';
 import Dialog from './Dialog.vue';
-import { call, model, kinds, label } from './api';
+import { call, model, kinds, label, display } from './api';
 const props = defineProps<{ definitions: model.Definition[]; revision: bigint }>();
 const emit = defineEmits<{ close: []; saved: [] }>();
 const selected = ref('');
 const draft = reactive(model.Definition.create());
-const choices = ref(''); const preview = ref<bigint>(); const convert = ref(false); const error = ref('');
+const choices = ref(''); const preview = ref<model.MigrationPreview>(); const convert = ref(false); const remove = ref(false); const error = ref('');
 function load() { const selectedDefinition = props.definitions.find(d => d.id === selected.value); Object.assign(draft, selectedDefinition ? model.Definition.create(selectedDefinition) : model.Definition.create()); choices.value = draft.choices.join('\n'); preview.value = undefined; }
 async function save(apply = false) {
   error.value = '';
@@ -15,9 +15,9 @@ async function save(apply = false) {
     const old = props.definitions.find(d => d.id === draft.id);
     const migration = old && (old.type !== draft.type || JSON.stringify(old.kinds) !== JSON.stringify(draft.kinds) || JSON.stringify(old.choices) !== JSON.stringify(draft.choices));
     const input = model.Definition.create({ ...draft, generation: 0n });
-    const result = migration ? await call({ oneofKind: 'migration', migration: model.Migration.create({ definition: input, expected: props.revision, apply, convertTypes: convert.value }) })
+    const result = migration ? await call({ oneofKind: 'migration', migration: model.Migration.create({ definition: input, expected: props.revision, apply, convertTypes: convert.value, removeInapplicable: remove.value }) })
       : await call({ oneofKind: 'definition', definition: input });
-    if (migration && !apply && result.oneofKind === 'mutation') { preview.value = result.mutation.affected; return; }
+    if (migration && !apply && result.oneofKind === 'migrationPreview') { preview.value = result.migrationPreview; return; }
     emit('saved');
   } catch (e) { error.value = String(e); }
 }
@@ -31,6 +31,7 @@ async function save(apply = false) {
 <label class="check"><input v-model="draft.searchable" type="checkbox">Include values in descriptive search</label>
 <label class="check"><input v-model="draft.retired" type="checkbox">Retire, preserving current interpretation</label>
 <label v-if="draft.id" class="check"><input v-model="convert" type="checkbox">Review deterministic conversion of existing values</label>
-<p v-if="preview !== undefined" class="notice">{{ preview }} current values validated against the next definition. Apply commits the definition and values atomically.</p>
-<p v-if="error" role="alert">{{ error }}</p><footer><button type="button" @click="emit('close')">Cancel</button><button v-if="preview !== undefined" type="button" class="primary" @click="save(true)">Apply reviewed migration</button><button v-else class="primary">Review / save definition</button></footer>
+<label v-if="draft.id" class="check"><input v-model="remove" type="checkbox">Remove local values from excluded resource kinds</label>
+<section v-if="preview" aria-label="Migration preview"><p class="notice">{{ preview.affected }} current values reviewed. {{ preview.removed }} values will be removed. {{ preview.invalid }} values need repair. No values have been changed.</p><ul><li v-for="issue in preview.issues" :key="issue.target?.assetId">Resource {{ issue.target?.assetId }}: {{ display(issue.value) }}. {{ issue.diagnostic }}</li></ul><p v-if="preview.invalid > BigInt(preview.issues.length)" class="hint">Showing {{ preview.issues.length }} examples of {{ preview.invalid }} invalid values.</p><p>Apply commits the definition and accepted values atomically. Source evidence is preserved.</p></section>
+<p v-if="error" role="alert">{{ error }}</p><footer><button type="button" @click="emit('close')">Cancel</button><button v-if="preview" type="button" class="primary" :disabled="preview.invalid !== 0n" @click="save(true)">Apply reviewed migration</button><button v-else class="primary">Review / save definition</button></footer>
 </form></Dialog></template>

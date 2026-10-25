@@ -24,6 +24,7 @@ test('empty optional integer is not silently accepted as zero', async ({ page })
     await dialog.getByLabel('Name', { exact: true }).fill('Capacity');
     await dialog.getByRole('combobox', { name: 'Type', exact: true }).selectOption({ label: 'integer' });
     await dialog.getByRole('checkbox', { name: 'device', exact: true }).check();
+    await dialog.getByRole('checkbox', { name: 'virtual machine', exact: true }).check();
     await dialog.getByRole('button', { name: 'Review / save definition', exact: true }).click();
     await expect(dialog).toBeHidden();
     await page.getByRole('button', { name: 'Typed resource', exact: true }).click();
@@ -38,6 +39,22 @@ test('empty optional integer is not silently accepted as zero', async ({ page })
     await expect(dialog).toBeHidden();
     await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('Capacity');
     await expect(page.getByRole('region', { name: 'Resource details' }).locator('dd').filter({ hasText: /^0$/ })).toHaveCount(1);
+    // Applicability removal is separately reviewed; it cannot silently erase a value.
+    await page.getByRole('button', { name: 'Company fields', exact: true }).click();
+    dialog = page.getByRole('dialog');
+    await dialog.getByRole('combobox', { name: 'Definition', exact: true }).selectOption({ label: 'Capacity' });
+    await dialog.getByRole('checkbox', { name: 'device', exact: true }).uncheck();
+    await dialog.getByRole('button', { name: 'Review / save definition', exact: true }).click();
+    await expect(dialog.getByRole('region', { name: 'Migration preview' })).toContainText('1 values need repair');
+    await expect(dialog.getByRole('button', { name: 'Apply reviewed migration', exact: true })).toBeDisabled();
+    await dialog.getByRole('checkbox', { name: 'Remove local values from excluded resource kinds', exact: true }).check();
+    await dialog.getByRole('button', { name: 'Review / save definition', exact: true }).click();
+    await expect(dialog.getByRole('region', { name: 'Migration preview' })).toContainText('1 values will be removed. 0 values need repair');
+    await dialog.getByRole('button', { name: 'Apply reviewed migration', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await page.reload();
+    await expect(page.getByRole('region', { name: 'Resource details' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Resource details' })).not.toContainText('Capacity');
   } finally {
     if (child.exitCode===null && child.signalCode===null) { const exit=new Promise(resolve=>child.once('exit',resolve));child.kill('SIGINT');await exit; }
     await rm(data,{recursive:true,force:true});

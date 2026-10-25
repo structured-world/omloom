@@ -298,3 +298,95 @@ fn migration_requires_data_rights_and_does_not_write_noops() -> TestResult {
     ));
     Ok(())
 }
+
+// Narrowing applicability must show exactly what is removed and require explicit consent.
+#[test]
+fn applicability_migration_previews_removal_without_silent_data_loss() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = Store::open(directory.path(), policy())?;
+    let context = operator();
+    let host = create(&store, &context, K::Device, "host")?;
+    let vm = create(&store, &context, K::VirtualMachine, "vm")?;
+    let api::reply::Result::Definitions(created) = call(
+        &store,
+        &context,
+        api::request::Command::Definition(api::Definition {
+            name: "Purpose".into(),
+            kinds: vec![K::Device as i32, K::VirtualMachine as i32],
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("definition");
+    };
+    let mut definition = created.items[0].clone();
+    for (target, kind) in [(host.clone(), K::Device), (vm.clone(), K::VirtualMachine)] {
+        call(
+            &store,
+            &context,
+            api::request::Command::Write(api::Write {
+                target: Some(target),
+                expected: Some(1),
+                kind: kind as i32,
+                changes: vec![text_field(&definition.id, "backup")],
+            }),
+        )?;
+    }
+    definition.kinds = vec![K::Device as i32];
+    let before = store.usage()?;
+    let mut migration = api::Migration {
+        definition: Some(definition.clone()),
+        expected: before.revision,
+        ..Default::default()
+    };
+    let api::reply::Result::MigrationPreview(preview) = call(
+        &store,
+        &context,
+        api::request::Command::Migration(migration.clone()),
+    )?
+    else {
+        panic!("preview");
+    };
+    assert_eq!(
+        (preview.affected, preview.removed, preview.invalid),
+        (2, 0, 1)
+    );
+    assert_eq!(preview.issues[0].target.as_ref(), Some(&vm));
+    assert_eq!(store.usage()?, before);
+    migration.remove_inapplicable = true;
+    let api::reply::Result::MigrationPreview(preview) = call(
+        &store,
+        &context,
+        api::request::Command::Migration(migration.clone()),
+    )?
+    else {
+        panic!("preview");
+    };
+    assert_eq!(
+        (preview.affected, preview.removed, preview.invalid),
+        (2, 1, 0)
+    );
+    assert_eq!(store.usage()?, before);
+    migration.apply = true;
+    call(
+        &store,
+        &context,
+        api::request::Command::Migration(migration),
+    )?;
+    assert!(
+        store
+            .asset(AssetRef::try_from(&host)?)?
+            .intended
+            .iter()
+            .any(|v| v.field.as_ref().is_some_and(|f| f.name == definition.id))
+    );
+    assert!(
+        store
+            .asset(AssetRef::try_from(&vm)?)?
+            .intended
+            .iter()
+            .all(|v| v.field.as_ref().is_none_or(|f| f.name != definition.id))
+    );
+    assert_eq!(store.asset(AssetRef::try_from(&vm)?)?.revision, 3);
+    Ok(())
+}

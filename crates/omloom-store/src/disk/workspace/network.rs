@@ -119,15 +119,15 @@ impl Store {
         let key = format!("network/{}", identity(target));
         let old = tx.get(&key)?;
         let owner_key = format!("vlan/{}/{vid}", identity(link));
-        if let Some(owner) = tx.get(&owner_key)? {
-            if !same_target(&owner, target) {
-                return Err(Error::Conflict);
-            }
+        if let Some(owner) = tx.get(&owner_key)?
+            && !same_target(&owner, target)
+        {
+            return Err(Error::Conflict);
         }
-        if let Some(old) = &old {
-            if old.get("namespace") != Some(&text(&owner_key)) {
-                tx.delete(&string(old, "namespace")?)?;
-            }
+        if let Some(old) = &old
+            && old.get("namespace") != Some(&text(&owner_key))
+        {
+            tx.delete(&string(old, "namespace")?)?;
         }
         let mut data = target_props(target);
         data.extend(props([
@@ -262,10 +262,10 @@ impl Store {
             return Err(Error::Missing);
         }
         let owner_key = allocation(space, network, kind, link)?;
-        if let Some(owner) = tx.get(&owner_key)? {
-            if !same_target(&owner, target) {
-                return Err(Error::Conflict);
-            }
+        if let Some(owner) = tx.get(&owner_key)?
+            && !same_target(&owner, target)
+        {
+            return Err(Error::Conflict);
         }
         let members = tx.children(&format!("members/{}", identity(target)))?;
         if sharing == api::SharedUse::Exclusive && members.len() > 1 {
@@ -288,12 +288,11 @@ impl Store {
         } else {
             None
         };
-        if let Some(key) = &protocol_key {
-            if let Some(owner) = tx.get(key)? {
-                if !same_target(&owner, target) {
-                    return Err(Error::Conflict);
-                }
-            }
+        if let Some(key) = &protocol_key
+            && let Some(owner) = tx.get(key)?
+            && !same_target(&owner, target)
+        {
+            return Err(Error::Conflict);
         }
         if old.as_ref().is_some_and(|p| {
             p.get("sharing") == Some(&text(api::SharedUse::Exclusive.as_str_name()))
@@ -338,10 +337,9 @@ impl Store {
             .as_ref()
             .and_then(|p| p.get("group"))
             .and_then(Value::as_str)
+            && protocol_key.as_deref() != Some(previous)
         {
-            if protocol_key.as_deref() != Some(previous) {
-                tx.delete(previous)?;
-            }
+            tx.delete(previous)?;
         }
         if old
             .as_ref()
