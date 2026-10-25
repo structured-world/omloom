@@ -115,7 +115,15 @@ impl Store {
         } else if request.remove {
             return Err(Error::Invalid);
         }
-        if view.audiences.iter().any(|a| !context.teams.contains(a))
+        let existing_audiences = old
+            .as_ref()
+            .map(|p| read_strings(p, "audiences"))
+            .transpose()?
+            .unwrap_or_default();
+        if view
+            .audiences
+            .iter()
+            .any(|a| !existing_audiences.contains(a) && !context.teams.contains(a))
             || view.editors.iter().any(|a| !view.audiences.contains(a))
         {
             return Err(Error::Denied);

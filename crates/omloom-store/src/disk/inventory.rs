@@ -535,6 +535,11 @@ impl Store {
         let mut tx = self.begin()?;
         let from_row = tx.asset(from)?;
         let to_row = tx.asset(to)?;
+        if number(&from_row, "adoption")? != wire::Adoption::Adopted as u64
+            || number(&to_row, "adoption")? != wire::Adoption::Adopted as u64
+        {
+            return Err(Error::Invalid);
+        }
         use wire::{AssetKind as A, RelationKind as R};
         let from_kind =
             A::try_from(number(&from_row, "kind")? as i32).map_err(|_| Error::Corrupt)?;
@@ -590,6 +595,14 @@ impl Store {
         let old = tx.get(&key)?;
         if old.as_ref().map(|p| number(p, "revision")).transpose()? != expected {
             return Err(Error::Conflict);
+        }
+        let placement = match kind {
+            R::InstalledIn => Some((from, to)),
+            R::Contains | R::HasPort => Some((to, from)),
+            _ => None,
+        };
+        if let Some((child, parent)) = placement {
+            tx.check_physical_parent(child, parent, &key)?;
         }
         let mut p = target_props(from);
         p.extend(props([
@@ -700,4 +713,76 @@ fn relation_projection(p: &Properties) -> Result<wire::Relation> {
         revision: number(p, "revision")?,
         authority_id: string(p, "authority")?,
     })
+}
+
+impl Tx<'_> {
+    fn physical_parent(&self, child: AssetRef, skip: &str) -> Result<Option<AssetRef>> {
+        let mut parents = Vec::with_capacity(2);
+        for (query, kinds, incoming) in [
+            (
+                "MATCH (a:OmRow {key:$asset})-[:OmRelationFrom]->(r:OmRow) WHERE r.kind IN $kinds AND r.key<>$skip RETURN properties(r) AS p LIMIT 2",
+                vec![wire::RelationKind::InstalledIn],
+                false,
+            ),
+            (
+                "MATCH (a:OmRow {key:$asset})<-[:OmRelationTo]-(r:OmRow) WHERE r.kind IN $kinds AND r.key<>$skip RETURN properties(r) AS p LIMIT 2",
+                vec![wire::RelationKind::Contains, wire::RelationKind::HasPort],
+                true,
+            ),
+        ] {
+            let rows = self.query(
+                query,
+                params([
+                    ("asset", text(asset_key(child))),
+                    ("skip", text(skip)),
+                    (
+                        "kinds",
+                        Value::Array(
+                            kinds
+                                .into_iter()
+                                .map(|k| Value::Int(k as i32 as i64))
+                                .collect(),
+                        ),
+                    ),
+                ]),
+            )?;
+            for row in rows {
+                if parents.len() == 1 {
+                    return Err(Error::Conflict);
+                }
+                let parent = if incoming {
+                    super::target(&row)?
+                } else {
+                    AssetRef {
+                        asset: string(&row, "to_asset")?
+                            .parse()
+                            .map_err(|_| Error::Corrupt)?,
+                        incarnation: string(&row, "to_incarnation")?
+                            .parse()
+                            .map_err(|_| Error::Corrupt)?,
+                    }
+                };
+                parents.push(parent);
+            }
+        }
+        Ok(parents.pop())
+    }
+    fn check_physical_parent(&self, child: AssetRef, parent: AssetRef, skip: &str) -> Result<()> {
+        if self.physical_parent(child, skip)?.is_some() {
+            return Err(Error::Conflict);
+        }
+        let mut current = Some(parent);
+        let mut seen = std::collections::BTreeSet::new();
+        while let Some(node) = current {
+            if node == child || seen.contains(&node) {
+                return Err(Error::Invalid);
+            }
+            if seen.len() == 1024 {
+                return Err(Error::Limit);
+            }
+            seen.insert(node);
+            current = self.physical_parent(node, skip)?;
+        }
+        Ok(())
+    }
 }

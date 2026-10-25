@@ -18,6 +18,7 @@ pub const MAX_IMPORT: usize = 128;
 pub const MAX_CSV: usize = 256 * 1024;
 pub const MAX_FIELDS: usize = 32;
 pub const MAX_DEFINITIONS: usize = 128;
+const EXPLICIT_CLEAR: i32 = wire::NullValue::NullValue as i32;
 
 #[derive(Debug, Clone)]
 pub enum Scope {
@@ -236,6 +237,9 @@ impl Tx<'_> {
     }
     fn visible_asset(&self, context: &Context, target: AssetRef) -> Result<Properties> {
         let row = self.asset(target)?;
+        if number(&row, "adoption")? != wire::Adoption::Adopted as u64 {
+            return Err(Error::Missing);
+        }
         if !context.readable(target, number(&row, "kind")? as i32) {
             return Err(Error::Denied);
         }

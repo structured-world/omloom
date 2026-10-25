@@ -13,7 +13,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut selected = None;
     let mut grants = None;
     let mut port = 0u16;
-    let mut query_memory_mib = 32u64;
+    let mut query_memory_mib = 128u64;
     while let Some(arg) = args.next() {
         let value = args.next().ok_or("Every option requires a value")?;
         match arg.as_str() {
@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--query-memory-mib" => query_memory_mib = value.parse()?,
             _ => {
                 return Err(
-                    "Usage: omloom-dev --data PATH --ui PATH --fixture NAME [--port PORT]".into(),
+                    "Usage: omloom-dev --data PATH --ui PATH --fixture NAME [--port PORT] [--grants PATH] [--query-memory-mib MIB]".into(),
                 );
             }
         }
@@ -40,8 +40,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .as_deref()
             .ok_or("--fixture is required; this host has no production login")?,
     )?;
-    if let Some(path) = grants { omloom_app::fixtures::configure(&mut context, &path)?; }
-    let query_memory = query_memory_mib.checked_mul(1_048_576).ok_or("Query memory size overflow")?;
+    if let Some(path) = grants {
+        omloom_app::fixtures::configure(&mut context, &path)?;
+    }
+    let query_memory = query_memory_mib
+        .checked_mul(1_048_576)
+        .ok_or("Query memory size overflow")?;
     let store = Store::open_with_query_memory(&data, policy(), query_memory)?;
     let listener =
         tokio::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).await?;

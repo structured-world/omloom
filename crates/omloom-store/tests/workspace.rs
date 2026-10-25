@@ -580,3 +580,120 @@ fn removal_blocks_replay_and_releases_only_its_allocation() -> TestResult {
     ));
     Ok(())
 }
+
+// A prepared store pays mandatory index recovery guards at startup, not on a user's first search.
+#[test]
+fn cold_search_does_not_write_after_store_readiness() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    create(&store, &operator(), K::Device, "cold-router")?;
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    store.diagnostic_database().persist()?;
+    let syncs = store.diagnostic_database().engine().journal_syncs();
+    let mut taps = Vec::new();
+    for partition in coordinode_storage::engine::partition::Partition::all() {
+        let (tap, _) = store
+            .diagnostic_database()
+            .engine()
+            .tap_writes(*partition)?;
+        taps.push(tap);
+    }
+    let before = store.usage()?;
+    let mut q = query();
+    q.search = "cold".into();
+    call(&store, &operator(), api::request::Command::Query(q))?;
+    for tap in taps {
+        assert_eq!(
+            tap.take(),
+            coordinode_storage::engine::tap::Tapped::Keys(Vec::new()),
+            "First search wrote {:?}",
+            tap.partition()
+        );
+    }
+    assert_eq!(store.diagnostic_database().engine().journal_syncs(), syncs);
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// An archived identity cannot be revived by an inventory edit.
+#[test]
+fn archived_identity_cannot_be_edited_back_to_live() -> TestResult {
+    use omloom_contracts::wire::{Adoption, record};
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let original = asset();
+    let target = target(&original);
+    store.save_asset(
+        &admit(record::Body::Asset(original.clone())),
+        None,
+        "operator",
+        1,
+    )?;
+    let mut archived = store.asset(target)?;
+    archived.adoption = Adoption::Archived as i32;
+    store.save_asset(
+        &admit(record::Body::Asset(archived)),
+        Some(1),
+        "operator",
+        2,
+    )?;
+    assert!(matches!(
+        call(
+            &store,
+            &operator(),
+            api::request::Command::Write(api::Write {
+                target: original.target,
+                expected: Some(2),
+                kind: K::Device as i32,
+                changes: vec![text_field("name", "revived")]
+            })
+        ),
+        Err(Error::Conflict)
+    ));
+    Ok(())
+}
+
+// One accepted physical parent and acyclic containment are transactional inventory invariants.
+#[test]
+fn physical_placement_is_exclusive_and_acyclic() -> TestResult {
+    use omloom_contracts::wire::RelationKind as R;
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let context = operator();
+    let device = create(&store, &context, K::Device, "device")?;
+    let rack_a = create(&store, &context, K::Rack, "rack-a")?;
+    let rack_b = create(&store, &context, K::Rack, "rack-b")?;
+    let relation = |from, to, kind| {
+        api::request::Command::Relation(api::Relationship {
+            relation: Some(wire::Relation {
+                from: Some(from),
+                to: Some(to),
+                kind: kind as i32,
+                ..Default::default()
+            }),
+            remove: false,
+        })
+    };
+    call(
+        &store,
+        &context,
+        relation(device.clone(), rack_a, R::InstalledIn),
+    )?;
+    assert!(matches!(
+        call(&store, &context, relation(device, rack_b, R::InstalledIn)),
+        Err(Error::Conflict)
+    ));
+    let a = create(&store, &context, K::Location, "room-a")?;
+    let b = create(&store, &context, K::Location, "room-b")?;
+    call(
+        &store,
+        &context,
+        relation(a.clone(), b.clone(), R::InstalledIn),
+    )?;
+    assert!(matches!(
+        call(&store, &context, relation(b, a, R::InstalledIn)),
+        Err(Error::Invalid)
+    ));
+    Ok(())
+}

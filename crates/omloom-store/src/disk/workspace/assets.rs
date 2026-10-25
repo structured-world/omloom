@@ -89,7 +89,7 @@ fn value_clause(
         field::Value::Text(s) => (1, "vtext", text(s)),
         field::Value::Integer(n) => (2, "vint", Value::Int(*n)),
         field::Value::Flag(b) => (3, "vflag", Value::Bool(*b)),
-        field::Value::Clear(0) => return Ok(format!("{alias}.vtype=4")),
+        field::Value::Clear(EXPLICIT_CLEAR) => return Ok(format!("{alias}.vtype=4")),
         _ => return Err(Error::Invalid),
     };
     Ok(format!(
@@ -154,7 +154,14 @@ impl Store {
             "a.parent='assets'".to_owned(),
             visible_clause(context, None, &mut values),
         ];
-        let mut entry = "MATCH (a:OmRow)".to_owned();
+        clauses.push(format!(
+            "a.adoption={}",
+            parameter(
+                &mut values,
+                Value::Int(wire::Adoption::Adopted as i32 as i64)
+            )
+        ));
+        let mut entry = "MATCH (a:OmRow {parent:'assets'})".to_owned();
         let mut bindings = vec!["a".to_owned()];
         let mut predicate_joins = Vec::new();
         let view_kinds = kind_for_view(view);
@@ -216,7 +223,7 @@ impl Store {
                 clauses.push(format!("a.asset={}", parameter(&mut values, text(&term))));
             } else if let Ok(ip) = term.parse::<std::net::IpAddr>() {
                 entry = format!(
-                    "MATCH (ip:OmRow) WHERE ip.parent='networks' AND ip.cidr STARTS WITH {} MATCH (a:OmRow) WHERE a.key='asset/'+ip.asset WITH a, ip",
+                    "MATCH (ip:OmRow {{parent:'networks'}}) WHERE ip.cidr STARTS WITH {} MATCH (a:OmRow) WHERE a.key='asset/'+ip.asset WITH a, ip",
                     parameter(&mut values, text(format!("{ip}/")))
                 );
                 clauses.push("ip.incarnation=a.incarnation".into());
@@ -251,7 +258,7 @@ impl Store {
                     ));
                 }
                 entry = format!(
-                    "MATCH (s:OmRow) WHERE s.layer='intent' AND ({}) MATCH (a:OmRow) WHERE a.key=s.parent WITH a, s",
+                    "MATCH (s:OmRow {{layer:'intent'}}) WHERE ({}) MATCH (a:OmRow) WHERE a.key=s.parent WITH a, s",
                     value_matches.join(" OR ")
                 );
                 bindings.push("s".into());
@@ -338,7 +345,7 @@ impl Store {
             .iter()
             .map(|p| string(p, "key").map(text))
             .collect::<Result<_>>()?;
-        let fields = tx.query("MATCH (f:OmRow) WHERE f.parent IN $keys AND f.layer='intent' AND f.field IN $fields RETURN properties(f) AS p LIMIT 4097", params([
+        let fields = tx.query("UNWIND $keys AS owner UNWIND $fields AS name MATCH (f:OmRow) WHERE f.key=owner+'/intent/'+name RETURN properties(f) AS p LIMIT 4097", params([
             ("keys", Value::Array(keys)), ("fields", strings(&query.columns)),
         ]))?;
         if fields.len() > MAX_PAGE * MAX_FIELDS {
@@ -360,7 +367,7 @@ impl Store {
             .map(|p| target(p).map(|t| text(format!("network/{}/{}", t.asset, t.incarnation))))
             .collect::<Result<Vec<_>>>()?;
         let networks = tx.query(
-            "MATCH (n:OmRow) WHERE n.key IN $keys RETURN properties(n) AS p LIMIT 101",
+            "UNWIND $keys AS key MATCH (n:OmRow) WHERE n.key=key RETURN properties(n) AS p LIMIT 101",
             params([("keys", Value::Array(network_keys))]),
         )?;
         for row in &networks {
@@ -435,6 +442,9 @@ impl Store {
                 return Err(Error::Limit);
             }
             let asset = self.asset(current)?;
+            if asset.adoption != wire::Adoption::Adopted as i32 {
+                return Err(Error::Missing);
+            }
             if !context.readable(current, asset.kind) {
                 return Err(Error::Denied);
             }
@@ -463,7 +473,9 @@ impl Store {
                 };
                 if let Some(child) = child {
                     let asset = self.asset(child)?;
-                    if context.readable(child, asset.kind) {
+                    if asset.adoption == wire::Adoption::Adopted as i32
+                        && context.readable(child, asset.kind)
+                    {
                         pending.push(child);
                     }
                 }
@@ -476,6 +488,9 @@ impl Store {
         let basis = self.usage()?.revision;
         let target = parse_target(read.target.as_ref())?;
         let asset = self.asset(target)?;
+        if asset.adoption != wire::Adoption::Adopted as i32 {
+            return Err(Error::Missing);
+        }
         if !context.readable(target, asset.kind) {
             return Err(Error::Denied);
         }
@@ -609,8 +624,11 @@ impl Store {
             }
             for reference in [existing.from.as_ref(), existing.to.as_ref()] {
                 let target = parse_target(reference)?;
-                let row = tx.visible_asset(context, target)?;
-                if !context.field(target, number(&row, "kind")? as i32, "relations", true) {
+                let row = tx.asset(target)?;
+                let kind = number(&row, "kind")? as i32;
+                if !context.readable(target, kind)
+                    || !context.field(target, kind, "relations", true)
+                {
                     return Err(Error::Denied);
                 }
             }
@@ -721,6 +739,9 @@ impl Tx<'_> {
             return Err(Error::Conflict);
         }
         if let Some(row) = &old {
+            if number(row, "adoption")? != wire::Adoption::Adopted as u64 {
+                return Err(Error::Conflict);
+            }
             if super::super::target(row)? != target || number(row, "kind")? as i32 != write.kind {
                 return Err(Error::Conflict);
             }
@@ -910,7 +931,7 @@ pub(super) fn validate_predicate(
 ) -> Result<()> {
     validate_column(&predicate.field, definitions)?;
     if let Some(definition) = definitions.iter().find(|d| d.id == predicate.field) {
-        if predicate.definition_revision != Some(definition.revision) {
+        if predicate.definition_generation != Some(definition.generation) {
             return Err(Error::Incomplete);
         }
         super::definitions::validate_value(
@@ -918,7 +939,7 @@ pub(super) fn validate_predicate(
             predicate.value.as_ref().ok_or(Error::Invalid)?,
         )?;
     } else {
-        if predicate.definition_revision.is_some() {
+        if predicate.definition_generation.is_some() {
             return Err(Error::Invalid);
         }
         match predicate.value.as_ref().and_then(|v| v.value.as_ref()) {
@@ -927,7 +948,7 @@ pub(super) fn validate_predicate(
             Some(field::Value::Text(s))
                 if s.len() <= 2048 && predicate.field != "vrid" && predicate.field != "vlan_id" => {
             }
-            Some(field::Value::Clear(0)) if !network_column(&predicate.field) => {}
+            Some(field::Value::Clear(EXPLICIT_CLEAR)) if !network_column(&predicate.field) => {}
             _ => return Err(Error::Invalid),
         }
     }

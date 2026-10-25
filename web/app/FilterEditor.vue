@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import Dialog from './Dialog.vue';
-import { model, text, type Field } from './api';
+import { model, text, NullValue, type Field } from './api';
 const props = defineProps<{ definitions: model.Definition[]; predicates: model.Predicate[] }>();
 const emit = defineEmits<{ close: []; apply: [model.Predicate[]] }>();
 const selected = ref('name'); const value = ref(''); const cleared = ref(false); const error = ref('');
@@ -10,14 +10,14 @@ const definition = computed(() => fields.value.find(d => d.id === selected.value
 function apply() {
   try {
     let field: Field = text(selected.value, value.value);
-    if (cleared.value) field = { name: selected.value, value: { oneofKind: 'clear', clear: 0 } };
+    if (cleared.value) field = { name: selected.value, value: { oneofKind: 'clear', clear: NullValue.NULL_VALUE } };
     else if (definition.value?.type === model.FieldType.INTEGER) field = { name: selected.value, value: { oneofKind: 'integer', integer: BigInt(value.value) } };
     else if (definition.value?.type === model.FieldType.BOOLEAN) {
       if (!['true', 'false'].includes(value.value)) throw Error('Select true or false');
       field = { name: selected.value, value: { oneofKind: 'flag', flag: value.value === 'true' } };
     }
     const d = props.definitions.find(d => d.id === selected.value);
-    emit('apply', [...props.predicates, model.Predicate.create({ field: selected.value, value: field, definitionRevision: d?.revision })]);
+    emit('apply', [...props.predicates, model.Predicate.create({ field: selected.value, value: field, definitionGeneration: d?.generation })]);
   } catch (e) { error.value = String(e); }
 }
 </script>

@@ -25,11 +25,12 @@ export interface Predicate {
      */
     value?: Field;
     /**
-     * Definition revision reviewed with this predicate; absent for built-in fields.
+     * Reviewed interpretation generation, absent for built-ins. Label/help edits
+     * preserve it; type, choice or applicability migration invalidates it.
      *
-     * @generated from protobuf field: optional uint64 definition_revision = 3
+     * @generated from protobuf field: optional uint64 definition_generation = 3
      */
-    definitionRevision?: bigint;
+    definitionGeneration?: bigint;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Query
@@ -362,6 +363,13 @@ export interface Definition {
      * @generated from protobuf field: bool retired = 9
      */
     retired: boolean;
+    /**
+     * Server-owned interpretation generation, starting at one. Responses supply
+     * it for predicates; inputs omit it because the server derives it under revision CAS.
+     *
+     * @generated from protobuf field: uint64 generation = 10
+     */
+    generation: bigint;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Conversion
@@ -828,90 +836,120 @@ export interface Request {
     command: {
         oneofKind: "identity";
         /**
+         * Read the host-selected synthetic actor and fixture capabilities.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Empty identity = 1
          */
         identity: Empty;
     } | {
         oneofKind: "query";
         /**
+         * Retrieve a bounded authorized current projection, never a result snapshot.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Query query = 2
          */
         query: Query;
     } | {
         oneofKind: "read";
         /**
+         * Read one exact incarnation and its authorized current evidence.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Read read = 3
          */
         read: Read;
     } | {
         oneofKind: "write";
         /**
+         * Create or conditionally edit accepted fields with explicit set/clear intent.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Write write = 4
          */
         write: Write;
     } | {
         oneofKind: "bulk";
         /**
+         * Apply a reviewed, revision-bound finite selection atomically.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Bulk bulk = 5
          */
         bulk: Bulk;
     } | {
         oneofKind: "relation";
         /**
+         * Create, conditionally replace or explicitly remove a typed relationship.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Relationship relation = 6
          */
         relation: Relationship;
     } | {
         oneofKind: "definition";
         /**
+         * Administer local definition metadata without changing value interpretation.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Definition definition = 7
          */
         definition: Definition;
     } | {
         oneofKind: "definitions";
         /**
+         * List only the definition metadata allowed by the host context.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Empty definitions = 8
          */
         definitions: Empty;
     } | {
         oneofKind: "migration";
         /**
+         * Validate or atomically apply a reviewed interpretation/value migration.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Migration migration = 9
          */
         migration: Migration;
     } | {
         oneofKind: "saveView";
         /**
+         * Save personal metadata or separately confirm its reviewed publication.
+         *
          * @generated from protobuf field: omloom.workspace.v1.SaveView save_view = 10
          */
         saveView: SaveView;
     } | {
         oneofKind: "views";
         /**
+         * List personally owned and explicitly published view definitions.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Empty views = 11
          */
         views: Empty;
     } | {
         oneofKind: "import";
         /**
+         * Prepare a bounded CSV preview or accept that exact current preview.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Import import = 12
          */
         import: Import;
     } | {
         oneofKind: "network";
         /**
+         * Allocate or review changes to an explicitly scoped IP, prefix or VLAN.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Network network = 13
          */
         network: Network;
     } | {
         oneofKind: "member";
         /**
+         * Change an intended interface participant without releasing the canonical IP.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Member member = 14
          */
         member: Member;
     } | {
         oneofKind: "export";
         /**
+         * Export the current authorized projection under one application revision.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Export export = 15
          */
         export: Export;
@@ -931,48 +969,64 @@ export interface Reply {
     result: {
         oneofKind: "identity";
         /**
+         * Host-selected synthetic identity; no authentication assertion is returned.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Identity identity = 1
          */
         identity: Identity;
     } | {
         oneofKind: "page";
         /**
+         * Current filtered data and authorized count at one revision.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Page page = 2
          */
         page: Page;
     } | {
         oneofKind: "detail";
         /**
+         * Exact resource incarnation with separately projected source evidence.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Detail detail = 3
          */
         detail: Detail;
     } | {
         oneofKind: "mutation";
         /**
+         * Committed mutation identities, or validated migration scope before commit.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Mutation mutation = 4
          */
         mutation: Mutation;
     } | {
         oneofKind: "definitions";
         /**
+         * Visible typed definition metadata, including current interpretation generation.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Definitions definitions = 5
          */
         definitions: Definitions;
     } | {
         oneofKind: "views";
         /**
+         * Visible saved definitions, including a reviewed unpublished draft where requested.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Views views = 6
          */
         views: Views;
     } | {
         oneofKind: "preview";
         /**
+         * Row validation results and an expiring acceptance identity only when valid.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Preview preview = 7
          */
         preview: Preview;
     } | {
         oneofKind: "download";
         /**
+         * Bounded authorized CSV, distinguished by the requested output contract.
+         *
          * @generated from protobuf field: omloom.workspace.v1.Download download = 8
          */
         download: Download;
@@ -1057,7 +1111,7 @@ class Predicate$Type extends MessageType<Predicate> {
         super("omloom.workspace.v1.Predicate", [
             { no: 1, name: "field", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 2, name: "value", kind: "message", T: () => Field },
-            { no: 3, name: "definition_revision", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
+            { no: 3, name: "definition_generation", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
         ]);
     }
 }
@@ -1214,7 +1268,8 @@ class Definition$Type extends MessageType<Definition> {
             { no: 6, name: "choices", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
             { no: 7, name: "searchable", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
             { no: 8, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
-            { no: 9, name: "retired", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+            { no: 9, name: "retired", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 10, name: "generation", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
         ]);
     }
 }

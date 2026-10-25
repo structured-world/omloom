@@ -34,8 +34,9 @@ message Predicate {
   string field = 1;
   // User-selected typed equality operand; an explicit clear tests a cleared value.
   omloom.v1.Field value = 2;
-  // Definition revision reviewed with this predicate; absent for built-in fields.
-  optional uint64 definition_revision = 3;
+  // Reviewed interpretation generation, absent for built-ins. Label/help edits
+  // preserve it; type, choice or applicability migration invalidates it.
+  optional uint64 definition_generation = 3;
 }
 message Query {
   // User-selected presentation; it never grants access or changes adoption.
@@ -150,6 +151,9 @@ message Definition {
   uint64 revision = 8;
   // Explicit retirement request; current values keep their original interpretation.
   bool retired = 9;
+  // Server-owned interpretation generation, starting at one. Responses supply
+  // it for predicates; inputs omit it because the server derives it under revision CAS.
+  uint64 generation = 10;
 }
 message Conversion {
   // Current typed value selected in the migration preview.
@@ -311,33 +315,56 @@ message Empty {}
 message Request {
   // Exactly one user intention; no derived authorization, counts or status inputs.
   oneof command {
+    // Read the host-selected synthetic actor and fixture capabilities.
     Empty identity = 1;
+    // Retrieve a bounded authorized current projection, never a result snapshot.
     Query query = 2;
+    // Read one exact incarnation and its authorized current evidence.
     Read read = 3;
+    // Create or conditionally edit accepted fields with explicit set/clear intent.
     Write write = 4;
+    // Apply a reviewed, revision-bound finite selection atomically.
     Bulk bulk = 5;
+    // Create, conditionally replace or explicitly remove a typed relationship.
     Relationship relation = 6;
+    // Administer local definition metadata without changing value interpretation.
     Definition definition = 7;
+    // List only the definition metadata allowed by the host context.
     Empty definitions = 8;
+    // Validate or atomically apply a reviewed interpretation/value migration.
     Migration migration = 9;
+    // Save personal metadata or separately confirm its reviewed publication.
     SaveView save_view = 10;
+    // List personally owned and explicitly published view definitions.
     Empty views = 11;
+    // Prepare a bounded CSV preview or accept that exact current preview.
     Import import = 12;
+    // Allocate or review changes to an explicitly scoped IP, prefix or VLAN.
     Network network = 13;
+    // Change an intended interface participant without releasing the canonical IP.
     Member member = 14;
+    // Export the current authorized projection under one application revision.
     Export export = 15;
   }
 }
 message Reply {
   // Typed successful result. Failures use canonical gRPC Status with ErrorInfo.
   oneof result {
+    // Host-selected synthetic identity; no authentication assertion is returned.
     Identity identity = 1;
+    // Current filtered data and authorized count at one revision.
     Page page = 2;
+    // Exact resource incarnation with separately projected source evidence.
     Detail detail = 3;
+    // Committed mutation identities, or validated migration scope before commit.
     Mutation mutation = 4;
+    // Visible typed definition metadata, including current interpretation generation.
     Definitions definitions = 5;
+    // Visible saved definitions, including a reviewed unpublished draft where requested.
     Views views = 6;
+    // Row validation results and an expiring acceptance identity only when valid.
     Preview preview = 7;
+    // Bounded authorized CSV, distinguished by the requested output contract.
     Download download = 8;
   }
 }

@@ -25,6 +25,7 @@ fn definition(p: &Properties) -> Result<api::Definition> {
         searchable: flag(p, "searchable")?,
         revision: number(p, "revision")?,
         retired: flag(p, "retired")?,
+        generation: number(p, "generation")?,
     })
 }
 fn properties(d: &api::Definition) -> Result<Properties> {
@@ -34,6 +35,7 @@ fn properties(d: &api::Definition) -> Result<Properties> {
         ("help", text(&d.description)),
         ("definition_type", Value::Int(d.r#type.into())),
         ("revision", int(d.revision)?),
+        ("generation", int(d.generation)?),
         (
             "kinds",
             Value::Array(d.kinds.iter().map(|n| Value::Int((*n).into())).collect()),
@@ -99,7 +101,7 @@ fn date(s: &str) -> bool {
 pub(super) fn validate_value(d: &api::Definition, value: &wire::Field) -> Result<()> {
     use api::FieldType as T;
     match value.value.as_ref().ok_or(Error::Invalid)? {
-        field::Value::Clear(0) => Ok(()),
+        field::Value::Clear(EXPLICIT_CLEAR) => Ok(()),
         field::Value::Text(s) if s.len() <= 2048 => {
             match T::try_from(d.r#type).map_err(|_| Error::Invalid)? {
                 T::Text => Ok(()),
@@ -199,6 +201,7 @@ impl Store {
         };
         if let Some(row) = &old {
             let previous = definition(row)?;
+            d.generation = previous.generation;
             if d.revision != previous.revision {
                 return Err(Error::Conflict);
             }
@@ -211,6 +214,8 @@ impl Store {
             if previous == d {
                 return Ok(mutation(tx.commit()?, Vec::new()));
             }
+        } else {
+            d.generation = 1;
         }
         d.revision = d.revision.checked_add(1).ok_or(Error::Limit)?;
         tx.put_against(
@@ -252,6 +257,10 @@ impl Store {
         }
         let old = tx.get(&key)?.ok_or(Error::Missing)?;
         let previous = definition(&old)?;
+        next.generation = previous.generation;
+        let meaning_changed = next.r#type != previous.r#type
+            || next.kinds != previous.kinds
+            || next.choices != previous.choices;
         if next.revision != previous.revision {
             return Err(Error::Conflict);
         }
@@ -279,12 +288,31 @@ impl Store {
             }
             let parent = string(row, "parent")?;
             let asset = tx.get(&parent)?.ok_or(Error::Corrupt)?;
+            let target = super::super::target(&asset)?;
+            let kind = number(&asset, "kind")? as i32;
+            if !context.field(target, kind, &next.id, false)
+                || !context.field(target, kind, &next.id, true)
+            {
+                return Err(Error::Denied);
+            }
             if !next.kinds.contains(&(number(&asset, "kind")? as i32)) {
                 return Err(Error::Invalid);
             }
             staged.push(replacement);
         }
         let affected = staged.len() as u64;
+        if next == previous
+            && values
+                .iter()
+                .zip(&staged)
+                .all(|(row, value)| super::super::inventory::field_matches(value, row))
+        {
+            return Ok(reply(api::reply::Result::Mutation(api::Mutation {
+                revision: tx.commit()?,
+                targets: Vec::new(),
+                affected,
+            })));
+        }
         if migration.apply {
             for (row, value) in values.iter().zip(&staged) {
                 let mut data = super::super::inventory::field_props(value)?;
@@ -292,7 +320,7 @@ impl Store {
                     ("layer", text("intent")),
                     ("authority", text(string(row, "authority")?)),
                 ]));
-                tx.put_against(
+                let changed = tx.put_against(
                     &string(row, "key")?,
                     &string(row, "parent")?,
                     Class::Inventory,
@@ -301,12 +329,17 @@ impl Store {
                 )?;
                 let parent = string(row, "parent")?;
                 let asset = tx.get(&parent)?.ok_or(Error::Corrupt)?;
-                tx.workspace_advance(
-                    super::super::target(&asset)?,
-                    &context.actor,
-                    "definition.value-migrated",
-                    now,
-                )?;
+                if changed || meaning_changed {
+                    tx.workspace_advance(
+                        super::super::target(&asset)?,
+                        &context.actor,
+                        "definition.value-migrated",
+                        now,
+                    )?;
+                }
+            }
+            if meaning_changed {
+                next.generation = previous.generation.checked_add(1).ok_or(Error::Limit)?;
             }
             next.revision = next.revision.checked_add(1).ok_or(Error::Limit)?;
             tx.put_against(
@@ -338,7 +371,7 @@ impl Store {
             return Err(Error::Invalid);
         }
         let mut tx = self.begin()?;
-        let rows = tx.query("MATCH (n:OmRow) WHERE n.parent='definitions' AND n.retired=true RETURN properties(n) AS p LIMIT $limit", params([("limit", int(u64::from(limit))?)]))?;
+        let rows = tx.query("MATCH (n:OmRow {parent:'definitions'}) WHERE n.retired=true RETURN properties(n) AS p LIMIT $limit", params([("limit", int(u64::from(limit))?)]))?;
         let mut removed = 0;
         for row in rows {
             let definition = definition(&row)?;
@@ -369,7 +402,7 @@ impl Tx<'_> {
                 {
                     Ok(())
                 }
-                Some(field::Value::Clear(0)) if value.name != "name" => Ok(()),
+                Some(field::Value::Clear(EXPLICIT_CLEAR)) if value.name != "name" => Ok(()),
                 _ => Err(Error::Invalid),
             },
             _ => {

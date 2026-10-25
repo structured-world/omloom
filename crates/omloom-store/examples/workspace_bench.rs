@@ -25,8 +25,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
         batch_rows: 128,
     };
-    let memory_mib: u64 = std::env::args().nth(2).ok_or("Supply statement memory in MiB")?.parse()?;
-    let store = Store::open_with_query_memory(directory.path(), policy, memory_mib.checked_mul(1_048_576).ok_or("Memory size overflow")?)?;
+    let memory_mib: u64 = std::env::args()
+        .nth(2)
+        .ok_or("Supply statement memory in MiB")?
+        .parse()?;
+    let store = Store::open_with_query_memory(
+        directory.path(),
+        policy,
+        memory_mib
+            .checked_mul(1_048_576)
+            .ok_or("Memory size overflow")?,
+    )?;
     println!("statement memory={memory_mib} MiB");
     let context = Context {
         actor: "benchmark".into(),
@@ -66,17 +75,30 @@ fn main() -> Result<(), Box<dyn Error>> {
                 field: "name".into(),
             }],
             ..Default::default()
-        })).map_err(|error| format!("Preview at row {base}: {error}"))?;
+        }))
+        .map_err(|error| format!("Preview at row {base}: {error}"))?;
         let Some(api::reply::Result::Preview(preview)) = response.result else {
             return Err("Expected preview".into());
         };
         execute(api::request::Command::Import(api::Import {
             preview: Some(preview.id.ok_or("Invalid fixture CSV")?),
             ..Default::default()
-        })).map_err(|error| format!("Accept at row {base}: {error}"))?;
-        if base % 1024 == 0 { println!("Accepted {} resources", (base + 128).min(count)); }
+        }))
+        .map_err(|error| format!("Accept at row {base}: {error}"))?;
+        if base % 1024 == 0 {
+            println!("Accepted {} resources", (base + 128).min(count));
+        }
     }
     println!("Seeded {count} resources in {:?}", start.elapsed());
+    store.diagnostic_database().persist()?;
+    let mut taps = Vec::new();
+    for partition in coordinode_storage::engine::partition::Partition::all() {
+        let (tap, _) = store
+            .diagnostic_database()
+            .engine()
+            .tap_writes(*partition)?;
+        taps.push(tap);
+    }
     let before = store.usage()?;
     let syncs = store.diagnostic_database().engine().journal_syncs();
     for search in ["", "edge-00042", "edge"] {
@@ -106,6 +128,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
     }
     assert_eq!(store.usage()?, before, "Retrieval must not write");
+    for tap in taps {
+        let writes = tap.take();
+        assert_eq!(
+            writes,
+            coordinode_storage::engine::tap::Tapped::Keys(Vec::new()),
+            "Unexpected {:?} write during retrieval: {writes:?}",
+            tap.partition()
+        );
+    }
     assert_eq!(
         store.diagnostic_database().engine().journal_syncs(),
         syncs,

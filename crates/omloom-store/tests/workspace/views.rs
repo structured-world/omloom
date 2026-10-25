@@ -5,7 +5,8 @@ use super::*;
 fn personal_publication_and_shared_edit_conflicts() -> TestResult {
     let dir = tempfile::tempdir()?;
     let store = Store::open(dir.path(), policy())?;
-    let owner = operator();
+    let mut owner = operator();
+    owner.teams.push("engineering".into());
     create(&store, &owner, K::Device, "private-host")?;
     let result = call(
         &store,
@@ -25,6 +26,7 @@ fn personal_publication_and_shared_edit_conflicts() -> TestResult {
     let mut view = saved.items[0].clone();
     let mut colleague = owner.clone();
     colleague.actor = "fixture-colleague".into();
+    colleague.teams = vec!["operations".into()];
     colleague.grants[0].scope = Scope::Kinds(vec![K::VirtualMachine]);
     let api::reply::Result::Views(hidden) = call(
         &store,
@@ -45,8 +47,8 @@ fn personal_publication_and_shared_edit_conflicts() -> TestResult {
         }),
     )?;
     assert_eq!(store.usage()?, before);
-    view.audiences = vec!["operations".into()];
-    view.editors = view.audiences.clone();
+    view.audiences = vec!["operations".into(), "engineering".into()];
+    view.editors = vec!["operations".into()];
     call(
         &store,
         &owner,
@@ -139,7 +141,7 @@ fn invalid_saved_predicate_is_not_silently_removed() -> TestResult {
     let mut q = query();
     q.predicates.push(api::Predicate {
         field: d.id.clone(),
-        definition_revision: Some(d.revision),
+        definition_generation: Some(d.generation),
         value: Some(text_field(&d.id, "backup")),
     });
     let api::reply::Result::Views(saved) = call(
@@ -179,6 +181,120 @@ fn invalid_saved_predicate_is_not_silently_removed() -> TestResult {
     assert!(matches!(
         call(&store, &context, api::request::Command::Query(q)),
         Err(Error::Incomplete)
+    ));
+    Ok(())
+}
+
+// A label-only rename must not break the meaning of an existing typed predicate.
+#[test]
+fn renamed_definition_keeps_filter_interpretation() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = Store::open(directory.path(), policy())?;
+    let context = operator();
+    let target = create(&store, &context, K::Device, "host")?;
+    let api::reply::Result::Definitions(created) = call(
+        &store,
+        &context,
+        api::request::Command::Definition(api::Definition {
+            name: "Owner label".into(),
+            kinds: vec![K::Device as i32],
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("definition")
+    };
+    let mut definition = created.items[0].clone();
+    call(
+        &store,
+        &context,
+        api::request::Command::Write(api::Write {
+            target: Some(target),
+            expected: Some(1),
+            kind: K::Device as i32,
+            changes: vec![text_field(&definition.id, "operations")],
+        }),
+    )?;
+    let mut q = query();
+    q.predicates.push(api::Predicate {
+        field: definition.id.clone(),
+        definition_generation: Some(definition.generation),
+        value: Some(text_field(&definition.id, "operations")),
+    });
+    definition.name = "Responsible team".into();
+    call(
+        &store,
+        &context,
+        api::request::Command::Definition(definition),
+    )?;
+    let api::reply::Result::Page(page) = call(&store, &context, api::request::Command::Query(q))?
+    else {
+        panic!("page")
+    };
+    assert_eq!(page.total, 1);
+    Ok(())
+}
+
+// Unchanged migrations need no new state or audit, and schema administration cannot grant data access.
+#[test]
+fn migration_requires_data_rights_and_does_not_write_noops() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let store = Store::open(directory.path(), policy())?;
+    let context = operator();
+    let target = create(&store, &context, K::Device, "host")?;
+    let api::reply::Result::Definitions(created) = call(
+        &store,
+        &context,
+        api::request::Command::Definition(api::Definition {
+            name: "Purpose".into(),
+            kinds: vec![K::Device as i32],
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("definition")
+    };
+    let definition = created.items[0].clone();
+    call(
+        &store,
+        &context,
+        api::request::Command::Write(api::Write {
+            target: Some(target),
+            expected: Some(1),
+            kind: K::Device as i32,
+            changes: vec![text_field(&definition.id, "backup")],
+        }),
+    )?;
+    let before = store.usage()?;
+    call(
+        &store,
+        &context,
+        api::request::Command::Migration(api::Migration {
+            definition: Some(definition.clone()),
+            expected: before.revision,
+            apply: true,
+            ..Default::default()
+        }),
+    )?;
+    assert_eq!(store.usage()?, before);
+    let mut restricted = context.clone();
+    restricted.grants[0].read = Fields::Selected(vec!["name".into()]);
+    restricted.grants[0].write = Fields::Selected(vec!["name".into()]);
+    let mut next = definition;
+    next.r#type = api::FieldType::Choice as i32;
+    next.choices = vec!["backup".into()];
+    assert!(matches!(
+        call(
+            &store,
+            &restricted,
+            api::request::Command::Migration(api::Migration {
+                definition: Some(next),
+                expected: store.usage()?.revision,
+                apply: true,
+                ..Default::default()
+            })
+        ),
+        Err(Error::Denied)
     ));
     Ok(())
 }

@@ -72,7 +72,7 @@ pub fn fixture(name: &str) -> Result<Context, &'static str> {
             writable,
         }],
         teams: teams.into_iter().map(str::to_owned).collect(),
-        recipients: ["operator", "developer", "engineer", "viewer"]
+        recipients: ["operator", "developer", "devops", "engineer", "viewer"]
             .map(|n| format!("fixture-{n}"))
             .into(),
         schema_admin,

@@ -23,7 +23,14 @@ free port and prints its URL. `--data`, `--ui` and `--fixture` are required.
 Closing and restarting the host with the same data path preserves inventory.
 Never open the same directory from two independent host processes.
 
-The available fixture profiles are `operator`, `developer`, `engineer` and
+The host allows 128 MiB of query execution memory per database statement.
+Use `--query-memory-mib MIB` to select another finite budget. This controls
+query working memory, not total process memory or database disk usage. The
+default supports the measured 10,000-resource fixture workload; it is not a
+production sizing recommendation. Concurrent requests, the embedded engine
+and the interface have additional memory costs.
+
+The available fixture profiles are `operator`, `developer`, `devops`, `engineer` and
 `viewer`. They select server-owned scopes. The browser cannot select an actor
 or assert grants. The fixture API qualifies application projection; it does not
 qualify authentication or deployment for other users.

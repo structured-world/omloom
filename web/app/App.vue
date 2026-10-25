@@ -4,14 +4,14 @@ import { useRoute, useRouter } from 'vue-router';
 import AssetEditor from './AssetEditor.vue'; import SchemaEditor from './SchemaEditor.vue'; import ImportEditor from './ImportEditor.vue'; import ViewEditor from './ViewEditor.vue'; import NetworkEditor from './NetworkEditor.vue'; import Dialog from './Dialog.vue';
 import MemberEditor from './MemberEditor.vue';
 import FilterEditor from './FilterEditor.vue';
-import { call, model, label, display, key, kinds, AssetKind as K, RelationKind, text, type AssetRef } from './api';
+import { call, model, label, display, key, kinds, AssetKind as K, RelationKind, NullValue, text, type AssetRef } from './api';
 const router = useRouter(); const route = useRoute();
 const identity = ref<model.Identity>(); const definitions = ref<model.Definition[]>([]); const views = ref<model.SavedView[]>([]);
 const page = ref(model.Page.create()); const detail = ref<model.Detail>(); const loading = ref(false); const error = ref(''); const notice = ref('');
 const editor = ref<'' | 'asset' | 'schema' | 'import' | 'view' | 'network' | 'bulk' | 'relation' | 'member' | 'filter'>(''); const editing = ref<model.Item>();
 const selected = ref<string[]>([]); const search = ref(''); const relationTo = ref(''); const relationKind = ref(RelationKind.INSTALLED_IN); const relationCandidates = ref<model.Item[]>([]);
 const bulkName = ref('description'); const bulkValue = ref(''); const bulkMode = ref('set');
-const presentations = [{ id: 0, name: 'Overview', symbol: '▦' }, { id: 1, name: 'Network', symbol: '⇄' }, { id: 2, name: 'Hardware', symbol: '▤' }, { id: 3, name: 'Virtualization', symbol: '◫' }, { id: 4, name: 'Services', symbol: '◇' }];
+const presentations = [{ id: model.View.OVERVIEW, name: 'Overview', symbol: '▦' }, { id: model.View.NETWORK, name: 'Network', symbol: '⇄' }, { id: model.View.HARDWARE, name: 'Hardware', symbol: '▤' }, { id: model.View.VIRTUALIZATION, name: 'Virtualization', symbol: '◫' }, { id: model.View.SERVICES, name: 'Services', symbol: '◇' }];
 const query = computed(() => model.Query.create({
   view: Number(route.query.view ?? 0), search: String(route.query.search ?? ''),
   kinds: route.query.kind ? [Number(route.query.kind)] : [], columns: String(route.query.columns ?? 'name,description').split(','),
@@ -76,7 +76,7 @@ async function exportCsv() {
 async function bulk(remove = false) {
   try {
     await call({ oneofKind: 'bulk', bulk: { targets: selectedItems.value.flatMap(i => i.target ? [i.target] : []), expected: page.value.revision, remove,
-      changes: remove ? [] : [{ name: bulkName.value, value: bulkMode.value === 'clear' ? { oneofKind: 'clear', clear: 0 } : { oneofKind: 'text', text: bulkValue.value } }] } }); await saved();
+      changes: remove ? [] : [{ name: bulkName.value, value: bulkMode.value === 'clear' ? { oneofKind: 'clear', clear: NullValue.NULL_VALUE } : { oneofKind: 'text', text: bulkValue.value } }] } }); await saved();
   } catch (e) { error.value = String(e); }
 }
 async function relations() {

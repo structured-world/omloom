@@ -14,8 +14,9 @@ async function save(apply = false) {
     draft.choices = draft.type === model.FieldType.CHOICE ? choices.value.split('\n').filter(Boolean) : [];
     const old = props.definitions.find(d => d.id === draft.id);
     const migration = old && (old.type !== draft.type || JSON.stringify(old.kinds) !== JSON.stringify(draft.kinds) || JSON.stringify(old.choices) !== JSON.stringify(draft.choices));
-    const result = migration ? await call({ oneofKind: 'migration', migration: model.Migration.create({ definition: draft, expected: props.revision, apply, convertTypes: convert.value }) })
-      : await call({ oneofKind: 'definition', definition: draft });
+    const input = model.Definition.create({ ...draft, generation: 0n });
+    const result = migration ? await call({ oneofKind: 'migration', migration: model.Migration.create({ definition: input, expected: props.revision, apply, convertTypes: convert.value }) })
+      : await call({ oneofKind: 'definition', definition: input });
     if (migration && !apply && result.oneofKind === 'mutation') { preview.value = result.mutation.affected; return; }
     emit('saved');
   } catch (e) { error.value = String(e); }

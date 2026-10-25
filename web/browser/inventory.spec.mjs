@@ -85,6 +85,16 @@ test('departments share one backup host while namespace and host projections rem
     const support = await create(page, 'Service VM', 'VIRTUAL_MACHINE');
     const devopsStorage = await create(page, 'Operations backup namespace', 'STORAGE');
     const serviceStorage = await create(page, 'Engineering backup namespace', 'STORAGE');
+    for (const storage of [devopsStorage, serviceStorage]) {
+      await page.goto(`${server.url}/#/?asset=${storage.asset_id}&incarnation=${storage.incarnation}`);
+      await page.getByRole('button', { name: 'Add relationship', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByRole('combobox', { name: 'Relationship', exact: true }).selectOption({ label: 'on' }, { timeout: 5000 });
+      await dialog.getByRole('combobox', { name: 'Destination', exact: true }).selectOption(`${backup.asset_id}/${backup.incarnation}`);
+      await dialog.getByRole('button', { name: 'Add relationship', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByRole('region', { name: 'Resource details' })).toContainText(backup.asset_id.slice(-8));
+    }
     const grant = targets => ({ selection: { scope: 'targets', targets }, read: { mode: 'all' }, write: { mode: 'all' }, writable: true });
     const operationsFile = join(dir, 'operations.json');
     const engineeringFile = join(dir, 'engineering.json');

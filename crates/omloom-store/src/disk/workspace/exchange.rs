@@ -17,7 +17,7 @@ impl std::io::Write for CsvOutput {
 fn csv_value(name: &str, value: &str, definitions: &[api::Definition]) -> Result<wire::Field> {
     let kind = definitions.iter().find(|d| d.id == name).map(|d| d.r#type);
     let value = if value == "<clear>" {
-        field::Value::Clear(0)
+        field::Value::Clear(EXPLICIT_CLEAR)
     } else if kind == Some(api::FieldType::Integer as i32) {
         field::Value::Integer(value.parse().map_err(|_| Error::Invalid)?)
     } else if kind == Some(api::FieldType::Boolean as i32) {
@@ -187,7 +187,7 @@ impl Store {
             revision: base,
         };
         if valid {
-            let pending = tx.query("MATCH (n:OmRow) WHERE n.parent='workspace-previews' AND n.owner=$owner RETURN properties(n) AS p LIMIT 5", params([("owner", text(&context.actor))]))?;
+            let pending = tx.query("MATCH (n:OmRow {parent:'workspace-previews'}) WHERE n.owner=$owner RETURN properties(n) AS p LIMIT 5", params([("owner", text(&context.actor))]))?;
             if pending.len() >= 4 {
                 return Err(Error::Limit);
             }
@@ -272,7 +272,7 @@ impl Store {
                 for name in &columns {
                     let mut cell = match field_value(&item.fields, name) {
                         None => String::new(),
-                        Some(field::Value::Clear(0)) => "<clear>".into(),
+                        Some(field::Value::Clear(EXPLICIT_CLEAR)) => "<clear>".into(),
                         Some(field::Value::Text(s)) => s.clone(),
                         Some(field::Value::Integer(n)) => n.to_string(),
                         Some(field::Value::Flag(b)) => b.to_string(),

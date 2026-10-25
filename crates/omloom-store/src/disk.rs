@@ -455,7 +455,11 @@ impl Store {
         {
             return Err(Error::SchemaVersion);
         }
-        for (name, property) in [("omloom_parent", "parent"), ("omloom_class", "class")] {
+        for (name, property) in [
+            ("omloom_parent", "parent"),
+            ("omloom_class", "class"),
+            ("omloom_layer", "layer"),
+        ] {
             match db.execute_cypher(&format!("CREATE INDEX {name} ON :OmRow({property})")) {
                 Ok(_) => {}
                 Err(DatabaseError::CatalogObjectExists {
@@ -482,6 +486,21 @@ impl Store {
         }
         if string(&root, "policy")? != store.policy_identity() {
             return Err(Error::PolicyChanged);
+        }
+        // CoordiNode stores a member-local recovery guard before an index's
+        // first use. Prepare our fixed indexes before exposing a ready store.
+        let class_probe = format!(
+            "MATCH (n:OmRow {{class:{}}}) RETURN n.key AS key LIMIT 1",
+            Class::Inventory as usize
+        );
+        for query in [
+            "MATCH (n:OmRow {parent:'assets'}) RETURN n.key AS key LIMIT 1",
+            &class_probe,
+            "MATCH (n:OmRow {layer:'intent'}) RETURN n.key AS key LIMIT 1",
+        ] {
+            store
+                .db
+                .execute_cypher_shared(query, None, None, None, None)?;
         }
         Ok(store)
     }

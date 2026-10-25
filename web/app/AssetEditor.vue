@@ -1,20 +1,26 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue';
 import Dialog from './Dialog.vue';
-import { call, text, display, label, kinds, model, AssetKind, type Field } from './api';
+import { call, text, input, label, kinds, model, AssetKind, NullValue, type Field } from './api';
 const props = defineProps<{ item?: model.Item; definitions: model.Definition[] }>();
 const emit = defineEmits<{ close: []; saved: [] }>();
 const kind = ref(props.item?.kind ?? AssetKind.DEVICE);
 const values = reactive<Record<string, string>>({});
 const modes = reactive<Record<string, string>>({});
 const fields = [{ id: 'name', name: 'Name', type: model.FieldType.TEXT }, { id: 'description', name: 'Description', type: model.FieldType.TEXT }, { id: 'serial', name: 'Serial number', type: model.FieldType.TEXT }, ...props.definitions.filter(d => !d.retired)];
-for (const f of fields) { values[f.id] = display(props.item?.fields.find(v => v.name === f.id)); modes[f.id] = props.item ? 'preserve' : f.id === 'name' ? 'set' : 'preserve'; }
+for (const f of fields) { values[f.id] = input(props.item?.fields.find(v => v.name === f.id)); modes[f.id] = props.item ? 'preserve' : f.id === 'name' ? 'set' : 'preserve'; }
 const error = ref(''); const busy = ref(false);
 function field(id: string, type: model.FieldType): Field {
   const v = values[id] ?? '';
-  if (modes[id] === 'clear') return { name: id, value: { oneofKind: 'clear', clear: 0 } };
-  if (type === model.FieldType.INTEGER) return { name: id, value: { oneofKind: 'integer', integer: BigInt(v) } };
-  if (type === model.FieldType.BOOLEAN) return { name: id, value: { oneofKind: 'flag', flag: v === 'true' } };
+  if (modes[id] === 'clear') return { name: id, value: { oneofKind: 'clear', clear: NullValue.NULL_VALUE } };
+  if (type === model.FieldType.INTEGER) {
+    if (!/^-?(0|[1-9][0-9]*)$/.test(v)) throw Error('Enter an integer explicitly. Empty input is not zero.');
+    return { name: id, value: { oneofKind: 'integer', integer: BigInt(v) } };
+  }
+  if (type === model.FieldType.BOOLEAN) {
+    if (v !== 'true' && v !== 'false') throw Error('Select true or false explicitly.');
+    return { name: id, value: { oneofKind: 'flag', flag: v === 'true' } };
+  }
   return text(id, v);
 }
 async function save() {
@@ -30,8 +36,8 @@ async function save() {
 <label for="resource-kind">Resource kind</label><select id="resource-kind" v-model="kind" :disabled="!!item"><option v-for="k in kinds" :key="k" :value="k" :disabled="!item && [AssetKind.IP_ADDRESS, AssetKind.PREFIX, AssetKind.VLAN].includes(k)">{{ label(k) }}{{ !item && [AssetKind.IP_ADDRESS, AssetKind.PREFIX, AssetKind.VLAN].includes(k) ? ' (use Network allocation)' : '' }}</option></select>
 <template v-for="f in fields" :key="f.id"><div v-if="!('kinds' in f) || f.kinds.includes(kind)" class="field-edit">
 <label :for="`value-${f.id}`">{{ f.name }}</label><select v-model="modes[f.id]" :aria-label="`${f.name} change`"><option value="preserve">Preserve</option><option value="set">Set</option><option v-if="f.id !== 'name'" value="clear">Clear explicitly</option></select>
-<select v-if="f.type === model.FieldType.BOOLEAN" :id="`value-${f.id}`" v-model="values[f.id]" :disabled="modes[f.id] !== 'set'"><option value="true">True</option><option value="false">False</option></select>
-<select v-else-if="'choices' in f && f.choices.length" :id="`value-${f.id}`" v-model="values[f.id]" :disabled="modes[f.id] !== 'set'"><option v-for="choice in f.choices" :key="choice">{{ choice }}</option></select>
+<select v-if="f.type === model.FieldType.BOOLEAN" :id="`value-${f.id}`" v-model="values[f.id]" :disabled="modes[f.id] !== 'set'" :required="modes[f.id] === 'set'"><option disabled value="">Choose true or false</option><option value="true">True</option><option value="false">False</option></select>
+<select v-else-if="'choices' in f && f.choices.length" :id="`value-${f.id}`" v-model="values[f.id]" :disabled="modes[f.id] !== 'set'" :required="modes[f.id] === 'set'"><option disabled value="">Choose a value</option><option v-for="choice in f.choices" :key="choice">{{ choice }}</option></select>
 <input v-else :id="`value-${f.id}`" v-model="values[f.id]" :type="f.type === model.FieldType.DATE ? 'date' : f.type === model.FieldType.INTEGER ? 'number' : 'text'" :disabled="modes[f.id] !== 'set'" :maxlength="f.id === 'name' ? 160 : 2048" @input="modes[f.id] = 'set'">
 </div></template>
 <p v-if="error" role="alert">{{ error }}</p><footer><button type="button" @click="emit('close')">Cancel</button><button class="primary" :disabled="busy">{{ busy ? 'Saving…' : 'Save resource' }}</button></footer>
