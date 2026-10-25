@@ -7,9 +7,16 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+diagnostics = ["omloom-store/diagnostics"]
+
 [[bin]]
 name = "omloom-dev"
 path = "src/main.rs"
+
+[[example]]
+name = "search_probe"
+required-features = ["diagnostics"]
 
 [dependencies]
 omloom-contracts = { path = "../omloom-contracts" }
