@@ -5,6 +5,19 @@ use coordinode_embed::Database;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+// Prefix-scoped current reads must correlate a range predicate to each root.
+#[test]
+fn disk_queries_correlate_namespace_ranges() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let mut db = Database::open(dir.path())?;
+    db.execute_cypher("CREATE UNIQUE INDEX range_key ON :RangeRow(key)")?;
+    db.execute_cypher("CREATE (:RangeRow {key:'asset/one', parent:'assets', asset:'one', incarnation:'life'}), (:RangeRow {key:'network/one/life', parent:'networks', address_space:'space/life', ip_order:'4/c000020a'})")?;
+    let rows = db.execute_cypher("MATCH (a:RangeRow {parent:'assets'}) WITH a, 'network/'+a.asset+'/'+a.incarnation AS scope_key WHERE EXISTS { MATCH (ns:RangeRow) WHERE ns.key=scope_key AND ns.address_space='space/life' AND ns.ip_order>='4/c0000200' AND ns.ip_order<='4/c00002ff' } RETURN a.key AS key")?;
+    assert_eq!(rows.len(),1);
+    assert_eq!(rows[0].get("key"),Some(&Value::String("asset/one".into())));
+    Ok(())
+}
+
 // Nullable search branches must keep a match from another visible typed field.
 #[test]
 fn disk_queries_preserve_three_valued_boolean_results() -> TestResult {
