@@ -13,10 +13,24 @@ fn main() -> Result<(), Box<dyn Error>> {
     prost_build::Config::new()
         .file_descriptor_set_path(&descriptor)
         .compile_protos(&[proto], &["../../proto"])?;
+    let workspace = "../../proto/omloom/v1/workspace.proto";
+    println!("cargo:rerun-if-changed={workspace}");
+    prost_build::Config::new()
+        .extern_path(".omloom.v1", "crate::wire")
+        .file_descriptor_set_path(&descriptor)
+        .compile_protos(&[workspace], &["../../proto"])?;
     let set = FileDescriptorSet::decode(fs::read(descriptor)?.as_slice())?;
-    let messages = &set.file[0].message_type;
+    let messages: Vec<_> = set
+        .file
+        .iter()
+        .flat_map(|file| {
+            file.message_type
+                .iter()
+                .map(move |message| (file.package(), message))
+        })
+        .collect();
     let mut shapes = String::from("const SHAPES: &[&[Shape]] = &[\n");
-    for message in messages {
+    for (_, message) in &messages {
         shapes.push_str("&[\n");
         for field in &message.field {
             let kind = match field.r#type() {
@@ -24,7 +38,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let name = field.type_name.as_deref().ok_or("missing type")?;
                     let index = messages
                         .iter()
-                        .position(|m| name == format!(".omloom.v1.{}", m.name()))
+                        .position(|(package, m)| name == format!(".{package}.{}", m.name()))
                         .ok_or("unknown message")?;
                     format!("Kind::Message({index})")
                 }
@@ -48,13 +62,23 @@ fn main() -> Result<(), Box<dyn Error>> {
     shapes.push_str("];");
     let record = messages
         .iter()
-        .position(|m| m.name() == "Record")
+        .position(|(package, m)| *package == "omloom.v1" && m.name() == "Record")
         .ok_or("no Record")?;
     shapes.push_str(&format!("\nconst ROOT: usize = {record};\n"));
-    for message in messages {
+    let request = messages
+        .iter()
+        .position(|(package, m)| *package == "omloom.workspace.v1" && m.name() == "Request")
+        .ok_or("no Request")?;
+    shapes.push_str(&format!("\nconst WORKSPACE_ROOT: usize = {request};\n"));
+    for (package, message) in &messages {
         // Fails compilation if schema growth invalidates the preflight envelope.
+        let (module, size) = if *package == "omloom.v1" {
+            ("wire", 256)
+        } else {
+            ("workspace", 512)
+        };
         shapes.push_str(&format!(
-            "const _: () = assert!(std::mem::size_of::<crate::wire::{}>() <= 256);\n",
+            "const _: () = assert!(std::mem::size_of::<crate::{module}::{}>() <= {size});\n",
             message.name()
         ));
     }

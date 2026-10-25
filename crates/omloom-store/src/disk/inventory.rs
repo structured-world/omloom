@@ -163,6 +163,9 @@ impl Store {
         int(now)?;
         let key = asset_key(target);
         let mut tx = self.begin()?;
+        if tx.get(&format!("removed/{}", target.asset))?.is_some() {
+            return Err(Error::Conflict);
+        }
         if tx.root.get("restored") == Some(&Value::Bool(true)) {
             return Err(Error::RecoveryRequired);
         }
@@ -377,6 +380,7 @@ impl Store {
                 ("adoption", Value::Int(asset.adoption.into())),
                 ("revision", int(revision)?),
             ]));
+            workspace::hot_fields(asset, &mut data)?;
             tx.put_against(&key, "assets", Class::Inventory, data, old.as_ref())?;
             tx.audit(&key, actor, "inventory.accepted", revision, now)?;
         }
@@ -556,8 +560,14 @@ impl Store {
                 (A::VirtualMachine, A::Device) | (A::Service, A::Device | A::VirtualMachine)
             ),
             R::StoredOn => matches!((from_kind, to_kind), (A::VirtualMachine, A::Storage)),
-            R::On => matches!((from_kind, to_kind), (A::Storage, A::Device)),
-            R::Uses => matches!((from_kind, to_kind), (A::Device, A::Interface)),
+            R::On => matches!(
+                (from_kind, to_kind),
+                (A::Storage | A::Vrf, A::Device) | (A::Interface, A::Vlan | A::L2Domain | A::Vrf)
+            ),
+            R::Uses => matches!(
+                (from_kind, to_kind),
+                (A::Device, A::Interface) | (A::Vrf, A::AddressSpace)
+            ),
             R::PoweredBy => matches!(
                 (from_kind, to_kind),
                 (A::Device, A::Port) | (A::Port, A::PowerFeed)

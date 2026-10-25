@@ -3,20 +3,29 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "generate": "protoc --proto_path=proto --plugin=protoc-gen-ts=node_modules/.bin/protoc-gen-ts --ts_out=web/src/generated --ts_opt=long_type_bigint,force_optimize_code_size proto/omloom/v1/contracts.proto",
+    "generate": "protoc --proto_path=proto --plugin=protoc-gen-ts=node_modules/.bin/protoc-gen-ts --ts_out=web/src/generated --ts_opt=long_type_bigint,force_optimize_code_size,force_client_none proto/omloom/v1/contracts.proto proto/omloom/v1/workspace.proto",
     "typecheck": "tsc --noEmit",
     "build": "tsc && esbuild web/src/browser-corpus.ts --bundle --format=iife --outfile=dist/browser-corpus.js",
     "test:contracts": "node --test web/tests/contracts.test.mjs",
     "test:browser": "playwright test",
-    "clean": "node scripts/clean.mjs"
+    "clean": "node scripts/clean.mjs",
+    "build:app": "node scripts/check-vue.cjs --noEmit -p web/app/tsconfig.json && vite build --config web/app/vite.config.ts"
   },
   "dependencies": {
-    "@protobuf-ts/runtime": "2.11.1"
+    "@protobuf-ts/grpcweb-transport": "2.11.1",
+    "@protobuf-ts/runtime": "2.11.1",
+    "vue": "3.5.44",
+    "vue-router": "5.4.0"
   },
   "devDependencies": {
-    "@protobuf-ts/plugin": "2.11.1",
     "@playwright/test": "1.64.1",
+    "@protobuf-ts/plugin": "2.11.1",
+    "@types/node": "26.6.5",
+    "@vitejs/plugin-vue": "6.0.10",
+    "esbuild": "0.28.2",
     "typescript": "7.0.2",
-    "esbuild": "0.28.2"
+    "typescript-vue": "npm:typescript@6.0.3",
+    "vite": "8.3.5",
+    "vue-tsc": "3.3.13"
   }
 }

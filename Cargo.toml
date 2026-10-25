@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/omloom-contracts", "crates/omloom-store"]
+members = ["crates/omloom-contracts", "crates/omloom-store", "crates/omloom-app"]
 resolver = "3"
 
 [workspace.package]

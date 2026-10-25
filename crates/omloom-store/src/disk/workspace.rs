@@ -1,0 +1,263 @@
+//! Application projection and mutations on the existing transactional namespace.
+//! Context is supplied by a trusted host, never decoded from a caller's request.
+use super::*;
+use omloom_contracts::{ids::*, workspace as api};
+use prost::Message;
+use std::collections::BTreeSet;
+
+mod assets;
+mod definitions;
+mod exchange;
+mod network;
+mod views;
+
+pub const MAX_PAGE: usize = 100;
+pub const MAX_BULK: usize = 128;
+pub const MAX_QUERY: usize = 256;
+pub const MAX_IMPORT: usize = 128;
+pub const MAX_CSV: usize = 256 * 1024;
+pub const MAX_FIELDS: usize = 32;
+pub const MAX_DEFINITIONS: usize = 128;
+
+#[derive(Debug, Clone)]
+pub enum Scope {
+    All,
+    Kinds(Vec<wire::AssetKind>),
+    Targets(Vec<AssetRef>),
+}
+#[derive(Debug, Clone)]
+pub enum Fields {
+    All,
+    Selected(Vec<String>),
+}
+impl Fields {
+    fn contains(&self, field: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Selected(fields) => fields.iter().any(|f| f == field),
+        }
+    }
+}
+#[derive(Debug, Clone)]
+pub struct Grant {
+    pub scope: Scope,
+    pub read: Fields,
+    pub write: Fields,
+    pub writable: bool,
+}
+#[derive(Debug, Clone)]
+pub struct Context {
+    pub actor: String,
+    pub fixture: String,
+    pub grants: Vec<Grant>,
+    pub teams: Vec<String>,
+    pub recipients: Vec<String>,
+    pub schema_admin: bool,
+    pub authority_revision: u64,
+}
+impl Context {
+    fn matches(grant: &Grant, target: AssetRef, kind: i32) -> bool {
+        match &grant.scope {
+            Scope::All => true,
+            Scope::Kinds(kinds) => kinds.iter().any(|k| *k as i32 == kind),
+            Scope::Targets(targets) => targets.contains(&target),
+        }
+    }
+    fn readable(&self, target: AssetRef, kind: i32) -> bool {
+        self.grants.iter().any(|g| Self::matches(g, target, kind))
+    }
+    fn field(&self, target: AssetRef, kind: i32, field: &str, write: bool) -> bool {
+        self.grants.iter().any(|g| {
+            Self::matches(g, target, kind)
+                && if write {
+                    g.writable && g.write.contains(field)
+                } else {
+                    g.read.contains(field)
+                }
+        })
+    }
+    fn admin(&self) -> Result<()> {
+        if self.schema_admin {
+            Ok(())
+        } else {
+            Err(Error::Denied)
+        }
+    }
+}
+
+fn target_wire(target: AssetRef) -> wire::AssetRef {
+    wire::AssetRef {
+        asset_id: target.asset.to_string(),
+        incarnation: target.incarnation.to_string(),
+    }
+}
+fn parse_target(value: Option<&wire::AssetRef>) -> Result<AssetRef> {
+    AssetRef::try_from(value.ok_or(Error::Invalid)?).map_err(|_| Error::Invalid)
+}
+fn new_target() -> AssetRef {
+    AssetRef {
+        asset: AssetId::generate(),
+        incarnation: IncarnationId::generate(),
+    }
+}
+fn reply(result: api::reply::Result) -> api::Reply {
+    api::Reply {
+        result: Some(result),
+    }
+}
+fn mutation(revision: u64, targets: Vec<wire::AssetRef>) -> api::Reply {
+    reply(api::reply::Result::Mutation(api::Mutation {
+        revision,
+        targets,
+        affected: 0,
+    }))
+}
+fn strings(values: &[String]) -> Value {
+    Value::Array(values.iter().map(text).collect())
+}
+fn read_strings(p: &Properties, key: &str) -> Result<Vec<String>> {
+    match p.get(key) {
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(|v| v.as_str().map(str::to_owned).ok_or(Error::Corrupt))
+            .collect(),
+        _ => Err(Error::Corrupt),
+    }
+}
+fn flag(p: &Properties, key: &str) -> Result<bool> {
+    p.get(key).and_then(Value::as_bool).ok_or(Error::Corrupt)
+}
+fn field_value<'a>(fields: &'a [wire::Field], name: &str) -> Option<&'a field::Value> {
+    fields
+        .iter()
+        .find(|f| f.name == name)
+        .and_then(|f| f.value.as_ref())
+}
+pub(super) fn hot_fields(asset: &wire::Asset, data: &mut Properties) -> Result<()> {
+    let name = asset.intended.iter().find_map(|f| {
+        f.field
+            .as_ref()
+            .filter(|f| f.name == "name")
+            .and_then(|f| match f.value.as_ref() {
+                Some(field::Value::Text(s)) => Some(s.as_str()),
+                _ => None,
+            })
+    });
+    if let Some(name) = name {
+        if name.len() > 160 {
+            return Err(Error::Invalid);
+        }
+        data.insert("name".into(), text(name));
+        data.insert("name_sort".into(), text(name.to_lowercase()));
+    }
+    Ok(())
+}
+fn binary<'a>(p: &'a Properties, key: &str) -> Result<&'a [u8]> {
+    match p.get(key) {
+        Some(Value::Binary(bytes)) => Ok(bytes),
+        _ => Err(Error::Corrupt),
+    }
+}
+
+impl Store {
+    /// Executes an application request against real disk state. The host has
+    /// already bounded the frame, acquired work capacity and selected context.
+    pub fn workspace(
+        &self,
+        context: &Context,
+        request: api::Request,
+        now: u64,
+    ) -> Result<api::Reply> {
+        bounded(&context.actor)?;
+        if context.grants.len() > 32 || context.teams.len() > 32 {
+            return Err(Error::Invalid);
+        }
+        use api::request::Command as C;
+        match request.command.ok_or(Error::Invalid)? {
+            C::Identity(_) => Ok(reply(api::reply::Result::Identity(api::Identity {
+                name: context.actor.clone(),
+                fixture: context.fixture.clone(),
+                teams: context.teams.clone(),
+                writable: context.grants.iter().any(|g| g.writable),
+                schema_admin: context.schema_admin,
+            }))),
+            C::Query(query) => self
+                .workspace_query(context, query)
+                .map(|p| reply(api::reply::Result::Page(p))),
+            C::Read(read) => self
+                .workspace_read(context, read)
+                .map(|d| reply(api::reply::Result::Detail(d))),
+            C::Write(write) => self.workspace_write(context, write, now),
+            C::Bulk(bulk) => self.workspace_bulk(context, bulk, now),
+            C::Relation(relation) => self.workspace_relation(context, relation, now),
+            C::Definitions(_) => self
+                .workspace_definitions(context)
+                .map(|items| reply(api::reply::Result::Definitions(api::Definitions { items }))),
+            C::Definition(definition) => self.workspace_definition(context, definition, now),
+            C::Migration(migration) => self.workspace_migration(context, migration, now),
+            C::Views(_) => self
+                .workspace_views(context)
+                .map(|items| reply(api::reply::Result::Views(api::Views { items }))),
+            C::SaveView(view) => self.workspace_save_view(context, view, now),
+            C::Import(import) => self.workspace_import(context, import, now),
+            C::Export(export) => self.workspace_export(context, export),
+            C::Network(network) => self.workspace_network(context, network, now),
+            C::Member(member) => self.workspace_member(context, member, now),
+        }
+    }
+
+    fn workspace_rows(&self, parent: &str, limit: usize) -> Result<Vec<Properties>> {
+        let tx = self.begin()?;
+        let rows = tx.query(
+            "MATCH (n:OmRow) WHERE n.parent=$parent RETURN properties(n) AS p LIMIT $limit",
+            params([
+                ("parent", text(parent)),
+                ("limit", int((limit + 1) as u64)?),
+            ]),
+        )?;
+        if rows.len() > limit {
+            return Err(Error::Limit);
+        }
+        tx.commit()?;
+        Ok(rows)
+    }
+}
+
+impl Tx<'_> {
+    fn raw(
+        &self,
+        query: &str,
+        values: HashMap<String, Value>,
+    ) -> Result<Vec<BTreeMap<String, Value>>> {
+        self.store
+            .db
+            .execute_in_transaction(self.id.ok_or(Error::Corrupt)?, query, Some(values))
+            .map_err(Into::into)
+    }
+    fn visible_asset(&self, context: &Context, target: AssetRef) -> Result<Properties> {
+        let row = self.asset(target)?;
+        if !context.readable(target, number(&row, "kind")? as i32) {
+            return Err(Error::Denied);
+        }
+        Ok(row)
+    }
+    fn require_changes(
+        &self,
+        context: &Context,
+        target: AssetRef,
+        kind: i32,
+        fields: &[wire::Field],
+    ) -> Result<()> {
+        if fields.is_empty() || fields.len() > MAX_FIELDS {
+            return Err(Error::Invalid);
+        }
+        let mut seen = BTreeSet::new();
+        for field in fields {
+            if !seen.insert(&field.name) || !context.field(target, kind, &field.name, true) {
+                return Err(Error::Denied);
+            }
+            self.validate_field(kind, field)?;
+        }
+        Ok(())
+    }
+}

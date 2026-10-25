@@ -28,6 +28,7 @@ mod inventory;
 mod lifecycle;
 mod operations;
 mod scans;
+pub mod workspace;
 pub use lifecycle::{ActivityEntry, Cleanup};
 pub use scans::ScanState;
 
@@ -47,6 +48,8 @@ pub enum Error {
     Expired,
     RecoveryRequired,
     UnsafeTransition,
+    Denied,
+    Incomplete,
 }
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -337,6 +340,22 @@ impl Store {
             "to_asset",
             "to_incarnation",
             "vtext",
+            "name",
+            "name_sort",
+            "description",
+            "search_term",
+            "asset_key",
+            "workspace_kind",
+            "label",
+            "help",
+            "owner",
+            "namespace",
+            "cidr",
+            "address_space",
+            "link_scope",
+            "routing_context",
+            "sharing",
+            "group",
         ] {
             schema.add_property(PropertyDef::new(name, PropertyType::String));
         }
@@ -360,10 +379,24 @@ impl Store {
             "vint",
             "settlement_rows",
             "settlement_bytes",
+            "definition_type",
+            "generation",
+            "vrid",
+            "priority",
+            "prefix_len",
+            "family",
+            "vlan_id",
         ] {
             schema.add_property(PropertyDef::new(name, PropertyType::Int));
         }
-        for name in ["restored", "pinned", "vflag", "settled"] {
+        for name in [
+            "restored",
+            "pinned",
+            "vflag",
+            "settled",
+            "searchable",
+            "retired",
+        ] {
             schema.add_property(PropertyDef::new(name, PropertyType::Bool));
         }
         for name in ["counts", "sizes"] {
@@ -373,6 +406,19 @@ impl Store {
             ));
         }
         schema.add_property(PropertyDef::new("digest", PropertyType::Binary));
+        schema.add_property(PropertyDef::new("query", PropertyType::Binary));
+        for name in ["choices", "audiences", "editors", "columns"] {
+            schema.add_property(PropertyDef::new(
+                name,
+                PropertyType::Array(Box::new(PropertyType::String)),
+            ));
+        }
+        for name in ["kinds"] {
+            schema.add_property(PropertyDef::new(
+                name,
+                PropertyType::Array(Box::new(PropertyType::Int)),
+            ));
+        }
         let publication = db.publish_schema(SchemaPackage {
             labels: vec![LabelDeclaration {
                 schema,

@@ -186,6 +186,12 @@ impl Work {
 }
 
 pub(crate) fn check(bytes: &[u8], limits: Limits) -> Result<usize, Error> {
+    check_root(bytes, limits, ROOT)
+}
+pub(crate) fn check_workspace(bytes: &[u8], limits: Limits) -> Result<usize, Error> {
+    check_root(bytes, limits, WORKSPACE_ROOT)
+}
+fn check_root(bytes: &[u8], limits: Limits, root: usize) -> Result<usize, Error> {
     let limits = Limits {
         bytes: limits.bytes.min(MAX_BYTES),
         fields: limits.fields.min(MAX_FIELDS),
@@ -200,7 +206,7 @@ pub(crate) fn check(bytes: &[u8], limits: Limits) -> Result<usize, Error> {
         charge: bytes.len() * 2 + 4096,
         limits,
     };
-    work.message(bytes, ROOT, 1)?;
+    work.message(bytes, root, 1)?;
     if work.charge > MAX_MEMORY {
         return Err(Error::Limit);
     }
