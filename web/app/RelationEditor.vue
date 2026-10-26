@@ -12,6 +12,7 @@ const destination = ref(''); const chosen = ref<model.Item>();
 const kinds = ref<RelationKind[]>([]); const kind = ref<RelationKind>();
 const anchorFrom = ref(true); const editing = ref<Relation>(); const removing = ref(false);
 const revision = ref<bigint>(); const error = ref(''); const busy = ref(false); const existing = ref<model.Detail>();
+const connectionPage = ref<string>();
 const name = (item: model.Item | undefined) => display(item?.fields.find(f => f.name === 'name')) || item?.target?.assetId.slice(-8);
 const scope = computed(() => {
   const targets = [props.target, chosen.value?.target, editing.value?.from, editing.value?.to].filter((t): t is AssetRef => !!t);
@@ -34,11 +35,12 @@ async function load(cursor?: string) {
   } catch (e) { error.value = String(e); } finally { busy.value = false; }
 }
 function select() { chosen.value = items.value.find(i => key(i.target) === destination.value); }
-async function connections() {
+async function connections(cursor?: string) {
   busy.value = true; error.value = '';
   try {
-    const reply = await call({ oneofKind: 'read', read: { target: props.target } }, model.WorkingContext.create({ roots: bounds.value }));
+    const reply = await call({ oneofKind: 'read', read: { target: props.target, relationsCursor: cursor } }, model.WorkingContext.create({ roots: bounds.value }));
     if (reply.oneofKind !== 'detail') throw Error('Connections are unavailable'); existing.value = reply.detail; step.value = 'connections';
+    connectionPage.value = cursor;
   } catch (e) { error.value = String(e); } finally { busy.value = false; }
 }
 async function prepare() {
@@ -78,12 +80,12 @@ function start() { editing.value = undefined; removing.value = false; chosen.val
 <p class="hint">Linking peers uses a context containing both resources. Each endpoint keeps its own permissions.</p>
 <template v-if="step === 'scope'">
 <p>{{ bounds.length ? 'Search within the enclosing selection.' : 'Choose from permitted inventory, then review only the selected endpoints.' }}</p>
-<footer><button type="button" @click="connections">Review existing connections</button><button class="primary" type="button" @click="start">Choose connection endpoints</button></footer>
+<footer><button type="button" @click="connections()">Review existing connections</button><button class="primary" type="button" @click="start">Choose connection endpoints</button></footer>
 </template>
 <template v-else-if="step === 'connections'">
 <p v-if="!existing?.relations.length">No connections are visible in this enclosing context.</p>
 <ul class="connection-list"><li v-for="r in existing?.relations" :key="r.relationId"><strong>{{ otherName(r) }}</strong><span>{{ relationLabel(r.kind) }}</span><button type="button" @click="review(r,false)">Change connection</button><button type="button" @click="review(r,true)">Review removal</button></li></ul>
-<footer><button type="button" @click="step = 'scope'">Back</button><button type="button" @click="start">Add connection</button></footer>
+<footer><button type="button" @click="step = 'scope'">Back</button><button v-if="connectionPage" type="button" :disabled="busy" @click="connections()">First connections</button><button v-if="existing?.relationsNext" type="button" :disabled="busy" @click="connections(existing.relationsNext)">Next connections</button><button type="button" @click="start">Add connection</button></footer>
 </template>
 <template v-else-if="step === 'choose'">
 <p class="context-chip">{{ bounds.length ? 'Enclosing selection: '+bounds.length+' roots' : 'All permitted inventory' }}</p>

@@ -300,6 +300,53 @@ test('inventory choices apply together, cancel cleanly and keep the list compact
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
 
+test('broader connections page beyond 25 peers and remove a later relationship', async ({ page }) => {
+  // A focused inspector hides peer links; the broader dialog must expose every authorized page.
+  const { buildSync } = await import('esbuild');
+  const { GrpcWebFetchTransport } = await import('@protobuf-ts/grpcweb-transport');
+  const built=buildSync({stdin:{contents:'export * from "./web/src/generated/omloom/v1/workspace"; export {AssetKind,RelationKind} from "./web/src/generated/omloom/v1/contracts";',resolveDir:process.cwd()},bundle:true,write:false,format:'esm',platform:'node'});
+  const m=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].contents).toString('base64'));
+  const dir=await mkdtemp(join(tmpdir(),'omloom-peer-pages-')); const server=await host(dir);
+  try {
+    const transport=new GrpcWebFetchTransport({baseUrl:server.url,format:'binary'});
+    async function rpc(command) {
+      const q=(await transport.unary(m.Workspace.methods[0],m.Request.create({command:{oneofKind:'query',query:m.Query.create({limit:1})}}),transport.mergeOptions())).response.result;
+      return (await transport.unary(m.Workspace.methods[0],m.Request.create({command,working:{expected:q.page.revision}}),transport.mergeOptions())).response.result;
+    }
+    async function object(name) { return (await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.SERVICE,changes:[{name:'name',value:{oneofKind:'text',text:name}}]})})).mutation.targets[0]; }
+    const anchor=await object('Application');
+    for(let i=0;i<30;i++) {
+      const peer=await object(`Peer ${i}`);
+      await rpc({oneofKind:'relation',relation:m.Relationship.create({relation:{from:anchor,to:peer,kind:m.RelationKind.DEPENDS_ON}})});
+    }
+    for(const [index,width] of [1440,390].entries()) {
+      const first=(await rpc({oneofKind:'read',read:m.Read.create({target:anchor})})).detail;
+      expect(first.relations).toHaveLength(25);
+      const second=(await rpc({oneofKind:'read',read:m.Read.create({target:anchor,relationsCursor:first.relationsNext})})).detail;
+      const relation=second.relations[0];
+      const item=second.related.find(i=>i.target.assetId===relation.to.assetId);
+      const name=item.fields.find(f=>f.name==='name').value.text;
+      await page.setViewportSize({width,height:900});
+      await page.goto(`${server.url}/#/?asset=${anchor.assetId}&incarnation=${anchor.incarnation}`);
+      await page.getByRole('button',{name:'Connections in broader scope',exact:true}).click();
+      const dialog=page.getByRole('dialog',{name:'Connections in broader scope',exact:true});
+      await dialog.getByRole('button',{name:'Review existing connections',exact:true}).click();
+      await expect(dialog.locator('.connection-list li')).toHaveCount(25);
+      await expect(dialog.getByRole('button',{name:'Next connections',exact:true})).toBeVisible();
+      await dialog.getByRole('button',{name:'Next connections',exact:true}).click();
+      await expect(dialog.locator('.connection-list li')).toHaveCount(5-index);
+      await dialog.locator('.connection-list li').filter({has:page.getByText(name,{exact:true})}).getByRole('button',{name:'Review removal',exact:true}).click();
+      await dialog.getByRole('button',{name:'Remove reviewed relationship',exact:true}).click();
+      await expect(dialog).toBeHidden();
+      const remaining=(await rpc({oneofKind:'read',read:m.Read.create({target:anchor,relationsCursor:undefined})})).detail;
+      const last=(await rpc({oneofKind:'read',read:m.Read.create({target:anchor,relationsCursor:remaining.relationsNext})})).detail;
+      const all=[...remaining.relations,...last.relations];
+      expect(all).toHaveLength(29-index);
+      expect(all.some(r=>r.relationId===relation.relationId)).toBe(false);
+    }
+  } finally { await server.stop(); await rm(dir,{recursive:true,force:true}); }
+});
+
 test('peer connection review preserves the resource context through edit and removal', async ({ page }) => {
   // Local details must never silently expose peers or edit an unseen old endpoint.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-peer-ui-')); const server = await host(dir);
