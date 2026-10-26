@@ -1,6 +1,66 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
+// Next-available cannot search a range wider than the selected parent, for either IP family.
+#[test]
+fn next_available_rejects_ranges_outside_the_parent_prefix() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let space = create(&store, &actor, K::AddressSpace, "namespace")?;
+    for (parent_cidr, wider, inside) in [
+        ("192.0.2.0/24", "192.0.2.1/16", "192.0.2.1/24"),
+        ("2001:db8:1::/64", "2001:db8:1::1/48", "2001:db8:1::1/64"),
+    ] {
+        let prefix = changed(call(
+            &store,
+            &actor,
+            Command::Network(api::Network {
+                kind: K::Prefix as i32,
+                name: parent_cidr.into(),
+                cidr: parent_cidr.into(),
+                address_space: Some(space.clone()),
+                ..Default::default()
+            }),
+        )?);
+        let mut request = api::Network {
+            kind: K::IpAddress as i32,
+            name: "first available".into(),
+            parent: Some(Box::new(prefix.clone())),
+            cidr: wider.into(),
+            next_available: true,
+            ..Default::default()
+        };
+        let before = store.usage()?;
+        assert!(matches!(
+            within(
+                &store,
+                &actor,
+                focused(&store, &prefix)?,
+                Command::Network(request.clone())
+            ),
+            Err(Error::Invalid)
+        ));
+        assert_eq!(store.usage()?, before);
+        request.cidr = inside.into();
+        let allocated = changed(within(
+            &store,
+            &actor,
+            focused(&store, &prefix)?,
+            Command::Network(request),
+        )?);
+        let mut q = query();
+        q.focus = Some(prefix);
+        q.kinds = vec![K::IpAddress as i32];
+        let Reply::Page(page) = call(&store, &actor, Command::Query(q))? else {
+            panic!("page")
+        };
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].target.as_ref(), Some(&allocated));
+    }
+    Ok(())
+}
+
 // A canonical edit cannot make a reconciled address reference point at another address.
 #[test]
 fn canonical_address_edit_preserves_bound_facts_without_participants() -> TestResult {

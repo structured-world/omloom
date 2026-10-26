@@ -730,7 +730,7 @@ impl Tx<'_> {
                     .map_err(|_| Error::Corrupt)?;
                 let proposed: IpNet = request.cidr.parse().map_err(|_| Error::Invalid)?;
                 if !block.contains(&proposed.addr())
-                    || (request.kind == wire::AssetKind::Prefix as i32
+                    || ((request.kind == wire::AssetKind::Prefix as i32 || request.next_available)
                         && proposed.prefix_len() < block.prefix_len())
                 {
                     return Err(Error::Invalid);
