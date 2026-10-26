@@ -1,6 +1,74 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
+// Dedicated address semantics cannot be bypassed through ordinary description/company changes.
+#[test]
+fn direct_address_changes_reject_reserved_network_fields() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let fact = changed(call(
+        &store,
+        &actor,
+        Command::Address(api::Address {
+            address: Some("192.0.2.10".into()),
+            ..Default::default()
+        }),
+    )?);
+    for value in [
+        wire::Field {
+            name: "prefix_length".into(),
+            value: Some(wire::field::Value::Integer(64)),
+        },
+        text_field("address", "192.0.2.11"),
+        text_field("meaning", api::AddressMeaning::Configured.as_str_name()),
+        text_field("zone", "en0"),
+        text_field(
+            "binding",
+            &format!("{}/{}", fact.asset_id, fact.incarnation),
+        ),
+    ] {
+        for target in [None, Some(fact.clone())] {
+            let before = store.usage()?;
+            let request = api::Address {
+                expected: target.as_ref().map(|_| 1),
+                address: target.is_none().then(|| "192.0.2.20".into()),
+                target,
+                changes: vec![value.clone()],
+                ..Default::default()
+            };
+            assert!(
+                matches!(
+                    call(&store, &actor, Command::Address(request)),
+                    Err(Error::Invalid)
+                ),
+                "reserved field {}",
+                value.name
+            );
+            assert_eq!(store.usage()?, before);
+        }
+    }
+    call(
+        &store,
+        &actor,
+        Command::Address(api::Address {
+            target: Some(fact.clone()),
+            expected: Some(1),
+            changes: vec![text_field("description", "reviewed fact")],
+            ..Default::default()
+        }),
+    )?;
+    let fields = detail(&store, &actor, &fact)?.item.expect("fact").fields;
+    assert!(fields.contains(&text_field("address", "192.0.2.10")));
+    assert!(fields.contains(&text_field("description", "reviewed fact")));
+    assert!(
+        fields
+            .iter()
+            .all(|f| !["prefix_length", "zone", "binding"].contains(&f.name.as_str()))
+    );
+    Ok(())
+}
+
 // Next-available cannot search a range wider than the selected parent, for either IP family.
 #[test]
 fn next_available_rejects_ranges_outside_the_parent_prefix() -> TestResult {

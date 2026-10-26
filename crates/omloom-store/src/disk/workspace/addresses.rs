@@ -213,6 +213,14 @@ impl Tx<'_> {
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<AssetRef> {
+        if request.changes.iter().any(|f| {
+            matches!(
+                f.name.as_str(),
+                "name" | "serial" | "address" | "prefix_length" | "meaning" | "zone" | "binding"
+            )
+        }) {
+            return Err(Error::Invalid);
+        }
         if (request.binding.is_some() || request.clear_binding) && working.expected.is_none() {
             return Err(Error::Conflict);
         }
@@ -444,13 +452,6 @@ impl Tx<'_> {
         }
         if !request.changes.is_empty() {
             self.require_changes(context, target, kind as i32, &request.changes)?;
-            if request
-                .changes
-                .iter()
-                .any(|f| f.name == "name" || f.name == "serial")
-            {
-                return Err(Error::Invalid);
-            }
         }
         let mut changed =
             self.put_against(&key, "networks", Class::Inventory, data, old.as_ref())?;
