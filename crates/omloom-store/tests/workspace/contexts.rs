@@ -1,6 +1,66 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
+// A canonical edit cannot make a reconciled address reference point at another address.
+#[test]
+fn canonical_address_edit_preserves_bound_facts_without_participants() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let space = create(&store, &actor, K::AddressSpace, "namespace")?;
+    let mut allocation = api::Network {
+        kind: K::IpAddress as i32,
+        name: "canonical".into(),
+        cidr: "192.0.2.10/32".into(),
+        address_space: Some(space),
+        ..Default::default()
+    };
+    let canonical = changed(call(&store, &actor, Command::Network(allocation.clone()))?);
+    let fact = changed(within(
+        &store,
+        &actor,
+        api::WorkingContext {
+            expected: Some(store.usage()?.revision),
+            ..Default::default()
+        },
+        Command::Address(api::Address {
+            address: Some("192.0.2.10".into()),
+            binding: Some(canonical.clone()),
+            meaning: Some(api::AddressMeaning::Destination as i32),
+            ..Default::default()
+        }),
+    )?);
+    assert!(detail(&store, &actor, &canonical)?.participants.is_empty());
+    allocation.target = Some(canonical.clone());
+    allocation.expected = Some(store.asset(AssetRef::try_from(&canonical)?)?.revision);
+    allocation.cidr = "192.0.2.11/32".into();
+    let before = store.usage()?;
+    let result = call(&store, &actor, Command::Network(allocation.clone()));
+    assert!(
+        matches!(result, Err(Error::Conflict)),
+        "unexpected edit result: {result:?}"
+    );
+    assert_eq!(store.usage()?, before);
+    assert!(
+        detail(&store, &actor, &canonical)?
+            .item
+            .expect("canonical")
+            .fields
+            .contains(&text_field("cidr", "192.0.2.10/32"))
+    );
+    assert!(
+        detail(&store, &actor, &fact)?
+            .item
+            .expect("fact")
+            .fields
+            .contains(&text_field("address", "192.0.2.10"))
+    );
+    allocation.cidr = "192.0.2.10/32".into();
+    allocation.name = "renamed canonical".into();
+    call(&store, &actor, Command::Network(allocation))?;
+    Ok(())
+}
+
 // Prefix contexts derive only their declared namespace and enforce containment.
 #[test]
 fn prefix_creation_remains_visible_without_reselecting_upstream_topology() -> TestResult {

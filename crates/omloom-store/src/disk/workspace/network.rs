@@ -315,12 +315,21 @@ impl Store {
         if sharing == api::SharedUse::Exclusive && members.len() > 1 {
             return Err(Error::Conflict);
         }
-        if !members.is_empty()
-            && old
-                .as_ref()
-                .is_some_and(|p| p.get("namespace") != Some(&text(&owner_key)))
+        if old
+            .as_ref()
+            .is_some_and(|p| p.get("namespace") != Some(&text(&owner_key)))
         {
-            return Err(Error::Conflict);
+            if !members.is_empty() {
+                return Err(Error::Conflict);
+            }
+            // Reconciled references depend on identity even without assigned interfaces.
+            let references = tx.query(
+                "MATCH (n:OmRow {parent:'networks'}) WHERE n.binding=$binding RETURN properties(n) AS p LIMIT 1",
+                params([("binding", text(identity(target)))]),
+            )?;
+            if !references.is_empty() {
+                return Err(Error::Conflict);
+            }
         }
         let previous_group = old.as_ref().map(groups::group_of).transpose()?.flatten();
         let mut changed_groups = BTreeSet::new();
