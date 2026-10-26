@@ -1,5 +1,121 @@
 use super::*;
 
+// Retained definitions cannot starve eligible later cleanup pages or cause idle writes.
+#[test]
+fn definition_cleanup_progresses_past_retained_fields() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let host = create(&store, &actor, K::Device, "retained values")?;
+    let mut definitions = Vec::new();
+    for i in 0..18 {
+        let name = format!("Field {i}");
+        let api::reply::Result::Definitions(result) = call(
+            &store,
+            &actor,
+            api::request::Command::Definition(api::Definition {
+                name: name.clone(),
+                kinds: vec![K::Device as i32],
+                ..Default::default()
+            }),
+        )?
+        else {
+            panic!("definitions")
+        };
+        definitions.push(
+            result
+                .items
+                .into_iter()
+                .find(|d| d.name == name)
+                .expect("created definition"),
+        );
+    }
+    let first = store.diagnostic_database().execute_cypher_shared(
+        "MATCH (n:OmRow {parent:'definitions'}) RETURN n.key AS key LIMIT 16",
+        None,
+        None,
+        None,
+        None,
+    )?;
+    let retained = first
+        .rows
+        .iter()
+        .map(|r| {
+            r.get("key")
+                .and_then(|v| v.as_str())
+                .expect("key")
+                .strip_prefix("definition/")
+                .expect("definition")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    call(
+        &store,
+        &actor,
+        api::request::Command::Write(api::Write {
+            target: Some(host.clone()),
+            expected: Some(1),
+            kind: K::Device as i32,
+            changes: retained.iter().map(|id| text_field(id, "keep")).collect(),
+            parent: None,
+        }),
+    )?;
+    for mut definition in definitions {
+        definition.retired = true;
+        call(
+            &store,
+            &actor,
+            api::request::Command::Definition(definition),
+        )?;
+    }
+    let before = store.usage()?;
+    let started = std::time::Instant::now();
+    let mut removed = 0;
+    let mut cursor = None;
+    for _ in 0..3 {
+        let page = store.workspace_cleanup_definitions(16, cursor.as_deref())?;
+        assert!(page.removed + page.pinned <= 16);
+        removed += page.removed;
+        cursor = page.cursor;
+    }
+    let after = store.usage()?;
+    eprintln!(
+        "definition cleanup: {:?}, inventory bytes {} -> {}, removed {removed}",
+        started.elapsed(),
+        before.bytes[0],
+        after.bytes[0]
+    );
+    assert_eq!(
+        removed, 2,
+        "retained first page starved eligible definitions"
+    );
+    assert_eq!(after.rows[0] + 2, before.rows[0]);
+    assert!(after.bytes[0] < before.bytes[0]);
+    let api::reply::Result::Detail(detail) = call(
+        &store,
+        &actor,
+        api::request::Command::Read(api::Read {
+            target: Some(host),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("detail")
+    };
+    let item = detail.item.expect("host");
+    for id in retained {
+        assert!(item.fields.contains(&text_field(&id, "keep")));
+    }
+    let before = store.usage()?;
+    assert_eq!(store.workspace_cleanup_definitions(16, None)?.removed, 0);
+    assert_eq!(
+        store.usage()?,
+        before,
+        "skipping retained definitions wrote state"
+    );
+    Ok(())
+}
+
 // Migration and an inventory edit share one database CAS boundary; restore cannot expose half a schema change.
 #[test]
 fn concurrent_migration_and_edit_keep_one_interpretation_after_restore() -> TestResult {
@@ -277,7 +393,7 @@ fn invalid_saved_predicate_is_not_silently_removed() -> TestResult {
         call(&store, &context, api::request::Command::Query(q.clone())),
         Err(Error::Incomplete)
     ));
-    store.workspace_cleanup_definitions(32)?;
+    store.workspace_cleanup_definitions(32, None)?;
     drop(store);
     let store = Store::open(dir.path(), policy())?;
     let api::reply::Result::Views(views) = call(

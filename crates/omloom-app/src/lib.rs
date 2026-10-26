@@ -158,6 +158,7 @@ impl Application {
     pub async fn maintain(self, mut shutdown: tokio::sync::watch::Receiver<bool>) {
         let mut detail = None;
         let mut review = None;
+        let mut definitions = None;
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
         loop {
             tokio::select! {
@@ -167,17 +168,18 @@ impl Application {
                     let store = Arc::clone(&self.store);
                     let previous_detail = detail.clone();
                     let previous_review = review.clone();
+                    let previous_definitions = definitions.clone();
                     let result = tokio::task::spawn_blocking(move || {
                         let _permit = permit;
                         let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| Error::Invalid)?.as_millis();
                         let now = u64::try_from(now).map_err(|_| Error::Invalid)?;
                         let d = store.cleanup(now, previous_detail.as_deref())?;
                         let r = store.cleanup_reviews(now, previous_review.as_deref())?;
-                        store.workspace_cleanup_definitions(16)?;
-                        Ok::<_, Error>((d.cursor, r.cursor))
+                        let definitions = store.workspace_cleanup_definitions(16, previous_definitions.as_deref())?;
+                        Ok::<_, Error>((d.cursor, r.cursor, definitions.cursor))
                     }).await;
                     match result {
-                        Ok(Ok((d, r))) => { detail = d; review = r; }
+                        Ok(Ok((d, r, f))) => { detail = d; review = r; definitions = f; }
                         Ok(Err(error)) => eprintln!("Cleanup did not complete; cursor retained: {error}"),
                         Err(error) => eprintln!("Cleanup task failed; cursor retained: {error}"),
                     }

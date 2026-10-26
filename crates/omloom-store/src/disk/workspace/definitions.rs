@@ -410,13 +410,32 @@ impl Store {
 
     /// Reclaims only retired definitions with no current values. UUIDs are never
     /// accepted for creation, so removing an unused definition cannot reuse it.
-    pub fn workspace_cleanup_definitions(&self, limit: u16) -> Result<u16> {
+    /// Pass the returned cursor to continue; absence starts a new bounded pass.
+    pub fn workspace_cleanup_definitions(
+        &self,
+        limit: u16,
+        after: Option<&str>,
+    ) -> Result<Cleanup> {
         if limit == 0 || limit > 32 {
             return Err(Error::Invalid);
         }
+        if let Some(cursor) = after {
+            cursor
+                .strip_prefix("definition/")
+                .ok_or(Error::Invalid)?
+                .parse::<AuthorityId>()
+                .map_err(|_| Error::Invalid)?;
+        }
         let mut tx = self.begin()?;
-        let rows = tx.query("MATCH (n:OmRow {parent:'definitions'}) WHERE n.retired=true RETURN properties(n) AS p LIMIT $limit", params([("limit", int(u64::from(limit))?)]))?;
+        let mut rows = tx.query("MATCH (n:OmRow {parent:'definitions'}) WHERE n.retired=true AND ($after IS NULL OR n.key>$after) RETURN properties(n) AS p ORDER BY n.key LIMIT $limit", params([("after", after.map(text).unwrap_or(Value::Null)), ("limit", int(u64::from(limit)+1)?)]))?;
+        let cursor = if rows.len() > usize::from(limit) {
+            rows.truncate(usize::from(limit));
+            Some(string(rows.last().ok_or(Error::Corrupt)?, "key")?)
+        } else {
+            None
+        };
         let mut removed = 0;
+        let mut pinned = 0;
         for row in rows {
             let definition = definition(&row)?;
             let current = tx.query(
@@ -426,10 +445,16 @@ impl Store {
             if current.is_empty() {
                 tx.delete(&string(&row, "key")?)?;
                 removed += 1;
+            } else {
+                pinned += 1;
             }
         }
         tx.commit()?;
-        Ok(removed)
+        Ok(Cleanup {
+            removed,
+            pinned,
+            cursor,
+        })
     }
 }
 

@@ -151,6 +151,10 @@ definition disclosed, including roots and predicates. Definition audiences and
 editors do not grant access to matching inventory. Personal URL adjustments do
 not modify the shared definition. Reset reloads that definition. Unavailable,
 retired or retyped predicates fail explicitly instead of broadening the query.
+Retired definitions keep their current values. Definition cleanup returns a
+continuation even when a page contains only retained definitions; the host
+resumes that cursor and safely restarts the pass after a process restart.
+Skipping retained definitions creates no durable cursor or idle writes.
 
 Network allocation distinguishes address space, L2 domain and routing context.
 An ordinary address is unique in its address space; link-local identities also
