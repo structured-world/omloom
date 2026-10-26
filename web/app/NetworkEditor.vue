@@ -32,12 +32,35 @@ async function loadOptions() {
       const r = await call({ oneofKind: 'query', query: model.Query.create({ roots: props.working.roots, kinds: [K.ADDRESS_SPACE, K.L2_DOMAIN, K.VRF, K.ADDRESS_GROUP], columns: ['name', 'sharing', 'vrid', 'link_scope'], search: lookup.value, limit: 100, cursor }) });
       if (r.oneofKind !== 'page') throw Error('Unexpected response'); found.push(...r.page.items); cursor = r.page.next; revision.value = r.page.revision;
     } while (cursor && found.length < 1000);
-    items.value = [...new Map([...retained, ...found].map(i => [i.target?.assetId, i])).values()];
+    const choices = new Map([...retained, ...found].map(i => [i.target?.assetId, i]));
+    // Accepted references can lie outside the bounded choices, but are not implicit clears.
+    const selected = [space.value, link.value, routing.value, selectedGroup.value];
+    const references: AssetRef[] = [];
+    for (const field of ['address_space', 'link_scope', 'routing_context']) {
+      const encoded = value(field);
+      if (!encoded) continue;
+      const [assetId, incarnation] = encoded.split('/');
+      if (!assetId || !incarnation) throw Error('The existing scope reference is incomplete. Reload the resource.');
+      references.push({ assetId, incarnation });
+    }
+    if (props.group?.target) references.push(props.group.target);
+    for (const target of references) {
+      if (!selected.includes(target.assetId) || choices.get(target.assetId)?.target?.incarnation === target.incarnation) continue;
+      const r = await call({ oneofKind: 'read', read: model.Read.create({ target }) }, model.WorkingContext.create({ focus: target }));
+      if (r.oneofKind !== 'detail' || !r.detail.item) throw Error('The selected scope is unavailable. Reload or explicitly choose another scope.');
+      choices.set(target.assetId, r.detail.item);
+    }
+    items.value = [...choices.values()];
     if (cursor) coverage.value = 'Showing a bounded selection. Search for a scope or group name to narrow the options.';
   } catch (e) { error.value = String(e); }
 }
 onMounted(loadOptions);
-function targetRef(id: string): AssetRef | undefined { return items.value.find(i => i.target?.assetId === id)?.target; }
+function targetRef(id: string): AssetRef | undefined {
+  if (!id) return undefined;
+  const target = items.value.find(i => i.target?.assetId === id)?.target;
+  if (!target) throw Error('A selected scope has not loaded. Wait for the options or explicitly choose another scope.');
+  return target;
+}
 async function save() {
   try {
     const vlan = kind.value === K.VLAN;

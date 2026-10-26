@@ -34,6 +34,55 @@ async function create(page, name, kind = 'DEVICE') {
   return { asset_id: params.get('asset'), incarnation: params.get('incarnation') };
 }
 
+test('network rename preserves scopes beyond the bounded options window', async ({ page }) => {
+  // Real disk/API fixtures place accepted references after 1,000 choices; rename must never clear them.
+  test.setTimeout(120_000);
+  const { buildSync } = await import('esbuild');
+  const { GrpcWebFetchTransport } = await import('@protobuf-ts/grpcweb-transport');
+  const built = buildSync({ stdin: { contents: 'export * from "./web/src/generated/omloom/v1/workspace"; export {AssetKind} from "./web/src/generated/omloom/v1/contracts";', resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node' });
+  const m = await import('data:text/javascript;base64,' + Buffer.from(built.outputFiles[0].contents).toString('base64'));
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-network-options-'));
+  const server = await host(dir);
+  try {
+    const transport = new GrpcWebFetchTransport({ baseUrl: server.url, format: 'binary' });
+    async function rpc(command) {
+      const q = await transport.unary(m.Workspace.methods[0], m.Request.create({ command: { oneofKind: 'query', query: m.Query.create({ limit: 1 }) } }), transport.mergeOptions());
+      return (await transport.unary(m.Workspace.methods[0], m.Request.create({ command, working: { expected: q.response.result.page.revision } }), transport.mergeOptions())).response.result;
+    }
+    async function object(kind, name) {
+      return (await rpc({ oneofKind: 'write', write: m.Write.create({ kind, changes: [{ name: 'name', value: { oneofKind: 'text', text: name } }] }) })).mutation.targets[0];
+    }
+    const space = await object(m.AssetKind.ADDRESS_SPACE, 'A namespace');
+    for (let offset = 0; offset < 1000; offset += 100) {
+      const csv = 'external_id,name\n' + Array.from({ length: 100 }, (_, i) => `${offset+i},A option ${String(offset+i).padStart(4,'0')}`).join('\n');
+      const preview = (await rpc({ oneofKind:'import', import:m.Import.create({ source:'option-fixture', kind:m.AssetKind.VRF, csv, mappings:[{ source:'name', field:'name' }] }) })).preview;
+      expect(preview.id).toBeDefined();
+      expect(preview.rows.every(row => row.change !== undefined)).toBe(true);
+      await rpc({ oneofKind:'import', import:m.Import.create({ preview:preview.id }) });
+    }
+    const link = await object(m.AssetKind.L2_DOMAIN, 'Z selected L2');
+    const routing = await object(m.AssetKind.VRF, 'Z selected VRF');
+    const target = (await rpc({ oneofKind:'network', network:m.Network.create({ kind:m.AssetKind.IP_ADDRESS, name:'Scoped address', cidr:'192.0.2.10/32', addressSpace:space, link, routing }) })).mutation.targets[0];
+    const url = `${server.url}/#/?view=1&asset=${target.assetId}&incarnation=${target.incarnation}`;
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height:900 });
+      await page.goto(url);
+      await page.getByRole('button', { name:'Review network settings', exact:true }).click();
+      const dialog = page.getByRole('dialog');
+      await expect(dialog).toContainText('Showing a bounded selection');
+      const name = `Renamed address ${width}`;
+      await dialog.getByLabel('Name', { exact:true }).fill(name);
+      await dialog.getByRole('button', { name:'Apply reviewed settings', exact:true }).click();
+      await expect(dialog).toBeHidden();
+      const item = (await rpc({ oneofKind:'read', read:m.Read.create({ target }) })).detail.item;
+      const field = key => item.fields.find(f => f.name === key)?.value.text;
+      expect(field('name')).toBe(name);
+      expect(field('link_scope')).toBe(`${link.assetId}/${link.incarnation}`);
+      expect(field('routing_context')).toBe(`${routing.assetId}/${routing.incarnation}`);
+    }
+  } finally { await server.stop(); await rm(dir, { recursive:true, force:true }); }
+});
+
 test('local network evidence keeps service ownership, coverage and phone navigation', async ({ page }) => {
   // Actual API/storage setup exercises the same inspector on desktop and phone, without personal fixtures.
   const { buildSync } = await import('esbuild');
