@@ -387,7 +387,7 @@ impl Tx<'_> {
                     let link = network::groups::reference(&string(&canonical, "link_scope")?)?;
                     self.selection(context, working, true)?
                         .contains(link, self)?;
-                    if request.zone.is_none() {
+                    if address.is_ipv6() && !data.contains_key("zone") {
                         return Err(Error::Incomplete);
                     }
                 }

@@ -61,6 +61,68 @@ fn canonical_address_edit_preserves_bound_facts_without_participants() -> TestRe
     Ok(())
 }
 
+// IPv4 link-local uses the explicit L2 identity; only IPv6 needs a host-local zone.
+#[test]
+fn link_local_bindings_require_zones_only_for_ipv6() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let space = create(&store, &actor, K::AddressSpace, "namespace")?;
+    let link = create(&store, &actor, K::L2Domain, "local link")?;
+    for (address, cidr, zone) in [
+        ("169.254.1.1", "169.254.1.1/32", None),
+        ("fe80::1", "fe80::1/128", Some("en0")),
+    ] {
+        let canonical = changed(call(
+            &store,
+            &actor,
+            Command::Network(api::Network {
+                kind: K::IpAddress as i32,
+                name: address.into(),
+                cidr: cidr.into(),
+                address_space: Some(space.clone()),
+                link: Some(link.clone()),
+                ..Default::default()
+            }),
+        )?);
+        let mut request = api::Address {
+            address: Some(address.into()),
+            binding: Some(canonical.clone()),
+            meaning: Some(api::AddressMeaning::Destination as i32),
+            ..Default::default()
+        };
+        let working = api::WorkingContext {
+            expected: Some(store.usage()?.revision),
+            ..Default::default()
+        };
+        if zone.is_some() {
+            let before = store.usage()?;
+            assert!(matches!(
+                within(
+                    &store,
+                    &actor,
+                    working.clone(),
+                    Command::Address(request.clone())
+                ),
+                Err(Error::Incomplete)
+            ));
+            assert_eq!(store.usage()?, before);
+        }
+        request.zone = zone.map(str::to_owned);
+        let fact = changed(within(&store, &actor, working, Command::Address(request))?);
+        let item = detail(&store, &actor, &fact)?.item.expect("bound fact");
+        assert!(item.fields.contains(&text_field(
+            "binding",
+            &format!("{}/{}", canonical.asset_id, canonical.incarnation)
+        )));
+        assert_eq!(
+            item.fields.iter().find(|f| f.name == "zone"),
+            zone.map(|z| text_field("zone", z)).as_ref()
+        );
+    }
+    Ok(())
+}
+
 // Prefix contexts derive only their declared namespace and enforce containment.
 #[test]
 fn prefix_creation_remains_visible_without_reselecting_upstream_topology() -> TestResult {
