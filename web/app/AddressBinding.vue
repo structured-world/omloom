@@ -11,8 +11,11 @@ const actions = ref(model.Actions.create()); const items = ref<model.Item[]>([])
 const search = ref(input(props.item.fields.find(f => f.name === 'address'))); const next = ref<string>();
 const interfaceSearch = ref(''); const interfaceNext = ref<string>();
 const selected = ref(''); const interfaceId = ref(''); const allocation = ref<model.Network>();
+const preparedUse = ref<model.SharedUse>(); const priority = ref<number>();
 const remove = ref(false); const error = ref('');
 const candidate = computed(() => items.value.find(i => key(i.target) === selected.value));
+const vrrp = computed(() => allocation.value ? preparedUse.value === model.SharedUse.VRRP : input(candidate.value?.fields.find(f => f.name === 'sharing')) === `SHARED_USE_${model.SharedUse[model.SharedUse.VRRP]}`);
+const needsPriority = computed(() => !remove.value && configured && !!interfaceId.value && vrrp.value);
 const allocationActions = computed(() => actions.value.allocations.filter(a => a.kind === K.IP_ADDRESS));
 const configured = props.item.fields.some(f => f.name === 'meaning' && input(f) === `ADDRESS_MEANING_${model.AddressMeaning[model.AddressMeaning.CONFIGURED]}`);
 const label = (item: model.Item) => display(item.fields.find(f => f.name === 'name')) || item.target!.assetId.slice(-8);
@@ -44,16 +47,18 @@ async function loadInterfaces(cursor?: string) {
 async function save() {
   error.value = '';
   try {
+    if (needsPriority.value && (priority.value === undefined || !Number.isInteger(priority.value) || priority.value < 1 || priority.value > 255)) throw Error('Enter an intended VRRP priority from 1 to 255.');
     await call({ oneofKind: 'address', address: model.Address.create({
       target: props.item.target, expected: props.item.revision,
       binding: remove.value || allocation.value ? undefined : candidate.value?.target,
       allocation: remove.value ? undefined : allocation.value, clearBinding: remove.value,
       interface: interfaceId.value ? interfaces.value.find(i => key(i.target) === interfaceId.value)?.target : undefined,
+      priority: needsPriority.value ? priority.value : undefined,
     }) }, model.WorkingContext.create({ roots: roots.value, expected: revision.value }));
     emit('saved');
   } catch (e) { error.value = String(e); }
 }
-function reviewed(request: model.Network, working: model.WorkingContext) { allocation.value = request; revision.value = working.expected; allocating.value = false; void review(); }
+function reviewed(request: model.Network, working: model.WorkingContext, sharing: model.SharedUse) { allocation.value = request; preparedUse.value = sharing; revision.value = working.expected; allocating.value = false; void review(); }
 onMounted(() => { if (props.working.focus) error.value = 'Select an enclosing context before resolving the address'; });
 </script>
 <template><Dialog title="Resolve address in broader scope" @close="emit('close')">
@@ -73,6 +78,7 @@ onMounted(() => { if (props.working.focus) error.value = 'Select an enclosing co
 <p v-if="remove">Remove only the reference mapping. The canonical allocation and its assignments remain unchanged.</p>
 <template v-else><p>{{ allocation ? 'New allocation: '+allocation.name+' · '+allocation.cidr : 'Canonical allocation: '+(candidate ? label(candidate) : '') }}</p><p v-if="allocation">The allocation and mapping will commit together or neither will be saved.</p>
 <template v-if="configured"><label>Find assignment interface<input v-model="interfaceSearch" maxlength="256"></label><button @click="loadInterfaces().catch(e => error = String(e))">Find interfaces</button><label for="binding-interface">Intended assignment</label><select id="binding-interface" v-model="interfaceId"><option value="">Map knowledge only, do not assign</option><option v-for="i in interfaces" :key="key(i.target)" :value="key(i.target)">{{ label(i) }}</option></select><button v-if="interfaceNext" @click="loadInterfaces(interfaceNext).catch(e => error = String(e))">Next interfaces</button></template></template>
+<label v-if="needsPriority">Intended priority<input v-model.number="priority" type="number" min="1" max="255" required></label>
 <footer><button @click="reviewing = false">Back</button><button class="primary" @click="save">{{ remove ? 'Remove reviewed mapping' : 'Apply reviewed mapping' }}</button></footer>
 </template>
 <p v-if="error" role="alert">{{ error }}</p><footer><button @click="emit('close')">Return to resource</button></footer>

@@ -343,6 +343,69 @@ test('peer connection review preserves the resource context through edit and rem
   } finally { await server.stop(); await rm(dir,{recursive:true,force:true}); }
 });
 
+test('VRRP reconciliation submits intended priority for existing and prepared allocations', async ({ page }) => {
+  // All three reconciliation paths commit real membership, including a prepared address in an existing group.
+  const { buildSync } = await import('esbuild');
+  const { GrpcWebFetchTransport } = await import('@protobuf-ts/grpcweb-transport');
+  const built = buildSync({ stdin:{ contents:'export * from "./web/src/generated/omloom/v1/workspace"; export {AssetKind} from "./web/src/generated/omloom/v1/contracts";', resolveDir:process.cwd() }, bundle:true, write:false, format:'esm', platform:'node' });
+  const m = await import('data:text/javascript;base64,' + Buffer.from(built.outputFiles[0].contents).toString('base64'));
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-vrrp-binding-')); const server = await host(dir);
+  try {
+    const transport = new GrpcWebFetchTransport({ baseUrl:server.url, format:'binary' });
+    async function rpc(command) {
+      const q = (await transport.unary(m.Workspace.methods[0], m.Request.create({command:{oneofKind:'query',query:m.Query.create({limit:1})}}),transport.mergeOptions())).response.result;
+      return (await transport.unary(m.Workspace.methods[0],m.Request.create({command,working:{expected:q.page.revision}}),transport.mergeOptions())).response.result;
+    }
+    async function object(kind,name) { return (await rpc({oneofKind:'write',write:m.Write.create({kind,changes:[{name:'name',value:{oneofKind:'text',text:name}}]})})).mutation.targets[0]; }
+    const space=await object(m.AssetKind.ADDRESS_SPACE,'VRRP namespace');
+    const link=await object(m.AssetKind.L2_DOMAIN,'VRRP link');
+    const iface=await object(m.AssetKind.INTERFACE,'Gateway eth0');
+    const existing=(await rpc({oneofKind:'network',network:m.Network.create({kind:m.AssetKind.IP_ADDRESS,name:'Existing VRRP',cidr:'192.0.2.81/32',addressSpace:space,link,sharing:m.SharedUse.VRRP,vrid:41,groupName:'Existing gateway group'})})).mutation.targets[0];
+    const group=(await rpc({oneofKind:'read',read:m.Read.create({target:existing})})).detail.group;
+    for (const [index,mode] of ['existing','new','group'].entries()) {
+      const address=`192.0.2.${81+index}`;
+      const fact=(await rpc({oneofKind:'address',address:m.Address.create({address,meaning:m.AddressMeaning.CONFIGURED})})).mutation.targets[0];
+      await page.setViewportSize({width:index===0?1440:390,height:900});
+      await page.goto(`${server.url}/#/?asset=${fact.assetId}&incarnation=${fact.incarnation}`);
+      await page.getByRole('button',{name:'Resolve address in broader scope',exact:true}).click();
+      const dialog=page.getByRole('dialog',{name:'Resolve address in broader scope',exact:true});
+      await dialog.getByRole('button',{name:'Choose allocation context',exact:true}).click();
+      if (mode==='existing') {
+        await dialog.getByLabel('Canonical allocation',{exact:true}).selectOption(`${existing.assetId}/${existing.incarnation}`);
+        await dialog.getByRole('button',{name:'Review address mapping',exact:true}).click();
+      } else {
+        await dialog.getByRole('button',{name:'Prepare new allocation',exact:true}).click();
+        const allocation=page.getByRole('dialog',{name:'Allocate network resource',exact:true});
+        await allocation.getByLabel('Name',{exact:true}).fill(`Prepared ${mode}`);
+        await allocation.getByLabel('Address / prefix',{exact:true}).fill(`${address}/32`);
+        await allocation.getByLabel('Address space',{exact:true}).selectOption(space.assetId);
+        await allocation.getByLabel('Address use',{exact:true}).selectOption(String(m.SharedUse.VRRP));
+        if (mode==='group') {
+          await allocation.getByLabel('Group selection',{exact:true}).selectOption('existing');
+          await allocation.getByLabel('Shared address group',{exact:true}).selectOption(group.target.assetId);
+        } else {
+          await allocation.getByLabel('L2 domain',{exact:true}).selectOption(link.assetId);
+          await allocation.getByLabel('VRID',{exact:true}).fill('42');
+          await allocation.getByLabel('New group name',{exact:true}).fill('New gateway group');
+        }
+        await allocation.getByRole('button',{name:'Review allocation',exact:true}).click();
+        await expect(allocation).toBeHidden();
+      }
+      await dialog.getByLabel('Intended assignment',{exact:true}).selectOption(`${iface.assetId}/${iface.incarnation}`);
+      await expect(dialog.getByLabel('Intended priority',{exact:true})).toBeVisible();
+      await dialog.getByLabel('Intended priority',{exact:true}).fill(String(150+index));
+      await dialog.getByRole('button',{name:'Apply reviewed mapping',exact:true}).click();
+      await expect(dialog).toBeHidden();
+      const item=(await rpc({oneofKind:'read',read:m.Read.create({target:fact})})).detail.item;
+      const binding=item.fields.find(f=>f.name==='binding').value.text.split('/');
+      const detail=(await rpc({oneofKind:'read',read:m.Read.create({target:{assetId:binding[0],incarnation:binding[1]}})})).detail;
+      expect(detail.participants).toHaveLength(1);
+      expect(detail.participants[0].interface).toEqual(iface);
+      expect(detail.participants[0].priority).toBe(150+index);
+    }
+  } finally { await server.stop(); await rm(dir,{recursive:true,force:true}); }
+});
+
 test('address mapping reviews a new allocation and commits its explicit assignment together', async ({ page }) => {
   // Preparing a new canonical address must not allocate before the final mapping review.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-binding-ui-')); let server = await host(dir);

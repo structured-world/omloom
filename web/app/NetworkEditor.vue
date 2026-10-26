@@ -8,7 +8,7 @@ const parents = computed(() => [...new Map(props.allocations.filter(a => a.paren
 const parent = ref(parents.value.length === 1 ? parents.value[0]!.target!.assetId : '');
 const container = computed(() => parents.value.find(p => p.target?.assetId === parent.value));
 const availableKinds = computed(() => props.allocations.filter(a => (a.parent?.target?.assetId ?? '') === parent.value).map(a => a.kind));
-const emit = defineEmits<{ close: []; saved: []; refresh: []; reviewed: [request: model.Network, working: model.WorkingContext] }>();
+const emit = defineEmits<{ close: []; saved: []; refresh: []; reviewed: [request: model.Network, working: model.WorkingContext, sharing: model.SharedUse] }>();
 const creatingScope = ref(false);
 async function scopeSaved() { creatingScope.value = false; await loadOptions(); emit('refresh'); }
 const value = (field: string) => input(props.item?.fields.find(f => f.name === field));
@@ -80,7 +80,7 @@ async function save() {
       previousGroupRevision: props.group && props.group.target?.assetId !== chosen?.target?.assetId ? props.group.revision : undefined,
     });
     const working = model.WorkingContext.create({ ...props.working, expected: revision.value });
-    if (props.reviewOnly) { emit('reviewed',request,working); return; }
+    if (props.reviewOnly) { emit('reviewed',request,working,sharing.value); return; }
     await call({ oneofKind: 'network', network: request }, working); emit('saved');
   } catch (e) { error.value = String(e); }
 }
