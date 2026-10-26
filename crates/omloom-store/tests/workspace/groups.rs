@@ -85,6 +85,7 @@ fn concurrent_shared_and_exclusive_allocation_survives_restore() -> TestResult {
         &context,
         api::request::Command::Read(api::Read {
             target: target.clone(),
+            ..Default::default()
         }),
     )?
     else {
@@ -145,6 +146,7 @@ fn shared_group_spans_addresses_and_fences_cross_address_edits() -> TestResult {
         &context,
         api::request::Command::Read(api::Read {
             target: Some(first.clone()),
+            ..Default::default()
         }),
     )?
     else {
@@ -175,6 +177,7 @@ fn shared_group_spans_addresses_and_fences_cross_address_edits() -> TestResult {
         &context,
         api::request::Command::Read(api::Read {
             target: Some(first.clone()),
+            ..Default::default()
         }),
     )?
     else {
@@ -197,6 +200,7 @@ fn shared_group_spans_addresses_and_fences_cross_address_edits() -> TestResult {
         &context,
         api::request::Command::Read(api::Read {
             target: Some(second.clone()),
+            ..Default::default()
         }),
     )?
     else {
@@ -243,6 +247,7 @@ fn shared_group_spans_addresses_and_fences_cross_address_edits() -> TestResult {
             &partial,
             api::request::Command::Read(api::Read {
                 target: Some(second.clone()),
+                ..Default::default()
             }),
         )?
         else {
@@ -259,6 +264,7 @@ fn shared_group_spans_addresses_and_fences_cross_address_edits() -> TestResult {
         &restricted,
         api::request::Command::Read(api::Read {
             target: Some(second),
+            ..Default::default()
         }),
     )?
     else {
@@ -301,6 +307,7 @@ fn group_vrid_projection_and_filter_do_not_keep_stale_copies() -> TestResult {
         &context,
         api::request::Command::Read(api::Read {
             target: Some(created.targets[0].clone()),
+            ..Default::default()
         }),
     )?
     else {
@@ -406,6 +413,7 @@ fn address_group_removal_releases_only_owned_protocol_namespace() -> TestResult 
         &context,
         api::request::Command::Read(api::Read {
             target: Some(address.clone()),
+            ..Default::default()
         }),
     )?
     else {

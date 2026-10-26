@@ -1,9 +1,215 @@
 use super::*;
 
+#[derive(Default)]
+struct RelationPage {
+    relations: Vec<wire::Relation>,
+    related: BTreeMap<AssetRef, Properties>,
+    next: Option<String>,
+}
+
 fn parameter(values: &mut HashMap<String, Value>, value: Value) -> String {
     let name = format!("p{}", values.len());
     values.insert(name.clone(), value);
     format!("${name}")
+}
+
+// Use the same typed ownership rules as creation; peer links never form levels.
+pub(super) fn ownership_clause(
+    reverse_only: Option<bool>,
+    child_kinds: &[wire::AssetKind],
+) -> String {
+    use wire::AssetKind as K;
+    let kinds = [
+        K::Site,
+        K::Location,
+        K::Rack,
+        K::Device,
+        K::VirtualMachine,
+        K::SoftwareInstallation,
+        K::Service,
+        K::Interface,
+        K::AddressReference,
+        K::Port,
+        K::Storage,
+    ];
+    let mut groups = BTreeMap::<(i32, bool, i32), Vec<i32>>::new();
+    for parent in kinds {
+        for child in kinds {
+            if !child_kinds.is_empty() && !child_kinds.contains(&child) {
+                continue;
+            }
+            if let Some((relation, reverse)) = working::attachment(parent, child) {
+                if reverse_only.is_some_and(|direction| direction != reverse) {
+                    continue;
+                }
+                groups
+                    .entry((relation as i32, reverse, parent as i32))
+                    .or_default()
+                    .push(child as i32);
+            }
+        }
+    }
+    let mut terms = Vec::new();
+    for ((relation, reverse, parent), children) in groups {
+        let owner = if reverse {
+            "r.to_asset=p.asset AND r.to_incarnation=p.incarnation AND r.asset=a.asset AND r.incarnation=a.incarnation"
+        } else {
+            "r.asset=p.asset AND r.incarnation=p.incarnation AND r.to_asset=a.asset AND r.to_incarnation=a.incarnation"
+        };
+        terms.push(format!(
+            "(p.kind={parent} AND a.kind IN {children:?} AND r.kind={relation} AND {owner})"
+        ));
+    }
+    if terms.is_empty() {
+        return "false".into();
+    }
+    format!("({})", terms.join(" OR "))
+}
+
+pub(super) fn ownership_path(children: bool, reverse: bool) -> &'static str {
+    match (children, reverse) {
+        (true, false) => {
+            "(p:OmRow {key:key})-[:OmRelationFrom]->(r:OmRow)-[:OmRelationTo]->(a:OmRow)"
+        }
+        (true, true) => {
+            "(p:OmRow {key:key})<-[:OmRelationTo]-(r:OmRow)<-[:OmRelationFrom]-(a:OmRow)"
+        }
+        (false, false) => {
+            "(a:OmRow {key:key})<-[:OmRelationTo]-(r:OmRow)<-[:OmRelationFrom]-(p:OmRow)"
+        }
+        (false, true) => {
+            "(a:OmRow {key:key})-[:OmRelationFrom]->(r:OmRow)-[:OmRelationTo]->(p:OmRow)"
+        }
+    }
+}
+
+fn browse_clause(
+    context: &Context,
+    values: &mut HashMap<String, Value>,
+    reverse: Option<bool>,
+    kinds: &[wire::AssetKind],
+) -> String {
+    format!(
+        "p.parent='assets' AND p.key<>a.key AND p.adoption={} AND {} AND {} AND {}",
+        wire::Adoption::Adopted as i32,
+        visible_clause_for(context, Some("relations"), values, "p"),
+        visible_clause_for(context, Some("relations"), values, "a"),
+        ownership_clause(reverse, kinds)
+    )
+}
+
+impl Tx<'_> {
+    fn relation_page(
+        &self,
+        context: &Context,
+        target: AssetRef,
+        working: &api::WorkingContext,
+        cursor: Option<&str>,
+    ) -> Result<RelationPage> {
+        let revision = number(&self.root, "revision")?;
+        let query = api::Query {
+            roots: working.roots.clone(),
+            focus: Some(target_wire(target)),
+            search: format!("relations/{:?}", working.focus),
+            ..Default::default()
+        };
+        let fingerprint = query_fingerprint(&query, context);
+        let mut offset = 0;
+        if let Some(cursor) = cursor {
+            if cursor.len() > 256 {
+                return Err(Error::Invalid);
+            }
+            let parts: Vec<_> = cursor.split(':').collect();
+            if parts.len() != 4
+                || parts[0].parse::<u64>().ok() != Some(revision)
+                || parts[1] != fingerprint
+                || parts[2].parse::<u64>().ok() != Some(context.authority_revision)
+            {
+                return Err(Error::Expired);
+            }
+            offset = parts[3].parse::<u64>().map_err(|_| Error::Invalid)?;
+            if offset > 100_000 {
+                return Err(Error::Limit);
+            }
+        }
+        let mut values = HashMap::new();
+        let permitted = visible_clause_for(context, Some("relations"), &mut values, "a");
+        let local = if working.focus.is_some() {
+            ownership_clause(None, &[])
+        } else {
+            "true".into()
+        };
+        values.insert("key".into(), text(asset_key(target)));
+        values.insert("offset".into(), int(offset)?);
+        let mut rows=self.raw(&format!("MATCH (p:OmRow {{key:$key}})-[:OmRelationFrom|OmRelationTo]-(r:OmRow)-[:OmRelationFrom|OmRelationTo]-(a:OmRow) WHERE a.parent='assets' AND a.key<>p.key AND a.adoption={} AND {permitted} AND {local} RETURN DISTINCT properties(r) AS r, properties(a) AS a ORDER BY r.key SKIP $offset LIMIT 26",wire::Adoption::Adopted as i32),values)?;
+        let next = if rows.len() > 25 {
+            rows.truncate(25);
+            Some(format!(
+                "{revision}:{fingerprint}:{}:{}",
+                context.authority_revision,
+                offset + 25
+            ))
+        } else {
+            None
+        };
+        let mut relations = Vec::new();
+        let mut related = BTreeMap::new();
+        for mut row in rows {
+            let (Some(Value::Map(r)), Some(Value::Map(a))) = (row.remove("r"), row.remove("a"))
+            else {
+                return Err(Error::Corrupt);
+            };
+            related.insert(super::super::target(&a)?, a);
+            relations.push(super::super::inventory::relation_projection(&r)?);
+        }
+        Ok(RelationPage {
+            relations,
+            related,
+            next,
+        })
+    }
+    pub(super) fn verify_owned_focus(
+        &self,
+        context: &Context,
+        roots: &[wire::AssetRef],
+        focus: AssetRef,
+    ) -> Result<()> {
+        let roots = roots
+            .iter()
+            .map(|r| parse_target(Some(r)).map(asset_key))
+            .collect::<Result<BTreeSet<_>>>()?;
+        let mut seen = BTreeSet::new();
+        let mut frontier = BTreeSet::from([asset_key(focus)]);
+        while !frontier.is_empty() {
+            if frontier.iter().any(|key| roots.contains(key)) {
+                return Ok(());
+            }
+            let mut next = BTreeSet::new();
+            for reverse in [false, true] {
+                let mut values = HashMap::new();
+                let owner = browse_clause(context, &mut values, Some(reverse), &[]);
+                values.insert(
+                    "keys".into(),
+                    Value::Array(frontier.iter().map(text).collect()),
+                );
+                let path = ownership_path(false, reverse);
+                let rows=self.raw(&format!("UNWIND $keys AS key MATCH {path} WHERE {owner} RETURN DISTINCT p.key AS key LIMIT 1025"),values)?;
+                for row in rows {
+                    next.insert(string(&row, "key")?);
+                }
+                if next.len() > 1024 {
+                    return Err(Error::Limit);
+                }
+            }
+            seen.extend(frontier);
+            frontier = next;
+            frontier.retain(|key| !seen.contains(key));
+            if seen.len() + frontier.len() > 1024 {
+                return Err(Error::Limit);
+            }
+        }
+        Err(Error::Denied)
+    }
 }
 fn scope_clause(scope: &Scope, values: &mut HashMap<String, Value>, alias: &str) -> String {
     match scope {
@@ -41,7 +247,7 @@ fn visible_clause(
 ) -> String {
     visible_clause_for(context, field, values, "a")
 }
-fn visible_clause_for(
+pub(super) fn visible_clause_for(
     context: &Context,
     field: Option<&str>,
     values: &mut HashMap<String, Value>,
@@ -112,8 +318,8 @@ pub(super) fn kind_for_view(view: api::View) -> &'static [wire::AssetKind] {
             K::AddressGroup,
             K::AddressReference,
         ],
-        api::View::Virtualization => &[K::VirtualMachine, K::Device, K::Cluster, K::Storage],
-        api::View::Services => &[K::Service, K::Device, K::VirtualMachine, K::Storage],
+        api::View::Virtualization => &[K::VirtualMachine, K::Device, K::Cluster],
+        api::View::Services => &[K::Service, K::SoftwareInstallation, K::Storage],
     }
 }
 fn value_clause(
@@ -151,6 +357,7 @@ impl Store {
             return Err(Error::Invalid);
         }
         let view = api::View::try_from(query.view).map_err(|_| Error::Invalid)?;
+        let view_kinds = kind_for_view(view);
         let basis = self.usage()?.revision;
         if query.columns.is_empty() {
             query.columns.push("name".into());
@@ -200,8 +407,55 @@ impl Store {
         let mut entry = "MATCH (a:OmRow {parent:'assets'})".to_owned();
         let mut bindings = vec!["a".to_owned()];
         let mut predicate_joins = Vec::new();
+        if query.omit_host_local
+            && (view_kinds.is_empty()
+                || view_kinds.iter().any(|kind| {
+                    matches!(
+                        kind,
+                        wire::AssetKind::IpAddress | wire::AssetKind::AddressReference
+                    )
+                }))
+            && (query.kinds.is_empty()
+                || query.kinds.iter().any(|kind| {
+                    [
+                        wire::AssetKind::IpAddress as i32,
+                        wire::AssetKind::AddressReference as i32,
+                    ]
+                    .contains(kind)
+                }))
+        {
+            predicate_joins.push(" OPTIONAL MATCH (local_ip:OmRow) WHERE local_ip.key='network/'+a.asset+'/'+a.incarnation".into());
+            bindings.push("local_ip".into());
+            let address = "(CASE WHEN local_ip.address IS NOT NULL THEN local_ip.address WHEN local_ip.cidr IS NOT NULL THEN local_ip.cidr ELSE '' END)";
+            let mut local: Vec<_> = [
+                "127.",
+                "169.254.",
+                "fe8",
+                "fe9",
+                "fea",
+                "feb",
+                "::ffff:127.",
+                "::ffff:169.254.",
+            ]
+            .iter()
+            .map(|prefix| format!("{address} STARTS WITH '{}'", prefix))
+            .collect();
+            local.extend(
+                ["::1", "::1/128", "0.0.0.0", "0.0.0.0/32", "::", "::/128"]
+                    .iter()
+                    .map(|value| format!("{address}='{value}'")),
+            );
+            clauses.push(format!(
+                "(NOT (a.kind IN [{},{}]) OR NOT ({}))",
+                wire::AssetKind::AddressReference as i32,
+                wire::AssetKind::IpAddress as i32,
+                local.join(" OR ")
+            ));
+        }
         let mut network_scope = false;
-        let view_kinds = kind_for_view(view);
+        if view == api::View::Virtualization && query.kinds.is_empty() {
+            clauses.push(format!("a.kind<>{}", wire::AssetKind::Cluster as i32));
+        }
         if !view_kinds.is_empty() {
             clauses.push(format!(
                 "a.kind IN {}",
@@ -213,6 +467,17 @@ impl Store {
                             .map(|k| Value::Int(*k as i32 as i64))
                             .collect()
                     )
+                )
+            ));
+        }
+        if view == api::View::Virtualization {
+            let role_visible = visible_clause(context, Some("virtualization_role"), &mut values);
+            clauses.push(format!(
+                "(a.kind<>{} OR (a.virtualization_role={} AND {role_visible}))",
+                wire::AssetKind::Device as i32,
+                parameter(
+                    &mut values,
+                    text(api::VirtualizationRole::Hypervisor.as_str_name())
                 )
             ));
         }
@@ -245,7 +510,93 @@ impl Store {
             focus: query.focus.clone(),
             expected: None,
         };
-        let selection = tx.selection(context, &working, false)?;
+        let browse_roots: Vec<_> = query
+            .focus
+            .iter()
+            .chain(query.roots.iter().filter(|_| query.focus.is_none()))
+            .cloned()
+            .collect();
+        let mut level_only = query.level_only || query.focus.is_some();
+        for root in &browse_roots {
+            let row = tx.visible_asset(context, parse_target(Some(root))?)?;
+            if [
+                wire::AssetKind::AddressSpace as u64,
+                wire::AssetKind::Prefix as u64,
+            ]
+            .contains(&number(&row, "kind")?)
+            {
+                // IPAM containment is an indexed namespace/range selection, not ownership.
+                level_only = false;
+            }
+        }
+        if level_only {
+            if query.focus.is_some() && !query.roots.is_empty() {
+                tx.selection(context, &working, false)?;
+            }
+            let child_kinds = if query.kinds.is_empty() {
+                view_kinds.to_vec()
+            } else {
+                query
+                    .kinds
+                    .iter()
+                    .map(|kind| wire::AssetKind::try_from(*kind).map_err(|_| Error::Invalid))
+                    .collect::<Result<Vec<_>>>()?
+            };
+            if browse_roots.is_empty() {
+                predicate_joins.push(format!(
+                    " WITH {} WHERE {}",
+                    bindings.join(", "),
+                    clauses.join(" AND ")
+                ));
+                clauses.clear();
+                // Keep the anti-join in the optimized top-level plan, with an
+                // explicit key for its per-resource parent lookup.
+                for (reverse, path) in [
+                    (
+                        false,
+                        "(probe:OmRow {key:a.key})<-[:OmRelationTo]-(r:OmRow)<-[:OmRelationFrom]-(p:OmRow)",
+                    ),
+                    (
+                        true,
+                        "(probe:OmRow {key:a.key})-[:OmRelationFrom]->(r:OmRow)-[:OmRelationTo]->(p:OmRow)",
+                    ),
+                ] {
+                    let owner = browse_clause(context, &mut values, Some(reverse), &child_kinds);
+                    let flag = if reverse {
+                        "reverse_owned"
+                    } else {
+                        "forward_owned"
+                    };
+                    predicate_joins.push(format!(
+                        " OPTIONAL MATCH {path} WHERE {owner} WITH {}, p IS NOT NULL AS {flag}",
+                        bindings.join(", ")
+                    ));
+                    bindings.push(flag.into());
+                    clauses.push(format!("NOT {flag}"));
+                }
+            } else {
+                let owner = browse_clause(context, &mut values, None, &child_kinds);
+                let keys = browse_roots
+                    .iter()
+                    .map(|r| parse_target(Some(r)).map(|t| text(asset_key(t))))
+                    .collect::<Result<Vec<_>>>()?;
+                let keys = parameter(&mut values, Value::Array(keys));
+                entry = format!(
+                    "UNWIND {keys} AS root_key MATCH (p:OmRow {{key:root_key}})-[:OmRelationFrom|OmRelationTo]-(r:OmRow)-[:OmRelationFrom|OmRelationTo]-(a:OmRow)"
+                );
+                bindings.extend(["p".into(), "r".into()]);
+                clauses.push(owner);
+            }
+        }
+        let unscoped = api::WorkingContext::default();
+        let mut selection = tx.selection(
+            context,
+            if level_only { &unscoped } else { &working },
+            false,
+        )?;
+        if !level_only && query.focus.is_none() && !working.roots.is_empty() {
+            selection.members = Some(tx.working_scope(context, &working.roots)?);
+        }
         if let Some(roots) = &selection.members {
             let mut selected = vec![format!(
                 "a.key IN {}",
@@ -307,11 +658,21 @@ impl Store {
             if term.parse::<AssetId>().is_ok() {
                 clauses.push(format!("a.asset={}", parameter(&mut values, text(&term))));
             } else if let Ok(ip) = term.parse::<std::net::IpAddr>() {
-                entry = format!(
-                    "MATCH (ip:OmRow {{parent:'networks'}}) WHERE ip.cidr STARTS WITH {} OR ip.address={} MATCH (a:OmRow) WHERE a.key='asset/'+ip.asset",
-                    parameter(&mut values, text(format!("{ip}/"))),
-                    parameter(&mut values, text(ip.to_string()))
-                );
+                let literal = parameter(&mut values, text(ip.to_string()));
+                let cidr = parameter(&mut values, text(format!("{ip}/")));
+                if level_only {
+                    predicate_joins.push(
+                        " MATCH (ip:OmRow) WHERE ip.key='network/'+a.asset+'/'+a.incarnation"
+                            .into(),
+                    );
+                    clauses.push(format!(
+                        "(ip.cidr STARTS WITH {cidr} OR ip.address={literal})"
+                    ));
+                } else {
+                    entry = format!(
+                        "MATCH (ip:OmRow {{parent:'networks'}}) WHERE ip.cidr STARTS WITH {cidr} OR ip.address={literal} MATCH (a:OmRow) WHERE a.key='asset/'+ip.asset"
+                    );
+                }
                 clauses.push("ip.incarnation=a.incarnation".into());
                 bindings.push("ip".into());
                 let canonical = visible_clause(context, Some("cidr"), &mut values);
@@ -349,11 +710,15 @@ impl Store {
                         parameter(&mut values, Value::Bool(term == "true"))
                     ));
                 }
-                entry = format!(
-                    "MATCH (s:OmRow {{layer:'intent'}}) WHERE s.field IN {} AND ({}) MATCH (a:OmRow) WHERE a.key=s.parent",
-                    parameter(&mut values, strings(&searchable)),
-                    value_matches.join(" OR ")
-                );
+                let fields = parameter(&mut values, strings(&searchable));
+                let matches = value_matches.join(" OR ");
+                if level_only {
+                    predicate_joins.push(format!(" MATCH (s:OmRow) WHERE s.parent=a.key AND s.layer='intent' AND s.field IN {fields} AND ({matches})"));
+                } else {
+                    entry = format!(
+                        "MATCH (s:OmRow {{layer:'intent'}}) WHERE s.field IN {fields} AND ({matches}) MATCH (a:OmRow) WHERE a.key=s.parent"
+                    );
+                }
                 bindings.push("s".into());
                 let search_scopes: Vec<_> = searchable
                     .iter()
@@ -584,6 +949,11 @@ impl Store {
                 fields,
             });
         }
+        let contexts = if query.include_context {
+            tx.item_contexts(context, &rows, &query)?
+        } else {
+            Vec::new()
+        };
         tx.commit()?;
         if self.usage()?.revision != revision {
             return Err(Error::Expired);
@@ -591,6 +961,7 @@ impl Store {
         let next_offset = offset.checked_add(u64::from(limit)).ok_or(Error::Limit)?;
         Ok(api::Page {
             items,
+            contexts,
             total,
             revision,
             next: if next_offset < total {
@@ -630,10 +1001,14 @@ impl Store {
             .collect();
         let mut relations = Vec::new();
         let mut related_keys = BTreeSet::new();
-        let (candidates, adjacent) = if context.field(target, asset.kind, "relations", false) {
-            tx.adjacent(target)?
+        let RelationPage {
+            relations: candidates,
+            related: adjacent,
+            next: relations_next,
+        } = if context.field(target, asset.kind, "relations", false) {
+            tx.relation_page(context, target, working, read.relations_cursor.as_deref())?
         } else {
-            (Vec::new(), BTreeMap::new())
+            RelationPage::default()
         };
         for relation in candidates {
             let from = parse_target(relation.from.as_ref())?;
@@ -712,6 +1087,16 @@ impl Store {
         };
         let (participants, participants_complete, group) =
             self.workspace_network_fields(context, target, asset.kind, &mut fields)?;
+        let host_network = if read.relations_cursor.is_none() {
+            tx.read_host_network(context, target, asset.kind)?
+        } else {
+            Vec::new()
+        };
+        let current_addresses = if read.relations_cursor.is_none() {
+            tx.current_addresses(context, target, asset.kind)?
+        } else {
+            Vec::new()
+        };
         tx.commit()?;
         if self.usage()?.revision != basis {
             return Err(Error::Expired);
@@ -730,6 +1115,9 @@ impl Store {
             participants_complete,
             group,
             related,
+            host_network,
+            current_addresses,
+            relations_next,
         })
     }
 
@@ -898,7 +1286,9 @@ impl Store {
         relation.authority_id = authority;
         let (from, to) = tx.check_relationship(context, &selection, &relation)?;
         if relation.revision == 0 {
-            for existing in tx.working_relations(from)? {
+            let rows=tx.query("MATCH (a:OmRow {key:$from})-[:OmRelationFrom]->(r:OmRow)-[:OmRelationTo]->(b:OmRow {key:$to}) WHERE r.kind=$kind RETURN properties(r) AS p LIMIT 1",params([("from",text(asset_key(from))),("to",text(asset_key(to))),("kind",Value::Int(relation.kind as i64))]))?;
+            for row in rows {
+                let existing = super::super::inventory::relation_projection(&row)?;
                 if existing.from == relation.from
                     && existing.to == relation.to
                     && existing.kind == relation.kind
@@ -1032,6 +1422,11 @@ impl Tx<'_> {
             let name = string(name, "vtext")?;
             row.insert("name".into(), text(&name));
             row.insert("name_sort".into(), text(name.to_lowercase()));
+        }
+        if let Some(role) = self.get(&format!("{key}/intent/virtualization_role"))?
+            && role.get("vtype") == Some(&Value::Int(1))
+        {
+            row.insert("virtualization_role".into(), text(string(&role, "vtext")?));
         }
         self.put_against(&key, "assets", Class::Inventory, row, old.as_ref())?;
         self.audit(&key, &context.actor, "inventory.accepted", revision, now)?;
@@ -1180,6 +1575,7 @@ pub(super) fn validate_column(name: &str, definitions: &[api::Definition]) -> Re
         "name",
         "description",
         "serial",
+        "virtualization_role",
         "cidr",
         "address_space",
         "link_scope",

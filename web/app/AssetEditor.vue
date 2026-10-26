@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import Dialog from './Dialog.vue';
 import { call, typedField, input, label, key, model, AssetKind, type AssetRef } from './api';
 
-const props = defineProps<{ item?: model.Item; definitions: model.Definition[]; initialKind?: AssetKind; working: model.WorkingContext; view: model.View }>();
+const props = defineProps<{ item?: model.Item; definitions: model.Definition[]; initialKind?: AssetKind; initialHypervisor?: boolean; working: model.WorkingContext; view: model.View }>();
 const emit = defineEmits<{ close: []; saved: [target?: AssetRef] }>();
 const kind = ref<number | undefined>(props.item?.kind ?? props.initialKind);
 const actions = ref<model.Actions>();
@@ -29,6 +29,7 @@ const fields = computed<EditorField[]>(() => {
     { id: 'name', name: 'Name', type: model.FieldType.TEXT, choices: [], advanced: false },
     { id: 'description', name: 'Description', type: model.FieldType.TEXT, choices: [], advanced: false },
     { id: 'serial', name: 'Serial number', type: model.FieldType.TEXT, choices: [], advanced: false },
+    { id: 'virtualization_role', name: 'Virtualization role', type: model.FieldType.CHOICE, choices: [`VIRTUALIZATION_ROLE_${model.VirtualizationRole[model.VirtualizationRole.HYPERVISOR]}`], advanced: false },
   ];
   const custom = props.definitions.filter(d => !d.retired && kind.value !== undefined && d.kinds.includes(kind.value))
     .map(d => ({ id: d.id, name: d.name, type: d.type, choices: d.choices, advanced: false }));
@@ -38,6 +39,7 @@ watch(fields, available => {
   for (const f of available) {
     if (!(f.id in values)) values[f.id] = input(props.item?.fields.find(v => v.name === f.id));
     if (!(f.id in modes)) modes[f.id] = props.item ? 'preserve' : ['name', 'address'].includes(f.id) ? 'set' : 'preserve';
+    if (!props.item && props.initialHypervisor && f.id === 'virtualization_role' && values[f.id] === '') { values[f.id]=`VIRTUALIZATION_ROLE_${model.VirtualizationRole[model.VirtualizationRole.HYPERVISOR]}`; modes[f.id]='set'; }
   }
 }, { immediate: true });
 watch(choices, available => {

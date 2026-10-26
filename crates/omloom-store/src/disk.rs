@@ -22,7 +22,7 @@ use std::{
 type Properties = BTreeMap<String, Value>;
 type Result<T> = std::result::Result<T, Error>;
 const ROOT: &str = "installation";
-const SCHEMA_VERSION: u64 = 3;
+const SCHEMA_VERSION: u64 = 7;
 const MAX_CHILDREN: usize = 2048;
 mod inventory;
 mod lifecycle;
@@ -323,6 +323,10 @@ impl Store {
         for name in ["candidate", "cursor", "snapshot"] {
             schema.add_property(PropertyDef::new(name, PropertyType::String));
         }
+        schema.add_property(PropertyDef::new(
+            "virtualization_role",
+            PropertyType::String,
+        ));
         for name in ["completeness", "review_rows", "review_bytes"] {
             schema.add_property(PropertyDef::new(name, PropertyType::Int));
         }
@@ -403,6 +407,8 @@ impl Store {
             "family",
             "vlan_id",
             "prefix_length",
+            "count",
+            "bytes",
         ] {
             schema.add_property(PropertyDef::new(name, PropertyType::Int));
         }
@@ -425,6 +431,7 @@ impl Store {
         schema.add_property(PropertyDef::new("digest", PropertyType::Binary));
         schema.add_property(PropertyDef::new("query", PropertyType::Binary));
         schema.add_property(PropertyDef::new("working", PropertyType::Binary));
+        schema.add_property(PropertyDef::new("payload", PropertyType::Binary));
         for name in ["choices", "audiences", "editors", "columns"] {
             schema.add_property(PropertyDef::new(
                 name,
@@ -446,8 +453,11 @@ impl Store {
                 None,
                 None,
             )?;
-            if root.rows.first().and_then(|row| row.get("version")) != Some(&Value::Int(2))
-                || current.mode != schema.mode
+            let previous_version = root.rows.first().and_then(|row| row.get("version"));
+            if !matches!(
+                root.rows.first().and_then(|row| row.get("version")),
+                Some(Value::Int(2..=6))
+            ) || current.mode != schema.mode
                 || current.placement != schema.placement
                 || current.temporal != schema.temporal
                 || current
@@ -459,6 +469,18 @@ impl Store {
                     .keys()
                     .filter(|key| !current.properties.contains_key(*key))
                     .any(|key| {
+                        if key == "count" || key == "bytes" {
+                            return false;
+                        }
+                        if previous_version == Some(&Value::Int(6)) {
+                            return true;
+                        }
+                        if previous_version == Some(&Value::Int(3)) {
+                            return key != "payload" && key != "virtualization_role";
+                        }
+                        if matches!(previous_version, Some(Value::Int(4 | 5))) {
+                            return key != "virtualization_role";
+                        }
                         ![
                             "address",
                             "meaning",
@@ -467,6 +489,10 @@ impl Store {
                             "ip_order",
                             "prefix_length",
                             "working",
+                            "payload",
+                            "virtualization_role",
+                            "count",
+                            "bytes",
                         ]
                         .contains(&key.as_str())
                     })
@@ -531,7 +557,7 @@ impl Store {
         }
         let root = store.read(ROOT)?.ok_or(Error::Corrupt)?;
         let version = number(&root, "schema")?;
-        if version != 2 && version != SCHEMA_VERSION {
+        if !(2..=SCHEMA_VERSION).contains(&version) {
             return Err(Error::SchemaVersion);
         }
         if string(&root, "policy")? != store.policy_identity() {
@@ -539,10 +565,15 @@ impl Store {
         }
         if version == 2 {
             workspace::upgrade_network_order(&store)?;
+        }
+        if version < 7 {
+            workspace::network_facts::upgrade(&store)?;
+        }
+        if version < SCHEMA_VERSION {
             // One-direction admission of scoped address facts. Older readers
             // must refuse the new kind; unbound old previews expire on acceptance.
             let mut tx = store.begin()?;
-            if number(&tx.root, "schema")? == 2 {
+            if number(&tx.root, "schema")? < SCHEMA_VERSION {
                 tx.root.insert("schema".into(), int(SCHEMA_VERSION)?);
                 tx.changed = true;
             }
@@ -826,6 +857,9 @@ impl Tx<'_> {
         if self.root.get("restored") == Some(&Value::Bool(true)) {
             return Err(Error::RecoveryRequired);
         }
+        self.delete_projection(key)
+    }
+    fn delete_projection(&mut self, key: &str) -> Result<()> {
         if let Some(old) = self.get(key)? {
             self.counters(Some(&old), None)?;
             self.store.db.execute_in_transaction(

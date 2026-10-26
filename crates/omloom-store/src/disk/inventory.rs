@@ -199,6 +199,7 @@ impl Store {
                 tx.commit()?;
                 return number(old, "revision");
             }
+            tx.retire_current_facts(target)?;
             for row in children {
                 let child = string(&row, "key")?;
                 if row.get("layer") == Some(&text("mapping")) {
@@ -773,7 +774,13 @@ pub(super) fn compatible(
                     K::VirtualMachine | K::Interface,
                     K::Interface | K::AddressReference
                 )
-                | (K::Service, K::AddressReference)
+                | (K::Service, K::Interface | K::AddressReference)
+                | (
+                    K::SoftwareInstallation,
+                    K::Interface | K::AddressReference | K::Service
+                )
+                | (K::Device | K::VirtualMachine, K::SoftwareInstallation)
+                | (K::Service, K::SoftwareInstallation)
         ),
         R::HasPort => matches!((from, to), (K::Device, K::Port)),
         R::Carries => matches!((from, to), (K::Port, K::Interface)),

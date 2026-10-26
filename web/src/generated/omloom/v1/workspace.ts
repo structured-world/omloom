@@ -110,6 +110,28 @@ export interface Query {
      * @generated from protobuf field: optional omloom.v1.AssetRef focus = 12
      */
     focus?: AssetRef;
+    /**
+     * Request bounded owner/address context for visible rows, not additional authority.
+     *
+     * @generated from protobuf field: bool include_context = 13
+     */
+    includeContext: boolean;
+    /**
+     * Ordinary inventory presentation omits host-local address resources before pagination.
+     * This is a projection choice, not an authorization grant or removal of source evidence.
+     *
+     * @generated from protobuf field: bool omit_host_local = 14
+     */
+    omitHostLocal: boolean;
+    /**
+     * Browse one ownership level: root containers when no scope is selected,
+     * otherwise direct children of roots/focus. View and kind filters apply before
+     * count/pagination. Explicit search may request a flat scoped result instead.
+     * This changes presentation only and never grants resource/field authority.
+     *
+     * @generated from protobuf field: bool level_only = 15
+     */
+    levelOnly: boolean;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.WorkingContext
@@ -281,6 +303,70 @@ export interface Page {
      * @generated from protobuf field: uint64 revision = 4
      */
     revision: bigint;
+    /**
+     * Bounded authorized owner/address hints for this page only, absent unless requested.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.ItemContext contexts = 5
+     */
+    contexts: ItemContext[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.OwnerContext
+ */
+export interface OwnerContext {
+    /**
+     * Current authorized owner identity; never a fabricated unknown resource.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef target = 1
+     */
+    target?: AssetRef;
+    /**
+     * Actual owner kind, preserving OS/container/host distinctions.
+     *
+     * @generated from protobuf field: omloom.v1.AssetKind kind = 2
+     */
+    kind: AssetKind;
+    /**
+     * Permitted current owner label, without unrelated owner fields.
+     *
+     * @generated from protobuf field: string name = 3
+     */
+    name: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.ItemContext
+ */
+export interface ItemContext {
+    /**
+     * Visible row to which these server-derived hints apply.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef target = 1
+     */
+    target?: AssetRef;
+    /**
+     * Authorized containment path from the enclosing host to the immediate owner.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.OwnerContext owners = 2
+     */
+    owners: OwnerContext[];
+    /**
+     * Permitted non-local addresses attached to this resource's local interfaces.
+     *
+     * @generated from protobuf field: repeated string addresses = 3
+     */
+    addresses: string[];
+    /**
+     * Multiple authorized immediate owners at a shared boundary, never a fabricated chain.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.OwnerContext alternative_owners = 5
+     */
+    alternativeOwners: OwnerContext[];
+    /**
+     * Actual permitted service binds for this page, independent of configured interface addresses.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.SocketBind endpoints = 6
+     */
+    endpoints: SocketBind[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Read
@@ -292,6 +378,12 @@ export interface Read {
      * @generated from protobuf field: omloom.v1.AssetRef target = 1
      */
     target?: AssetRef;
+    /**
+     * Server-issued relation continuation, bound to target, context and current revision.
+     *
+     * @generated from protobuf field: optional string relations_cursor = 2
+     */
+    relationsCursor?: string;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Detail
@@ -347,6 +439,467 @@ export interface Detail {
      * @generated from protobuf field: repeated omloom.workspace.v1.Item related = 8
      */
     related: Item[];
+    /**
+     * Authorized current local network evidence; absent does not establish absence.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.HostNetworkView host_network = 9
+     */
+    hostNetwork: HostNetworkView[];
+    /**
+     * Authorized current interface-address facts; no address asset identities or history.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.InterfaceAddressView current_addresses = 10
+     */
+    currentAddresses: InterfaceAddressView[];
+    /**
+     * Next authorized relation page, absent at the end. Each page contains at most 25 relations.
+     *
+     * @generated from protobuf field: optional string relations_next = 11
+     */
+    relationsNext?: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.AddressObservation
+ */
+export interface AddressObservation {
+    /**
+     * Current source value, without a separate inventory identity or historical sample.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.CurrentAddress value = 1
+     */
+    value?: CurrentAddress;
+    /**
+     * Exact source observation time for this value, Unix milliseconds; never freshened by omission.
+     * Absent for migrated partial collections whose old format lost individual dates.
+     *
+     * @generated from protobuf field: optional uint64 observed_at = 2
+     */
+    observedAt?: bigint;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.InterfaceAddressView
+ */
+export interface InterfaceAddressView {
+    /**
+     * Latest source checkpoint and completeness; addresses are carried only in observations below.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.InterfaceAddresses coverage = 1
+     */
+    coverage?: InterfaceAddresses;
+    /**
+     * Current facts with independent dates, including facts omitted from a partial refresh.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.AddressObservation observations = 2
+     */
+    observations: AddressObservation[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.NetworkObservation
+ */
+export interface NetworkObservation {
+    /**
+     * Exact source observation time, Unix milliseconds, independent of the latest scan checkpoint.
+     *
+     * @generated from protobuf field: uint64 observed_at = 1
+     */
+    observedAt: bigint;
+    /**
+     * Actual boot/session basis at collection; an omitted partial fact retains its prior basis.
+     *
+     * @generated from protobuf field: string basis = 2
+     */
+    basis: string;
+    /**
+     * Exactly one current typed fact. It does not imply reachability or effective packet permission.
+     *
+     * @generated from protobuf oneof: value
+     */
+    value: {
+        oneofKind: "socket";
+        /**
+         * Observed service-owned kernel bind.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.SocketBind socket = 3
+         */
+        socket: SocketBind;
+    } | {
+        oneofKind: "route";
+        /**
+         * Observed local routing entry.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.LocalRoute route = 4
+         */
+        route: LocalRoute;
+    } | {
+        oneofKind: "rule";
+        /**
+         * Observed application firewall rule.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.ApplicationRule rule = 5
+         */
+        rule: ApplicationRule;
+    } | {
+        oneofKind: "policy";
+        /**
+         * One reported application firewall setting, independently dated.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.FirewallSetting policy = 6
+         */
+        policy: FirewallSetting;
+    } | {
+        oneofKind: undefined;
+    };
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.HostNetworkView
+ */
+export interface HostNetworkView {
+    /**
+     * Latest source checkpoint and reported policy/coverage, without duplicated fact arrays.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.HostNetwork coverage = 1
+     */
+    coverage?: HostNetwork;
+    /**
+     * Current facts retain their own exact observation time and boot basis.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.NetworkObservation observations = 2
+     */
+    observations: NetworkObservation[];
+    /**
+     * Authorized current labels for services referenced by these facts, independent of relation pagination.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.OwnerContext services = 3
+     */
+    services: OwnerContext[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.FirewallSetting
+ */
+export interface FirewallSetting {
+    /**
+     * Source-reported setting identity, independent of other optional policies.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.FirewallSetting.Kind kind = 1
+     */
+    kind: FirewallSetting_Kind;
+    /**
+     * Observed policy value; absence is represented by no observation, not false.
+     *
+     * @generated from protobuf field: bool enabled = 2
+     */
+    enabled: boolean;
+}
+/**
+ * Reported application policy selector; never an effective per-port verdict.
+ *
+ * @generated from protobuf enum omloom.workspace.v1.FirewallSetting.Kind
+ */
+export enum FirewallSetting_Kind {
+    /**
+     * @generated from protobuf enum value: KIND_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: KIND_ENABLED = 1;
+     */
+    ENABLED = 1,
+    /**
+     * @generated from protobuf enum value: KIND_BLOCK_ALL = 2;
+     */
+    BLOCK_ALL = 2,
+    /**
+     * @generated from protobuf enum value: KIND_ALLOW_BUILTIN_SIGNED = 3;
+     */
+    ALLOW_BUILTIN_SIGNED = 3,
+    /**
+     * @generated from protobuf enum value: KIND_ALLOW_DOWNLOADED_SIGNED = 4;
+     */
+    ALLOW_DOWNLOADED_SIGNED = 4
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.CurrentAddress
+ */
+export interface CurrentAddress {
+    /**
+     * Source-configured IP literal; not a resource identity or allocation claim.
+     *
+     * @generated from protobuf field: string address = 1
+     */
+    address: string;
+    /**
+     * Source-known assignment mask; absence means unknown, zero means /0.
+     *
+     * @generated from protobuf field: optional uint32 prefix_length = 2
+     */
+    prefixLength?: number;
+    /**
+     * Source-known generation class, independent of preferred/deprecated state.
+     * TEMPORARY is classified at collection and rejected before persistence.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.AddressStability stability = 3
+     */
+    stability: AddressStability;
+    /**
+     * Source-known preferred/deprecated state; deprecated does not mean invalid.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.AddressState state = 4
+     */
+    state: AddressState;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.InterfaceAddresses
+ */
+export interface InterfaceAddresses {
+    /**
+     * Existing interface being observed; no separate address objects are created.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef interface = 1
+     */
+    interface?: AssetRef;
+    /**
+     * Selected source label; it grants no authority over the interface.
+     *
+     * @generated from protobuf field: string source = 2
+     */
+    source: string;
+    /**
+     * Source observation instant in Unix milliseconds, used for stale-write rejection.
+     *
+     * @generated from protobuf field: uint64 observed_at = 3
+     */
+    observedAt: bigint;
+    /**
+     * Current non-temporary facts, at most 64. Equal input writes no new versions.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.CurrentAddress addresses = 4
+     */
+    addresses: CurrentAddress[];
+    /**
+     * Explicit completeness within this source/interface. Partial input preserves omissions.
+     *
+     * @generated from protobuf field: bool complete = 5
+     */
+    complete: boolean;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.SocketBind
+ */
+export interface SocketBind {
+    /**
+     * Existing owning service identity in this installation, never a physical Port.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef service = 1
+     */
+    service?: AssetRef;
+    /**
+     * Observed transport, tcp or udp; UDP bind does not prove a server role.
+     *
+     * @generated from protobuf field: string protocol = 2
+     */
+    protocol: string;
+    /**
+     * Reported socket family: IPv4, IPv6 or IPv4+IPv6.
+     *
+     * @generated from protobuf field: string family = 3
+     */
+    family: string;
+    /**
+     * Kernel local literal or wildcard *, including a source-local IPv6 zone.
+     *
+     * @generated from protobuf field: string bind = 4
+     */
+    bind: string;
+    /**
+     * Observed nonzero local transport port, constrained to 65535.
+     *
+     * @generated from protobuf field: uint32 port = 5
+     */
+    port: number;
+    /**
+     * Source-known literal generation class; wildcard/unknown remains unspecified.
+     * Temporary literal binds must be discarded by the collector, never persisted.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.AddressStability address_stability = 6
+     */
+    addressStability: AddressStability;
+    /**
+     * Source-known preferred/deprecated state, independent of generation class.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.AddressState address_state = 7
+     */
+    addressState: AddressState;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.LocalRoute
+ */
+export interface LocalRoute {
+    /**
+     * Source-reported numeric destination; source abbreviations remain explicit.
+     *
+     * @generated from protobuf field: string destination = 1
+     */
+    destination: string;
+    /**
+     * Source-reported next hop, interface reference or link-layer address.
+     *
+     * @generated from protobuf field: string gateway = 2
+     */
+    gateway: string;
+    /**
+     * Source-local kernel flags, not a portable routing policy.
+     *
+     * @generated from protobuf field: string flags = 3
+     */
+    flags: string;
+    /**
+     * Interface name in the observed OS installation.
+     *
+     * @generated from protobuf field: string interface = 4
+     */
+    interface: string;
+    /**
+     * Source address family, IPv4 or IPv6.
+     *
+     * @generated from protobuf field: string family = 5
+     */
+    family: string;
+    /**
+     * Whether the source marks a link-layer/local-host entry, not a network route.
+     *
+     * @generated from protobuf field: bool link_layer = 6
+     */
+    linkLayer: boolean;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.ApplicationRule
+ */
+export interface ApplicationRule {
+    /**
+     * Source application path or bundle identity; no basename-based process match.
+     *
+     * @generated from protobuf field: string subject = 1
+     */
+    subject: string;
+    /**
+     * Reported app action, allow incoming or block incoming. Not a packet verdict.
+     *
+     * @generated from protobuf field: string action = 2
+     */
+    action: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.HostNetwork
+ */
+export interface HostNetwork {
+    /**
+     * Existing software installation observed by the selected local source.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef installation = 1
+     */
+    installation?: AssetRef;
+    /**
+     * Operator-selected source label; cannot assert actor identity or authority.
+     *
+     * @generated from protobuf field: string source = 2
+     */
+    source: string;
+    /**
+     * Actual source observation time, milliseconds since Unix epoch; not server freshness.
+     *
+     * @generated from protobuf field: uint64 observed_at = 3
+     */
+    observedAt: bigint;
+    /**
+     * Source boot/session basis, not a durable OS installation identifier.
+     *
+     * @generated from protobuf field: string basis = 4
+     */
+    basis: string;
+    /**
+     * Selected current service-owned kernel binds, without remote flows or counters.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.SocketBind sockets = 5
+     */
+    sockets: SocketBind[];
+    /**
+     * Source-local route and link-layer rows, not canonical IPAM or upstream topology.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.LocalRoute routes = 6
+     */
+    routes: LocalRoute[];
+    /**
+     * Readable application firewall rules, without inferred effective port decisions.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.ApplicationRule rules = 7
+     */
+    rules: ApplicationRule[];
+    /**
+     * Actual partial/verified/failed/blocked socket-source coverage, bounded readable text.
+     *
+     * @generated from protobuf field: string socket_coverage = 8
+     */
+    socketCoverage: string;
+    /**
+     * Actual route-source coverage; failed retrieval never means no routes.
+     *
+     * @generated from protobuf field: string route_coverage = 9
+     */
+    routeCoverage: string;
+    /**
+     * Actual application-firewall coverage, independent of packet filtering.
+     *
+     * @generated from protobuf field: string application_coverage = 10
+     */
+    applicationCoverage: string;
+    /**
+     * Actual PF coverage or permission failure; unknown never means disabled.
+     *
+     * @generated from protobuf field: string packet_filter_coverage = 11
+     */
+    packetFilterCoverage: string;
+    /**
+     * Reported application firewall enablement; omitted when unreadable.
+     *
+     * @generated from protobuf field: optional bool firewall_enabled = 12
+     */
+    firewallEnabled?: boolean;
+    /**
+     * Reported application block-all policy; omitted when unreadable.
+     *
+     * @generated from protobuf field: optional bool block_all = 13
+     */
+    blockAll?: boolean;
+    /**
+     * Reported signed-app policy; omitted when unreadable.
+     *
+     * @generated from protobuf field: optional bool allow_builtin_signed = 14
+     */
+    allowBuiltinSigned?: boolean;
+    /**
+     * Reported downloaded signed-app policy; omitted when unreadable.
+     *
+     * @generated from protobuf field: optional bool allow_downloaded_signed = 15
+     */
+    allowDownloadedSigned?: boolean;
+    /**
+     * Source asserts a complete result within its declared socket collection scope.
+     *
+     * @generated from protobuf field: bool sockets_complete = 16
+     */
+    socketsComplete: boolean;
+    /**
+     * Source asserts a complete result within its declared route collection scope.
+     *
+     * @generated from protobuf field: bool routes_complete = 17
+     */
+    routesComplete: boolean;
+    /**
+     * Source asserts a complete application rules result, independently of PF.
+     *
+     * @generated from protobuf field: bool rules_complete = 18
+     */
+    rulesComplete: boolean;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Participant
@@ -1344,6 +1897,22 @@ export interface Request {
          */
         address: Address;
     } | {
+        oneofKind: "hostNetwork";
+        /**
+         * Accept selected dated local network evidence under explicit installation authority.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.HostNetwork host_network = 19
+         */
+        hostNetwork: HostNetwork;
+    } | {
+        oneofKind: "interfaceAddresses";
+        /**
+         * Current source/interface address facts; temporary addresses are rejected.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.InterfaceAddresses interface_addresses = 20
+         */
+        interfaceAddresses: InterfaceAddresses;
+    } | {
         oneofKind: undefined;
     };
 }
@@ -1466,6 +2035,19 @@ export enum View {
     SERVICES = 4
 }
 /**
+ * @generated from protobuf enum omloom.workspace.v1.VirtualizationRole
+ */
+export enum VirtualizationRole {
+    /**
+     * @generated from protobuf enum value: VIRTUALIZATION_ROLE_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: VIRTUALIZATION_ROLE_HYPERVISOR = 1;
+     */
+    HYPERVISOR = 1
+}
+/**
  * @generated from protobuf enum omloom.workspace.v1.FieldType
  */
 export enum FieldType {
@@ -1510,6 +2092,40 @@ export enum SharedUse {
      * @generated from protobuf enum value: SHARED_USE_UNSPECIFIED = 3;
      */
     UNSPECIFIED = 3
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.AddressStability
+ */
+export enum AddressStability {
+    /**
+     * @generated from protobuf enum value: ADDRESS_STABILITY_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: ADDRESS_STABILITY_STABLE = 1;
+     */
+    STABLE = 1,
+    /**
+     * @generated from protobuf enum value: ADDRESS_STABILITY_TEMPORARY = 2;
+     */
+    TEMPORARY = 2
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.AddressState
+ */
+export enum AddressState {
+    /**
+     * @generated from protobuf enum value: ADDRESS_STATE_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: ADDRESS_STATE_PREFERRED = 1;
+     */
+    PREFERRED = 1,
+    /**
+     * @generated from protobuf enum value: ADDRESS_STATE_DEPRECATED = 2;
+     */
+    DEPRECATED = 2
 }
 /**
  * @generated from protobuf enum omloom.workspace.v1.AddressMeaning
@@ -1557,7 +2173,10 @@ class Query$Type extends MessageType<Query> {
             { no: 9, name: "cursor", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 10, name: "limit", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
             { no: 11, name: "unplaced", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
-            { no: 12, name: "focus", kind: "message", T: () => AssetRef }
+            { no: 12, name: "focus", kind: "message", T: () => AssetRef },
+            { no: 13, name: "include_context", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 14, name: "omit_host_local", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 15, name: "level_only", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
         ]);
     }
 }
@@ -1645,7 +2264,8 @@ class Page$Type extends MessageType<Page> {
             { no: 1, name: "items", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Item },
             { no: 2, name: "next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 3, name: "total", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
-            { no: 4, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
+            { no: 4, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 5, name: "contexts", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => ItemContext }
         ]);
     }
 }
@@ -1654,10 +2274,41 @@ class Page$Type extends MessageType<Page> {
  */
 export const Page = new Page$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class OwnerContext$Type extends MessageType<OwnerContext> {
+    constructor() {
+        super("omloom.workspace.v1.OwnerContext", [
+            { no: 1, name: "target", kind: "message", T: () => AssetRef },
+            { no: 2, name: "kind", kind: "enum", T: () => ["omloom.v1.AssetKind", AssetKind, "ASSET_KIND_"] },
+            { no: 3, name: "name", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.OwnerContext
+ */
+export const OwnerContext = new OwnerContext$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class ItemContext$Type extends MessageType<ItemContext> {
+    constructor() {
+        super("omloom.workspace.v1.ItemContext", [
+            { no: 1, name: "target", kind: "message", T: () => AssetRef },
+            { no: 2, name: "owners", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => OwnerContext },
+            { no: 3, name: "addresses", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
+            { no: 5, name: "alternative_owners", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => OwnerContext },
+            { no: 6, name: "endpoints", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => SocketBind }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.ItemContext
+ */
+export const ItemContext = new ItemContext$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class Read$Type extends MessageType<Read> {
     constructor() {
         super("omloom.workspace.v1.Read", [
-            { no: 1, name: "target", kind: "message", T: () => AssetRef }
+            { no: 1, name: "target", kind: "message", T: () => AssetRef },
+            { no: 2, name: "relations_cursor", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
         ]);
     }
 }
@@ -1676,7 +2327,10 @@ class Detail$Type extends MessageType<Detail> {
             { no: 5, name: "participants", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Participant },
             { no: 6, name: "participants_complete", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
             { no: 7, name: "group", kind: "message", T: () => Item },
-            { no: 8, name: "related", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Item }
+            { no: 8, name: "related", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Item },
+            { no: 9, name: "host_network", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostNetworkView },
+            { no: 10, name: "current_addresses", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => InterfaceAddressView },
+            { no: 11, name: "relations_next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
         ]);
     }
 }
@@ -1684,6 +2338,184 @@ class Detail$Type extends MessageType<Detail> {
  * @generated MessageType for protobuf message omloom.workspace.v1.Detail
  */
 export const Detail = new Detail$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class AddressObservation$Type extends MessageType<AddressObservation> {
+    constructor() {
+        super("omloom.workspace.v1.AddressObservation", [
+            { no: 1, name: "value", kind: "message", T: () => CurrentAddress },
+            { no: 2, name: "observed_at", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.AddressObservation
+ */
+export const AddressObservation = new AddressObservation$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class InterfaceAddressView$Type extends MessageType<InterfaceAddressView> {
+    constructor() {
+        super("omloom.workspace.v1.InterfaceAddressView", [
+            { no: 1, name: "coverage", kind: "message", T: () => InterfaceAddresses },
+            { no: 2, name: "observations", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AddressObservation }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.InterfaceAddressView
+ */
+export const InterfaceAddressView = new InterfaceAddressView$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class NetworkObservation$Type extends MessageType<NetworkObservation> {
+    constructor() {
+        super("omloom.workspace.v1.NetworkObservation", [
+            { no: 1, name: "observed_at", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 2, name: "basis", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "socket", kind: "message", oneof: "value", T: () => SocketBind },
+            { no: 4, name: "route", kind: "message", oneof: "value", T: () => LocalRoute },
+            { no: 5, name: "rule", kind: "message", oneof: "value", T: () => ApplicationRule },
+            { no: 6, name: "policy", kind: "message", oneof: "value", T: () => FirewallSetting }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.NetworkObservation
+ */
+export const NetworkObservation = new NetworkObservation$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class HostNetworkView$Type extends MessageType<HostNetworkView> {
+    constructor() {
+        super("omloom.workspace.v1.HostNetworkView", [
+            { no: 1, name: "coverage", kind: "message", T: () => HostNetwork },
+            { no: 2, name: "observations", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => NetworkObservation },
+            { no: 3, name: "services", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => OwnerContext }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostNetworkView
+ */
+export const HostNetworkView = new HostNetworkView$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class FirewallSetting$Type extends MessageType<FirewallSetting> {
+    constructor() {
+        super("omloom.workspace.v1.FirewallSetting", [
+            { no: 1, name: "kind", kind: "enum", T: () => ["omloom.workspace.v1.FirewallSetting.Kind", FirewallSetting_Kind, "KIND_"] },
+            { no: 2, name: "enabled", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.FirewallSetting
+ */
+export const FirewallSetting = new FirewallSetting$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class CurrentAddress$Type extends MessageType<CurrentAddress> {
+    constructor() {
+        super("omloom.workspace.v1.CurrentAddress", [
+            { no: 1, name: "address", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "prefix_length", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ },
+            { no: 3, name: "stability", kind: "enum", T: () => ["omloom.workspace.v1.AddressStability", AddressStability, "ADDRESS_STABILITY_"] },
+            { no: 4, name: "state", kind: "enum", T: () => ["omloom.workspace.v1.AddressState", AddressState, "ADDRESS_STATE_"] }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.CurrentAddress
+ */
+export const CurrentAddress = new CurrentAddress$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class InterfaceAddresses$Type extends MessageType<InterfaceAddresses> {
+    constructor() {
+        super("omloom.workspace.v1.InterfaceAddresses", [
+            { no: 1, name: "interface", kind: "message", T: () => AssetRef },
+            { no: 2, name: "source", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "observed_at", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 4, name: "addresses", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => CurrentAddress },
+            { no: 5, name: "complete", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.InterfaceAddresses
+ */
+export const InterfaceAddresses = new InterfaceAddresses$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class SocketBind$Type extends MessageType<SocketBind> {
+    constructor() {
+        super("omloom.workspace.v1.SocketBind", [
+            { no: 1, name: "service", kind: "message", T: () => AssetRef },
+            { no: 2, name: "protocol", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "family", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "bind", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 5, name: "port", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 6, name: "address_stability", kind: "enum", T: () => ["omloom.workspace.v1.AddressStability", AddressStability, "ADDRESS_STABILITY_"] },
+            { no: 7, name: "address_state", kind: "enum", T: () => ["omloom.workspace.v1.AddressState", AddressState, "ADDRESS_STATE_"] }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.SocketBind
+ */
+export const SocketBind = new SocketBind$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class LocalRoute$Type extends MessageType<LocalRoute> {
+    constructor() {
+        super("omloom.workspace.v1.LocalRoute", [
+            { no: 1, name: "destination", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "gateway", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "flags", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "interface", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 5, name: "family", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 6, name: "link_layer", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.LocalRoute
+ */
+export const LocalRoute = new LocalRoute$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class ApplicationRule$Type extends MessageType<ApplicationRule> {
+    constructor() {
+        super("omloom.workspace.v1.ApplicationRule", [
+            { no: 1, name: "subject", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "action", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.ApplicationRule
+ */
+export const ApplicationRule = new ApplicationRule$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class HostNetwork$Type extends MessageType<HostNetwork> {
+    constructor() {
+        super("omloom.workspace.v1.HostNetwork", [
+            { no: 1, name: "installation", kind: "message", T: () => AssetRef },
+            { no: 2, name: "source", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "observed_at", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 4, name: "basis", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 5, name: "sockets", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => SocketBind },
+            { no: 6, name: "routes", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => LocalRoute },
+            { no: 7, name: "rules", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => ApplicationRule },
+            { no: 8, name: "socket_coverage", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 9, name: "route_coverage", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 10, name: "application_coverage", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 11, name: "packet_filter_coverage", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 12, name: "firewall_enabled", kind: "scalar", opt: true, T: 8 /*ScalarType.BOOL*/ },
+            { no: 13, name: "block_all", kind: "scalar", opt: true, T: 8 /*ScalarType.BOOL*/ },
+            { no: 14, name: "allow_builtin_signed", kind: "scalar", opt: true, T: 8 /*ScalarType.BOOL*/ },
+            { no: 15, name: "allow_downloaded_signed", kind: "scalar", opt: true, T: 8 /*ScalarType.BOOL*/ },
+            { no: 16, name: "sockets_complete", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 17, name: "routes_complete", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 18, name: "rules_complete", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostNetwork
+ */
+export const HostNetwork = new HostNetwork$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class Participant$Type extends MessageType<Participant> {
     constructor() {
@@ -2094,7 +2926,9 @@ class Request$Type extends MessageType<Request> {
             { no: 14, name: "member", kind: "message", oneof: "command", T: () => Member },
             { no: 15, name: "export", kind: "message", oneof: "command", T: () => Export },
             { no: 16, name: "prepare", kind: "message", oneof: "command", T: () => Prepare },
-            { no: 17, name: "address", kind: "message", oneof: "command", T: () => Address }
+            { no: 17, name: "address", kind: "message", oneof: "command", T: () => Address },
+            { no: 19, name: "host_network", kind: "message", oneof: "command", T: () => HostNetwork },
+            { no: 20, name: "interface_addresses", kind: "message", oneof: "command", T: () => InterfaceAddresses }
         ]);
     }
 }

@@ -27,7 +27,7 @@ test('empty optional integer is not silently accepted as zero', async ({ page })
     await dialog.getByRole('checkbox', { name: 'virtual machine', exact: true }).check();
     await dialog.getByRole('button', { name: 'Review / save definition', exact: true }).click();
     await expect(dialog).toBeHidden();
-    await page.getByRole('button', { name: 'Typed resource', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: 'Typed resource', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Edit resource', exact: true }).click();
     dialog=page.getByRole('dialog');
     await dialog.getByLabel('Capacity change', { exact: true }).selectOption('set');
@@ -40,6 +40,7 @@ test('empty optional integer is not silently accepted as zero', async ({ page })
     await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('Capacity');
     await expect(page.getByRole('region', { name: 'Resource details' }).locator('dd').filter({ hasText: /^0$/ })).toHaveCount(1);
     // Bulk edits use the same typed contract and leave every unselected field intact.
+    await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
     await page.getByRole('checkbox', { name: 'Select Typed resource', exact: true }).check();
     await page.getByRole('button', { name: 'Review bulk change', exact: true }).click();
     dialog = page.getByRole('dialog');
@@ -50,6 +51,7 @@ test('empty optional integer is not silently accepted as zero', async ({ page })
     await dialog.getByLabel('Value', { exact: true }).fill('42');
     await dialog.getByRole('button', { name: 'Apply reviewed change', exact: true }).click();
     await expect(dialog).toBeHidden();
+    await page.getByRole('button', { name: 'Typed resource', exact: true }).click();
     await page.reload();
     await expect(page.getByRole('region', { name: 'Resource details' }).locator('dd').filter({ hasText: /^42$/ })).toHaveCount(1);
     await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: 'Typed resource', exact: true })).toBeVisible();

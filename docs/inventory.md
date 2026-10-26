@@ -47,6 +47,46 @@ view retains the selected root. Details, filters, columns and selection are
 addressable through the URL. Unplaced selects the absence of accepted physical
 placement, not absence of observations or a claim of available capacity.
 
+Ordinary browsing shows one ownership level. Hardware shows containers such as
+hosts instead of flattening their ports into the same list. Select a host as
+scope to browse its direct components; components of a nested device remain
+inside that device. Counts and pagination use this server-side selection.
+Search and explicit field filters can query the selected scope more broadly.
+IPAM selection uses its namespace and address-range semantics independently
+of physical ownership. Hidden ownership does not conceal otherwise permitted
+resources or grant access to their containers.
+
+List context is limited to authorized owner labels and address hints for the
+displayed services/interfaces. It does not load host routing tables, firewall
+rules or the address sets of ancestor hosts and sibling services. Network
+observations are retrieved in the selected resource inspector. Physical
+visualization may request bounded details for visible containers separately;
+opening the estate list does not expand every container.
+
+Service rows can show actual permitted transport endpoints without a dedicated
+interface. Wildcard binds retain their address family; a configured interface
+address and an observed listener are distinct facts. A listener does not prove
+firewall permission or network reachability.
+
+<a id="current-network-observations"></a>
+Current network observations retain separate source claims and exact dates for
+individual addresses, listeners, routes, application rules and policy settings.
+Partial input preserves omitted values with their earlier dates and boot basis.
+A complete section replaces only that source's section. Values and freshness
+metadata are stored separately; identical delivery and set reordering perform
+no writes, and a freshness refresh does not rewrite values or append history.
+Temporary address literals are rejected before persistence. The fixed network
+evidence bounds are eight sources and 2,048 total facts/256 KiB of value payload
+per installation; interface addresses have eight sources and 64 total claims.
+Storage admission additionally charges keys, metadata and indexes under their
+own budgets. These are development ceilings, not supported production sizing.
+
+The on-disk migration preserves existing observations. Earlier partial
+interface collections did not retain individual dates; migrated values show
+an unknown observation time until explicitly reobserved. Their collection
+checkpoint is preserved separately. Archiving a resource reclaims its current
+network facts, retaining the existing identity/replay fences.
+
 Resource kinds and Columns open checkbox selections with Apply and Cancel;
 changing a draft choice does not change the query. At least one data column is
 required. On phones the resource list uses cards with page selection and sorting.
@@ -83,6 +123,13 @@ original known fact; it does not merge machines or enable shared use.
 On phones, the detail screen provides a perspective selector, local resource
 creation and a bounded child list. Back follows the resource trail, then returns
 to the original inventory query and selection.
+Changing a representation inside details does not replace the original return
+destination. The URL preserves its enclosing query across reload; selection and
+scroll restoration apply within the current browser session. Relationships use
+separate pages of at most 25 permitted edges. Their continuation is bound to
+the resource, working context, authority and data revision; it does not reload
+the resource's routing/firewall evidence. Large containers remain usable without
+enumerating all children to prepare actions or validate the selected target.
 These create accepted inventory records, not real provider resources. External
 provisioning and connection adapters are not implemented by this fixture host.
 

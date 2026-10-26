@@ -793,7 +793,13 @@ export enum AssetKind {
      *
      * @generated from protobuf enum value: ASSET_KIND_ADDRESS_REFERENCE = 21;
      */
-    ADDRESS_REFERENCE = 21
+    ADDRESS_REFERENCE = 21,
+    /**
+     * Concrete installed OS/firmware context, independent of hardware and boot session.
+     *
+     * @generated from protobuf enum value: ASSET_KIND_SOFTWARE_INSTALLATION = 22;
+     */
+    SOFTWARE_INSTALLATION = 22
 }
 /**
  * @generated from protobuf enum omloom.v1.NullValue

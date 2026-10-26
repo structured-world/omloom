@@ -157,6 +157,8 @@ fn address_resolution_is_atomic_and_preserves_conflicting_facts() -> TestResult 
         write: Fields::All,
         writable: true,
     });
+    // Settle fixture journal work before measuring the rejected request itself.
+    store.diagnostic_database().persist()?;
     let before = store.usage()?;
     let syncs = store.diagnostic_database().engine().journal_syncs();
     assert!(matches!(
@@ -415,12 +417,13 @@ fn detail(store: &Store, context: &Context, target: &wire::AssetRef) -> Result<a
         focused(store, target)?,
         Command::Read(api::Read {
             target: Some(target.clone()),
+            ..Default::default()
         }),
     )?
     else {
         return Err(Error::Corrupt);
     };
-    Ok(result)
+    Ok(*result)
 }
 
 // A VM form offers local components; neither peers nor the host's network are inherited.
@@ -784,6 +787,7 @@ fn peer_relationships_require_the_enclosing_context_for_every_edit() -> TestResu
         enclosing(&store)?,
         Command::Read(api::Read {
             target: Some(first.clone()),
+            ..Default::default()
         }),
     )?
     else {

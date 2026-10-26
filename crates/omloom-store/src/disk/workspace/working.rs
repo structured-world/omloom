@@ -24,7 +24,9 @@ fn writable_fields(
     use wire::AssetKind as K;
     let builtins: &[&str] = if kind == K::AddressReference {
         &["address", "prefix_length", "meaning", "zone", "description"]
-    } else if matches!(kind, K::Device | K::Rack | K::Port | K::Cable) {
+    } else if kind == K::Device {
+        &["name", "description", "serial", "virtualization_role"]
+    } else if matches!(kind, K::Rack | K::Port | K::Cable) {
         &["name", "description", "serial"]
     } else {
         &["name", "description"]
@@ -48,10 +50,23 @@ fn writable_fields(
 }
 impl Selection<'_> {
     pub fn contains(&self, target: AssetRef, tx: &Tx<'_>) -> Result<()> {
-        if self
-            .members
-            .as_ref()
-            .is_some_and(|set| !set.contains(&target))
+        if let Some(focus) = self.focus {
+            if target == focus || tx.direct_child(self.context, focus, target)? {
+                return Ok(());
+            }
+        } else if let Some(roots) = &self.members {
+            if roots.contains(&target) {
+                return Ok(());
+            }
+            let roots = roots.iter().map(|t| target_wire(*t)).collect::<Vec<_>>();
+            match tx.verify_owned_focus(self.context, &roots, target) {
+                Ok(()) => return Ok(()),
+                Err(Error::Denied) => {}
+                Err(error) => return Err(error),
+            }
+        } else {
+            return Ok(());
+        }
         {
             if self.networks.is_empty() {
                 return Err(Error::Denied);
@@ -94,8 +109,6 @@ impl Selection<'_> {
                 }
             }
             Err(Error::Denied)
-        } else {
-            Ok(())
         }
     }
 }
@@ -113,7 +126,10 @@ pub(super) fn attachment(
         (K::Device, K::Device | K::Interface | K::AddressReference)
         | (K::VirtualMachine, K::Interface | K::AddressReference)
         | (K::Interface, K::Interface | K::AddressReference)
-        | (K::Service, K::AddressReference) => Some((R::Contains, false)),
+        | (K::SoftwareInstallation, K::Interface | K::AddressReference | K::Service)
+        | (K::Service, K::Interface | K::AddressReference) => Some((R::Contains, false)),
+        (K::Device | K::VirtualMachine, K::SoftwareInstallation) => Some((R::Contains, false)),
+        (K::Service, K::SoftwareInstallation) => Some((R::Contains, false)),
         (K::Device, K::Port) => Some((R::HasPort, false)),
         (K::Port, K::Interface) => Some((R::Carries, false)),
         (K::Device, K::VirtualMachine | K::Service) | (K::VirtualMachine, K::Service) => {
@@ -145,25 +161,45 @@ pub(super) fn refines(
 }
 
 impl Tx<'_> {
-    pub(super) fn adjacent(
+    pub(super) fn direct_child(
         &self,
-        target: AssetRef,
-    ) -> Result<(Vec<wire::Relation>, BTreeMap<AssetRef, Properties>)> {
-        let relations = self.working_relations(target)?;
-        let mut keys = BTreeSet::new();
-        for relation in &relations {
-            let from = parse_target(relation.from.as_ref())?;
-            let to = parse_target(relation.to.as_ref())?;
-            keys.insert(asset_key(if from == target { to } else { from }));
+        context: &Context,
+        parent: AssetRef,
+        child: AssetRef,
+    ) -> Result<bool> {
+        let p = self.visible_asset(context, parent)?;
+        let c = self.visible_asset(context, child)?;
+        let pk =
+            wire::AssetKind::try_from(number(&p, "kind")? as i32).map_err(|_| Error::Corrupt)?;
+        let ck =
+            wire::AssetKind::try_from(number(&c, "kind")? as i32).map_err(|_| Error::Corrupt)?;
+        if !context.field(parent, pk as i32, "relations", false)
+            || !context.field(child, ck as i32, "relations", false)
+        {
+            return Ok(false);
         }
-        let mut adjacent = BTreeMap::new();
-        if !keys.is_empty() {
-            let rows = self.query("UNWIND $keys AS key MATCH (a:OmRow) WHERE a.key=key RETURN properties(a) AS p LIMIT 129",params([("keys",Value::Array(keys.iter().map(text).collect()))]))?;
-            for row in rows {
-                adjacent.insert(super::super::target(&row)?, row);
+        let Some((kind, reverse)) = attachment(pk, ck) else {
+            return Ok(false);
+        };
+        let path = assets::ownership_path(false, reverse);
+        let rows=self.query(&format!("UNWIND [$child] AS key MATCH {path} WHERE p.key=$parent AND r.kind=$kind RETURN properties(r) AS p LIMIT 129"),params([("parent",text(asset_key(parent))),("child",text(asset_key(child))),("kind",Value::Int(kind as i64))]))?;
+        if rows.len() > 128 {
+            return Err(Error::Limit);
+        }
+        for row in rows {
+            let relation = super::super::inventory::relation_projection(&row)?;
+            let (from, to) = if reverse {
+                (child, parent)
+            } else {
+                (parent, child)
+            };
+            if parse_target(relation.from.as_ref())? == from
+                && parse_target(relation.to.as_ref())? == to
+            {
+                return Ok(true);
             }
         }
-        Ok((relations, adjacent))
+        Ok(false)
     }
     pub(super) fn check_relationship(
         &self,
@@ -257,15 +293,15 @@ impl Tx<'_> {
             return Ok(Vec::new());
         }
         let mut children = Vec::new();
-        let (relations, rows) = self.adjacent(parent)?;
-        for relation in relations {
+        for (_, child_row, relation) in
+            self.context_edges(context, &BTreeSet::from([asset_key(parent)]), true)?
+        {
             let from = parse_target(relation.from.as_ref())?;
             let to = parse_target(relation.to.as_ref())?;
             let child = if from == parent { to } else { from };
-            let child_row = rows.get(&child).ok_or(Error::Corrupt)?;
-            let child_kind = wire::AssetKind::try_from(number(child_row, "kind")? as i32)
+            let child_kind = wire::AssetKind::try_from(number(&child_row, "kind")? as i32)
                 .map_err(|_| Error::Corrupt)?;
-            if number(child_row, "adoption")? != wire::Adoption::Adopted as u64
+            if number(&child_row, "adoption")? != wire::Adoption::Adopted as u64
                 || !context.readable(child, child_kind as i32)
                 || !context.field(child, child_kind as i32, "relations", false)
             {
@@ -351,6 +387,9 @@ impl Tx<'_> {
         working: &api::WorkingContext,
         mutation: bool,
     ) -> Result<Selection<'a>> {
+        if working.roots.len() > MAX_BULK {
+            return Err(Error::Limit);
+        }
         if mutation {
             match working.expected {
                 Some(expected) if expected != number(&self.root, "revision")? => {
@@ -365,7 +404,13 @@ impl Tx<'_> {
         let members = if working.roots.is_empty() {
             None
         } else {
-            Some(self.working_scope(context, &working.roots)?)
+            let mut roots = BTreeSet::new();
+            for root in &working.roots {
+                let target = parse_target(Some(root))?;
+                self.visible_asset(context, target)?;
+                roots.insert(target);
+            }
+            Some(roots)
         };
         let mut networks = Vec::new();
         for root in &working.roots {
@@ -386,11 +431,15 @@ impl Tx<'_> {
         };
         if let Some(focus) = focus {
             self.visible_asset(context, focus)?;
-            selection.contains(focus, self)?;
+            selection.focus = None;
+            match selection.contains(focus, self) {
+                Ok(()) => {}
+                Err(Error::Denied) => self.verify_owned_focus(context, &working.roots, focus)?,
+                Err(error) => return Err(error),
+            }
             selection.networks = self.network_scope(context, focus)?.into_iter().collect();
-            let mut local = BTreeSet::from([focus]);
-            local.extend(self.local_children(context, focus)?);
-            selection.members = Some(local);
+            selection.focus = Some(focus);
+            selection.members = Some(BTreeSet::from([focus]));
         }
         Ok(selection)
     }
@@ -439,7 +488,19 @@ impl Store {
             self.workspace_definitions(context)?
         };
         let tx = self.begin()?;
-        let selection = tx.selection(context, working, false)?;
+        let unscoped = api::WorkingContext::default();
+        let selection = if request.from.is_none() && working.focus.is_none() {
+            if working.roots.len() > MAX_BULK {
+                return Err(Error::Limit);
+            }
+            for root in &working.roots {
+                tx.visible_asset(context, parse_target(Some(root))?)?;
+            }
+            // Creation choices use only the explicitly selected parents, not descendants.
+            tx.selection(context, &unscoped, false)?
+        } else {
+            tx.selection(context, working, false)?
+        };
         let parents = if request.from.is_some() {
             Vec::new()
         } else {
@@ -525,6 +586,7 @@ impl Store {
                 K::AddressSpace,
                 K::L2Domain,
                 K::AddressReference,
+                K::SoftwareInstallation,
             ] {
                 let raw = kind as i32;
                 if let Some(parent) = &parent_item {

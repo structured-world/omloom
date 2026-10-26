@@ -15,6 +15,10 @@ enum View {
   VIEW_VIRTUALIZATION = 3;
   VIEW_SERVICES = 4;
 }
+enum VirtualizationRole {
+  VIRTUALIZATION_ROLE_UNSPECIFIED = 0;
+  VIRTUALIZATION_ROLE_HYPERVISOR = 1;
+}
 enum FieldType {
   FIELD_TYPE_TEXT = 0;
   FIELD_TYPE_INTEGER = 1;
@@ -64,6 +68,16 @@ message Query {
   // Explicit resource perspective within roots, rechecked by the server. Only
   // its local components are projected; upstream topology is not inferred.
   optional omloom.v1.AssetRef focus = 12;
+  // Request bounded owner/address context for visible rows, not additional authority.
+  bool include_context = 13;
+  // Ordinary inventory presentation omits host-local address resources before pagination.
+  // This is a projection choice, not an authorization grant or removal of source evidence.
+  bool omit_host_local = 14;
+  // Browse one ownership level: root containers when no scope is selected,
+  // otherwise direct children of roots/focus. View and kind filters apply before
+  // count/pagination. Explicit search may request a flat scoped result instead.
+  // This changes presentation only and never grants resource/field authority.
+  bool level_only = 15;
 }
 
 message WorkingContext {
@@ -130,10 +144,34 @@ message Page {
   uint64 total = 3;
   // Current application revision used to prepare this page or selection.
   uint64 revision = 4;
+  // Bounded authorized owner/address hints for this page only, absent unless requested.
+  repeated ItemContext contexts = 5;
+}
+message OwnerContext {
+  // Current authorized owner identity; never a fabricated unknown resource.
+  omloom.v1.AssetRef target = 1;
+  // Actual owner kind, preserving OS/container/host distinctions.
+  omloom.v1.AssetKind kind = 2;
+  // Permitted current owner label, without unrelated owner fields.
+  string name = 3;
+}
+message ItemContext {
+  // Visible row to which these server-derived hints apply.
+  omloom.v1.AssetRef target = 1;
+  // Authorized containment path from the enclosing host to the immediate owner.
+  repeated OwnerContext owners = 2;
+  // Permitted non-local addresses attached to this resource's local interfaces.
+  repeated string addresses = 3;
+  // Multiple authorized immediate owners at a shared boundary, never a fabricated chain.
+  repeated OwnerContext alternative_owners = 5;
+  // Actual permitted service binds for this page, independent of configured interface addresses.
+  repeated SocketBind endpoints = 6;
 }
 message Read {
   // User-selected local target; the server rechecks current scope/incarnation.
   omloom.v1.AssetRef target = 1;
+  // Server-issued relation continuation, bound to target, context and current revision.
+  optional string relations_cursor = 2;
 }
 message Detail {
   // Current visible inventory fields and edit revision.
@@ -154,6 +192,174 @@ message Detail {
   // Minimal permitted endpoint labels for the returned relations, fetched in
   // one bounded batch. These are projections of existing identities, not copies.
   repeated Item related = 8;
+  // Authorized current local network evidence; absent does not establish absence.
+  repeated HostNetworkView host_network = 9;
+  // Authorized current interface-address facts; no address asset identities or history.
+  repeated InterfaceAddressView current_addresses = 10;
+  // Next authorized relation page, absent at the end. Each page contains at most 25 relations.
+  optional string relations_next = 11;
+}
+
+message AddressObservation {
+  // Current source value, without a separate inventory identity or historical sample.
+  CurrentAddress value = 1;
+  // Exact source observation time for this value, Unix milliseconds; never freshened by omission.
+  // Absent for migrated partial collections whose old format lost individual dates.
+  optional uint64 observed_at = 2;
+}
+message InterfaceAddressView {
+  // Latest source checkpoint and completeness; addresses are carried only in observations below.
+  InterfaceAddresses coverage = 1;
+  // Current facts with independent dates, including facts omitted from a partial refresh.
+  repeated AddressObservation observations = 2;
+}
+message NetworkObservation {
+  // Exact source observation time, Unix milliseconds, independent of the latest scan checkpoint.
+  uint64 observed_at = 1;
+  // Actual boot/session basis at collection; an omitted partial fact retains its prior basis.
+  string basis = 2;
+  // Exactly one current typed fact. It does not imply reachability or effective packet permission.
+  oneof value {
+    // Observed service-owned kernel bind.
+    SocketBind socket = 3;
+    // Observed local routing entry.
+    LocalRoute route = 4;
+    // Observed application firewall rule.
+    ApplicationRule rule = 5;
+    // One reported application firewall setting, independently dated.
+    FirewallSetting policy = 6;
+  }
+}
+message HostNetworkView {
+  // Latest source checkpoint and reported policy/coverage, without duplicated fact arrays.
+  HostNetwork coverage = 1;
+  // Current facts retain their own exact observation time and boot basis.
+  repeated NetworkObservation observations = 2;
+  // Authorized current labels for services referenced by these facts, independent of relation pagination.
+  repeated OwnerContext services = 3;
+}
+message FirewallSetting {
+  // Reported application policy selector; never an effective per-port verdict.
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_ENABLED = 1;
+    KIND_BLOCK_ALL = 2;
+    KIND_ALLOW_BUILTIN_SIGNED = 3;
+    KIND_ALLOW_DOWNLOADED_SIGNED = 4;
+  }
+  // Source-reported setting identity, independent of other optional policies.
+  Kind kind = 1;
+  // Observed policy value; absence is represented by no observation, not false.
+  bool enabled = 2;
+}
+
+enum AddressStability {
+  ADDRESS_STABILITY_UNSPECIFIED = 0;
+  ADDRESS_STABILITY_STABLE = 1;
+  ADDRESS_STABILITY_TEMPORARY = 2;
+}
+enum AddressState {
+  ADDRESS_STATE_UNSPECIFIED = 0;
+  ADDRESS_STATE_PREFERRED = 1;
+  ADDRESS_STATE_DEPRECATED = 2;
+}
+message CurrentAddress {
+  // Source-configured IP literal; not a resource identity or allocation claim.
+  string address = 1;
+  // Source-known assignment mask; absence means unknown, zero means /0.
+  optional uint32 prefix_length = 2;
+  // Source-known generation class, independent of preferred/deprecated state.
+  // TEMPORARY is classified at collection and rejected before persistence.
+  AddressStability stability = 3;
+  // Source-known preferred/deprecated state; deprecated does not mean invalid.
+  AddressState state = 4;
+}
+message InterfaceAddresses {
+  // Existing interface being observed; no separate address objects are created.
+  omloom.v1.AssetRef interface = 1;
+  // Selected source label; it grants no authority over the interface.
+  string source = 2;
+  // Source observation instant in Unix milliseconds, used for stale-write rejection.
+  uint64 observed_at = 3;
+  // Current non-temporary facts, at most 64. Equal input writes no new versions.
+  repeated CurrentAddress addresses = 4;
+  // Explicit completeness within this source/interface. Partial input preserves omissions.
+  bool complete = 5;
+}
+message SocketBind {
+  // Existing owning service identity in this installation, never a physical Port.
+  omloom.v1.AssetRef service = 1;
+  // Observed transport, tcp or udp; UDP bind does not prove a server role.
+  string protocol = 2;
+  // Reported socket family: IPv4, IPv6 or IPv4+IPv6.
+  string family = 3;
+  // Kernel local literal or wildcard *, including a source-local IPv6 zone.
+  string bind = 4;
+  // Observed nonzero local transport port, constrained to 65535.
+  uint32 port = 5;
+  // Source-known literal generation class; wildcard/unknown remains unspecified.
+  // Temporary literal binds must be discarded by the collector, never persisted.
+  AddressStability address_stability = 6;
+  // Source-known preferred/deprecated state, independent of generation class.
+  AddressState address_state = 7;
+}
+message LocalRoute {
+  // Source-reported numeric destination; source abbreviations remain explicit.
+  string destination = 1;
+  // Source-reported next hop, interface reference or link-layer address.
+  string gateway = 2;
+  // Source-local kernel flags, not a portable routing policy.
+  string flags = 3;
+  // Interface name in the observed OS installation.
+  string interface = 4;
+  // Source address family, IPv4 or IPv6.
+  string family = 5;
+  // Whether the source marks a link-layer/local-host entry, not a network route.
+  bool link_layer = 6;
+}
+message ApplicationRule {
+  // Source application path or bundle identity; no basename-based process match.
+  string subject = 1;
+  // Reported app action, allow incoming or block incoming. Not a packet verdict.
+  string action = 2;
+}
+message HostNetwork {
+  // Existing software installation observed by the selected local source.
+  omloom.v1.AssetRef installation = 1;
+  // Operator-selected source label; cannot assert actor identity or authority.
+  string source = 2;
+  // Actual source observation time, milliseconds since Unix epoch; not server freshness.
+  uint64 observed_at = 3;
+  // Source boot/session basis, not a durable OS installation identifier.
+  string basis = 4;
+  // Selected current service-owned kernel binds, without remote flows or counters.
+  repeated SocketBind sockets = 5;
+  // Source-local route and link-layer rows, not canonical IPAM or upstream topology.
+  repeated LocalRoute routes = 6;
+  // Readable application firewall rules, without inferred effective port decisions.
+  repeated ApplicationRule rules = 7;
+  // Actual partial/verified/failed/blocked socket-source coverage, bounded readable text.
+  string socket_coverage = 8;
+  // Actual route-source coverage; failed retrieval never means no routes.
+  string route_coverage = 9;
+  // Actual application-firewall coverage, independent of packet filtering.
+  string application_coverage = 10;
+  // Actual PF coverage or permission failure; unknown never means disabled.
+  string packet_filter_coverage = 11;
+  // Reported application firewall enablement; omitted when unreadable.
+  optional bool firewall_enabled = 12;
+  // Reported application block-all policy; omitted when unreadable.
+  optional bool block_all = 13;
+  // Reported signed-app policy; omitted when unreadable.
+  optional bool allow_builtin_signed = 14;
+  // Reported downloaded signed-app policy; omitted when unreadable.
+  optional bool allow_downloaded_signed = 15;
+  // Source asserts a complete result within its declared socket collection scope.
+  bool sockets_complete = 16;
+  // Source asserts a complete result within its declared route collection scope.
+  bool routes_complete = 17;
+  // Source asserts a complete application rules result, independently of PF.
+  bool rules_complete = 18;
 }
 message Participant {
   // Stable local interface identity selected for this canonical address.
@@ -508,6 +714,10 @@ message Request {
     Prepare prepare = 16;
     // Record or reconcile a known address without requiring allocation topology.
     Address address = 17;
+    // Accept selected dated local network evidence under explicit installation authority.
+    HostNetwork host_network = 19;
+    // Current source/interface address facts; temporary addresses are rejected.
+    InterfaceAddresses interface_addresses = 20;
   }
 }
 message Reply {

@@ -19,6 +19,13 @@ h1 { font-size: 26px; letter-spacing: -.6px; margin: 0; }
 td, th { padding: 11px 12px; }
 .selection { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
 .empty { padding: 30px 20px; }
+.resource-address { font-size: 14px; font-weight: 600; color: #274e58; white-space: normal; overflow-wrap: anywhere; max-width: 420px; }
+.resource-owner { display: block; color: #657b85; white-space: normal; max-width: 420px; overflow-wrap: anywhere; }
+td:has(.resource-owner) .resource-link { font-size: 13px; font-weight: 500; }
+.inventory .context-group { background: #eaf0f1; }
+.inventory .context-group td { padding: 10px 12px; white-space: normal; }
+.context-group button { border: 0; padding: 2px 0; background: transparent; text-align: left; font-weight: 600; }
+.context-group small { display: block; color: #657b85; font-size: 11px; }
 .empty > span { margin-bottom: 10px; }
 .pagination { padding: 12px; gap: 12px; flex-wrap: wrap; }
 .detail { margin-top: 0; padding: 18px; min-width: 0; }
@@ -83,6 +90,8 @@ dialog input[type=checkbox] { min-height: 16px; }
   tbody tr { display: grid; grid-template-columns: 32px minmax(0, 1fr); padding: 12px; border-top: 1px solid #e1e8eb; }
   tbody td { grid-column: 2; padding: 2px 0; border: 0; overflow-wrap: anywhere; }
   tbody td:first-child { grid-column: 1; grid-row: 1 / span 10; padding-top: 10px; }
+  .inventory .context-group { display: block; }
+  .inventory .context-group td:first-child { display: block; padding: 0; grid-column: auto; grid-row: auto; }
   tbody .resource-link { font-size: 16px; text-align: left; }
   tbody .identity-link { min-height: 44px; }
   tbody td.empty-field, .has-name tbody td:last-child { display: none; }

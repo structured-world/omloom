@@ -10,9 +10,9 @@ synthetic contexts for test-owned data. These qualify application projection
 without claiming identity-provider enforcement.
 
 The backend pins CoordiNode Git revision
-`2c7c9d55fd8cfe0eb9737f9de92cf2b111f0fcc2` and a consumer lockfile. This source
-revision corrects nullable Boolean and correlated conditional lookup semantics
-required by inventory queries. It is not a published embedded release. Its
+`d7dae1f28097f6cb58bcdf58042949d68405dba9` and a consumer lockfile. This source
+revision includes nullable Boolean, correlated lookup and edge-orientation
+corrections required by inventory queries. It is not a published embedded release. Its
 filesystem capability requires the `std` feature. Policy types also compile
 without default features on a bare-metal target. A host can supply a supported
 replicated Database instead of opening a local directory. Never concurrently
@@ -85,11 +85,14 @@ envelope, but are **application accounting**, not total filesystem allocation.
 Pinned detail and unresolved work count against their budgets. Admission fails
 atomically when it cannot fit; it does not evict safety state.
 
-This unreleased storage format uses schema version 3. Version 2 databases
-upgrade in bounded restartable batches, adding normalized current IP ordering
-and prefix length for namespace/range retrieval. No inventory history is added.
-The upgrade keeps restore fences and admission accounting. Earlier experimental
-layouts are refused with `SchemaVersion`, never silently overwritten.
+This unreleased storage format uses schema version 7. Supported versions 2
+through 6 upgrade in bounded restartable batches, including normalized IP
+ordering and source-scoped current observation facts with separate freshness
+and accounting. No inventory history is added. The upgrade keeps restore fences
+and admission accounting. Earlier experimental layouts are refused with
+`SchemaVersion`, never silently overwritten. See the
+[observation contract](inventory.md#current-network-observations) for migration
+of previously unavailable per-fact dates.
 
 The host's durable worker calls bounded cleanup with a resumable cursor. Pin
 changes conflict with cleanup through database CAS. Cleanup reports logical

@@ -10,6 +10,10 @@ use support::*;
 mod contexts;
 #[path = "workspace/groups.rs"]
 mod groups;
+#[path = "workspace/host_network.rs"]
+mod host_network;
+#[path = "workspace/projections.rs"]
+mod projections;
 #[path = "workspace/views.rs"]
 mod views;
 
@@ -180,6 +184,7 @@ fn relationship_disclosure_and_scope_require_field_permission() -> TestResult {
         &restricted,
         api::request::Command::Read(api::Read {
             target: Some(host.clone()),
+            ..Default::default()
         }),
     )?
     else {
@@ -731,6 +736,7 @@ fn link_local_scopes_and_shared_conversion() -> TestResult {
         &context,
         api::request::Command::Read(api::Read {
             target: Some(target.clone()),
+            ..Default::default()
         }),
     )?
     else {
@@ -753,6 +759,7 @@ fn link_local_scopes_and_shared_conversion() -> TestResult {
         &context,
         api::request::Command::Read(api::Read {
             target: Some(target.clone()),
+            ..Default::default()
         }),
     )?
     else {
@@ -773,6 +780,7 @@ fn link_local_scopes_and_shared_conversion() -> TestResult {
         &limited,
         api::request::Command::Read(api::Read {
             target: Some(target),
+            ..Default::default()
         }),
     )?
     else {
@@ -831,6 +839,7 @@ fn editing_preserves_partial_source_evidence_without_writes() -> TestResult {
             &operator(),
             api::request::Command::Read(api::Read {
                 target: current.target.clone(),
+                ..Default::default()
             }),
         )?;
     }

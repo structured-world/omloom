@@ -8,6 +8,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let data = args.next().ok_or("Supply a test-owned data directory")?;
     let search = args.next().ok_or("Supply a search term (empty for list)")?;
     let output = args.next().ok_or("Supply the diagnostic report path")?;
+    let browse = match args.next().as_deref() {
+        None => false,
+        Some("browse") => true,
+        Some(_) => return Err("The optional mode must be browse".into()),
+    };
     let store =
         Store::open_with_query_memory(Path::new(&data), omloom_app::policy(), 128 * 1_048_576)?;
     let context = omloom_app::fixture("operator")?;
@@ -15,20 +20,34 @@ fn main() -> Result<(), Box<dyn Error>> {
         working: None,
         command: Some(api::request::Command::Query(api::Query {
             search: search.clone(),
+            view: if browse {
+                api::View::Hardware as i32
+            } else {
+                api::View::Overview as i32
+            },
+            level_only: browse,
+            include_context: browse,
+            omit_host_local: browse,
             limit: 25,
-            columns: vec!["name".into(), "description".into(), "serial".into()],
+            sort: if browse { "name".into() } else { String::new() },
+            columns: if browse {
+                vec!["name".into(), "description".into()]
+            } else {
+                vec!["name".into(), "description".into(), "serial".into()]
+            },
             ..Default::default()
         })),
     };
-    for _ in 0..3 {
+    for _ in 0..if browse { 0 } else { 3 } {
         store.workspace(&context, request.clone(), 1)?;
     }
     let db = store.diagnostic_database();
+    db.persist()?;
     db.query_registry().reset();
     let before = store.usage()?;
     let syncs = db.engine().journal_syncs();
     let mut samples = Vec::new();
-    for _ in 0..5 {
+    for _ in 0..if browse { 1 } else { 5 } {
         let start = Instant::now();
         let reply = store.workspace(&context, request.clone(), 1)?;
         let Some(api::reply::Result::Page(page)) = reply.result else {
@@ -49,7 +68,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             })
         })
         .collect();
-    let report = serde_json::json!({"search": search, "samples": samples, "queries": queries});
+    let report = serde_json::json!({"search": search, "browse": browse, "samples": samples, "queries": queries});
     std::fs::write(output, serde_json::to_vec_pretty(&report)?)?;
     println!("{report}");
     Ok(())

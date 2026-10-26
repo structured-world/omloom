@@ -7,9 +7,13 @@ use std::collections::BTreeSet;
 
 mod addresses;
 mod assets;
+mod current_facts;
 mod definitions;
 mod exchange;
+mod interface_facts;
 mod network;
+pub(super) mod network_facts;
+mod projection;
 mod views;
 mod working;
 
@@ -225,7 +229,7 @@ impl Store {
                 .map(|p| reply(api::reply::Result::Page(p))),
             C::Read(read) => self
                 .workspace_read(context, read, working.as_ref().ok_or(Error::Invalid)?)
-                .map(|d| reply(api::reply::Result::Detail(d))),
+                .map(|d| reply(api::reply::Result::Detail(Box::new(d)))),
             C::Write(write) => {
                 self.workspace_write(context, write, working.as_ref().ok_or(Error::Invalid)?, now)
             }
@@ -274,6 +278,17 @@ impl Store {
                 address,
                 working.as_ref().ok_or(Error::Invalid)?,
                 now,
+            ),
+            C::HostNetwork(evidence) => self.workspace_host_network(
+                context,
+                evidence,
+                working.as_ref().ok_or(Error::Invalid)?,
+                now,
+            ),
+            C::InterfaceAddresses(value) => self.workspace_interface_addresses(
+                context,
+                value,
+                working.as_ref().ok_or(Error::Invalid)?,
             ),
         }
     }

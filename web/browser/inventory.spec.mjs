@@ -34,6 +34,140 @@ async function create(page, name, kind = 'DEVICE') {
   return { asset_id: params.get('asset'), incarnation: params.get('incarnation') };
 }
 
+test('local network evidence keeps service ownership, coverage and phone navigation', async ({ page }) => {
+  // Actual API/storage setup exercises the same inspector on desktop and phone, without personal fixtures.
+  const { buildSync } = await import('esbuild');
+  const { GrpcWebFetchTransport } = await import('@protobuf-ts/grpcweb-transport');
+  const built = buildSync({ stdin: { contents: 'export * from "./web/src/generated/omloom/v1/workspace"; export {AssetKind} from "./web/src/generated/omloom/v1/contracts";', resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node' });
+  const m = await import('data:text/javascript;base64,' + Buffer.from(built.outputFiles[0].contents).toString('base64'));
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-network-evidence-'));
+  const server = await host(dir);
+  try {
+    const transport = new GrpcWebFetchTransport({ baseUrl: server.url, format: 'binary' });
+    async function rpc(command, focus) {
+      const q = await transport.unary(m.Workspace.methods[0], m.Request.create({ command: { oneofKind: 'query', query: m.Query.create({ limit: 1 }) } }), transport.mergeOptions());
+      const { response } = await transport.unary(m.Workspace.methods[0], m.Request.create({ command, working: { roots: [], focus, expected: q.response.result.page.revision } }), transport.mergeOptions());
+      return response.result;
+    }
+    async function object(kind, name, parent) {
+      const result = await rpc({ oneofKind: 'write', write: m.Write.create({ kind, parent, changes: [{ name: 'name', value: { oneofKind: 'text', text: name } }] }) }, parent);
+      return result.mutation.targets[0];
+    }
+    const device = await object(m.AssetKind.DEVICE, 'Observed host');
+    const os = await object(m.AssetKind.SOFTWARE_INSTALLATION, 'Observed OS', device);
+    const service = await object(m.AssetKind.SERVICE, 'Observed tunnel', os);
+    const tunnel = await object(m.AssetKind.INTERFACE, 'tunnel-local', service);
+    await rpc({oneofKind:'interfaceAddresses',interfaceAddresses:m.InterfaceAddresses.create({interface:tunnel,source:'Fixture collector',observedAt:1000n,complete:true,addresses:[{address:'192.0.2.50',stability:m.AddressStability.STABLE,state:m.AddressState.PREFERRED}]})},tunnel);
+    const otherHost = await object(m.AssetKind.DEVICE, 'Other host');
+    const otherOS = await object(m.AssetKind.SOFTWARE_INSTALLATION, 'Other OS', otherHost);
+    const otherService = await object(m.AssetKind.SERVICE, 'Observed tunnel', otherOS);
+    const otherInterface = await object(m.AssetKind.INTERFACE, 'other-tunnel', otherService);
+    await object(m.AssetKind.PORT, 'Direct physical port', device);
+    const board = await object(m.AssetKind.DEVICE, 'Installed board', device);
+    await object(m.AssetKind.PORT, 'Nested physical port', board);
+    await rpc({oneofKind:'interfaceAddresses',interfaceAddresses:m.InterfaceAddresses.create({interface:otherInterface,source:'Fixture collector',observedAt:1000n,complete:true,addresses:[{address:'198.51.100.50',stability:m.AddressStability.STABLE,state:m.AddressState.PREFERRED}]})},otherInterface);
+    // Ordinary browsing selects a level on the server, including count and pagination.
+    // Opening one host must not materialize components of other hosts or deeper boards.
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({width,height:900});
+      await page.goto(`${server.url}/#/?view=2`);
+      await expect(page.getByRole('button',{name:'Observed host',exact:true})).toBeVisible();
+      await expect(page.getByRole('button',{name:'Other host',exact:true})).toBeVisible();
+      await expect(page.locator('tbody')).not.toContainText('Direct physical port');
+      await expect(page.locator('tbody')).not.toContainText('Installed board');
+      await expect(page.locator('tbody')).not.toContainText('Nested physical port');
+      await page.getByRole('button',{name:'Observed host',exact:true}).click();
+      await page.getByRole('button',{name:'Use as scope',exact:true}).click();
+      await expect(page.locator('tbody')).toContainText('Direct physical port');
+      await expect(page.locator('tbody')).toContainText('Installed board');
+      await expect(page.locator('tbody')).not.toContainText('Nested physical port');
+      await expect(page.locator('tbody')).not.toContainText('Other host');
+      const requested = await rpc({oneofKind:'query',query:m.Query.create({view:m.View.HARDWARE,levelOnly:true,roots:[device],limit:25,includeContext:true})});
+      expect(requested.page.total).toBe(2n);
+      expect(requested.page.contexts.every(c=>c.addresses.length===0)).toBe(true);
+    }
+    // An unaddressed interface must not borrow another interface's addresses from its OS.
+    const osInterface=await object(m.AssetKind.INTERFACE,'addressed sibling',os);
+    await object(m.AssetKind.INTERFACE,'unaddressed sibling',os);
+    await rpc({oneofKind:'interfaceAddresses',interfaceAddresses:m.InterfaceAddresses.create({interface:osInterface,source:'Fixture collector',observedAt:1000n,complete:true,addresses:[{address:'192.0.2.99',stability:m.AddressStability.STABLE,state:m.AddressState.PREFERRED}]})},osInterface);
+    await page.goto(`${server.url}/#/?view=1&search=unaddressed`);
+    const unaddressed=page.locator('tbody tr').filter({has:page.getByRole('button',{name:'unaddressed sibling',exact:true})});
+    await expect(unaddressed).toContainText('Address not known');
+    await expect(unaddressed).not.toContainText('192.0.2.99');
+    await expect(unaddressed).not.toContainText('Host address');
+    await object(m.AssetKind.VIRTUAL_MACHINE, 'Fixture guest');
+    await page.goto(`${server.url}/#/?view=3`);
+    await expect(page.getByRole('button', { name: 'Fixture guest', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Observed host', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Other host', exact: true })).toHaveCount(0);
+    const categories=page.getByRole('navigation',{name:'Resource categories'});
+    await categories.getByRole('button',{name:'Hypervisors',exact:true}).click();
+    await expect(page.getByRole('button',{name:'Fixture guest',exact:true})).toHaveCount(0);
+    await page.getByRole('button',{name:'+ Create resource',exact:true}).click();
+    await expect(page.getByRole('dialog').getByLabel('Resource kind',{exact:true}).locator('option:checked')).toHaveText('device');
+    await expect(page.getByRole('dialog').getByLabel('Virtualization role',{exact:true})).toHaveValue('VIRTUALIZATION_ROLE_HYPERVISOR');
+    await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();
+    await categories.getByRole('button',{name:'Virtual machines',exact:true}).click();
+    await expect(page.getByRole('button',{name:'Fixture guest',exact:true})).toBeVisible();
+    await page.reload();
+    await expect(categories.getByRole('button',{name:'Virtual machines',exact:true})).toHaveAttribute('aria-pressed','true');
+    await page.goto(`${server.url}/#/?view=4&search=Observed%20tunnel`);
+    await expect(page.getByRole('button', { name: 'Observed tunnel', exact: true })).toHaveCount(2);
+    await expect(page.getByRole('button', { name: 'Open owner Observed host / Observed OS', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Open owner Other host / Other OS', exact: true })).toBeVisible();
+    await expect(page.getByText('Address: 192.0.2.50', { exact: true })).toBeVisible();
+    await expect(page.getByText('Address: 198.51.100.50', { exact: true })).toBeVisible();
+    await page.goto(`${server.url}/#/?asset=${tunnel.assetId}&incarnation=${tunnel.incarnation}`);
+    const current=page.getByRole('region',{name:'Current interface addresses'});
+    await expect(current).toContainText('192.0.2.50');
+    await expect(current).toContainText('stable · preferred');
+    // A partial collection must leave the first address's date intact in the actual UI.
+    await rpc({oneofKind:'interfaceAddresses',interfaceAddresses:m.InterfaceAddresses.create({interface:tunnel,source:'Fixture collector',observedAt:2000n,complete:false,addresses:[{address:'192.0.2.51',stability:m.AddressStability.STABLE,state:m.AddressState.PREFERRED}]})},tunnel);
+    await page.reload();
+    await expect(current.locator('li').filter({hasText:'192.0.2.50'}).locator('time')).toHaveAttribute('datetime',new Date(1000).toISOString());
+    await expect(current.locator('li').filter({hasText:'192.0.2.51'}).locator('time')).toHaveAttribute('datetime',new Date(2000).toISOString());
+    const listener=await object(m.AssetKind.SERVICE,'Plain listener',os);
+    await rpc({ oneofKind: 'hostNetwork', hostNetwork: m.HostNetwork.create({ installation: os, source: 'Test collection', observedAt: 1000n, basis: 'test-boot', socketCoverage: 'Kernel verified; process coverage partial', routeCoverage: 'Local IPv4 table', applicationCoverage: 'verified', packetFilterCoverage: 'not run or blocked: permission denied', firewallEnabled: true, blockAll: false, sockets: [
+      { service, protocol: 'udp', family: 'IPv4', bind: '*', port: 51820 },
+      { service, protocol: 'tcp', family: 'IPv4', bind: '127.0.0.1', port: 9000 },
+      { service:listener, protocol:'tcp', family:'IPv4', bind:'192.0.2.60', port:8080 },
+      { service, protocol:'udp', family:'IPv6', bind:'*', port:51821 },
+    ], routes: [{ destination: 'default', gateway: '192.0.2.1', interface: 'en0', flags: 'UGSc', family: 'IPv4', linkLayer: false }], rules: [{ subject: '/Applications/Example.app', action: 'allow incoming' }] }) }, os);
+    const address = `${server.url}/#/?asset=${os.assetId}&incarnation=${os.incarnation}`;
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${server.url}/#/?view=4&search=Plain%20listener`);
+      const listenerRow=page.locator('tbody tr').filter({has:page.getByRole('button',{name:'Plain listener',exact:true})});
+      await expect(listenerRow).toContainText('192.0.2.60:8080/tcp');
+      await expect(listenerRow).toContainText('Observed host / Observed OS');
+      await page.goto(address);
+      const section = page.getByRole('region', { name: 'Local network observations', exact: true });
+      await expect(section).toContainText('*:51820');
+      await expect(section).toContainText('*:51821');
+      await expect(section).not.toContainText('[*]');
+      const ownerBox = await section.getByRole('button', { name: 'Observed tunnel', exact: true }).first().boundingBox();
+      expect(ownerBox.width).toBeGreaterThan(100);
+      expect(ownerBox.height).toBeLessThan(80);
+      await expect(section).not.toContainText('127.0.0.1:9000');
+      await expect(section.getByLabel('Non-loopback binds only')).toHaveCount(0);
+      await expect(section).not.toContainText('127.0.0.1:9000');
+      await section.getByRole('button', { name: 'Routes (1)', exact: true }).click();
+      await expect(section).toContainText('192.0.2.1');
+      await section.getByRole('button', { name: 'Firewall (1)', exact: true }).click();
+      await expect(section).toContainText('permission denied');
+      await expect(section).toContainText('Effective per-port decision: unknown');
+      await expect(section).toContainText('/Applications/Example.app');
+      await section.getByRole('button', { name: 'Endpoints (3)', exact: true }).click();
+      await section.getByRole('button', { name: 'Observed tunnel', exact: true }).first().click();
+      await expect(page.getByRole('heading', { name: 'Observed tunnel', exact: true })).toBeVisible();
+      await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('tunnel-local');
+      await expect(section.getByRole('button', { name: /^Routes/ })).toHaveCount(0);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.screenshot({path:`test-results/network-service-${width}.png`,fullPage:true});
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('phone creates local components and returns through the original context', async ({ page }) => {
   // Child creation must not become a global peer or require upstream network knowledge.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-local-phone-'));
@@ -255,6 +389,54 @@ test('workspace creation starts with the relevant resource type', async ({ page 
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
 
+test('dense containers paginate and restore the enclosing view on desktop and phone', async ({page}) => {
+  // Fixture creation is separate from the bounded user actions; each UI action retains its normal timeout.
+  test.setTimeout(60_000);
+  const {buildSync}=await import('esbuild');
+  const {GrpcWebFetchTransport}=await import('@protobuf-ts/grpcweb-transport');
+  const built=buildSync({stdin:{contents:'export * from "./web/src/generated/omloom/v1/workspace"; export {AssetKind} from "./web/src/generated/omloom/v1/contracts";',resolveDir:process.cwd()},bundle:true,write:false,format:'esm',platform:'node'});
+  const m=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].contents).toString('base64'));
+  const dir=await mkdtemp(join(tmpdir(),'omloom-dense-ui-'));const server=await host(dir);
+  try {
+    const transport=new GrpcWebFetchTransport({baseUrl:server.url,format:'binary'});
+    async function rpc(command,focus){
+      const q=await transport.unary(m.Workspace.methods[0],m.Request.create({command:{oneofKind:'query',query:m.Query.create({limit:1})}}),transport.mergeOptions());
+      return (await transport.unary(m.Workspace.methods[0],m.Request.create({command,working:{roots:[],focus,expected:q.response.result.page.revision}}),transport.mergeOptions())).response.result;
+    }
+    async function object(kind,name,parent){return (await rpc({oneofKind:'write',write:m.Write.create({kind,parent,changes:[{name:'name',value:{oneofKind:'text',text:name}}]})},parent)).mutation.targets[0];}
+    const device=await object(m.AssetKind.DEVICE,'Dense chassis');
+    for(let i=0;i<129;i++) await object(m.AssetKind.PORT,`Port ${String(i).padStart(3,'0')}`,device);
+    const root=`${server.url}/#/?view=2&search=Dense&sort=name&desc=1&columns=name,serial`;
+    for(const width of [1440,390]){
+      await page.setViewportSize({width,height:844});await page.goto(root);
+      await page.getByRole('checkbox',{name:'Select Dense chassis',exact:true}).check();
+      await page.getByRole('button',{name:'Dense chassis',exact:true}).click();
+      const details=page.getByRole('region',{name:'Resource details',exact:true});
+      await expect(details.getByRole('heading',{name:'Dense chassis',exact:true})).toBeVisible();
+      await expect(page.getByRole('alert')).toHaveCount(0);
+      await expect(details.getByRole('button',{name:'Next relationships',exact:true})).toBeVisible();
+      const firstRelations=await details.locator(':scope > ul').innerText();
+      await details.getByRole('button',{name:'Next relationships',exact:true}).click();
+      await expect.poll(()=>details.locator(':scope > ul').innerText()).not.toBe(firstRelations);
+      if(width<700) await page.getByLabel('Resource perspective',{exact:true}).selectOption('4');
+      else await page.getByRole('navigation',{name:'Views',exact:true}).getByRole('button',{name:'Services',exact:true}).click();
+      await details.getByRole('button',{name:'Close resource details',exact:true}).click();
+      await expect(page.getByRole('heading',{name:'Hardware',exact:true})).toBeVisible();
+      await expect(page.getByLabel('Search inventory',{exact:true})).toHaveValue('Dense');
+      await expect(page.getByRole('checkbox',{name:'Select Dense chassis',exact:true})).toBeChecked();
+      await page.getByRole('button',{name:'Dense chassis',exact:true}).click();
+      await page.reload();
+      await details.getByRole('button',{name:'Close resource details',exact:true}).click();
+      await expect(page.getByRole('heading',{name:'Hardware',exact:true})).toBeVisible();
+      await expect(page.getByLabel('Search inventory',{exact:true})).toHaveValue('Dense');
+      expect(new URL(page.url()).hash).toContain('desc=1');
+      expect(new URL(page.url()).hash).toContain('columns=name,serial');
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+      await page.screenshot({path:`test-results/dense-container-${width}.png`,fullPage:true});
+    }
+  } finally {await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('phone inventory opens a dedicated detail and returns to the same search', async ({ page }) => {
   // A phone should not require scrolling past the desktop table to inspect or edit its selected asset.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-phone-ui-'));
@@ -290,7 +472,10 @@ test('phone inventory opens a dedicated detail and returns to the same search', 
     await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
     await expect(dialog).toBeHidden();
     await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('Checked on site');
+    // Changing representation inside a detail must not replace its return destination.
+    await page.getByLabel('Resource perspective', { exact: true }).selectOption('4');
     await page.getByRole('button', { name: 'Back to inventory', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible();
     await expect(page.getByLabel('Search inventory')).toHaveValue('Field');
     await expect.poll(() => page.evaluate(() => scrollY)).toBe(listPosition);
     await expect(page.getByRole('checkbox', { name: 'Select Field router', exact: true })).toBeChecked();
@@ -479,17 +664,22 @@ test('departments share one backup host while namespace and host projections rem
     await server.stop(); server = await host(join(dir, 'db'), 'devops', operationsFile);
     await page.goto(server.url);
     await expect(page.getByRole('button', { name: 'Shared backup host', exact: true })).toHaveCount(1);
-    await expect(page.getByRole('button', { name: 'Operations backup namespace', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Operations backup namespace', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Engineering backup namespace', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Service engineering host', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Shared backup host', exact: true }).click();
     expect(new URLSearchParams(new URL(page.url()).hash.split('?')[1]).get('asset')).toBe(backup.asset_id);
+    await expect(page.getByRole('button', { name: 'on · Operations backup namespace', exact: true })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Resource details' })).not.toContainText('Engineering backup namespace');
     await server.stop(); server = await host(join(dir, 'db'), 'engineer', engineeringFile);
     await page.goto(server.url);
     await expect(page.getByRole('button', { name: 'Shared backup host', exact: true })).toHaveCount(1);
-    await expect(page.getByRole('button', { name: 'Engineering backup namespace', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Engineering backup namespace', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Operations backup namespace', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'DevOps hypervisor', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Shared backup host', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'on · Engineering backup namespace', exact: true })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Resource details' })).not.toContainText('Operations backup namespace');
     await server.stop(); server = await host(join(dir, 'db'), 'developer', developerFile);
     await page.goto(server.url);
     await expect(page.getByRole('button', { name: 'Development VM', exact: true })).toBeVisible();
@@ -531,8 +721,8 @@ test('selected roots survive view changes, personal save and reload', async ({ p
   const server = await host(dir);
   try {
     await page.goto(server.url);
-    await create(page, 'First scope host');
-    await create(page, 'Second scope VM', 'VIRTUAL_MACHINE');
+    const firstRoot = await create(page, 'First scope host');
+    const secondRoot = await create(page, 'Second scope VM', 'VIRTUAL_MACHINE');
     await create(page, 'Outside selection');
     await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
     await page.getByRole('checkbox', { name: 'Select First scope host', exact: true }).check();
@@ -540,8 +730,8 @@ test('selected roots survive view changes, personal save and reload', async ({ p
     await page.getByRole('button', { name: 'Use selected as scope', exact: true }).click({ timeout: 5000 });
     await expect(page.getByRole('button', { name: 'Outside selection', exact: true })).toHaveCount(0);
     await page.getByRole('navigation', { name: 'Views' }).getByRole('button', { name: 'Services', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'First scope host', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Second scope VM', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading',{name:'No resources at this level in this view',exact:true})).toBeVisible();
+    await expect(page.getByRole('button',{name:'2 selected roots',exact:true})).toBeVisible();
     await page.getByRole('button', { name: 'Save view', exact: true }).click();
     await page.getByRole('dialog').getByLabel('Name', { exact: true }).fill('Two selected roots');
     await page.getByRole('button', { name: 'Save personal view', exact: true }).click();
@@ -550,8 +740,17 @@ test('selected roots survive view changes, personal save and reload', async ({ p
     await expect(page.getByRole('button', { name: 'Outside selection', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '◦ Two selected roots', exact: true }).click();
     await page.reload();
-    await expect(page.getByRole('button', { name: 'First scope host', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Second scope VM', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading',{name:'Services',exact:true})).toBeVisible();
+    await expect(page.getByRole('heading',{name:'No resources at this level in this view',exact:true})).toBeVisible();
+    await expect(page.getByRole('button',{name:'2 selected roots',exact:true})).toBeVisible();
+    await page.getByRole('navigation',{name:'Views'}).getByRole('button',{name:'Overview',exact:true}).click();
+    // Selected roots define the enclosing level; they are not their own children.
+    await expect(page.getByRole('heading',{name:'No resources at this level in this view',exact:true})).toBeVisible();
+    const restored = new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
+    expect(restored.getAll('scope').sort()).toEqual([firstRoot.asset_id,secondRoot.asset_id].sort());
+    expect(restored.getAll('scopeInc').sort()).toEqual([firstRoot.incarnation,secondRoot.incarnation].sort());
+    await expect(page.getByRole('button', { name: 'First scope host', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Second scope VM', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Outside selection', exact: true })).toHaveCount(0);
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });

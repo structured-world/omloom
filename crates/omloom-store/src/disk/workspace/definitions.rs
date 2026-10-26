@@ -439,6 +439,21 @@ impl Tx<'_> {
             return Err(Error::Invalid);
         }
         match value.name.as_str() {
+            "virtualization_role" => {
+                if kind != wire::AssetKind::Device as i32 {
+                    return Err(Error::Invalid);
+                }
+                match value.value.as_ref() {
+                    Some(field::Value::Text(s))
+                        if api::VirtualizationRole::from_str_name(s)
+                            == Some(api::VirtualizationRole::Hypervisor) =>
+                    {
+                        Ok(())
+                    }
+                    Some(field::Value::Clear(EXPLICIT_CLEAR)) => Ok(()),
+                    _ => Err(Error::Invalid),
+                }
+            }
             "serial"
                 if !matches!(
                     wire::AssetKind::try_from(kind),
