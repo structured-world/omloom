@@ -1,6 +1,83 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
+// Bulk retirement must reclaim incarnation-owned observations, not just direct asset children.
+#[test]
+fn bulk_removal_reclaims_current_network_and_address_facts() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    create(&store, &actor, K::Device, "retained authority owner")?;
+    let initial = store.usage()?;
+    for kind in [K::Interface, K::SoftwareInstallation] {
+        let owner = create(&store, &actor, kind, "observed owner")?;
+        if kind == K::Interface {
+            call(
+                &store,
+                &actor,
+                Command::InterfaceAddresses(api::InterfaceAddresses {
+                    interface: Some(owner.clone()),
+                    source: "collector".into(),
+                    observed_at: 100,
+                    complete: true,
+                    addresses: vec![api::CurrentAddress {
+                        address: "192.0.2.10".into(),
+                        stability: api::AddressStability::Stable as i32,
+                        state: api::AddressState::Preferred as i32,
+                        ..Default::default()
+                    }],
+                }),
+            )?;
+        } else {
+            call(
+                &store,
+                &actor,
+                Command::HostNetwork(api::HostNetwork {
+                    installation: Some(owner.clone()),
+                    source: "collector".into(),
+                    basis: "boot".into(),
+                    observed_at: 100,
+                    route_coverage: "verified".into(),
+                    socket_coverage: "not collected".into(),
+                    application_coverage: "not collected".into(),
+                    packet_filter_coverage: "not collected".into(),
+                    routes_complete: true,
+                    routes: vec![api::LocalRoute {
+                        destination: "default".into(),
+                        gateway: "192.0.2.1".into(),
+                        interface: "en0".into(),
+                        family: "IPv4".into(),
+                        flags: "UG".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            )?;
+        }
+        call(
+            &store,
+            &actor,
+            Command::Bulk(api::Bulk {
+                targets: vec![owner],
+                expected: store.usage()?.revision,
+                remove: true,
+                changes: vec![],
+            }),
+        )?;
+        let after = store.usage()?;
+        let class = omloom_store::Class::Inventory as usize;
+        assert_eq!(
+            after.rows[class], initial.rows[class],
+            "retirement left current rows"
+        );
+        assert_eq!(
+            after.bytes[class], initial.bytes[class],
+            "retirement left charged bytes"
+        );
+    }
+    Ok(())
+}
+
 fn reconstruct(
     view: &api::HostNetworkView,
 ) -> Result<api::HostNetwork, Box<dyn std::error::Error>> {

@@ -1510,6 +1510,7 @@ impl Tx<'_> {
             }
             self.delete(&group_key)?;
         }
+        self.retire_current_facts(target)?;
         for child in self.children(&key)? {
             let child_key = string(&child, "key")?;
             if child.get("layer") == Some(&text("mapping")) {
