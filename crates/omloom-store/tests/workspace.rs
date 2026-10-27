@@ -75,6 +75,78 @@ fn query() -> api::Query {
     }
 }
 
+// Removing an imported asset releases only its mappings; a new import gets a new identity.
+#[test]
+fn removed_import_mapping_does_not_poison_reimport() -> TestResult {
+    use api::{reply::Result as Reply, request::Command};
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let import = api::Import {
+        source: "register".into(),
+        kind: K::Device as i32,
+        csv: "external_id,name\na,First\nb,Retained".into(),
+        mappings: vec![api::Mapping {
+            source: "name".into(),
+            field: "name".into(),
+        }],
+        ..Default::default()
+    };
+    let Reply::Preview(preview) = call(&store, &actor, Command::Import(import.clone()))? else {
+        panic!("preview");
+    };
+    let Reply::Mutation(created) = call(
+        &store,
+        &actor,
+        Command::Import(api::Import {
+            preview: preview.id,
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("accept");
+    };
+    let first = created.targets[0].clone();
+    let retained = created.targets[1].clone();
+    call(
+        &store,
+        &actor,
+        Command::Bulk(api::Bulk {
+            targets: vec![first.clone()],
+            expected: store.usage()?.revision,
+            remove: true,
+            changes: Vec::new(),
+        }),
+    )?;
+    let retained_before = store.asset(AssetRef::try_from(&retained)?)?;
+    let Reply::Preview(next) = call(&store, &actor, Command::Import(import))? else {
+        panic!("new preview");
+    };
+    assert!(
+        next.id.is_some(),
+        "stale mapping poisoned preview: {next:?}"
+    );
+    assert!(next.rows.iter().all(|row| row.change.is_some()));
+    let Reply::Mutation(accepted) = call(
+        &store,
+        &actor,
+        Command::Import(api::Import {
+            preview: next.id,
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("accept");
+    };
+    assert_ne!(accepted.targets[0], first);
+    assert_eq!(accepted.targets[1], retained);
+    assert_eq!(
+        store.asset(AssetRef::try_from(&retained)?)?,
+        retained_before
+    );
+    Ok(())
+}
+
 // A bounded CSV writer must report admission overflow, not malformed user input.
 #[test]
 fn csv_export_overflow_reports_limit() -> TestResult {
