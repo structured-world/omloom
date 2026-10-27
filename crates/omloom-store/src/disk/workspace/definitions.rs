@@ -77,7 +77,15 @@ fn validate_definition(d: &api::Definition) -> Result<()> {
     Ok(())
 }
 fn date(s: &str) -> bool {
-    if s.len() != 10 || !s.is_ascii() || &s[4..5] != "-" || &s[7..8] != "-" {
+    if s.len() != 10
+        || s.bytes().enumerate().any(|(index, byte)| {
+            if index == 4 || index == 7 {
+                byte != b'-'
+            } else {
+                !byte.is_ascii_digit()
+            }
+        })
+    {
         return false;
     }
     let Ok(year) = s[..4].parse::<u32>() else {

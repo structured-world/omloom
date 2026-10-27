@@ -8,6 +8,8 @@ use omloom_store::{Error, Store, workspace::*};
 use support::*;
 #[path = "workspace/contexts.rs"]
 mod contexts;
+#[path = "workspace/definitions.rs"]
+mod definitions;
 #[path = "workspace/groups.rs"]
 mod groups;
 #[path = "workspace/host_network.rs"]
