@@ -1017,6 +1017,47 @@ fn editing_preserves_partial_source_evidence_without_writes() -> TestResult {
     Ok(())
 }
 
+// Removal has its own revision and cannot overwrite the last accepted edit's actor or time.
+#[test]
+fn removal_preserves_the_last_edit_audit() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut actor = operator();
+    let target = create(&store, &actor, K::Device, "audit resource")?;
+    actor.actor = "editor".into();
+    call(
+        &store,
+        &actor,
+        api::request::Command::Write(api::Write {
+            target: Some(target.clone()),
+            expected: Some(1),
+            kind: K::Device as i32,
+            changes: vec![text_field("description", "accepted edit")],
+            ..Default::default()
+        }),
+    )?;
+    let owner = format!("asset/{}", target.asset_id);
+    let before = store.activity(&owner, 10)?;
+    actor.actor = "remover".into();
+    call(
+        &store,
+        &actor,
+        api::request::Command::Bulk(api::Bulk {
+            targets: vec![target],
+            expected: store.usage()?.revision,
+            remove: true,
+            changes: Vec::new(),
+        }),
+    )?;
+    let after = store.activity(&owner, 10)?;
+    assert_eq!(after.len(), before.len() + 1);
+    assert_eq!(&after[1..], before.as_slice());
+    assert_eq!(after[0].action, "inventory.removed");
+    assert_eq!(after[0].actor, "remover");
+    assert_eq!(after[0].revision, before[0].revision + 1);
+    Ok(())
+}
+
 // Removal cannot allow an old provider record to resurrect the removed identity.
 #[test]
 fn removal_blocks_replay_and_releases_only_its_allocation() -> TestResult {

@@ -1532,7 +1532,9 @@ impl Tx<'_> {
             &key,
             &context.actor,
             "inventory.removed",
-            number(row, "revision")?,
+            number(row, "revision")?
+                .checked_add(1)
+                .ok_or(Error::Limit)?,
             now,
         )?;
         Ok(())
