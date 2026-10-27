@@ -22,12 +22,15 @@ use std::{
 type Properties = BTreeMap<String, Value>;
 type Result<T> = std::result::Result<T, Error>;
 const ROOT: &str = "installation";
-const SCHEMA_VERSION: u64 = 2;
+const SCHEMA_VERSION: u64 = 8;
 const MAX_CHILDREN: usize = 2048;
 mod inventory;
 mod lifecycle;
 mod operations;
 mod scans;
+#[cfg(test)]
+mod tests;
+pub mod workspace;
 pub use lifecycle::{ActivityEntry, Cleanup};
 pub use scans::ScanState;
 
@@ -47,6 +50,8 @@ pub enum Error {
     Expired,
     RecoveryRequired,
     UnsafeTransition,
+    Denied,
+    Incomplete,
 }
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -60,6 +65,9 @@ impl From<DatabaseError> for Error {
             DatabaseError::RevisionMismatch { .. }
             | DatabaseError::UniqueViolation { .. }
             | DatabaseError::TransactionConflict { .. } => Self::Conflict,
+            DatabaseError::Budget(coordinode_core::budget::BudgetStop::Memory { .. }) => {
+                Self::Limit
+            }
             other => Self::Database(Box::new(other)),
         }
     }
@@ -280,12 +288,18 @@ fn unpack(rows: Vec<Properties>) -> Result<Vec<Properties>> {
 
 impl Store {
     pub fn open(path: &Path, policy: Policy) -> Result<Self> {
+        Self::open_with_query_memory(path, policy, 32 * 1_048_576)
+    }
+
+    /// Opens the same durable store with an explicit host-selected statement
+    /// memory ceiling. This is independent of admission and owned disk limits.
+    pub fn open_with_query_memory(path: &Path, policy: Policy, bytes: u64) -> Result<Self> {
         if !policy.valid() {
             return Err(Error::Invalid);
         }
         let mut db = Database::open(path)?;
         db.set_max_interactive_txn_bytes(16 * 1_048_576);
-        db.set_query_memory_limit(32 * 1_048_576)
+        db.set_query_memory_limit(bytes)
             .map_err(|_| Error::Invalid)?;
         db.set_retention_window(Duration::from_secs(1));
         let store = Self::from_database(db, policy)?;
@@ -309,6 +323,10 @@ impl Store {
         for name in ["candidate", "cursor", "snapshot"] {
             schema.add_property(PropertyDef::new(name, PropertyType::String));
         }
+        schema.add_property(PropertyDef::new(
+            "virtualization_role",
+            PropertyType::String,
+        ));
         for name in ["completeness", "review_rows", "review_bytes"] {
             schema.add_property(PropertyDef::new(name, PropertyType::Int));
         }
@@ -337,6 +355,27 @@ impl Store {
             "to_asset",
             "to_incarnation",
             "vtext",
+            "name",
+            "name_sort",
+            "description",
+            "search_term",
+            "asset_key",
+            "workspace_kind",
+            "label",
+            "help",
+            "owner",
+            "namespace",
+            "cidr",
+            "address_space",
+            "link_scope",
+            "routing_context",
+            "sharing",
+            "group",
+            "address",
+            "meaning",
+            "zone",
+            "binding",
+            "ip_order",
         ] {
             schema.add_property(PropertyDef::new(name, PropertyType::String));
         }
@@ -360,10 +399,27 @@ impl Store {
             "vint",
             "settlement_rows",
             "settlement_bytes",
+            "definition_type",
+            "generation",
+            "vrid",
+            "priority",
+            "prefix_len",
+            "family",
+            "vlan_id",
+            "prefix_length",
+            "count",
+            "bytes",
         ] {
             schema.add_property(PropertyDef::new(name, PropertyType::Int));
         }
-        for name in ["restored", "pinned", "vflag", "settled"] {
+        for name in [
+            "restored",
+            "pinned",
+            "vflag",
+            "settled",
+            "searchable",
+            "retired",
+        ] {
             schema.add_property(PropertyDef::new(name, PropertyType::Bool));
         }
         for name in ["counts", "sizes"] {
@@ -373,11 +429,114 @@ impl Store {
             ));
         }
         schema.add_property(PropertyDef::new("digest", PropertyType::Binary));
+        schema.add_property(PropertyDef::new("query", PropertyType::Binary));
+        schema.add_property(PropertyDef::new("working", PropertyType::Binary));
+        schema.add_property(PropertyDef::new("payload", PropertyType::Binary));
+        for name in ["choices", "audiences", "editors", "columns"] {
+            schema.add_property(PropertyDef::new(
+                name,
+                PropertyType::Array(Box::new(PropertyType::String)),
+            ));
+        }
+        schema.add_property(PropertyDef::new(
+            "kinds",
+            PropertyType::Array(Box::new(PropertyType::Int)),
+        ));
+        let mut intent = Intent::Ensure;
+        if let Some(current) = db.label_schemas()?.into_iter().find(|s| s.name == "OmRow")
+            && current.properties != schema.properties
+        {
+            let root = db.execute_cypher_shared(
+                "MATCH (n:OmRow {key:'installation'}) RETURN n.`schema` AS version",
+                None,
+                None,
+                None,
+                None,
+            )?;
+            let previous_version = root.rows.first().and_then(|row| row.get("version"));
+            if !matches!(
+                root.rows.first().and_then(|row| row.get("version")),
+                Some(Value::Int(2..=6))
+            ) || current.mode != schema.mode
+                || current.placement != schema.placement
+                || current.temporal != schema.temporal
+                || current
+                    .properties
+                    .iter()
+                    .any(|(key, value)| schema.properties.get(key) != Some(value))
+                || schema
+                    .properties
+                    .keys()
+                    .filter(|key| !current.properties.contains_key(*key))
+                    .any(|key| {
+                        if key == "count" || key == "bytes" {
+                            return false;
+                        }
+                        if previous_version == Some(&Value::Int(6)) {
+                            return true;
+                        }
+                        if previous_version == Some(&Value::Int(3)) {
+                            return key != "payload" && key != "virtualization_role";
+                        }
+                        if matches!(previous_version, Some(Value::Int(4 | 5))) {
+                            return key != "virtualization_role";
+                        }
+                        ![
+                            // Additive properties absent from the complete version-2 catalog.
+                            "name",
+                            "name_sort",
+                            "description",
+                            "search_term",
+                            "asset_key",
+                            "workspace_kind",
+                            "label",
+                            "help",
+                            "owner",
+                            "namespace",
+                            "cidr",
+                            "address_space",
+                            "link_scope",
+                            "routing_context",
+                            "sharing",
+                            "group",
+                            "definition_type",
+                            "generation",
+                            "vrid",
+                            "priority",
+                            "prefix_len",
+                            "family",
+                            "vlan_id",
+                            "searchable",
+                            "retired",
+                            "query",
+                            "choices",
+                            "audiences",
+                            "editors",
+                            "columns",
+                            "kinds",
+                            "address",
+                            "meaning",
+                            "zone",
+                            "binding",
+                            "ip_order",
+                            "prefix_length",
+                            "working",
+                            "payload",
+                            "virtualization_role",
+                            "count",
+                            "bytes",
+                        ]
+                        .contains(&key.as_str())
+                    })
+            {
+                return Err(Error::SchemaVersion);
+            }
+            intent = Intent::Change {
+                expected_revision: current.schema_revision,
+            };
+        }
         let publication = db.publish_schema(SchemaPackage {
-            labels: vec![LabelDeclaration {
-                schema,
-                intent: Intent::Ensure,
-            }],
+            labels: vec![LabelDeclaration { schema, intent }],
             edge_types: vec![
                 EdgeTypeDeclaration {
                     schema: EdgeTypeSchema::new("OmRelationFrom"),
@@ -403,7 +562,14 @@ impl Store {
         {
             return Err(Error::SchemaVersion);
         }
-        for (name, property) in [("omloom_parent", "parent"), ("omloom_class", "class")] {
+        for (name, property) in [
+            ("omloom_parent", "parent"),
+            ("omloom_class", "class"),
+            ("omloom_layer", "layer"),
+            // Reverse membership lookup and shared-address expansion for visible interface hints.
+            ("omloom_asset", "asset"),
+            ("omloom_group", "group"),
+        ] {
             match db.execute_cypher(&format!("CREATE INDEX {name} ON :OmRow({property})")) {
                 Ok(_) => {}
                 Err(DatabaseError::CatalogObjectExists {
@@ -425,11 +591,45 @@ impl Store {
             )?;
         }
         let root = store.read(ROOT)?.ok_or(Error::Corrupt)?;
-        if number(&root, "schema")? != SCHEMA_VERSION {
+        let version = number(&root, "schema")?;
+        if !(2..=SCHEMA_VERSION).contains(&version) {
             return Err(Error::SchemaVersion);
         }
         if string(&root, "policy")? != store.policy_identity() {
             return Err(Error::PolicyChanged);
+        }
+        if version == 2 {
+            workspace::upgrade_network_order(&store)?;
+        }
+        if version < 7 {
+            workspace::network_facts::upgrade(&store)?;
+        }
+        if version < 8 {
+            workspace::upgrade_asset_names(&store)?;
+        }
+        if version < SCHEMA_VERSION {
+            // Publish the format only after all resumable projections are ready.
+            let mut tx = store.begin()?;
+            if number(&tx.root, "schema")? < SCHEMA_VERSION {
+                tx.root.insert("schema".into(), int(SCHEMA_VERSION)?);
+                tx.changed = true;
+            }
+            tx.commit()?;
+        }
+        // CoordiNode stores a member-local recovery guard before an index's
+        // first use. Prepare our fixed indexes before exposing a ready store.
+        let class_probe = format!(
+            "MATCH (n:OmRow {{class:{}}}) RETURN n.key AS key LIMIT 1",
+            Class::Inventory as usize
+        );
+        for query in [
+            "MATCH (n:OmRow {parent:'assets'}) RETURN n.key AS key LIMIT 1",
+            &class_probe,
+            "MATCH (n:OmRow {layer:'intent'}) RETURN n.key AS key LIMIT 1",
+        ] {
+            store
+                .db
+                .execute_cypher_shared(query, None, None, None, None)?;
         }
         Ok(store)
     }
@@ -660,6 +860,18 @@ impl Tx<'_> {
         if self.root.get("restored") == Some(&Value::Bool(true)) {
             return Err(Error::RecoveryRequired);
         }
+        self.put_projection(key, parent, class, data, old)
+    }
+    /// Format migration can rebuild derived columns while the restored
+    /// installation remains fenced against domain mutations and dispatch.
+    fn put_projection(
+        &mut self,
+        key: &str,
+        parent: &str,
+        class: Class,
+        data: Properties,
+        old: Option<&Properties>,
+    ) -> Result<bool> {
         let data = charged_row(key, parent, class, data)?;
         if old == Some(&data) {
             return Ok(false);
@@ -682,6 +894,9 @@ impl Tx<'_> {
         if self.root.get("restored") == Some(&Value::Bool(true)) {
             return Err(Error::RecoveryRequired);
         }
+        self.delete_projection(key)
+    }
+    fn delete_projection(&mut self, key: &str) -> Result<()> {
         if let Some(old) = self.get(key)? {
             self.counters(Some(&old), None)?;
             self.store.db.execute_in_transaction(

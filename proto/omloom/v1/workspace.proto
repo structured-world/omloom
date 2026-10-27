@@ -1,0 +1,747 @@
+syntax = "proto3";
+package omloom.workspace.v1;
+import "omloom/v1/contracts.proto";
+
+// The same typed application surface is used by the development browser and
+// future authenticated hosts. Requests never carry an actor or effective grant.
+service Workspace {
+  rpc Call(Request) returns (Reply);
+}
+
+enum View {
+  VIEW_OVERVIEW = 0;
+  VIEW_NETWORK = 1;
+  VIEW_HARDWARE = 2;
+  VIEW_VIRTUALIZATION = 3;
+  VIEW_SERVICES = 4;
+}
+enum VirtualizationRole {
+  VIRTUALIZATION_ROLE_UNSPECIFIED = 0;
+  VIRTUALIZATION_ROLE_HYPERVISOR = 1;
+}
+enum FieldType {
+  FIELD_TYPE_TEXT = 0;
+  FIELD_TYPE_INTEGER = 1;
+  FIELD_TYPE_BOOLEAN = 2;
+  FIELD_TYPE_DATE = 3;
+  FIELD_TYPE_CHOICE = 4;
+}
+enum SharedUse {
+  SHARED_USE_EXCLUSIVE = 0;
+  SHARED_USE_VRRP = 1;
+  SHARED_USE_ANYCAST = 2;
+  SHARED_USE_UNSPECIFIED = 3;
+}
+
+message Predicate {
+  // User-selected built-in name or stable company definition UUID.
+  string field = 1;
+  // User-selected typed equality operand; an explicit clear tests a cleared value.
+  omloom.v1.Field value = 2;
+  // Reviewed interpretation generation, absent for built-ins. Label/help edits
+  // preserve it; type, choice or applicability migration invalidates it.
+  optional uint64 definition_generation = 3;
+}
+message Query {
+  // User-selected presentation; it never grants access or changes adoption.
+  View view = 1;
+  // Selected root identities; an empty set means all currently permitted inventory.
+  repeated omloom.v1.AssetRef roots = 2;
+  // User-selected supported resource kinds; empty means all kinds in this view.
+  repeated omloom.v1.AssetKind kinds = 3;
+  // User input for exact identity/IP or selected descriptive discovery.
+  string search = 4;
+  // Explicit typed conditions; unavailable conditions are errors, never discarded.
+  repeated Predicate predicates = 5;
+  // Requested built-in/definition fields; omission uses the documented name column.
+  repeated string columns = 6;
+  // User-selected supported ordering: name or kind, with stable ID ties.
+  string sort = 7;
+  // Requested direction of the selected sort, with the same stable tie ordering.
+  bool descending = 8;
+  // Opaque server cursor from the preceding page; not an authority token.
+  optional string cursor = 9;
+  // Requested page size, constrained by the server's fixed resource ceiling.
+  uint32 limit = 10;
+  // Explicit selection of objects without a confirmed physical placement.
+  bool unplaced = 11;
+  // Explicit resource perspective within roots, rechecked by the server. Only
+  // its local components are projected; upstream topology is not inferred.
+  optional omloom.v1.AssetRef focus = 12;
+  // Request bounded owner/address context for visible rows, not additional authority.
+  bool include_context = 13;
+  // Ordinary inventory presentation omits host-local address resources before pagination.
+  // This is a projection choice, not an authorization grant or removal of source evidence.
+  bool omit_host_local = 14;
+  // Browse one ownership level: root containers when no scope is selected,
+  // otherwise direct children of roots/focus. View and kind filters apply before
+  // count/pagination. Explicit search may request a flat scoped result instead.
+  // This changes presentation only and never grants resource/field authority.
+  bool level_only = 15;
+}
+
+message WorkingContext {
+  // User-selected enclosing roots. Empty explicitly selects all permitted
+  // inventory; this selector never supplies resource or field authority.
+  repeated omloom.v1.AssetRef roots = 1;
+  // Current local resource, if any. Creation refines it; peer edits require an
+  // explicit context encompassing both endpoints without this local focus.
+  optional omloom.v1.AssetRef focus = 2;
+  // Application revision reviewed for scoped mutations. Required with roots
+  // or focus; omit for retrieval. The server rechecks membership at commit.
+  optional uint64 expected = 3;
+}
+message Prepare {
+  // User-selected presentation used to suggest applicable creation actions;
+  // the server derives actual parent, kind and field permissions independently.
+  View view = 1;
+  // Explicit relationship source selected in the working context; supply both
+  // endpoints to obtain their actual permitted typed relationship choices.
+  optional omloom.v1.AssetRef from = 2;
+  // Explicit relationship destination; neither endpoint expands the selector.
+  optional omloom.v1.AssetRef to = 3;
+}
+message Creation {
+  // Server-qualified resource kind available at this exact parent/context.
+  omloom.v1.AssetKind kind = 1;
+  // Actual parent and its permitted name, absent for standalone inventory.
+  // The user selects one returned parent when the scope contains several.
+  optional Item parent = 2;
+  // Applicable writable built-ins and stable company field identities. Omitted
+  // fields are preserved; a parent grants neither their values nor permissions.
+  repeated string fields = 3;
+}
+message Actions {
+  // Server-derived bounded creation choices, never a client authority assertion.
+  repeated Creation creations = 1;
+  // Exact application revision of the prepared choices, echoed for mutations.
+  uint64 revision = 2;
+  // Typed relationship kinds applicable to the requested exact endpoint pair.
+  repeated omloom.v1.RelationKind relationships = 3;
+  // Writable fields of the focused existing resource, absent without a focus.
+  // These are server-derived form inputs, never inherited from its parent.
+  repeated string fields = 4;
+  // Explicit allocation choices within the selected namespace/prefix or L2
+  // domain. Separate from recording locally known address facts.
+  repeated Creation allocations = 5;
+}
+message Item {
+  // Server-owned stable local asset identity and lifetime.
+  omloom.v1.AssetRef target = 1;
+  // Server-validated actual kind of the resource.
+  omloom.v1.AssetKind kind = 2;
+  // Current accepted-intent revision for conditional editing.
+  uint64 revision = 3;
+  // Only requested and currently visible values; absence is not an explicit clear.
+  repeated omloom.v1.Field fields = 4;
+}
+message Page {
+  // Visible requested projections, ordered under this response's revision.
+  repeated Item items = 1;
+  // Opaque continuation with query/context revision binding, absent at the end.
+  optional string next = 2;
+  // Number of permitted matching assets, never hidden candidates.
+  uint64 total = 3;
+  // Current application revision used to prepare this page or selection.
+  uint64 revision = 4;
+  // Bounded authorized owner/address hints for this page only, absent unless requested.
+  repeated ItemContext contexts = 5;
+}
+message OwnerContext {
+  // Current authorized owner identity; never a fabricated unknown resource.
+  omloom.v1.AssetRef target = 1;
+  // Actual owner kind, preserving OS/container/host distinctions.
+  omloom.v1.AssetKind kind = 2;
+  // Permitted current owner label, without unrelated owner fields.
+  string name = 3;
+}
+message ItemContext {
+  // Visible row to which these server-derived hints apply.
+  omloom.v1.AssetRef target = 1;
+  // Authorized containment path from the enclosing host to the immediate owner.
+  repeated OwnerContext owners = 2;
+  // Permitted non-local addresses attached to this resource's local interfaces.
+  repeated string addresses = 3;
+  // Multiple authorized immediate owners at a shared boundary, never a fabricated chain.
+  repeated OwnerContext alternative_owners = 5;
+  // Actual permitted service binds for this page, independent of configured interface addresses.
+  repeated SocketBind endpoints = 6;
+}
+message Read {
+  // User-selected local target; the server rechecks current scope/incarnation.
+  omloom.v1.AssetRef target = 1;
+  // Server-issued relation continuation, bound to target, context and current revision.
+  optional string relations_cursor = 2;
+}
+message Detail {
+  // Current visible inventory fields and edit revision.
+  Item item = 1;
+  // Authorized relations whose endpoints are both disclosable.
+  repeated omloom.v1.Relation relations = 2;
+  // Current visible source evidence, separate from accepted intent.
+  repeated omloom.v1.Observation observed = 3;
+  // Visible import proposals, never silently promoted into accepted intent.
+  repeated omloom.v1.Observation imported = 4;
+  // Authorized current participants; these are intended assignments, not active-gateway observations.
+  repeated Participant participants = 5;
+  // True only when every intended participant is disclosable in this context.
+  bool participants_complete = 6;
+  // Visible typed shared-address group and its independent edit revision.
+  // Omitted when unshared or inaccessible; omission never proves no other participants.
+  optional Item group = 7;
+  // Minimal permitted endpoint labels for the returned relations, fetched in
+  // one bounded batch. These are projections of existing identities, not copies.
+  repeated Item related = 8;
+  // Authorized current local network evidence; absent does not establish absence.
+  repeated HostNetworkView host_network = 9;
+  // Authorized current interface-address facts; no address asset identities or history.
+  repeated InterfaceAddressView current_addresses = 10;
+  // Next authorized relation page, absent at the end. Each page contains at most 25 relations.
+  optional string relations_next = 11;
+}
+
+message AddressObservation {
+  // Current source value, without a separate inventory identity or historical sample.
+  CurrentAddress value = 1;
+  // Exact source observation time for this value, Unix milliseconds; never freshened by omission.
+  // Absent for migrated partial collections whose old format lost individual dates.
+  optional uint64 observed_at = 2;
+}
+message InterfaceAddressView {
+  // Latest source checkpoint and completeness; addresses are carried only in observations below.
+  InterfaceAddresses coverage = 1;
+  // Current facts with independent dates, including facts omitted from a partial refresh.
+  repeated AddressObservation observations = 2;
+}
+message NetworkObservation {
+  // Exact source observation time, Unix milliseconds, independent of the latest scan checkpoint.
+  uint64 observed_at = 1;
+  // Actual boot/session basis at collection; an omitted partial fact retains its prior basis.
+  string basis = 2;
+  // Exactly one current typed fact. It does not imply reachability or effective packet permission.
+  oneof value {
+    // Observed service-owned kernel bind.
+    SocketBind socket = 3;
+    // Observed local routing entry.
+    LocalRoute route = 4;
+    // Observed application firewall rule.
+    ApplicationRule rule = 5;
+    // One reported application firewall setting, independently dated.
+    FirewallSetting policy = 6;
+  }
+}
+message HostNetworkView {
+  // Latest source checkpoint and reported policy/coverage, without duplicated fact arrays.
+  HostNetwork coverage = 1;
+  // Current facts retain their own exact observation time and boot basis.
+  repeated NetworkObservation observations = 2;
+  // Authorized current labels for services referenced by these facts, independent of relation pagination.
+  repeated OwnerContext services = 3;
+}
+message FirewallSetting {
+  // Reported application policy selector; never an effective per-port verdict.
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_ENABLED = 1;
+    KIND_BLOCK_ALL = 2;
+    KIND_ALLOW_BUILTIN_SIGNED = 3;
+    KIND_ALLOW_DOWNLOADED_SIGNED = 4;
+  }
+  // Source-reported setting identity, independent of other optional policies.
+  Kind kind = 1;
+  // Observed policy value; absence is represented by no observation, not false.
+  bool enabled = 2;
+}
+
+enum AddressStability {
+  ADDRESS_STABILITY_UNSPECIFIED = 0;
+  ADDRESS_STABILITY_STABLE = 1;
+  ADDRESS_STABILITY_TEMPORARY = 2;
+}
+enum AddressState {
+  ADDRESS_STATE_UNSPECIFIED = 0;
+  ADDRESS_STATE_PREFERRED = 1;
+  ADDRESS_STATE_DEPRECATED = 2;
+}
+message CurrentAddress {
+  // Source-configured IP literal; not a resource identity or allocation claim.
+  string address = 1;
+  // Source-known assignment mask; absence means unknown, zero means /0.
+  optional uint32 prefix_length = 2;
+  // Source-known generation class, independent of preferred/deprecated state.
+  // TEMPORARY is classified at collection and rejected before persistence.
+  AddressStability stability = 3;
+  // Source-known preferred/deprecated state; deprecated does not mean invalid.
+  AddressState state = 4;
+}
+message InterfaceAddresses {
+  // Existing interface being observed; no separate address objects are created.
+  omloom.v1.AssetRef interface = 1;
+  // Selected source label; it grants no authority over the interface.
+  string source = 2;
+  // Source observation instant in Unix milliseconds, used for stale-write rejection.
+  uint64 observed_at = 3;
+  // Current non-temporary facts, at most 64. Equal input writes no new versions.
+  repeated CurrentAddress addresses = 4;
+  // Explicit completeness within this source/interface. Partial input preserves omissions.
+  bool complete = 5;
+}
+message SocketBind {
+  // Existing owning service identity in this installation, never a physical Port.
+  omloom.v1.AssetRef service = 1;
+  // Observed transport, tcp or udp; UDP bind does not prove a server role.
+  string protocol = 2;
+  // Reported socket family: IPv4, IPv6 or IPv4+IPv6.
+  string family = 3;
+  // Kernel local literal or wildcard *, including a source-local IPv6 zone.
+  string bind = 4;
+  // Observed nonzero local transport port, constrained to 65535.
+  uint32 port = 5;
+  // Source-known literal generation class; wildcard/unknown remains unspecified.
+  // Temporary literal binds must be discarded by the collector, never persisted.
+  AddressStability address_stability = 6;
+  // Source-known preferred/deprecated state, independent of generation class.
+  AddressState address_state = 7;
+}
+message LocalRoute {
+  // Source-reported numeric destination; source abbreviations remain explicit.
+  string destination = 1;
+  // Source-reported next hop, interface reference or link-layer address.
+  string gateway = 2;
+  // Source-local kernel flags, not a portable routing policy.
+  string flags = 3;
+  // Interface name in the observed OS installation.
+  string interface = 4;
+  // Source address family, IPv4 or IPv6.
+  string family = 5;
+  // Whether the source marks a link-layer/local-host entry, not a network route.
+  bool link_layer = 6;
+}
+message ApplicationRule {
+  // Source application path or bundle identity; no basename-based process match.
+  string subject = 1;
+  // Reported app action, allow incoming or block incoming. Not a packet verdict.
+  string action = 2;
+}
+message HostNetwork {
+  // Existing software installation observed by the selected local source.
+  omloom.v1.AssetRef installation = 1;
+  // Operator-selected source label; cannot assert actor identity or authority.
+  string source = 2;
+  // Actual source observation time, milliseconds since Unix epoch; not server freshness.
+  uint64 observed_at = 3;
+  // Source boot/session basis, not a durable OS installation identifier.
+  string basis = 4;
+  // Selected current service-owned kernel binds, without remote flows or counters.
+  repeated SocketBind sockets = 5;
+  // Source-local route and link-layer rows, not canonical IPAM or upstream topology.
+  repeated LocalRoute routes = 6;
+  // Readable application firewall rules, without inferred effective port decisions.
+  repeated ApplicationRule rules = 7;
+  // Actual partial/verified/failed/blocked socket-source coverage, bounded readable text.
+  string socket_coverage = 8;
+  // Actual route-source coverage; failed retrieval never means no routes.
+  string route_coverage = 9;
+  // Actual application-firewall coverage, independent of packet filtering.
+  string application_coverage = 10;
+  // Actual PF coverage or permission failure; unknown never means disabled.
+  string packet_filter_coverage = 11;
+  // Reported application firewall enablement; omitted when unreadable.
+  optional bool firewall_enabled = 12;
+  // Reported application block-all policy; omitted when unreadable.
+  optional bool block_all = 13;
+  // Reported signed-app policy; omitted when unreadable.
+  optional bool allow_builtin_signed = 14;
+  // Reported downloaded signed-app policy; omitted when unreadable.
+  optional bool allow_downloaded_signed = 15;
+  // Source asserts a complete result within its declared socket collection scope.
+  bool sockets_complete = 16;
+  // Source asserts a complete result within its declared route collection scope.
+  bool routes_complete = 17;
+  // Source asserts a complete application rules result, independently of PF.
+  bool rules_complete = 18;
+}
+message Participant {
+  // Stable local interface identity selected for this canonical address.
+  omloom.v1.AssetRef interface = 1;
+  // Intended VRRP priority, including 255 for the address owner; never observed election state.
+  optional uint32 priority = 2;
+}
+message Relationship {
+  // User-selected typed endpoints and edit revision; authority is assigned by the server.
+  omloom.v1.Relation relation = 1;
+  // Explicit revision-checked removal of this relationship only.
+  bool remove = 2;
+}
+message Write {
+  // Existing target for an edit; absent means explicitly create a new identity.
+  optional omloom.v1.AssetRef target = 1;
+  // Revision read by the user; required for edits and absent for creation.
+  optional uint64 expected = 2;
+  // User-selected resource kind for creation; existing kind cannot change here.
+  omloom.v1.AssetKind kind = 3;
+  // Explicit set/clear changes. Omitted fields are preserved, not cleared.
+  repeated omloom.v1.Field changes = 4;
+  // Explicit existing parent selected for creation in an enclosing context.
+  // The server derives the typed attachment and commits it with the child.
+  optional omloom.v1.AssetRef parent = 5;
+}
+message Bulk {
+  // Explicit bounded target identities reviewed by the user.
+  repeated omloom.v1.AssetRef targets = 1;
+  // Application revision used to resolve that exact selection.
+  uint64 expected = 2;
+  // Set/clear changes; omitted fields are preserved for every target.
+  repeated omloom.v1.Field changes = 3;
+  // Explicit removal request, incompatible with field changes.
+  bool remove = 4;
+}
+message Definition {
+  // Server-generated local definition UUID, stable across rename and migration.
+  string id = 1;
+  // User-visible name; equal labels do not make two definitions equivalent.
+  string name = 2;
+  // User-written bounded field help, independently protected as schema metadata.
+  string description = 3;
+  // User-selected type; date and choice retain explicit definition meaning.
+  FieldType type = 4;
+  // Explicit applicable asset kinds, not inferred from imported values.
+  repeated omloom.v1.AssetKind kinds = 5;
+  // Explicit allowed values for choice fields, empty for other field types.
+  repeated string choices = 6;
+  // Explicit selection for descriptive search; false never creates an index.
+  bool searchable = 7;
+  // Server revision, echoed as a precondition for edits and retirement.
+  uint64 revision = 8;
+  // Explicit retirement request; current values keep their original interpretation.
+  bool retired = 9;
+  // Server-owned interpretation generation, starting at one. Responses supply
+  // it for predicates; inputs omit it because the server derives it under revision CAS.
+  uint64 generation = 10;
+}
+message Conversion {
+  // Current typed value selected in the migration preview.
+  omloom.v1.Field from = 1;
+  // Reviewed replacement, including explicit clear when chosen by the user.
+  omloom.v1.Field to = 2;
+}
+message Migration {
+  // Reviewed next definition, carrying the expected current definition revision.
+  Definition definition = 1;
+  // Explicit complete conversion rules; missing conversions cannot use defaults.
+  repeated Conversion conversions = 2;
+  // Application revision shown in the migration preview, checked before activation.
+  uint64 expected = 3;
+  // True applies the reviewed migration; false returns its actual affected scope.
+  bool apply = 4;
+  // Explicit consent to deterministic text/integer/boolean/date conversions;
+  // invalid conversions still reject the entire reviewed migration.
+  bool convert_types = 5;
+  // Explicit consent to remove accepted local values from kinds excluded by
+  // the next applicability set. Source observations and proposals are untouched.
+  bool remove_inapplicable = 6;
+}
+message MigrationIssue {
+  // Server-selected authorized resource with an invalid current value.
+  omloom.v1.AssetRef target = 1;
+  // Current accepted value requiring repair or an explicit conversion rule.
+  omloom.v1.Field value = 2;
+  // Actionable validation explanation, without provider payloads or secrets.
+  string diagnostic = 3;
+}
+message MigrationPreview {
+  // Application revision read atomically for this non-persistent preview.
+  uint64 revision = 1;
+  // Total accepted values checked, including explicit applicability removals.
+  uint64 affected = 2;
+  // Accepted values that would be removed under the explicit requested policy.
+  uint64 removed = 3;
+  // Total invalid values. A nonzero count prevents the entire migration.
+  uint64 invalid = 4;
+  // At most 32 authorized examples; invalid reports total coverage separately.
+  repeated MigrationIssue issues = 5;
+}
+message SavedView {
+  // Server-generated stable view UUID; empty means create a new personal view.
+  string id = 1;
+  // User-visible name; private metadata is protected separately from asset data.
+  string name = 2;
+  // User-selected bounded query/layout, never a stored result set or executable code.
+  Query query = 3;
+  // Server edit revision, echoed for conditional saves.
+  uint64 revision = 4;
+  // Server-derived opaque definition owner, not an actor assertion in a request.
+  string owner = 5;
+  // Explicit team audiences; empty preserves personal-only visibility.
+  repeated string audiences = 6;
+  // Explicit team editors, constrained to the publication audience.
+  repeated string editors = 7;
+}
+message SaveView {
+  // Definition the user edited; server ignores/rejects caller-supplied owner changes.
+  SavedView view = 1;
+  // True commits the separately reviewed publication; false previews disclosure.
+  bool publish = 2;
+  // Explicit owner-authorized removal of the named definition at its revision.
+  bool remove = 3;
+}
+message Mapping {
+  // Exact source CSV column name selected by the user.
+  string source = 1;
+  // Explicit destination built-in name or company definition UUID.
+  string field = 2;
+}
+message Import {
+  // User-provided UTF-8 CSV, bounded before parsing; never retained as raw history.
+  string csv = 1;
+  // Explicit source-to-destination mapping; no automatic schema installation.
+  repeated Mapping mappings = 2;
+  // Kind selected for new rows; update rows retain their existing kind.
+  omloom.v1.AssetKind kind = 3;
+  // Explicit preview UUID to apply; absent means prepare a preview from CSV.
+  optional string preview = 4;
+  // Explicit source name within the current actor's import configuration;
+  // new source objects require an external_id CSV column for repeat-safe mapping.
+  string source = 5;
+  // Explicit parent selected for new imported rows; updates retain their
+  // existing attachment. Preview and acceptance check the same working context.
+  optional omloom.v1.AssetRef parent = 6;
+}
+
+enum AddressMeaning {
+  ADDRESS_MEANING_UNSPECIFIED = 0;
+  ADDRESS_MEANING_CONFIGURED = 1;
+  ADDRESS_MEANING_DESTINATION = 2;
+}
+message Address {
+  // Existing known-address reference for conditional editing, absent to record
+  // a new fact. Equal IP bytes never identify an existing reference implicitly.
+  optional omloom.v1.AssetRef target = 1;
+  // Revision read for this reference, required for edits and absent on creation.
+  optional uint64 expected = 2;
+  // User-known IPv4/IPv6 literal, without an invented mask or forwarding context.
+  // Required on creation; omission preserves it on edit without echoing a
+  // field the caller may not read. A scoped literal uses the zone field.
+  optional string address = 3;
+  // Known assignment prefix length. Absent means unknown on creation and
+  // preserves the current value on edit; zero is a real /0.
+  optional uint32 prefix_length = 4;
+  // User-selected meaning; configured and destination facts cannot substitute
+  // for one another or prove current reachability or allocation authority.
+  // Absence means unspecified on creation and preserves the meaning on edit.
+  optional AddressMeaning meaning = 5;
+  // Known host-local IPv6 zone label, preserved when omitted on edit.
+  // It is not a portable routing/L2 identity.
+  optional string zone = 6;
+  // Actual parent/subject for a new fact, absent for standalone inventory.
+  // No device or interface is invented when the source did not supply one.
+  optional omloom.v1.AssetRef parent = 7;
+  // Explicit canonical IPAM identity selected in a reviewed broader context.
+  // Omission preserves a binding; clearing is an explicit separate edit.
+  optional omloom.v1.AssetRef binding = 8;
+  // Explicit removal of a prior binding, incompatible with a new binding.
+  bool clear_binding = 9;
+  // Explicitly make the assignment mask unknown; incompatible with prefix_length.
+  bool clear_prefix_length = 10;
+  // Explicitly remove the known host-local zone; incompatible with zone.
+  bool clear_zone = 11;
+  // Explicit optional description/company-field changes. Omitted fields remain
+  // untouched; name is derived from the known address and cannot be supplied.
+  repeated omloom.v1.Field changes = 12;
+  // Explicit reviewed new canonical allocation, mutually exclusive with binding.
+  // Its namespace, uniqueness and optional assignment commit with this mapping.
+  optional Network allocation = 13;
+  // Explicit intended assignment to an existing permitted interface. Omitted
+  // means bind knowledge only, never infer an assignment from an address fact.
+  optional omloom.v1.AssetRef interface = 14;
+  // Intended participant priority for an explicitly selected VRRP assignment.
+  // This is not observed election state and is absent for ordinary assignment.
+  optional uint32 priority = 15;
+}
+message ImportRow {
+  // One-based source row used to locate errors without losing input context.
+  uint32 row = 1;
+  // Proposed explicit mutation, absent when validation failed.
+  Write change = 2;
+  // Field-specific actionable validation diagnostic; never a successful error envelope.
+  string diagnostic = 3;
+}
+message Preview {
+  // Server-generated bounded-lived preview identity, absent for invalid previews.
+  optional string id = 1;
+  // Selected row changes and validation diagnostics for operator review.
+  repeated ImportRow rows = 2;
+  // Source/application revision bound to this reviewed preview.
+  uint64 revision = 3;
+}
+message Network {
+  // Existing IP/prefix/VLAN/routing resource identity, absent for creation.
+  optional omloom.v1.AssetRef target = 1;
+  // Current accepted revision required for mutation of an existing resource.
+  optional uint64 expected = 2;
+  // User-selected IP address or prefix kind; no implicit address-space creation.
+  omloom.v1.AssetKind kind = 3;
+  // Explicit allocation namespace with stable local identity.
+  omloom.v1.AssetRef address_space = 4;
+  // User input address/mask, canonicalized by the server, with host mask retained.
+  string cidr = 5;
+  // Explicit L2/link scope for link-local addresses and gateway protocol context.
+  optional omloom.v1.AssetRef link = 6;
+  // Explicit routing context, independent of address-space identity.
+  optional omloom.v1.AssetRef routing = 7;
+  // Reviewed allocation mechanism; ordinary duplicates cannot set sharing implicitly.
+  SharedUse sharing = 8;
+  // Protocol VRID for VRRP, scoped to L2 domain and IP family, not a global identity.
+  optional uint32 vrid = 9;
+  // Explicit ordinary inventory name, not proof of observed network health.
+  string name = 10;
+  // Select an unused address within this prefix atomically; no IPv6 enumeration.
+  bool next_available = 11;
+  // Explicit 802.1Q VLAN identifier (1-4094), meaningful only with a selected L2 domain.
+  optional uint32 vlan_id = 12;
+  // Explicit existing shared group selected by the user. Its mechanism and VRRP
+  // parameters are server-owned: omit group_name, link/vrid (for VRRP) and use
+  // SHARED_USE_UNSPECIFIED when selecting it. Interface rights are not inherited.
+  optional omloom.v1.AssetRef group = 13;
+  // User-chosen name of a new VRRP/anycast group. Required only when creating
+  // that group, never a label-based lookup or automatic merge with an existing one.
+  string group_name = 14;
+  // Reviewed revision of the selected existing group, omitted for a new group.
+  optional uint64 expected_group = 15;
+  // Reviewed revision of the address's previous group when leaving it. Separate
+  // from the selected group's revision because these are independent objects.
+  optional uint64 previous_group_revision = 16;
+  // Selected allocation container for creation. The server derives its real
+  // namespace/link and checks prefix containment without inheriting grants.
+  // Required for scoped creation; omitted when editing an existing allocation.
+  optional omloom.v1.AssetRef parent = 17;
+}
+message Member {
+  // Canonical address or typed address-group identity selected for this edit.
+  // Memberships never duplicate an address or create a second participant list.
+  omloom.v1.AssetRef address = 1;
+  // User-selected participant interface identity, rechecked against actual kind/scope.
+  omloom.v1.AssetRef interface = 2;
+  // Address revision reviewed before membership change.
+  uint64 expected = 3;
+  // Explicit removal of only this participant, not a release of the shared address.
+  bool remove = 4;
+  // VRRP intended priority; no priority is interpreted as observed active status.
+  optional uint32 priority = 5;
+  // Current group revision reviewed via an address. Required for a shared
+  // address, omitted for exclusive assignment or a direct group edit.
+  optional uint64 expected_group = 6;
+}
+message Export {
+  // Explicit currently permitted query and requested columns to export.
+  Query query = 1;
+  // True selects spreadsheet-safe CSV; false requests lossless machine CSV.
+  bool spreadsheet = 2;
+}
+message Download {
+  // Server-produced bounded UTF-8 CSV from authorized current projections.
+  string csv = 1;
+  // Exact application revision of the exported result.
+  uint64 revision = 2;
+}
+message Identity {
+  // Name of the server-configured synthetic actor; this is not a login identity.
+  string name = 1;
+  // Named fixture used by this explicit development host.
+  string fixture = 2;
+  // Server-selected team references used by saved-view fixture scenarios.
+  repeated string teams = 3;
+  // Whether this context may edit permitted inventory; not inferred from UI controls.
+  bool writable = 4;
+  // Whether this context may administer company field definitions.
+  bool schema_admin = 5;
+}
+message Definitions {
+  // Only definition metadata permitted to this server-selected context.
+  repeated Definition items = 1;
+}
+message Views {
+  // Only personally owned or explicitly published definition metadata.
+  repeated SavedView items = 1;
+}
+message Mutation {
+  // Actual resulting application revision, including no-op detection.
+  uint64 revision = 1;
+  // Identities actually affected, never silently expanded from a changed query.
+  repeated omloom.v1.AssetRef targets = 2;
+  // Number of current values affected by a reviewed schema migration.
+  uint64 affected = 3;
+}
+message Empty {}
+message Request {
+  // Explicit working selector for resource details, prepared actions and every
+  // inventory mutation/import. Query/export use Query roots/focus instead.
+  // Absence is rejected for mutation, never interpreted as global authority.
+  optional WorkingContext working = 18;
+  // Exactly one user intention; no derived authorization, counts or status inputs.
+  oneof command {
+    // Read the host-selected synthetic actor and fixture capabilities.
+    Empty identity = 1;
+    // Retrieve a bounded authorized current projection, never a result snapshot.
+    Query query = 2;
+    // Read one exact incarnation and its authorized current evidence.
+    Read read = 3;
+    // Create or conditionally edit accepted fields with explicit set/clear intent.
+    Write write = 4;
+    // Apply a reviewed, revision-bound finite selection atomically.
+    Bulk bulk = 5;
+    // Create, conditionally replace or explicitly remove a typed relationship.
+    Relationship relation = 6;
+    // Administer local definition metadata without changing value interpretation.
+    Definition definition = 7;
+    // List only the definition metadata allowed by the host context.
+    Empty definitions = 8;
+    // Validate or atomically apply a reviewed interpretation/value migration.
+    Migration migration = 9;
+    // Save personal metadata or separately confirm its reviewed publication.
+    SaveView save_view = 10;
+    // List personally owned and explicitly published view definitions.
+    Empty views = 11;
+    // Prepare a bounded CSV preview or accept that exact current preview.
+    Import import = 12;
+    // Allocate or review changes to an explicitly scoped IP, prefix or VLAN.
+    Network network = 13;
+    // Change an intended interface participant without releasing the canonical IP.
+    Member member = 14;
+    // Export the current authorized projection under one application revision.
+    Export export = 15;
+    // Prepare actual context-specific creation kinds, parents and writable fields.
+    Prepare prepare = 16;
+    // Record or reconcile a known address without requiring allocation topology.
+    Address address = 17;
+    // Accept selected dated local network evidence under explicit installation authority.
+    HostNetwork host_network = 19;
+    // Current source/interface address facts; temporary addresses are rejected.
+    InterfaceAddresses interface_addresses = 20;
+  }
+}
+message Reply {
+  // Typed successful result. Failures use canonical gRPC Status with ErrorInfo.
+  oneof result {
+    // Host-selected synthetic identity; no authentication assertion is returned.
+    Identity identity = 1;
+    // Current filtered data and authorized count at one revision.
+    Page page = 2;
+    // Exact resource incarnation with separately projected source evidence.
+    Detail detail = 3;
+    // Committed mutation identities, or validated migration scope before commit.
+    Mutation mutation = 4;
+    // Visible typed definition metadata, including current interpretation generation.
+    Definitions definitions = 5;
+    // Visible saved definitions, including a reviewed unpublished draft where requested.
+    Views views = 6;
+    // Row validation results and an expiring acceptance identity only when valid.
+    Preview preview = 7;
+    // Bounded authorized CSV, distinguished by the requested output contract.
+    Download download = 8;
+    // Bounded validation coverage; never a saved migration history or partial apply.
+    MigrationPreview migration_preview = 9;
+    // Applicable context-specific actions under the current application revision.
+    Actions actions = 10;
+  }
+}

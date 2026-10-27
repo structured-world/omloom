@@ -61,7 +61,7 @@ pub(crate) fn check(text: &str) -> Result<(), Error> {
 }
 
 /// Nominal identity used by host domain code; equal names/provider IDs do not join it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AssetRef {
     pub asset: AssetId,
     pub incarnation: IncarnationId,

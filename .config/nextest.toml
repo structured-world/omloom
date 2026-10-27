@@ -1,2 +1,7 @@
 [profile.default]
 slow-timeout = { period = "30s", terminate-after = 2 }
+
+# Measure retrieval without competing fixture creation in this test run.
+[[profile.default.overrides]]
+filter = 'test(/^projections::level_browse_(small_estate_has_bounded_latency|hundred_hosts_only_projects_one_page)$/)'
+threads-required = "num-test-threads"

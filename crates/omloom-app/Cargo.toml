@@ -1,0 +1,40 @@
+[package]
+name = "omloom-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+diagnostics = ["omloom-store/diagnostics"]
+
+[[bin]]
+name = "omloom-dev"
+path = "src/main.rs"
+
+[[example]]
+name = "search_probe"
+required-features = ["diagnostics"]
+
+[dependencies]
+omloom-contracts = { path = "../omloom-contracts" }
+omloom-store = { path = "../omloom-store" }
+prost.workspace = true
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tonic = "0.14.6"
+tonic-prost = "0.14.6"
+tonic-types = "0.14.6"
+tonic-web = "0.14.6"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net", "sync", "time"] }
+axum = "0.8.9"
+tower-http = { version = "0.6", features = ["fs", "limit", "set-header"] }
+
+[build-dependencies]
+tonic-prost-build = "0.14.6"
+
+[dev-dependencies]
+tempfile = "3"
