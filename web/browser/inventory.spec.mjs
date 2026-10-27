@@ -184,6 +184,31 @@ test('reload selection retries a failed query when its URL is unchanged', async 
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
 
+test('saved view capacity refusal preserves desktop and phone startup', async ({ page }) => {
+  // Startup must remain usable after a real durable save reaches metadata capacity.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-view-budget-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const predicates = Array.from({ length: 8 }, () => ({ field: 'description', value: { name: 'description', value: { oneofKind: 'text', text: 'x'.repeat(950) } } }));
+    let refused = false;
+    for (let i = 0; i < 80; i++) {
+      try { await rpc({ oneofKind: 'saveView', saveView: m.SaveView.create({ view: { name: `Large ${i}`, query: { columns: ['name'], predicates } } }) }); }
+      catch (error) { expect(error.code).toBe('RESOURCE_EXHAUSTED'); refused = true; break; }
+    }
+    expect(refused).toBe(true);
+    const metadata = await rpc({ oneofKind: 'views', views: {} });
+    expect(m.Reply.toBinary({ result: metadata }).length).toBeLessThanOrEqual(512 * 1024);
+    await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Readable inventory' } }] }) });
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(server.url); await page.reload();
+      await expect(page.getByRole('button', { name: 'Readable inventory', exact: true })).toBeVisible();
+      await expect(page.getByRole('alert')).toHaveCount(0);
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('definition capacity refusal preserves desktop and phone startup', async ({ page }) => {
   // Individually valid choice sets cannot strand accepted inventory behind oversized metadata.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-schema-budget-'));

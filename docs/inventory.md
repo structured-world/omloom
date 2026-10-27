@@ -166,9 +166,11 @@ a migration rechecks the application revision and all affected data permissions;
 it changes accepted local values together or leaves them unchanged. Provider
 observations and import proposals keep their source interpretation.
 
-Saved views are personal initially. Team publication separately previews the
-definition disclosed, including roots and predicates. Definition audiences and
-editors do not grant access to matching inventory. Personal URL adjustments do
+Saved views are personal initially. Creation and edits enforce a 512 KiB
+aggregate metadata reply budget, leaving accepted views unchanged on refusal.
+Team publication separately previews the definition disclosed, including roots
+and predicates. Definition audiences and editors do not grant access to matching
+inventory. Personal URL adjustments do
 not modify the shared definition. Reset reloads that definition. Unavailable,
 retired or retyped predicates fail explicitly instead of broadening the query.
 Retired definitions keep their current values. Definition cleanup returns a

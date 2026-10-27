@@ -1,5 +1,103 @@
 use super::*;
 
+// Schema metadata must stay transport-readable after creation and revision-checked edits.
+#[test]
+fn saved_view_admission_preserves_metadata_reply_budget() -> TestResult {
+    use api::{reply::Result as Reply, request::Command};
+    use prost::Message;
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let small = api::SavedView {
+        name: "Small view".into(),
+        query: Some(query()),
+        ..Default::default()
+    };
+    let Reply::Views(saved) = call(
+        &store,
+        &actor,
+        Command::SaveView(api::SaveView {
+            view: Some(small),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("view");
+    };
+    let small = saved.items[0].clone();
+    let mut large_query = query();
+    large_query.predicates = (0..8)
+        .map(|_| api::Predicate {
+            field: "description".into(),
+            value: Some(text_field("description", &"x".repeat(950))),
+            ..Default::default()
+        })
+        .collect();
+    let mut refused = false;
+    for index in 0..80 {
+        let before = store.usage()?;
+        let result = call(
+            &store,
+            &actor,
+            Command::SaveView(api::SaveView {
+                view: Some(api::SavedView {
+                    name: format!("Large {index}"),
+                    query: Some(large_query.clone()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+        match result {
+            Ok(Reply::Views(_)) => {}
+            Err(Error::Limit) => {
+                assert_eq!(store.usage()?, before);
+                refused = true;
+                break;
+            }
+            other => panic!("save result: {other:?}"),
+        }
+    }
+    assert!(refused, "oversized saved-view collection admitted");
+    let mut expanded = small.clone();
+    expanded.query = Some(large_query);
+    let before = store.usage()?;
+    assert!(matches!(
+        call(
+            &store,
+            &actor,
+            Command::SaveView(api::SaveView {
+                view: Some(expanded),
+                ..Default::default()
+            })
+        ),
+        Err(Error::Limit)
+    ));
+    assert_eq!(store.usage()?, before);
+    let Reply::Views(views) = call(&store, &actor, Command::Views(api::Empty {}))? else {
+        panic!("views");
+    };
+    assert!(views.items.contains(&small));
+    assert!(
+        api::Reply {
+            result: Some(Reply::Views(views))
+        }
+        .encoded_len()
+            <= MAX_REPLY_BYTES
+    );
+    assert_eq!(store.usage()?, before, "reads must not persist state");
+    call(
+        &store,
+        &actor,
+        Command::SaveView(api::SaveView {
+            view: Some(small),
+            remove: true,
+            ..Default::default()
+        }),
+    )?;
+    Ok(())
+}
+
 // Retained definitions cannot starve eligible later cleanup pages or cause idle writes.
 #[test]
 fn definition_cleanup_progresses_past_retained_fields() -> TestResult {

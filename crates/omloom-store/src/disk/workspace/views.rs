@@ -67,9 +67,6 @@ impl Store {
             if view.revision != 0 || (!view.owner.is_empty() && view.owner != context.actor) {
                 return Err(Error::Denied);
             }
-            if self.workspace_rows("views", 256)?.len() >= 256 {
-                return Err(Error::Limit);
-            }
             view.id = AuthorityId::generate().to_string();
             view.owner.clone_from(&context.actor);
             None
@@ -139,6 +136,7 @@ impl Store {
             })));
         }
         view.revision = view.revision.checked_add(1).ok_or(Error::Limit)?;
+        tx.require_view_capacity(&view)?;
         let key = format!("view/{}", view.id);
         tx.put_against(
             &key,
@@ -162,5 +160,36 @@ impl Store {
         Ok(reply(api::reply::Result::Views(api::Views {
             items: vec![view],
         })))
+    }
+}
+
+impl Tx<'_> {
+    fn require_view_capacity(&self, next: &api::SavedView) -> Result<()> {
+        let size = next.encoded_len();
+        let mut bytes = 1 + prost::length_delimiter_len(size) + size;
+        let mut count = 1;
+        let key = format!("view/{}", next.id);
+        // Bound the complete collection, including overlapping audiences, without
+        // persisting per-reader copies or adding work to startup reads.
+        let rows = self.query(
+            "MATCH (n:OmRow {parent:'views'}) RETURN properties(n) AS p LIMIT 257",
+            None,
+        )?;
+        for row in &rows {
+            if row.get("key").and_then(Value::as_str) == Some(key.as_str()) {
+                continue;
+            }
+            count += 1;
+            let size = decode(row)?.encoded_len();
+            bytes += 1 + prost::length_delimiter_len(size) + size;
+            if count > 256 || bytes > MAX_REPLY_BYTES {
+                return Err(Error::Limit);
+            }
+        }
+        // Views is field 6 of Reply, with a one-byte message tag.
+        if 1 + prost::length_delimiter_len(bytes) + bytes > MAX_REPLY_BYTES {
+            return Err(Error::Limit);
+        }
+        Ok(())
     }
 }
