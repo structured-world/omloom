@@ -737,9 +737,21 @@ impl Store {
             _ => return Err(Error::Invalid),
         }
         let fields = if let Some(focus) = selection.focus {
-            let kind = wire::AssetKind::try_from(number(&tx.asset(focus)?, "kind")? as i32)
+            let row = tx.asset(focus)?;
+            let kind = wire::AssetKind::try_from(number(&row, "kind")? as i32)
                 .map_err(|_| Error::Corrupt)?;
-            writable_fields(context, focus, kind, &definitions)
+            let mut fields = writable_fields(context, focus, kind, &definitions);
+            if kind == wire::AssetKind::Device
+                && row
+                    .get("virtualization_role")
+                    .and_then(Value::as_str)
+                    .is_some()
+                && context.field(focus, kind as i32, "virtualization_role", false)
+                && context.field(focus, kind as i32, "virtualization_role", true)
+            {
+                fields.push("virtualization_role".into());
+            }
+            fields
         } else {
             Vec::new()
         };

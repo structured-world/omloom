@@ -1,6 +1,142 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
+// Retired device roles remain explicitly removable without allowing new roles or bypassing grants/CAS.
+#[test]
+fn legacy_device_role_can_be_cleared_but_never_assigned() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let mut old = asset();
+    old.intended.push(wire::IntendedField {
+        field: Some(text_field(
+            "virtualization_role",
+            "VIRTUALIZATION_ROLE_HYPERVISOR",
+        )),
+        authority_id: old.intended[0].authority_id.clone(),
+    });
+    let target = old.target.clone().ok_or("target")?;
+    store.save_asset(
+        &admit(wire::record::Body::Asset(old)),
+        None,
+        "provider",
+        100,
+    )?;
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    let actions = |context: &Context| -> Result<api::Actions, Error> {
+        let Reply::Actions(actions) = within(
+            &store,
+            context,
+            focused(&store, &target)?,
+            Command::Prepare(api::Prepare::default()),
+        )?
+        else {
+            return Err(Error::Corrupt);
+        };
+        Ok(actions)
+    };
+    assert!(
+        actions(&actor)?
+            .fields
+            .iter()
+            .any(|f| f == "virtualization_role")
+    );
+    let mut hidden = actor.clone();
+    hidden.grants[0].read = Fields::Selected(vec!["name".into()]);
+    assert!(
+        !actions(&hidden)?
+            .fields
+            .iter()
+            .any(|f| f == "virtualization_role")
+    );
+    let mut denied = actor.clone();
+    denied.grants[0].write = Fields::Selected(vec!["name".into()]);
+    assert!(
+        !actions(&denied)?
+            .fields
+            .iter()
+            .any(|f| f == "virtualization_role")
+    );
+    let clear = wire::Field {
+        name: "virtualization_role".into(),
+        value: Some(wire::field::Value::Clear(wire::NullValue::NullValue as i32)),
+    };
+    let write = api::Write {
+        target: Some(target.clone()),
+        expected: Some(1),
+        kind: K::Device as i32,
+        changes: vec![clear.clone()],
+        ..Default::default()
+    };
+    let clean = create(&store, &actor, K::Device, "No retired role")?;
+    let before = store.usage()?;
+    let mut absent = write.clone();
+    absent.target = Some(clean);
+    assert!(matches!(
+        call(&store, &actor, Command::Write(absent)),
+        Err(Error::Invalid)
+    ));
+    assert!(matches!(
+        call(&store, &denied, Command::Write(write.clone())),
+        Err(Error::Denied)
+    ));
+    let mut stale = write.clone();
+    stale.expected = Some(0);
+    assert!(matches!(
+        call(&store, &actor, Command::Write(stale)),
+        Err(Error::Conflict)
+    ));
+    let mut assign = write.clone();
+    assign.changes = vec![text_field(
+        "virtualization_role",
+        "VIRTUALIZATION_ROLE_HYPERVISOR",
+    )];
+    assert!(matches!(
+        call(&store, &actor, Command::Write(assign)),
+        Err(Error::Invalid)
+    ));
+    assert!(matches!(
+        call(
+            &store,
+            &actor,
+            Command::Write(api::Write {
+                kind: K::Device as i32,
+                changes: vec![text_field("name", "new"), clear.clone()],
+                ..Default::default()
+            })
+        ),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
+    call(&store, &actor, Command::Write(write.clone()))?;
+    let fields = detail(&store, &actor, &target)?.item.ok_or("item")?.fields;
+    assert!(fields.contains(&clear));
+    assert!(fields.contains(&text_field("name", "host")));
+    assert!(
+        !actions(&actor)?
+            .fields
+            .iter()
+            .any(|f| f == "virtualization_role")
+    );
+    let after = store.usage()?;
+    let mut repeat = write;
+    repeat.expected = Some(2);
+    call(&store, &actor, Command::Write(repeat))?;
+    assert_eq!(store.usage()?, after);
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    let accepted = store.asset(AssetRef::try_from(&target)?)?;
+    assert_eq!(accepted.revision, 2);
+    assert!(
+        accepted
+            .intended
+            .iter()
+            .any(|f| f.field.as_ref() == Some(&clear))
+    );
+    Ok(())
+}
+
 // A bad address must roll back the whole creation, including placement and earlier facts.
 #[test]
 fn initial_addresses_are_atomic_and_do_not_invent_interfaces_or_vlans() -> TestResult {

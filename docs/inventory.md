@@ -72,6 +72,10 @@ to be a hypervisor remain distinct. The Proxmox preset selects its default
 hypervisor role and allows correction. Accepted role is not evidence of live
 health or successful provisioning.
 
+An existing device with a retired virtualization role offers an explicit clear
+action to readers with write permission for that field. New roles can only be
+assigned to OS installations.
+
 Guests remain discoverable when their installation's virtualization role is
 unknown, disabled or unreadable. Their accepted placement is preserved;
 listing a permitted guest does not disclose a hidden role.

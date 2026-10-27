@@ -1636,11 +1636,26 @@ impl Tx<'_> {
             }
         }
         self.require_changes(context, target, write.kind, &write.changes)?;
+        if old.is_none()
+            && kind == wire::AssetKind::Device
+            && write
+                .changes
+                .iter()
+                .any(|f| f.name == "virtualization_role")
+        {
+            return Err(Error::Invalid);
+        }
         let authority = self.workspace_authority()?;
         let mut changed = old.is_none();
         for field in &write.changes {
             let field_key = format!("{key}/intent/{}", field.name);
             let prior = self.get(&field_key)?;
+            if kind == wire::AssetKind::Device
+                && field.name == "virtualization_role"
+                && prior.is_none()
+            {
+                return Err(Error::Invalid);
+            }
             if prior
                 .as_ref()
                 .is_some_and(|p| super::super::inventory::field_matches(field, p))

@@ -510,6 +510,12 @@ impl Tx<'_> {
                 _ => Err(Error::Invalid),
             },
             "virtualization_role" => {
+                // Existing on-disk device fields may be explicitly retired, never reassigned.
+                if kind == wire::AssetKind::Device as i32
+                    && matches!(value.value, Some(field::Value::Clear(EXPLICIT_CLEAR)))
+                {
+                    return Ok(());
+                }
                 if kind != wire::AssetKind::SoftwareInstallation as i32 {
                     return Err(Error::Invalid);
                 }
