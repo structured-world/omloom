@@ -54,7 +54,9 @@ fn first_address(prefix: IpNet) -> Result<IpAddr> {
     match prefix {
         // RFC 3021 section 2: both /31 addresses are usable on a point-to-point link.
         IpNet::V4(n) if n.prefix_len() < 31 => next_address(n.network().into()),
-        // RFC 6164 section 5: /127 point-to-point links have two usable endpoints.
+        // RFC 4291 section 2.6.1 reserves the all-zero subnet suffix for Subnet-Router anycast.
+        IpNet::V6(n) if n.prefix_len() < 127 => next_address(n.network().into()),
+        // RFC 6164 section 6 disables that anycast for /127; /128 selects one exact address.
         _ => Ok(prefix.network()),
     }
 }

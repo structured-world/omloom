@@ -589,6 +589,81 @@ fn direct_address_changes_reject_reserved_network_fields() -> TestResult {
     Ok(())
 }
 
+// Automatic unicast selection skips subnet anycast while retaining point-to-point and host routes.
+#[test]
+fn next_available_skips_ipv6_subnet_router_anycast() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let space = create(&store, &actor, K::AddressSpace, "allocation namespace")?;
+    for (cidr, addresses) in [
+        ("2001:db8:1::/64", vec!["2001:db8:1::1"]),
+        (
+            "2001:db8:2::/126",
+            vec!["2001:db8:2::1", "2001:db8:2::2", "2001:db8:2::3"],
+        ),
+        ("2001:db8:3::/127", vec!["2001:db8:3::", "2001:db8:3::1"]),
+        ("2001:db8:4::9/128", vec!["2001:db8:4::9"]),
+        ("192.0.2.0/30", vec!["192.0.2.1", "192.0.2.2"]),
+        ("198.51.100.0/31", vec!["198.51.100.0", "198.51.100.1"]),
+        ("203.0.113.9/32", vec!["203.0.113.9"]),
+    ] {
+        let prefix = changed(call(
+            &store,
+            &actor,
+            Command::Network(api::Network {
+                kind: K::Prefix as i32,
+                name: cidr.into(),
+                cidr: cidr.into(),
+                address_space: Some(space.clone()),
+                ..Default::default()
+            }),
+        )?);
+        let request = api::Network {
+            kind: K::IpAddress as i32,
+            name: "automatic allocation".into(),
+            parent: Some(Box::new(prefix.clone())),
+            cidr: cidr.into(),
+            next_available: true,
+            ..Default::default()
+        };
+        for address in addresses {
+            let allocated = changed(within(
+                &store,
+                &actor,
+                focused(&store, &prefix)?,
+                Command::Network(request.clone()),
+            )?);
+            let item = detail(&store, &actor, &allocated)?
+                .item
+                .ok_or("allocation")?;
+            let Some(wire::field::Value::Text(actual)) = item
+                .fields
+                .iter()
+                .find(|field| field.name == "cidr")
+                .and_then(|field| field.value.as_ref())
+            else {
+                panic!("cidr");
+            };
+            assert_eq!(actual.split('/').next(), Some(address));
+        }
+        if !cidr.ends_with("/64") {
+            let before = store.usage()?;
+            assert!(matches!(
+                within(
+                    &store,
+                    &actor,
+                    focused(&store, &prefix)?,
+                    Command::Network(request)
+                ),
+                Err(Error::Limit)
+            ));
+            assert_eq!(store.usage()?, before);
+        }
+    }
+    Ok(())
+}
+
 // Next-available cannot search a range wider than the selected parent, for either IP family.
 #[test]
 fn next_available_rejects_ranges_outside_the_parent_prefix() -> TestResult {
