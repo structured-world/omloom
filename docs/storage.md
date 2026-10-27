@@ -5,8 +5,14 @@ not a server, authentication endpoint or installer. Applications must obtain
 current identity and permission evidence before calling it. A database record,
 caller string or UUID grants no authority. Identity-provider integration is a
 separate component; this library does not implement login or role assignment.
+The [local development host](inventory.md) instead supplies explicitly selected
+synthetic contexts for test-owned data. These qualify application projection
+without claiming identity-provider enforcement.
 
-The backend uses immutable Git dependencies and a consumer lockfile. Its
+The backend pins CoordiNode Git revision
+`d7dae1f28097f6cb58bcdf58042949d68405dba9` and a consumer lockfile. This source
+revision includes nullable Boolean, correlated lookup and edge-orientation
+corrections required by inventory queries. It is not a published embedded release. Its
 filesystem capability requires the `std` feature. Policy types also compile
 without default features on a bare-metal target. A host can supply a supported
 replicated Database instead of opening a local directory. Never concurrently
@@ -23,6 +29,11 @@ remain unchanged. Reattesting an unchanged value updates its freshness row
 without rewriting the value or incrementing the accepted intent revision.
 Explicit clears remain claims. Different sources never overwrite each other.
 Repeated identical input and retrieval do not create application history.
+
+Interface and service address hints resolve current participant rows, including
+shared-group allocations. Indexes on the existing asset and group fields bound
+these lookups to the displayed interfaces and their assignments; no duplicate
+assignment records or persisted hint snapshots are maintained.
 
 The installation record serializes admission accounting and query revisions
 through database CAS, rather than a process-local lock. Uniqueness is enforced
@@ -79,9 +90,15 @@ envelope, but are **application accounting**, not total filesystem allocation.
 Pinned detail and unresolved work count against their budgets. Admission fails
 atomically when it cannot fit; it does not evict safety state.
 
-This initial, unreleased storage format uses schema version 2. Databases from
-the earlier experimental layout are refused with `SchemaVersion`; they must
-not be reused or silently overwritten.
+This unreleased storage format uses schema version 8. Supported versions 2
+through 7 upgrade in bounded restartable batches, including asset name/sort
+projections from accepted intent, normalized IP
+ordering and source-scoped current observation facts with separate freshness
+and accounting. No inventory history is added. The upgrade keeps restore fences
+and admission accounting. Earlier experimental layouts are refused with
+`SchemaVersion`, never silently overwritten. See the
+[observation contract](inventory.md#current-network-observations) for migration
+of previously unavailable per-fact dates.
 
 The host's durable worker calls bounded cleanup with a resumable cursor. Pin
 changes conflict with cleanup through database CAS. Cleanup reports logical
@@ -98,11 +115,12 @@ of Omloom's logical application quota and stored policy identity. Oversized
 input is refused before opening the destination. The host must enforce the
 same input ceiling before buffering a file or network response.
 
-The pinned provider is not qualified for a hard total-owned-file ceiling. Its
-sampled endpoint limit omits growth that matters to this guarantee. Native Git
-dependency builds also include an upstream development helper with C code;
-this source graph is not qualified as a pure Rust dependency graph. Neither
-limitation is represented as a passing check. No SD-card support, power-loss
+The pinned provider is not independently qualified here for a hard
+total-owned-file ceiling. Earlier consumer tests reproduced a physical cap
+failure on registry 0.9.0; changing the source pin does not establish that
+guarantee. The Git dependency graph includes the workspace development helper
+and its `alloca`/C build path, unlike the registry package. No pure-Rust closure,
+SD-card support, power-loss
 certification or production deployment support matrix is claimed.
 
 Run `sh scripts/check-contracts.sh` for generation, builds, storage/contract
