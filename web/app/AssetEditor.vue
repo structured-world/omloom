@@ -132,6 +132,7 @@ async function save() {
     if (!props.item && [AssetKind.DEVICE, AssetKind.VIRTUAL_MACHINE, AssetKind.SOFTWARE_INSTALLATION].includes(kind.value)) {
       for (const value of initialAddresses.value) {
         if (!value.address.trim() && value.vlanTag === undefined) continue;
+        if (!value.address.trim()) throw Error('Enter an IP address when specifying a VLAN tag');
         const parts = value.address.trim().split('/');
         if (parts.length > 2 || (parts.length === 2 && !/^\d{1,3}$/.test(parts[1]!))) throw Error('Enter a valid IP address and optional prefix length');
         addresses.push(model.InitialAddress.create({ address: parts[0], prefixLength: parts.length === 2 ? Number(parts[1]) : value.prefixLength, vlanTag: value.vlanTag, interfaceName: value.interfaceName }));

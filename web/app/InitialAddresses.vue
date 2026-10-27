@@ -22,7 +22,7 @@ function editAddress(index: number, event: Event) {
 <label :for="id+'-vlan-'+index">VLAN tag<input :id="id+'-vlan-'+index" :value="address.vlanTag" type="number" min="1" max="4094" step="1" placeholder="Unknown" :aria-label="'VLAN tag '+(index+1)" @input="vlan(index,$event)"></label>
 <button type="button" :aria-label="'Remove IP address '+(index+1)" @click="addresses.splice(index,1)">×</button>
 <small v-if="address.interfaceName" class="interface-name">Interface: {{ address.interfaceName }}</small>
-</div><p class="hint">Optional local facts. An IP or VLAN tag does not assign an interface, network or VRF.</p>
+</div><p class="hint">Optional IP addresses with local VLAN tags. A VLAN tag requires an IP address; these facts do not assign an interface, network or VRF.</p>
 </section></template>
 <style scoped>
 .initial-addresses { margin:16px 0; }

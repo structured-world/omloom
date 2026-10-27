@@ -75,6 +75,42 @@ test('leaving hypervisor through another resource kind discards its role', async
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
 
+test('a VLAN tag requires an initial IP before a creation request is sent', async ({ page }) => {
+  // Invalid local address rows must be explained before mutation, with the draft available for correction.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-vlan-only-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    let mutations = 0;
+    page.on('request', request => {
+      if (!request.url().includes('/omloom.workspace.v1.Workspace/')) return;
+      const body = request.postDataBuffer();
+      if (!body) return;
+      const command = m.Request.fromBinary(body.subarray(5)).command;
+      if (command.oneofKind === 'create' || command.oneofKind === 'write') mutations++;
+    });
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${server.url}/#/?view=2`);
+      await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByLabel('Name', { exact: true }).fill(`Address draft ${width}`);
+      await dialog.getByLabel('VLAN tag 1', { exact: true }).fill('42');
+      const before = (await rpc({ oneofKind: 'query', query: m.Query.create({ limit: 1 }) })).page.revision;
+      const sent = mutations;
+      await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
+      await expect(dialog.getByRole('alert')).toHaveText('Error: Enter an IP address when specifying a VLAN tag');
+      expect(mutations).toBe(sent);
+      expect((await rpc({ oneofKind: 'query', query: m.Query.create({ limit: 1 }) })).page.revision).toBe(before);
+      await expect(dialog.getByLabel('VLAN tag 1', { exact: true })).toHaveValue('42');
+      await dialog.getByLabel('IP address 1', { exact: true }).fill('192.0.2.10');
+      await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      expect(mutations).toBe(sent + 1);
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('placement defaults to unknown and description is editable immediately', async ({ page }) => {
   // Optional placement must not block creation or force a separate field-enable action.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-create-inputs-'));
