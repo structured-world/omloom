@@ -58,7 +58,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (stop, shutdown) = tokio::sync::watch::channel(false);
     let maintenance = tokio::spawn(application.clone().maintain(shutdown));
     let signal_stop = stop.clone();
-    let result = axum::serve(listener, router(application, &ui))
+    let port = listener.local_addr()?.port();
+    let result = axum::serve(listener, router(application, &ui, port))
         .with_graceful_shutdown(async move {
             if let Err(error) = tokio::signal::ctrl_c().await {
                 eprintln!("Shutdown signal failed: {error}");

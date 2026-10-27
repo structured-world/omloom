@@ -6,6 +6,11 @@ only to `127.0.0.1`. It is not a production login, installer or permission
 provider. Use test-owned data. No connector credentials or external effects
 are supported by this host.
 
+HTTP requests must name `127.0.0.1` or `localhost` with the actual listener port
+in their Host header or HTTP/2 authority. Foreign, missing or conflicting
+authorities are rejected before the API and static files to prevent a remote
+website from acquiring fixture access through DNS rebinding.
+
 ## Run
 
 With Rust, Node.js, protoc and the repository dependencies installed:

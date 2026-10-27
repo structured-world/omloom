@@ -34,6 +34,42 @@ async function create(page, name, kind = 'DEVICE') {
   return { asset_id: params.get('asset'), incarnation: params.get('incarnation') };
 }
 
+test('loopback host rejects foreign authorities before API and static routes', async ({ page }) => {
+  // A foreign browser origin must not obtain fixture authority by rebinding DNS to loopback.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-authority-'));
+  const server = await host(dir);
+  try {
+    const port = new URL(server.url).port;
+    for (const authority of [`rebind.example:${port}`, `127.0.0.1:${port === '80' ? '81' : '80'}`, `user@127.0.0.1:${port}`]) {
+      const headers = { Host: authority };
+      expect((await page.request.get(server.url, { headers })).status()).toBe(421);
+      expect((await page.request.post(`${server.url}/omloom.workspace.v1.Workspace/Call`, { headers, data: Buffer.alloc(5) })).status()).toBe(421);
+    }
+    for (const authority of [`127.0.0.1:${port}`, `localhost:${port}`]) {
+      expect((await page.request.get(server.url, { headers: { Host: authority } })).status()).toBe(200);
+    }
+    const { connect } = await import('node:http2');
+    const client = connect(server.url);
+    try {
+      for (const [authority, status] of [[`localhost:${port}`, 200], [`rebind.example:${port}`, 421]]) {
+        const response = await new Promise((resolve, reject) => {
+          const request = client.request({ ':path': '/', ':authority': authority });
+          request.on('response', headers => resolve(headers[':status']));
+          request.on('error', reject);
+          request.resume();
+          request.end();
+        });
+        expect(response).toBe(status);
+      }
+    } finally { client.close(); }
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(server.url);
+      await create(page, `Accepted loopback resource ${width}`);
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('network rename preserves scopes beyond the bounded options window', async ({ page }) => {
   // Real disk/API fixtures place accepted references after 1,000 choices; rename must never clear them.
   test.setTimeout(120_000);

@@ -17,6 +17,8 @@ use tonic::{Code, Request, Response, Status};
 use tonic_types::{ErrorDetails, StatusExt};
 pub mod codec;
 pub mod fixtures;
+#[cfg(test)]
+mod tests;
 
 pub mod transport {
     tonic::include_proto!("omloom.workspace.v1");
@@ -226,7 +228,36 @@ impl transport::workspace_server::Workspace for Application {
         Ok(Response::new(result))
     }
 }
-pub fn router(application: Application, ui: &std::path::Path) -> axum::Router {
+fn loopback_authority(value: &str, port: u16) -> bool {
+    if value.contains('@') {
+        return false;
+    }
+    let Ok(authority) = value.parse::<axum::http::uri::Authority>() else {
+        return false;
+    };
+    authority.port_u16() == Some(port)
+        && (authority.host() == "127.0.0.1" || authority.host().eq_ignore_ascii_case("localhost"))
+}
+
+fn loopback_request(request: &axum::extract::Request, port: u16) -> bool {
+    let authority = request.uri().authority();
+    if let Some(authority) = authority
+        && !loopback_authority(authority.as_str(), port)
+    {
+        return false;
+    }
+    let mut hosts = request.headers().get_all(axum::http::header::HOST).iter();
+    if let Some(host) = hosts.next() {
+        hosts.next().is_none()
+            && host
+                .to_str()
+                .is_ok_and(|host| loopback_authority(host, port))
+    } else {
+        authority.is_some()
+    }
+}
+
+pub fn router(application: Application, ui: &std::path::Path, port: u16) -> axum::Router {
     let service = transport::workspace_server::WorkspaceServer::new(application)
         .max_decoding_message_size(FRAME_LIMIT)
         .max_encoding_message_size(FRAME_LIMIT);
@@ -240,5 +271,17 @@ pub fn router(application: Application, ui: &std::path::Path) -> axum::Router {
         .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
             axum::http::header::CACHE_CONTROL,
             axum::http::HeaderValue::from_static("no-store"),
+        ))
+        // A remote website rebinding its DNS must not acquire the local fixture's authority.
+        .layer(axum::middleware::from_fn(
+            move |request: axum::extract::Request, next: axum::middleware::Next| async move {
+                if loopback_request(&request, port) {
+                    next.run(request).await
+                } else {
+                    axum::response::IntoResponse::into_response(
+                        axum::http::StatusCode::MISDIRECTED_REQUEST,
+                    )
+                }
+            },
         ))
 }
