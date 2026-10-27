@@ -336,6 +336,14 @@ impl Tx<'_> {
             if !context.field(a, k, field, false) {
                 continue;
             }
+            // A contact destination is not a local interface address; its fact remains in inventory.
+            if k == wire::AssetKind::AddressReference as i32
+                && (!context.field(a, k, "meaning", false)
+                    || row.get("meaning").and_then(Value::as_str)
+                        == Some(api::AddressMeaning::Destination.as_str_name()))
+            {
+                continue;
+            }
             let literal = string(&row, field)?;
             let ip = literal
                 .split('/')

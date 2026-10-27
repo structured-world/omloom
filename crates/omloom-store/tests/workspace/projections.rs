@@ -1,6 +1,128 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
+// Destination knowledge remains an address fact, never an interface's or service's local address.
+#[test]
+fn destination_references_do_not_become_local_address_hints() -> TestResult {
+    use prost::Message;
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let service = create(&store, &actor, K::Service, "application")?;
+    let interface = child(&store, &actor, &service, K::Interface, "eth0")?;
+    let mut destinations = Vec::new();
+    for (parent, address, meaning) in [
+        (&interface, "192.0.2.10", api::AddressMeaning::Configured),
+        (
+            &interface,
+            "198.51.100.10",
+            api::AddressMeaning::Unspecified,
+        ),
+        (&interface, "203.0.113.20", api::AddressMeaning::Destination),
+        (&service, "203.0.113.30", api::AddressMeaning::Destination),
+    ] {
+        let api::reply::Result::Mutation(created) = store
+            .workspace(
+                &actor,
+                api::Request {
+                    working: Some(api::WorkingContext {
+                        focus: Some(parent.clone()),
+                        expected: Some(store.usage()?.revision),
+                        ..Default::default()
+                    }),
+                    command: Some(Command::Address(api::Address {
+                        parent: Some(parent.clone()),
+                        address: Some(address.into()),
+                        meaning: Some(meaning as i32),
+                        ..Default::default()
+                    })),
+                },
+                100,
+            )?
+            .result
+            .ok_or("address result")?
+        else {
+            panic!("address")
+        };
+        if meaning == api::AddressMeaning::Destination {
+            destinations.push((created.targets[0].clone(), address));
+        }
+    }
+    let mut q = query();
+    q.kinds = vec![K::Service as i32, K::Interface as i32];
+    q.include_context = true;
+    let before = store.usage()?;
+    let mut samples = Vec::new();
+    let mut last = None;
+    for _ in 0..9 {
+        let start = std::time::Instant::now();
+        let Reply::Page(page) = call(&store, &actor, Command::Query(q.clone()))? else {
+            panic!("page")
+        };
+        samples.push(start.elapsed());
+        last = Some(page);
+    }
+    samples.sort_unstable();
+    let page = last.expect("page");
+    eprintln!(
+        "destination hint projection: median={:?} max_sample={:?} response_bytes={} logical_bytes={}",
+        samples[4],
+        samples[8],
+        page.encoded_len(),
+        before.bytes.iter().sum::<u64>()
+    );
+    assert_eq!(page.contexts.len(), 2);
+    for context in page.contexts {
+        assert_eq!(
+            context.addresses,
+            ["192.0.2.10", "198.51.100.10"],
+            "remote destinations must not appear as local addresses"
+        );
+    }
+    for (target, address) in destinations {
+        let Reply::Detail(detail) = call(
+            &store,
+            &actor,
+            Command::Read(api::Read {
+                target: Some(target),
+                ..Default::default()
+            }),
+        )?
+        else {
+            panic!("destination detail")
+        };
+        let fields = detail.item.expect("destination fact").fields;
+        assert!(fields.contains(&text_field("address", address)));
+        assert!(fields.contains(&text_field(
+            "meaning",
+            api::AddressMeaning::Destination.as_str_name()
+        )));
+        let mut search = query();
+        search.kinds = vec![K::AddressReference as i32];
+        search.search = address.into();
+        let Reply::Page(found) = call(&store, &actor, Command::Query(search))? else {
+            panic!("search")
+        };
+        assert_eq!(found.total, 1, "the destination remains searchable");
+    }
+    let mut limited = actor.clone();
+    limited.grants[0].read =
+        Fields::Selected(vec!["name".into(), "address".into(), "relations".into()]);
+    let Reply::Page(hidden) = call(&store, &limited, Command::Query(q))? else {
+        panic!("restricted page")
+    };
+    assert!(
+        hidden.contexts.iter().all(|c| c.addresses.is_empty()),
+        "classification cannot bypass meaning-field visibility"
+    );
+    assert_eq!(
+        store.usage()?,
+        before,
+        "hint filtering cannot mutate or remove facts"
+    );
+    Ok(())
+}
+
 // Direct and shared assignments are visible hints only through authorized interface membership.
 #[test]
 fn membership_address_hints_cover_interfaces_services_and_field_permissions() -> TestResult {

@@ -410,12 +410,16 @@ test('assigned allocations identify interfaces and services on desktop and phone
     const address=(await rpc({oneofKind:'network',network:m.Network.create({kind:m.AssetKind.IP_ADDRESS,name:'Canonical allocation',cidr:'192.0.2.51/32',addressSpace:space})})).mutation.targets[0];
     const detail=(await rpc({oneofKind:'read',read:m.Read.create({target:address})})).detail;
     await rpc({oneofKind:'member',member:m.Member.create({address,interface:iface,expected:detail.item.revision})});
+    for (const parent of [iface,service]) {
+      await rpc({oneofKind:'address',address:m.Address.create({parent,address:'203.0.113.44',meaning:m.AddressMeaning.DESTINATION})},parent);
+    }
     for (const width of [1440,390]) {
       await page.setViewportSize({width,height:900});
       for (const name of ['Assigned service','Assigned interface']) {
         await page.goto(`${server.url}/#/?view=0&search=${encodeURIComponent(name)}`);
         const row=page.getByRole('row').filter({has:page.getByRole('button',{name,exact:true})});
         await expect(row).toContainText('192.0.2.51');
+        await expect(row).not.toContainText('203.0.113.44');
         await page.getByRole('button',{name,exact:true}).click();
         await expect(page.getByRole('region',{name:'Resource details'}).getByRole('heading',{name,exact:true})).toBeVisible();
       }
@@ -909,6 +913,13 @@ test('CSV draft revisions survive repeated previews on desktop and phone', async
       await dialog.getByRole('button',{name:'Prepare preview',exact:true}).click();
       await expect(dialog.getByRole('heading',{name:'Review 1 rows',exact:true})).toBeVisible();
       await expect(dialog).toContainText('Name: Final name');
+      // Repeated valid drafts must not hit the former four-preview retention ceiling.
+      for (let index=0;index<3;index++) {
+        await dialog.getByLabel('Source name',{exact:true}).fill(`additional source ${index}`);
+        await dialog.getByRole('button',{name:'Prepare preview',exact:true}).click();
+        await expect(dialog.getByRole('heading',{name:'Review 1 rows',exact:true})).toBeVisible();
+        await expect(dialog).toContainText('Name: Final name');
+      }
       await expect(page.getByRole('button',{name:'Final name',exact:true})).toHaveCount(0);
       await dialog.getByRole('button',{name:'Accept reviewed rows',exact:true}).click();
       await expect(dialog).toBeHidden();

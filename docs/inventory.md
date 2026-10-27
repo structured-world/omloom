@@ -63,6 +63,10 @@ observations are retrieved in the selected resource inspector. Physical
 visualization may request bounded details for visible containers separately;
 opening the estate list does not expand every container.
 
+Destination/contact references remain searchable inventory facts and do not
+appear as local address hints. Hint classification also respects meaning-field
+visibility.
+
 Service rows can show actual permitted transport endpoints without a dedicated
 interface. Wildcard binds retain their address family; a configured interface
 address and an observed listener are distinct facts. A listener does not prove
