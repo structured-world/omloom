@@ -1,5 +1,108 @@
 use super::*;
 
+// Network-only grants may edit settings while an echoed, readable name stays unchanged.
+#[test]
+fn network_settings_do_not_require_unchanged_name_permission() -> TestResult {
+    use api::{reply::Result as Reply, request::Command};
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let space = create(&store, &actor, K::AddressSpace, "space")?;
+    let link = create(&store, &actor, K::L2Domain, "LAN")?;
+    let mut limited = actor.clone();
+    limited.grants[0].write = Fields::Selected(vec!["network".into()]);
+    for mut request in [
+        api::Network {
+            kind: K::IpAddress as i32,
+            name: "Address".into(),
+            cidr: "192.0.2.10/32".into(),
+            address_space: Some(space.clone()),
+            ..Default::default()
+        },
+        api::Network {
+            kind: K::Vlan as i32,
+            name: "VLAN".into(),
+            vlan_id: Some(10),
+            link: Some(link.clone()),
+            ..Default::default()
+        },
+    ] {
+        let Reply::Mutation(created) = call(&store, &actor, Command::Network(request.clone()))?
+        else {
+            panic!("network");
+        };
+        let target = created.targets[0].clone();
+        request.target = Some(target.clone());
+        request.expected = Some(store.asset(AssetRef::try_from(&target)?)?.revision);
+        if request.kind == K::IpAddress as i32 {
+            request.cidr = "192.0.2.11/32".into();
+        } else {
+            request.vlan_id = Some(11);
+        }
+        call(&store, &limited, Command::Network(request.clone()))?;
+        request.expected = Some(store.asset(AssetRef::try_from(&target)?)?.revision);
+        let before = store.usage()?;
+        call(&store, &limited, Command::Network(request.clone()))?;
+        assert_eq!(store.usage()?, before, "settings replay cannot write");
+        request.name = "Forbidden rename".into();
+        assert!(matches!(
+            call(&store, &limited, Command::Network(request)),
+            Err(Error::Denied)
+        ));
+        assert_eq!(store.usage()?, before);
+    }
+    let Reply::Mutation(seed) = call(
+        &store,
+        &actor,
+        Command::Network(api::Network {
+            kind: K::IpAddress as i32,
+            name: "VIP".into(),
+            cidr: "198.51.100.1/24".into(),
+            address_space: Some(space),
+            link: Some(link.clone()),
+            sharing: api::SharedUse::Vrrp as i32,
+            group_name: "Gateway group".into(),
+            vrid: Some(7),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("seed");
+    };
+    let Reply::Detail(detail) = call(
+        &store,
+        &actor,
+        Command::Read(api::Read {
+            target: Some(seed.targets[0].clone()),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("detail");
+    };
+    let group = detail.group.ok_or("group")?.target.ok_or("target")?;
+    let mut request = api::Network {
+        kind: K::AddressGroup as i32,
+        target: Some(group.clone()),
+        expected: Some(store.asset(AssetRef::try_from(&group)?)?.revision),
+        name: "Gateway group".into(),
+        link: Some(link),
+        sharing: api::SharedUse::Vrrp as i32,
+        vrid: Some(8),
+        ..Default::default()
+    };
+    call(&store, &limited, Command::Network(request.clone()))?;
+    request.expected = Some(store.asset(AssetRef::try_from(&group)?)?.revision);
+    request.name = "Forbidden group rename".into();
+    let before = store.usage()?;
+    assert!(matches!(
+        call(&store, &limited, Command::Network(request)),
+        Err(Error::Denied)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // Archival cannot hide an active allocation or silently release its reserved address.
 #[test]
 fn archival_refuses_live_ipam_state_without_changes() -> TestResult {

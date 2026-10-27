@@ -1379,6 +1379,20 @@ impl Tx<'_> {
             if super::super::target(row)? != target || number(row, "kind")? as i32 != write.kind {
                 return Err(Error::Conflict);
             }
+            // Network forms echo a readable name; unchanged text needs no rename grant.
+            if network
+                && context.field(target, write.kind, "name", false)
+                && let [
+                    wire::Field {
+                        name,
+                        value: Some(wire::field::Value::Text(value)),
+                    },
+                ] = write.changes.as_slice()
+                && name == "name"
+                && row.get("name").and_then(Value::as_str) == Some(value.as_str())
+            {
+                return Ok(target);
+            }
         }
         self.require_changes(context, target, write.kind, &write.changes)?;
         let authority = self.workspace_authority()?;
