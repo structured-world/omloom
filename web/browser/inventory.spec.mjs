@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
 
 async function host(directory, fixture = 'operator', grants) {
   const args = ['--data', directory, '--ui', 'dist/app', '--fixture', fixture];
@@ -46,6 +47,261 @@ async function workspaceClient(url) {
   }
   return { m, rpc };
 }
+
+test('placement defaults to unknown and description is editable immediately', async ({ page }) => {
+  // Optional placement must not block creation or force a separate field-enable action.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-create-inputs-'));
+  const server = await host(dir);
+  try {
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${server.url}/#/?view=3`);
+      await expect(page.getByRole('region', { name: 'Resource details' })).toBeHidden();
+      await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'Hypervisor (OS installation)' });
+      await expect(dialog.getByRole('combobox', { name: 'Find server', exact: true })).toHaveAttribute('placeholder', 'Unknown');
+      await expect(dialog.getByLabel('Description', { exact: true })).toBeEnabled();
+      await dialog.getByLabel('Description', { exact: true }).fill('Direct description input');
+      await dialog.getByLabel('Name', { exact: true }).fill(`Unknown placement ${width}`);
+      await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      const detail = page.getByRole('region', { name: 'Resource details' });
+      await expect(detail.getByRole('heading', { name: `Unknown placement ${width}`, exact: true })).toBeVisible();
+      await expect(detail).toContainText('Direct description input');
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('observation previews remain read only and reviewed interface addresses save atomically', async ({ page }) => {
+  // The protocol fixture exercises the real observer, draft review and disk store together.
+  const provider = createServer((request, response) => {
+    const responses = {
+      '/api2/json/version': { version: '9.2.21' },
+      '/api2/json/nodes': [{ node: 'Observed node' }],
+      '/api2/json/nodes/Observed%20node/status': { cpuinfo: { model: 'Test CPU' }, memory: { total: 17179869184 } },
+      '/api2/json/nodes/Observed%20node/network': [{ iface: 'vmbr0', cidr: '192.0.2.10/24', cidr6: '2001:db8::10/64', 'vlan-id': 42 }],
+    };
+    response.setHeader('Content-Type', 'application/json');
+    response.end(JSON.stringify({ data: responses[request.url] }));
+  });
+  await new Promise(resolve => provider.listen(0, '127.0.0.1', resolve));
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-observe-review-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${server.url}/#/?view=3`);
+      await expect(page.getByRole('region', { name: 'Resource details' })).toBeHidden();
+      const before = (await rpc({ oneofKind: 'query', query: m.Query.create({ limit: 1 }) })).page.revision;
+      await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'Hypervisor (OS installation)' });
+      await dialog.getByLabel('Name', { exact: true }).fill(`Reviewed node ${width}`);
+      await dialog.getByLabel('API endpoint', { exact: true }).fill(`http://127.0.0.1:${provider.address().port}`);
+      await dialog.getByText('Optional one-time credentials', { exact: true }).click();
+      await dialog.getByLabel('Authentication', { exact: true }).selectOption('token');
+      await dialog.getByLabel('Token ID', { exact: true }).fill('test@pve!reader');
+      await dialog.getByLabel('Token secret', { exact: true }).fill('test-secret');
+      await dialog.getByRole('button', { name: 'Observe', exact: true }).click();
+      await expect(dialog.getByRole('heading', { name: 'Review observed values', exact: true })).toBeVisible();
+      await expect(dialog.getByLabel('Token secret', { exact: true })).toHaveValue('');
+      await expect(dialog.getByLabel('Token ID', { exact: true })).toHaveValue('');
+      expect((await rpc({ oneofKind: 'query', query: m.Query.create({ limit: 1 }) })).page.revision).toEqual(before);
+      await dialog.getByRole('button', { name: 'Use selected values', exact: true }).click();
+      await expect(dialog.getByLabel('Name', { exact: true })).toHaveValue(`Reviewed node ${width}`);
+      await expect(dialog.getByLabel('IP address 1', { exact: true })).toHaveValue('192.0.2.10/24');
+      await dialog.getByLabel('IP address 1', { exact: true }).fill('192.0.2.10');
+      await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `Reviewed node ${width}`, exact: true })).toBeVisible();
+      const params = new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
+      const parent = { assetId: params.get('asset'), incarnation: params.get('incarnation') };
+      const local = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: parent }) })).detail.related;
+      expect(local).toHaveLength(1);
+      expect(local[0].kind).toBe(m.AssetKind.INTERFACE);
+      const interfaceDetail = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: local[0].target }) })).detail;
+      const addresses = interfaceDetail.related.filter(item => item.kind === m.AssetKind.ADDRESS_REFERENCE);
+      expect(addresses).toHaveLength(2);
+      const ipv4 = addresses.find(item => item.fields.some(field => field.name === 'name' && field.value.text === '192.0.2.10'));
+      const fields = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: ipv4.target }) })).detail.item.fields;
+      expect(fields.some(field => field.name === 'prefix_length')).toBe(false);
+      expect(fields.find(field => field.name === 'vlan_tag')?.value.integer).toBe(42n);
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); await new Promise(resolve => provider.close(resolve)); }
+});
+
+test('description edits persist for every resource kind on desktop and phone', async ({ page }) => {
+  // Direct typing must leave Preserve automatically for every shared editor consumer.
+  test.setTimeout(180_000);
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-description-kinds-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const targets = new Map();
+    const object = async kind => (await rpc({ oneofKind: 'write', write: m.Write.create({ kind, changes: [{ name: 'name', value: { oneofKind: 'text', text: `Description ${m.AssetKind[kind]}` } }] }) })).mutation.targets[0];
+    for (const kind of Object.values(m.AssetKind).filter(value => typeof value === 'number' && value !== m.AssetKind.UNSPECIFIED)) {
+      if ([m.AssetKind.IP_ADDRESS, m.AssetKind.PREFIX, m.AssetKind.VLAN, m.AssetKind.ADDRESS_GROUP, m.AssetKind.ADDRESS_REFERENCE].includes(kind)) continue;
+      targets.set(kind, await object(kind));
+    }
+    for (const kind of [m.AssetKind.IP_ADDRESS, m.AssetKind.PREFIX, m.AssetKind.VLAN]) {
+      const allocation = kind === m.AssetKind.VLAN
+        ? { link: targets.get(m.AssetKind.L2_DOMAIN), vlanId: 42, sharing: m.SharedUse.EXCLUSIVE }
+        : { cidr: kind === m.AssetKind.PREFIX ? '192.0.2.0/24' : '192.0.2.10/32', addressSpace: targets.get(m.AssetKind.ADDRESS_SPACE), sharing: m.SharedUse.EXCLUSIVE };
+      targets.set(kind, (await rpc({ oneofKind: 'network', network: m.Network.create({ kind, name: `Description ${m.AssetKind[kind]}`, ...allocation }) })).mutation.targets[0]);
+    }
+    targets.set(m.AssetKind.ADDRESS_REFERENCE, (await rpc({ oneofKind: 'address', address: m.Address.create({ address: '198.51.100.10' }) })).mutation.targets[0]);
+    const grouped = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.IP_ADDRESS, name: 'Grouped IP', cidr: '192.0.2.20/32', addressSpace: targets.get(m.AssetKind.ADDRESS_SPACE), sharing: m.SharedUse.ANYCAST, groupName: 'Description group' }) })).mutation.targets[0];
+    const groupDetail = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: grouped }) })).detail;
+    targets.set(m.AssetKind.ADDRESS_GROUP, groupDetail.group.target);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const [kind, target] of targets) {
+        await test.step(`${m.AssetKind[kind]} at ${width}px`, async () => {
+          await page.goto(`${server.url}/#/?asset=${target.assetId}&incarnation=${target.incarnation}&view=0`);
+          await expect(page.getByRole('region', { name: 'Resource details' })).toContainText(target.assetId);
+          await page.getByRole('button', { name: 'Edit resource', exact: true }).click();
+          const dialog = page.getByRole('dialog');
+          if (kind === m.AssetKind.ADDRESS_REFERENCE) await dialog.getByRole('button', { name: 'More known details', exact: true }).click();
+          await expect(dialog.getByLabel('Description change', { exact: true })).toHaveValue('preserve');
+          await expect(dialog.getByLabel('Description', { exact: true })).toBeEnabled();
+          const description = `Updated ${m.AssetKind[kind]} at ${width}`;
+          await dialog.getByLabel('Description', { exact: true }).fill(description);
+          await expect(dialog.getByLabel('Description change', { exact: true })).toHaveValue('set');
+          await dialog.getByRole('button', { name: /Save (resource|known address)/, exact: true }).click();
+          await expect(dialog).toBeHidden();
+          await page.reload();
+          await expect(page.getByRole('region', { name: 'Resource details' })).toContainText(description);
+          const detail = (await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail;
+          expect(detail.item.fields.find(field => field.name === 'description')?.value).toEqual({ oneofKind: 'text', text: description });
+        });
+      }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('hypervisor OS and VM placement work from estate and parent on desktop and phone', async ({ page }) => {
+  // The form must create real installations and atomic placement, including unknown hardware.
+  test.setTimeout(90_000);
+  page.setDefaultTimeout(10_000);
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-hypervisor-placement-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      const hardware = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: [{ name: 'name', value: { oneofKind: 'text', text: `Server ${width}` } }] }) })).mutation.targets[0];
+      await page.goto(`${server.url}/#/?view=${m.View.VIRTUALIZATION}`);
+      await expect(page.getByRole('region', { name: 'Resource details' })).toBeHidden();
+      await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+      let dialog = page.getByRole('dialog');
+      await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'Hypervisor (OS installation)' });
+      await dialog.getByLabel('Find server', { exact: true }).fill(`Server ${width}`);
+      await dialog.getByRole('option', { name: `Use server: Server ${width}`, exact: true }).click();
+      await dialog.getByLabel('Name', { exact: true }).fill(`Hypervisor ${width}`);
+      await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `Hypervisor ${width}`, exact: true })).toBeVisible();
+      const params = new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
+      const hypervisor = { assetId: params.get('asset'), incarnation: params.get('incarnation') };
+      const hostDetail = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: hypervisor }) })).detail;
+      expect(hostDetail.item.kind).toBe(m.AssetKind.SOFTWARE_INSTALLATION);
+      expect(hostDetail.relations.some(r => r.from.assetId === hardware.assetId && r.to.assetId === hypervisor.assetId)).toBe(true);
+      await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+      dialog = page.getByRole('dialog');
+      await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'virtual machine' });
+      await expect(dialog.getByText(`Hypervisor: Hypervisor ${width}`, { exact: true })).toBeVisible();
+      await dialog.getByLabel('Name', { exact: true }).fill(`Guest ${width}`);
+      await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `Guest ${width}`, exact: true })).toBeVisible();
+      await page.goto(`${server.url}/#/?view=${m.View.VIRTUALIZATION}`);
+      await expect(page.getByRole('region', { name: 'Resource details' })).toBeHidden();
+      await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+      dialog = page.getByRole('dialog');
+      await dialog.getByLabel('Find hypervisor', { exact: true }).fill(`Hypervisor ${width}`);
+      await dialog.getByRole('option', { name: `Use hypervisor: Hypervisor ${width}`, exact: true }).click();
+      await dialog.getByLabel('Name', { exact: true }).fill(`Estate guest ${width}`);
+      await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `Estate guest ${width}`, exact: true })).toBeVisible();
+      await page.goto(`${server.url}/#/?view=${m.View.VIRTUALIZATION}`);
+      await expect(page.getByRole('region', { name: 'Resource details' })).toBeHidden();
+      await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+      dialog = page.getByRole('dialog');
+      await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'Hypervisor (OS installation)' });
+      await dialog.getByRole('button', { name: 'Use Proxmox VE defaults', exact: true }).click();
+      await expect(dialog.getByLabel('Virtualization role', { exact: true }).locator('option:checked')).toHaveText('Installed and enabled');
+      await dialog.getByLabel('Name', { exact: true }).fill(`Unplaced hypervisor ${width}`);
+      await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `Unplaced hypervisor ${width}`, exact: true })).toBeVisible();
+      await page.reload();
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `Unplaced hypervisor ${width}`, exact: true })).toBeVisible();
+      await page.goto(`${server.url}/#/?asset=${hardware.assetId}&incarnation=${hardware.incarnation}&view=${m.View.HARDWARE}`);
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `Server ${width}`, exact: true })).toBeVisible();
+      await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+      dialog = page.getByRole('dialog');
+      await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'Hypervisor (OS installation)' });
+      await expect(dialog.getByText(`Server: Server ${width}`, { exact: true })).toBeVisible();
+      await expect(dialog.getByRole('combobox', { name: 'Find server', exact: true })).toHaveCount(0);
+      await dialog.getByLabel('Name', { exact: true }).fill(`Second OS ${width}`);
+      await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `Second OS ${width}`, exact: true })).toBeVisible();
+      await page.goto(`${server.url}/#/?asset=${hardware.assetId}&incarnation=${hardware.incarnation}&view=${m.View.VIRTUALIZATION}`);
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `Server ${width}`, exact: true })).toBeVisible();
+      await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+      dialog = page.getByRole('dialog');
+      await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'virtual machine' });
+      await dialog.getByLabel('Find hypervisor', { exact: true }).click();
+      await dialog.getByRole('option', { name: `Use hypervisor: Second OS ${width}`, exact: true }).click();
+      await dialog.getByLabel('Name', { exact: true }).fill(`Scoped guest ${width}`);
+      await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `Scoped guest ${width}`, exact: true })).toBeVisible();
+      await expect(page.getByRole('alert')).toHaveCount(0);
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('phone placement pages are bounded and preserve the resource draft', async ({ page }, info) => {
+  // A host beyond page one must be selectable without loading the entire estate.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-placement-pages-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (let i = 0; i < 26; i++) await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: [{ name: 'name', value: { oneofKind: 'text', text: `Node ${String(i).padStart(2, '0')}` } }] }) });
+    const queries = [];
+    page.on('request', request => {
+      if (!request.url().endsWith('/omloom.workspace.v1.Workspace/Call')) return;
+      const body = request.postDataBuffer();
+      if (!body) return;
+      const command = m.Request.fromBinary(body.subarray(5)).command;
+      if (command.oneofKind === 'query') queries.push(command.query);
+    });
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.goto(`${server.url}/#/?view=${m.View.VIRTUALIZATION}`);
+    await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'Hypervisor (OS installation)' });
+    await dialog.getByLabel('Name', { exact: true }).fill('Draft survives placement');
+    await dialog.getByLabel('Find server', { exact: true }).click();
+    await expect(dialog.getByRole('option', { name: /^Use server:/ })).toHaveCount(25);
+    await dialog.getByRole('button', { name: 'Next placement choices', exact: true }).click();
+    await dialog.getByRole('option', { name: 'Use server: Node 25', exact: true }).click();
+    await expect(dialog.getByLabel('Name', { exact: true })).toHaveValue('Draft survives placement');
+    expect(queries.filter(q => q.view === m.View.HARDWARE).every(q => q.limit === 25)).toBe(true);
+    expect(queries.some(q => q.view === m.View.HARDWARE && q.cursor)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(dialog.getByRole('button', { name: 'Save resource', exact: true })).toBeEnabled();
+    await page.screenshot({ path: info.outputPath('hypervisor-placement-phone.png') });
+    await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: 'Draft survives placement', exact: true })).toBeVisible();
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
 
 test('Unplaced combines with text and scoped address search in the browser', async ({ page }) => {
   // Search and namespace bindings must survive toggling the physical-placement filter.
@@ -506,7 +762,7 @@ test('local network evidence keeps service ownership, coverage and phone navigat
     await categories.getByRole('button',{name:'Hypervisors',exact:true}).click();
     await expect(page.getByRole('button',{name:'Fixture guest',exact:true})).toHaveCount(0);
     await page.getByRole('button',{name:'+ Create resource',exact:true}).click();
-    await expect(page.getByRole('dialog').getByLabel('Resource kind',{exact:true}).locator('option:checked')).toHaveText('device');
+    await expect(page.getByRole('dialog').getByLabel('Resource kind',{exact:true}).locator('option:checked')).toHaveText('Hypervisor (OS installation)');
     await expect(page.getByRole('dialog').getByLabel('Virtualization role',{exact:true})).toHaveValue('VIRTUALIZATION_ROLE_HYPERVISOR');
     await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();
     await categories.getByRole('button',{name:'Virtual machines',exact:true}).click();
@@ -1037,7 +1293,7 @@ test('workspace creation starts with the relevant resource type', async ({ page 
   const server = await host(dir);
   try {
     await page.goto(server.url);
-    for (const [view, kind] of [['Virtualization', 'virtual machine'], ['Services', 'service'], ['Hardware', 'device']]) {
+    for (const [view, kind] of [['Virtualization', 'virtual machine'], ['Software & services', 'service'], ['Hardware', 'device']]) {
       await page.getByRole('navigation', { name: 'Views' }).getByRole('button', { name: view, exact: true }).click();
       await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
       await expect(page.getByRole('dialog').getByLabel('Resource kind', { exact: true }).locator('option:checked')).toHaveText(kind);
@@ -1145,7 +1401,7 @@ test('dense containers paginate and restore the enclosing view on desktop and ph
       await details.getByRole('button',{name:'Next relationships',exact:true}).click();
       await expect.poll(()=>details.locator(':scope > ul').innerText()).not.toBe(firstRelations);
       if(width<700) await page.getByLabel('Resource perspective',{exact:true}).selectOption('4');
-      else await page.getByRole('navigation',{name:'Views',exact:true}).getByRole('button',{name:'Services',exact:true}).click();
+      else await page.getByRole('navigation',{name:'Views',exact:true}).getByRole('button',{name:'Software & services',exact:true}).click();
       await details.getByRole('button',{name:'Close resource details',exact:true}).click();
       await expect(page.getByRole('heading',{name:'Hardware',exact:true})).toBeVisible();
       await expect(page.getByLabel('Search inventory',{exact:true})).toHaveValue('Dense');
@@ -1639,7 +1895,7 @@ test('selected roots survive view changes, personal save and reload', async ({ p
     await page.getByRole('checkbox', { name: 'Select Second scope VM', exact: true }).check();
     await page.getByRole('button', { name: 'Use selected as scope', exact: true }).click({ timeout: 5000 });
     await expect(page.getByRole('button', { name: 'Outside selection', exact: true })).toHaveCount(0);
-    await page.getByRole('navigation', { name: 'Views' }).getByRole('button', { name: 'Services', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Views' }).getByRole('button', { name: 'Software & services', exact: true }).click();
     await expect(page.getByRole('heading',{name:'No resources at this level in this view',exact:true})).toBeVisible();
     await expect(page.getByRole('button',{name:'2 selected roots',exact:true})).toBeVisible();
     await page.getByRole('button', { name: 'Save view', exact: true }).click();
@@ -1650,7 +1906,7 @@ test('selected roots survive view changes, personal save and reload', async ({ p
     await expect(page.getByRole('button', { name: 'Outside selection', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '◦ Two selected roots', exact: true }).click();
     await page.reload();
-    await expect(page.getByRole('heading',{name:'Services',exact:true})).toBeVisible();
+    await expect(page.getByRole('heading',{name:'Software & services',exact:true})).toBeVisible();
     await expect(page.getByRole('heading',{name:'No resources at this level in this view',exact:true})).toBeVisible();
     await expect(page.getByRole('button',{name:'2 selected roots',exact:true})).toBeVisible();
     await page.getByRole('navigation',{name:'Views'}).getByRole('button',{name:'Overview',exact:true}).click();

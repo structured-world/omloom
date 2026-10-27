@@ -1,6 +1,64 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
+// Built-in local VLAN facts retain their integer meaning through CSV preview and acceptance.
+#[test]
+fn csv_address_vlan_tag_remains_typed() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let Reply::Preview(preview) = call(
+        &store,
+        &actor,
+        Command::Import(api::Import {
+            source: "address-fixture".into(),
+            kind: K::AddressReference as i32,
+            csv: "external_id,address,vlan_tag\naddress-1,192.0.2.10,42\n".into(),
+            mappings: ["address", "vlan_tag"]
+                .into_iter()
+                .map(|name| api::Mapping {
+                    source: name.into(),
+                    field: name.into(),
+                })
+                .collect(),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("preview")
+    };
+    assert!(preview.id.is_some(), "{preview:?}");
+    let Reply::Mutation(mutation) = call(
+        &store,
+        &actor,
+        Command::Import(api::Import {
+            preview: preview.id,
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("mutation")
+    };
+    let Reply::Detail(detail) = call(
+        &store,
+        &actor,
+        Command::Read(api::Read {
+            target: Some(mutation.targets[0].clone()),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("detail")
+    };
+    let fields = detail.item.ok_or("item")?.fields;
+    assert!(
+        fields
+            .iter()
+            .any(|f| f.name == "vlan_tag" && f.value == Some(wire::field::Value::Integer(42)))
+    );
+    Ok(())
+}
+
 // Spreadsheet protection applies to untrusted text, never to typed negative numbers.
 #[test]
 fn csv_preserves_numbers_and_neutralizes_text_prefixes() -> TestResult {

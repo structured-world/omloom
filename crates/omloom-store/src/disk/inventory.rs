@@ -624,6 +624,14 @@ impl Tx<'_> {
         if !compatible(from_kind, to_kind, kind) {
             return Err(Error::Invalid);
         }
+        if kind == wire::RelationKind::RunsOn
+            && from_kind == wire::AssetKind::VirtualMachine
+            && to_kind == wire::AssetKind::SoftwareInstallation
+            && to_row.get("virtualization_role").and_then(Value::as_str)
+                != Some(omloom_contracts::workspace::VirtualizationRole::Hypervisor.as_str_name())
+        {
+            return Err(Error::Invalid);
+        }
         let key = format!("relation/{}", relation.relation_id);
         let old = self.get(&key)?;
         if old.as_ref().map(|p| number(p, "revision")).transpose()? != expected {
@@ -799,7 +807,8 @@ pub(super) fn compatible(
         R::AssignedTo => matches!((from, to), (K::IpAddress, K::Interface)),
         R::RunsOn => matches!(
             (from, to),
-            (K::VirtualMachine, K::Device) | (K::Service, K::Device | K::VirtualMachine)
+            (K::VirtualMachine, K::Device | K::SoftwareInstallation)
+                | (K::Service, K::Device | K::VirtualMachine)
         ),
         R::StoredOn => matches!((from, to), (K::VirtualMachine, K::Storage)),
         R::On => matches!(

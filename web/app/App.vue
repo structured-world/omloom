@@ -38,7 +38,7 @@ const moreActions = ref(false);
 const selected = ref<string[]>([]); const search = ref('');
 const viewSearch = ref('');
 const matchingViews = computed(() => views.value.filter(v => v.name.toLocaleLowerCase().includes(viewSearch.value.toLocaleLowerCase())));
-const presentations = [{ id: model.View.OVERVIEW, name: 'Overview', symbol: '▦' }, { id: model.View.NETWORK, name: 'Network', symbol: '⇄' }, { id: model.View.HARDWARE, name: 'Hardware', symbol: '▤' }, { id: model.View.VIRTUALIZATION, name: 'Virtualization', symbol: '◫' }, { id: model.View.SERVICES, name: 'Services', symbol: '◇' }];
+const presentations = [{ id: model.View.OVERVIEW, name: 'Overview', symbol: '▦' }, { id: model.View.NETWORK, name: 'Network', symbol: '⇄' }, { id: model.View.HARDWARE, name: 'Hardware', symbol: '▤' }, { id: model.View.VIRTUALIZATION, name: 'Virtualization', symbol: '◫' }, { id: model.View.SERVICES, name: 'Software & services', symbol: '◇' }];
 function parameters(name: string): string[] {
   const value = route.query[name];
   if (value === undefined) return [];
@@ -218,6 +218,7 @@ function withoutContinuation(selection: LocationQuery, origin = true): LocationQ
   return next;
 }
 async function saved(target?: AssetRef) {
+  loading.value = true;
   editor.value = ''; notice.value = 'Changes saved to local storage.';
   try {
     const next = withoutContinuation(route.query);
@@ -238,7 +239,7 @@ async function reloadSelection() {
   if (route.query[cursor] !== undefined) await change({ cursor: undefined });
   else await load();
 }
-function create() { editing.value = undefined; editor.value = 'asset'; }
+function create() { if (loading.value) return; editing.value = undefined; editor.value = 'asset'; }
 function edit() { editing.value = detail.value?.item; editor.value = 'asset'; }
 async function useView(v: model.SavedView) {
   if (!v.query) return;
@@ -276,7 +277,7 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <div class="saved-heading"><p class="nav-caption">SAVED VIEWS</p><button aria-label="Save current view" @click="editor = 'view'">+</button></div><input v-if="views.length" v-model="viewSearch" aria-label="Find saved views" placeholder="Find a saved view" maxlength="100"><button v-for="v in matchingViews" :key="v.id" class="saved-link" @click="useView(v)">{{ v.audiences.length ? '♧' : '◦' }} {{ v.name }}</button><p v-if="!views.length" class="sidebar-hint">Keep useful selections here.</p><p v-else-if="!matchingViews.length" class="sidebar-hint">No visible definitions match.</p>
 <div class="fixture"><span class="status-dot" />Local development<strong>{{ identity?.name ?? 'Connecting…' }}</strong><small>Fixture scope: {{ identity?.fixture }}</small></div></aside>
 <main><header class="topbar"><div class="breadcrumb">Workspace <span>/</span> {{ currentTitle }}</div><button @click="load" :disabled="loading">↻ Refresh</button></header>
-<div class="workspace-head"><div><h1>{{ currentTitle }}</h1></div><div class="actions workspace-actions" @keydown.esc="moreActions = false"><div id="workspace-secondary" class="secondary-actions" :class="{ open: moreActions }"><button class="phone-refresh" @click="load" :disabled="loading">Refresh inventory</button><button @click="exportCsv">Export CSV</button><button v-if="identity?.writable" @click="editor = 'import'">Import CSV</button><button v-if="identity?.schemaAdmin" @click="editor = 'schema'">Company fields</button></div><button v-if="identity?.writable" class="primary" @click="create">+ Create resource</button><button class="phone-more" :aria-expanded="moreActions" aria-controls="workspace-secondary" @click="moreActions = !moreActions">More</button></div></div>
+<div class="workspace-head"><div><h1>{{ currentTitle }}</h1></div><div class="actions workspace-actions" @keydown.esc="moreActions = false"><div id="workspace-secondary" class="secondary-actions" :class="{ open: moreActions }"><button class="phone-refresh" @click="load" :disabled="loading">Refresh inventory</button><button @click="exportCsv">Export CSV</button><button v-if="identity?.writable" @click="editor = 'import'">Import CSV</button><button v-if="identity?.schemaAdmin" @click="editor = 'schema'">Company fields</button></div><button v-if="identity?.writable" class="primary" :disabled="loading" @click="create">+ Create resource</button><button class="phone-more" :aria-expanded="moreActions" aria-controls="workspace-secondary" @click="moreActions = !moreActions">More</button></div></div>
 <div class="scopebar"><span class="scope-label">SCOPE</span><template v-if="detail?.item"><strong>{{ detailName || detail.item.target?.assetId.slice(-8) }}</strong><button @click="closeDetail">Enclosing selection</button></template><button v-else-if="query.roots.length" @click="change({ scope: undefined, scopeInc: undefined })">{{ query.roots.length }} selected root{{ query.roots.length === 1 ? '' : 's' }} <span aria-hidden="true">×</span></button><span v-else>All permitted infrastructure</span><small>{{ detail?.item ? 'Local components and known facts' : 'Changing views preserves this scope.' }}</small></div>
 <CategoryNav :view="query.view" :kinds="query.kinds" @select="kinds => change({kind:kinds.length?kinds.map(String):undefined})" />
 <p v-if="notice" class="notice" role="status">{{ notice }}<button aria-label="Dismiss notice" @click="notice = ''">×</button></p><p v-if="error" class="error" role="alert">{{ error }}<button @click="reloadSelection">Reload selection</button></p>
@@ -300,7 +301,7 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <button v-if="detail.relationsNext" @click="nextRelations">Next relationships</button>
 <template v-for="section in [{ title: 'Observed evidence', items: detail.observed }, { title: 'Import proposals', items: detail.imported }]" :key="section.title"><h3>{{ section.title }}</h3><p v-if="!section.items.length" class="hint">{{ detail.hostNetwork.length && section.title === 'Observed evidence' ? 'No additional visible field evidence.' : 'No visible current evidence. Accepted values are not observations.' }}</p><div v-for="o in section.items" :key="o.evidence?.sourceId"><p class="mono">Source {{ o.evidence?.sourceId }}</p><dl><template v-for="f in o.evidence?.fields" :key="f.name"><dt>{{ f.name }}</dt><dd>{{ display(f) }}</dd></template></dl></div></template></section>
 </div></main></div>
-<AssetEditor v-if="editor === 'asset'" :item="editing" :initial-kind="initialKind" :initial-hypervisor="query.view === model.View.VIRTUALIZATION && query.kinds.length === 1 && query.kinds[0] === K.DEVICE" :definitions="definitions" :working="working" :view="query.view" @close="editor = ''" @saved="saved" />
+<AssetEditor v-if="editor === 'asset'" :item="editing" :initial-kind="initialKind" :initial-hypervisor="query.view === model.View.VIRTUALIZATION && query.kinds.length === 1 && query.kinds[0] === K.SOFTWARE_INSTALLATION" :definitions="definitions" :working="working" :view="query.view" @close="editor = ''" @saved="saved" />
 <SchemaEditor v-if="editor === 'schema'" :definitions="definitions" :revision="page.revision" @close="editor = ''" @saved="saved" />
 <ImportEditor v-if="editor === 'import'" :definitions="definitions" :working="working" @close="editor = ''" @saved="saved" />
 <ViewEditor v-if="editor === 'view' && identity" :query="query" :identity="identity" :existing="activeView" @close="editor = ''" @saved="saved" />

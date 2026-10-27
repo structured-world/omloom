@@ -1,6 +1,7 @@
 target/
 dist/
 node_modules/
+.yarn/install-state.gz
 __pycache__/
 *.pyc
 .DS_Store
@@ -11,3 +12,4 @@ __pycache__/
 test-results/
 playwright-report/
 /var/
+/cargo-flamegraph.trace

@@ -318,7 +318,7 @@ pub(super) fn kind_for_view(view: api::View) -> &'static [wire::AssetKind] {
             K::AddressGroup,
             K::AddressReference,
         ],
-        api::View::Virtualization => &[K::VirtualMachine, K::Device, K::Cluster],
+        api::View::Virtualization => &[K::VirtualMachine, K::SoftwareInstallation, K::Cluster],
         api::View::Services => &[K::Service, K::SoftwareInstallation, K::Storage],
     }
 }
@@ -474,7 +474,7 @@ impl Store {
             let role_visible = visible_clause(context, Some("virtualization_role"), &mut values);
             clauses.push(format!(
                 "(a.kind<>{} OR (a.virtualization_role={} AND {role_visible}))",
-                wire::AssetKind::Device as i32,
+                wire::AssetKind::SoftwareInstallation as i32,
                 parameter(
                     &mut values,
                     text(api::VirtualizationRole::Hypervisor.as_str_name())
@@ -562,7 +562,32 @@ impl Store {
                         "(probe:OmRow {key:a.key})-[:OmRelationFrom]->(r:OmRow)-[:OmRelationTo]->(p:OmRow)",
                     ),
                 ] {
-                    let owner = browse_clause(context, &mut values, Some(reverse), &child_kinds);
+                    let mut owner =
+                        browse_clause(context, &mut values, Some(reverse), &child_kinds);
+                    if view == api::View::Virtualization {
+                        // Hardware is grouping context here; the hypervisor is the view's root.
+                        owner.push_str(&format!(
+                            " AND NOT (a.kind={} AND p.kind={})",
+                            wire::AssetKind::SoftwareInstallation as i32,
+                            wire::AssetKind::Device as i32,
+                        ));
+                        let visible = visible_clause_for(
+                            context,
+                            Some("virtualization_role"),
+                            &mut values,
+                            "p",
+                        );
+                        let enabled = parameter(
+                            &mut values,
+                            text(api::VirtualizationRole::Hypervisor.as_str_name()),
+                        );
+                        // Losing a visible host role must not make its retained guests disappear.
+                        owner.push_str(&format!(
+                            " AND NOT (a.kind={} AND p.kind={} AND {visible} AND (p.virtualization_role IS NULL OR p.virtualization_role<>{enabled}))",
+                            wire::AssetKind::VirtualMachine as i32,
+                            wire::AssetKind::SoftwareInstallation as i32,
+                        ));
+                    }
                     let flag = if reverse {
                         "reverse_owned"
                     } else {
@@ -1234,6 +1259,107 @@ impl Store {
         let target = tx.context_write(context, write, working, now)?;
         Ok(mutation(tx.commit()?, vec![target_wire(target)]))
     }
+    pub(super) fn workspace_create(
+        &self,
+        context: &Context,
+        create: api::Create,
+        working: &api::WorkingContext,
+        now: u64,
+    ) -> Result<api::Reply> {
+        use wire::AssetKind as K;
+        if create.addresses.len() > 16
+            || (!create.addresses.is_empty()
+                && !matches!(
+                    K::try_from(create.kind),
+                    Ok(K::Device | K::VirtualMachine | K::SoftwareInstallation)
+                ))
+        {
+            return Err(Error::Invalid);
+        }
+        let mut seen = BTreeSet::new();
+        for address in &create.addresses {
+            let ip = address
+                .address
+                .parse::<std::net::IpAddr>()
+                .map_err(|_| Error::Invalid)?;
+            if address.vlan_tag.is_some_and(|n| !(1..=4094).contains(&n))
+                || address.interface_name.as_ref().is_some_and(|n| {
+                    n.is_empty() || n.len() > 160 || n.chars().any(char::is_control)
+                })
+                || !seen.insert((ip, address.vlan_tag, address.interface_name.clone()))
+            {
+                return Err(Error::Invalid);
+            }
+        }
+        let mut tx = self.begin()?;
+        let target = tx.context_write(
+            context,
+            api::Write {
+                kind: create.kind,
+                changes: create.changes,
+                parent: create.parent,
+                ..Default::default()
+            },
+            working,
+            now,
+        )?;
+        let local = api::WorkingContext {
+            roots: working.roots.clone(),
+            focus: Some(target_wire(target)),
+            expected: Some(number(&tx.root, "revision")?),
+        };
+        let mut interfaces = BTreeMap::new();
+        for address in create.addresses {
+            let parent = if let Some(name) = &address.interface_name {
+                if let Some(interface) = interfaces.get(name) {
+                    *interface
+                } else {
+                    let interface = tx.context_write(
+                        context,
+                        api::Write {
+                            kind: K::Interface as i32,
+                            parent: Some(target_wire(target)),
+                            changes: vec![wire::Field {
+                                name: "name".into(),
+                                value: Some(field::Value::Text(name.clone())),
+                            }],
+                            ..Default::default()
+                        },
+                        &local,
+                        now,
+                    )?;
+                    interfaces.insert(name.clone(), interface);
+                    interface
+                }
+            } else {
+                target
+            };
+            let changes = address
+                .vlan_tag
+                .map(|n| wire::Field {
+                    name: "vlan_tag".into(),
+                    value: Some(field::Value::Integer(n.into())),
+                })
+                .into_iter()
+                .collect();
+            tx.workspace_address(
+                context,
+                api::Address {
+                    address: Some(address.address),
+                    prefix_length: address.prefix_length,
+                    parent: Some(target_wire(parent)),
+                    changes,
+                    ..Default::default()
+                },
+                &api::WorkingContext {
+                    focus: Some(target_wire(parent)),
+                    ..local.clone()
+                },
+                now,
+            )?;
+        }
+        Ok(mutation(tx.commit()?, vec![target_wire(target)]))
+    }
     pub(super) fn workspace_bulk(
         &self,
         context: &Context,
@@ -1387,6 +1513,18 @@ impl Store {
         }
         relation.authority_id = authority;
         let (from, to) = tx.check_relationship(context, &selection, &relation)?;
+        if relation.kind == wire::RelationKind::RunsOn as i32
+            && number(&tx.asset(from)?, "kind")? == wire::AssetKind::VirtualMachine as u64
+            && number(&tx.asset(to)?, "kind")? == wire::AssetKind::SoftwareInstallation as u64
+            && !context.field(
+                to,
+                wire::AssetKind::SoftwareInstallation as i32,
+                "virtualization_role",
+                false,
+            )
+        {
+            return Err(Error::Denied);
+        }
         if relation.revision == 0 {
             let rows=tx.query("MATCH (a:OmRow {key:$from})-[:OmRelationFrom]->(r:OmRow)-[:OmRelationTo]->(b:OmRow {key:$to}) WHERE r.kind=$kind RETURN properties(r) AS p LIMIT 1",params([("from",text(asset_key(from))),("to",text(asset_key(to))),("kind",Value::Int(relation.kind as i64))]))?;
             for row in rows {
@@ -1685,6 +1823,7 @@ pub(super) fn validate_column(name: &str, definitions: &[api::Definition]) -> Re
         "description",
         "serial",
         "virtualization_role",
+        "vlan_tag",
         "cidr",
         "address_space",
         "link_scope",

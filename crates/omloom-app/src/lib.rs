@@ -17,6 +17,7 @@ use tonic::{Code, Request, Response, Status};
 use tonic_types::{ErrorDetails, StatusExt};
 pub mod codec;
 pub mod fixtures;
+mod observe;
 #[cfg(test)]
 mod tests;
 
@@ -146,6 +147,7 @@ pub struct Application {
     store: Arc<Store>,
     context: Context,
     work: Arc<Semaphore>,
+    observations: Arc<Semaphore>,
 }
 impl Application {
     pub fn new(store: Store, context: Context) -> Self {
@@ -153,6 +155,7 @@ impl Application {
             store: Arc::new(store),
             context,
             work: Arc::new(Semaphore::new(8)),
+            observations: Arc::new(Semaphore::new(2)),
         }
     }
     /// One bounded page per interval. Cursors advance only after a successful
@@ -211,10 +214,53 @@ impl transport::workspace_server::Workspace for Application {
             .map_err(|_| status(Code::Internal, "CLOCK", "The host clock is out of range."))?;
         let store = Arc::clone(&self.store);
         let context = self.context.clone();
+        let mut received = request.into_inner();
+        let mut decoded = received.admitted.take();
+        if matches!(
+            decoded.command,
+            Some(api::request::Command::ObserveProxmox(_))
+        ) {
+            let _observation = Arc::clone(&self.observations).try_acquire_owned().map_err(
+                |_| {
+                    status(
+                        Code::ResourceExhausted,
+                        "OBSERVE_BUSY",
+                        "Two observations are already running. Inventory reads remain available.",
+                    )
+                },
+            )?;
+            if !context.grants.iter().any(|g| g.writable) {
+                return Err(status(
+                    Code::PermissionDenied,
+                    "OBSERVE_DENIED",
+                    "This fixture cannot start provider observations.",
+                ));
+            }
+            let Some(api::request::Command::ObserveProxmox(probe)) = decoded.command.take() else {
+                return Err(status(
+                    Code::Internal,
+                    "OBSERVE_COMMAND",
+                    "Observation request is unavailable.",
+                ));
+            };
+            let observation = observe::probe(probe).await?;
+            let result = api::Reply {
+                result: Some(api::reply::Result::Observation(observation)),
+            };
+            if prost::Message::encoded_len(&result) > FRAME_LIMIT {
+                return Err(status(
+                    Code::ResourceExhausted,
+                    "OBSERVE_LIMIT",
+                    "Narrow the provider observation scope.",
+                ));
+            }
+            drop(permit);
+            return Ok(Response::new(result));
+        }
         let result = tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            let mut received = request.into_inner();
-            store.workspace(&context, received.admitted.take(), now)
+            let _received = received;
+            store.workspace(&context, decoded, now)
         })
         .await
         .map_err(|_| {

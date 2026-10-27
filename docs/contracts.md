@@ -1,7 +1,7 @@
 # Infrastructure contracts
 
 The protobuf schema in `proto/omloom/v1/contracts.proto` generates Rust wire
-types at build time and TypeScript types with `npm run generate`. It describes
+types at build time and TypeScript types with `yarn generate`. It describes
 inventory and operations; there is no runnable server, installer or user UI yet.
 
 Rust admission is `omloom_contracts::decode(frame, limits, &budget)`. It returns
@@ -104,8 +104,10 @@ integers. Browser verification is not installation or application acceptance.
 
 ## Development
 
-Install Rust 1.95+, protoc 36.2+, Node 24+ and cargo-nextest. Run `npm ci`, then
-`npx playwright install chromium`. Run `sh scripts/check-contracts.sh` for the
+Install Rust 1.95+, protoc 36.2+, Node 24+, Corepack and cargo-nextest. Run
+`corepack enable`, `yarn install --immutable`, then `yarn playwright install chromium`.
+Run `sh scripts/check-contracts.sh` for the
 complete generation/build/test/browser gate. Successful runs clean their own
 build outputs; failures preserve evidence. Generated TypeScript is committed
-and CI checks it for drift. Dependencies are pinned by Cargo.lock/package-lock.json.
+and CI checks it for drift. Dependencies are pinned by Cargo.lock/yarn.lock;
+the Yarn version is pinned in package.json.
