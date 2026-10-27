@@ -144,6 +144,8 @@ provisioning and connection adapters are not implemented by this fixture host.
 
 Company fields have stable identities and explicit types, applicable resource
 kinds, choice values and search inclusion. Renaming preserves field identity.
+Applicable kinds form an unordered set. Reordering them does not require a
+migration, write data or invalidate saved predicates.
 A type or applicability change requires a validated migration before applying
 the definition and current values together. No default backfill or automatic
 index per definition is created. Retired definitions with no remaining values

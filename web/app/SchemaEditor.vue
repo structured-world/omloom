@@ -12,6 +12,7 @@ async function save(apply = false) {
   error.value = '';
   try {
     draft.choices = draft.type === model.FieldType.CHOICE ? choices.value.split('\n').filter(Boolean) : [];
+    draft.kinds.sort((a, b) => a - b);
     const old = props.definitions.find(d => d.id === draft.id);
     const migration = old && (old.type !== draft.type || JSON.stringify(old.kinds) !== JSON.stringify(draft.kinds) || JSON.stringify(old.choices) !== JSON.stringify(draft.choices));
     const input = model.Definition.create({ ...draft, generation: 0n });

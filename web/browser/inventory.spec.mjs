@@ -34,6 +34,36 @@ async function create(page, name, kind = 'DEVICE') {
   return { asset_id: params.get('asset'), incarnation: params.get('incarnation') };
 }
 
+test('reordering field applicability saves without a migration on desktop and phone', async ({ page }) => {
+  // Checkbox interaction order cannot turn an unchanged applicability set into a value migration.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-field-order-'));
+  const server = await host(dir);
+  try {
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(server.url);
+      const fields = page.getByRole('button', { name: 'Company fields', exact: true });
+      await expect(page.getByRole('button', { name: '+ Create resource', exact: true })).toBeVisible();
+      if (!await fields.isVisible()) await page.getByRole('button', { name: 'More', exact: true }).click();
+      await fields.click();
+      const dialog = page.getByRole('dialog');
+      const name = `Purpose ${width}`;
+      await dialog.getByLabel('Name', { exact: true }).fill(name);
+      await dialog.getByRole('checkbox', { name: 'device', exact: true }).check();
+      await dialog.getByRole('checkbox', { name: 'virtual machine', exact: true }).check();
+      await dialog.getByRole('button', { name: 'Review / save definition', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      if (!await fields.isVisible()) await page.getByRole('button', { name: 'More', exact: true }).click();
+      await fields.click();
+      await dialog.getByRole('combobox', { name: 'Definition', exact: true }).selectOption({ label: name }, { timeout: 5000 });
+      await dialog.getByRole('checkbox', { name: 'device', exact: true }).uncheck();
+      await dialog.getByRole('checkbox', { name: 'device', exact: true }).check();
+      await dialog.getByRole('button', { name: 'Review / save definition', exact: true }).click();
+      await expect(dialog).toBeHidden();
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('loopback host rejects foreign authorities before API and static routes', async ({ page }) => {
   // A foreign browser origin must not obtain fixture authority by rebinding DNS to loopback.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-authority-'));

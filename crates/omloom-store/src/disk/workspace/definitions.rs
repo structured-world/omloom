@@ -1,7 +1,7 @@
 use super::*;
 
 fn definition(p: &Properties) -> Result<api::Definition> {
-    let kinds = match p.get("kinds") {
+    let mut kinds = match p.get("kinds") {
         Some(Value::Array(v)) => v
             .iter()
             .map(|v| {
@@ -12,6 +12,7 @@ fn definition(p: &Properties) -> Result<api::Definition> {
             .collect::<Result<Vec<_>>>()?,
         _ => return Err(Error::Corrupt),
     };
+    kinds.sort_unstable();
     Ok(api::Definition {
         id: string(p, "key")?
             .strip_prefix("definition/")
@@ -190,6 +191,7 @@ impl Store {
     ) -> Result<api::Reply> {
         context.admin()?;
         validate_definition(&d)?;
+        d.kinds.sort_unstable();
         let mut tx = self.begin()?;
         let old = if d.id.is_empty() {
             if d.revision != 0 {
@@ -255,6 +257,7 @@ impl Store {
         context.admin()?;
         let mut next = migration.definition.ok_or(Error::Invalid)?;
         validate_definition(&next)?;
+        next.kinds.sort_unstable();
         if migration.conversions.len() > 128 {
             return Err(Error::Limit);
         }
