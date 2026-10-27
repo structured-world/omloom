@@ -137,6 +137,7 @@ message Item {
 }
 message Page {
   // Visible requested projections, ordered under this response's revision.
+  // A page may contain fewer than the requested row limit to fit the reply byte ceiling.
   repeated Item items = 1;
   // Opaque continuation with query/context revision binding, absent at the end.
   optional string next = 2;

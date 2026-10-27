@@ -207,11 +207,19 @@ lossless machine CSV separately. These are different output contracts.
 Fixed operation ceilings are 100 resources per query page, 128 explicit targets
 or CSV rows per mutation, 32 requested fields, 8 equality predicates, 256 KiB CSV
 and 4 pending previews per actor. A larger operation must be narrowed rather
-than silently truncated. Frames have strict structural, depth and allocation
+than silently truncated. Query pages also fit a 512 KiB encoded reply ceiling:
+fewer rows are returned with a continuation, preserving requested values.
+Frames have strict structural, depth and allocation
 preflight before protobuf decoding. No search/read access counters or result
 snapshots are persisted.
 
 The fixture storage profile has finite per-class and total admission budgets.
+If a format upgrade cannot fit its derived projections, the trusted host can
+explicitly call `Store::open_with_capacity_increase` with the exact previous
+policy and larger admission ceilings. Ordinary open still rejects policy changes.
+This operation cannot reduce ceilings or change retention, preserves restore
+fences, and commits the new policy before resumable migration work. After an
+interruption, normal open with that new policy resumes the upgrade.
 Previews live for 30 minutes; inventory audit detail lives for 7 days. These are
 development data lifetimes, not production retention recommendations. One owned
 maintenance task processes bounded pages every 30 seconds, retaining its cursor

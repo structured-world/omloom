@@ -34,6 +34,152 @@ async function create(page, name, kind = 'DEVICE') {
   return { asset_id: params.get('asset'), incarnation: params.get('incarnation') };
 }
 
+async function workspaceClient(url) {
+  const { buildSync } = await import('esbuild');
+  const { GrpcWebFetchTransport } = await import('@protobuf-ts/grpcweb-transport');
+  const built = buildSync({ stdin: { contents: 'export * from "./web/src/generated/omloom/v1/workspace"; export {AssetKind} from "./web/src/generated/omloom/v1/contracts";', resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node' });
+  const m = await import('data:text/javascript;base64,' + Buffer.from(built.outputFiles[0].contents).toString('base64'));
+  const transport = new GrpcWebFetchTransport({ baseUrl: url, format: 'binary' });
+  async function rpc(command, focus) {
+    const q = await transport.unary(m.Workspace.methods[0], m.Request.create({ command: { oneofKind: 'query', query: m.Query.create({ limit: 1 }) } }), transport.mergeOptions());
+    return (await transport.unary(m.Workspace.methods[0], m.Request.create({ command, working: { expected: q.response.result.page.revision, focus } }), transport.mergeOptions())).response.result;
+  }
+  return { m, rpc };
+}
+
+test('saved mutation reports metadata refresh failure without an unhandled rejection', async ({ page }) => {
+  // Only the post-save metadata request fails; the write still reaches the real host and disk.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-save-refresh-'));
+  const server = await host(dir);
+  try {
+    const { m } = await workspaceClient(server.url);
+    const failures = [];
+    page.on('pageerror', error => failures.push(error.message));
+    let written = false; let interrupted = false;
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      const request = m.Request.fromBinary(route.request().postDataBuffer().subarray(5));
+      if (request.command.oneofKind === 'write') written = true;
+      if (written && !interrupted && request.command.oneofKind === 'definitions') { interrupted = true; await route.abort('failed'); }
+      else await route.continue();
+    });
+    await page.goto(server.url);
+    await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'device' });
+    await dialog.getByLabel('Name', { exact: true }).fill('Saved before refresh failure');
+    await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole('alert')).toBeVisible();
+    expect(interrupted).toBe(true);
+    expect(failures).toEqual([]);
+    await page.reload();
+    await expect(page.getByRole('button', { name: 'Saved before refresh failure', exact: true })).toBeVisible();
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('reload selection retries a failed query when its URL is unchanged', async ({ page }) => {
+  // An identical route is not navigation; the explicit retry must still issue a real query.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-query-retry-'));
+  const server = await host(dir);
+  try {
+    const { m } = await workspaceClient(server.url);
+    let queries = 0;
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      const request = m.Request.fromBinary(route.request().postDataBuffer().subarray(5));
+      if (request.command.oneofKind === 'query' && ++queries === 1) await route.abort('failed');
+      else await route.continue();
+    });
+    await page.goto(server.url);
+    await expect(page.getByRole('alert')).toBeVisible();
+    await page.getByRole('button', { name: 'Reload selection', exact: true }).click();
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Start with the infrastructure you know', exact: true })).toBeVisible();
+    expect(queries).toBe(2);
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('accepted wide columns remain browsable across byte-sized pages', async ({ page }) => {
+  // Real binary RPC and disk fixtures prove the transport accepts every continuation.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-wide-pages-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const columns = ['name'];
+    for (let i = 0; i < 11; i++) {
+      const name = `Payload ${i}`;
+      const result = await rpc({ oneofKind: 'definition', definition: m.Definition.create({ name, kinds: [m.AssetKind.DEVICE], type: m.FieldType.TEXT }) });
+      columns.push(result.definitions.items.find(d => d.name === name).id);
+    }
+    for (let i = 0; i < 25; i++) await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: columns.map(name => ({ name, value: { oneofKind: 'text', text: name === 'name' ? `wide-${String(i).padStart(2,'0')}` : 'x'.repeat(2048) } })) }) });
+    await page.goto(`${server.url}/#/?columns=${columns.join(',')}`);
+    await expect(page.getByRole('button', { name: 'wide-00', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Next page →', exact: true })).toBeEnabled();
+    await page.getByRole('button', { name: 'Next page →', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'wide-24', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Next page →', exact: true })).toBeDisabled();
+    await expect(page.getByRole('alert')).toHaveCount(0);
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('mutations reset ordinary and local continuations on desktop and phone', async ({ page }) => {
+  // A successful mutation changes the revision, so no old list or return cursor can survive it.
+  test.setTimeout(90_000);
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-mutation-cursors-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const csv = 'external_id,name\n' + Array.from({ length: 26 }, (_, i) => `${i},root-${String(i).padStart(2,'0')}`).join('\n');
+    const preview = (await rpc({ oneofKind: 'import', import: m.Import.create({ source: 'cursor-fixture', kind: m.AssetKind.DEVICE, csv, mappings: [{ source: 'name', field: 'name' }] }) })).preview;
+    const imported = await rpc({ oneofKind: 'import', import: m.Import.create({ preview: preview.id }) });
+    const parent = imported.mutation.targets[0];
+    for (let i = 0; i < 26; i++) await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.PORT, parent, changes: [{ name: 'name', value: { oneofKind: 'text', text: `port-${String(i).padStart(2,'0')}` } }] }) }, parent);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(server.url);
+      await page.getByRole('button', { name: 'Next page →', exact: true }).click();
+      await expect(page).toHaveURL(/cursor=/);
+      await expect(page.getByRole('button', { name: 'root-25', exact: true })).toBeVisible();
+      await page.getByRole('checkbox', { name: width === 390 ? 'Select phone page' : 'Select visible page', exact: true }).check();
+      await page.getByRole('button', { name: 'Review bulk change', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByRole('combobox', { name: 'Change', exact: true }).selectOption('set');
+      await dialog.getByLabel('Value', { exact: true }).fill(`Reviewed at ${width}`);
+      await dialog.getByRole('button', { name: 'Apply reviewed change', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      await expect(page).not.toHaveURL(/cursor=/);
+      await expect(page.getByRole('alert')).toHaveCount(0);
+      await page.getByRole('button', { name: 'Next page →', exact: true }).click();
+      await page.getByRole('button', { name: 'root-25', exact: true }).click();
+      await page.getByRole('button', { name: 'Edit resource', exact: true }).click();
+      await dialog.getByRole('combobox', { name: 'Description change', exact: true }).selectOption('set');
+      await dialog.getByLabel('Description', { exact: true }).fill(`Detail reviewed at ${width}`);
+      await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByRole('region', { name: 'Resource details' })).toContainText(`Detail reviewed at ${width}`);
+      await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
+      await expect(page).not.toHaveURL(/cursor=/);
+      await expect(page.getByRole('alert')).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'root-01', exact: true })).toBeVisible();
+      await page.goto(`${server.url}/#/?asset=${parent.assetId}&incarnation=${parent.incarnation}&view=${m.View.HARDWARE}`);
+      await expect(page.getByRole('region', { name: 'Resource details' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'port-00', exact: true })).toBeVisible();
+      const next = page.getByRole('button', { name: width === 390 ? 'Next local resources' : 'Next page →', exact: true });
+      await expect(next).toBeEnabled();
+      await next.click();
+      await expect(page).toHaveURL(/localCursor=/);
+      await expect(page.getByRole('button', { name: 'port-25', exact: true })).toBeVisible();
+      await page.getByRole('button', { name: 'Edit resource', exact: true }).click();
+      await dialog.getByRole('combobox', { name: 'Name change', exact: true }).selectOption('set');
+      await dialog.getByLabel('Name', { exact: true }).fill(`Updated parent ${width}`);
+      await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      await expect(page).not.toHaveURL(/localCursor=/);
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `Updated parent ${width}`, exact: true })).toBeVisible();
+      await expect(page.getByRole('alert')).toHaveCount(0);
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('reordering field applicability saves without a migration on desktop and phone', async ({ page }) => {
   // Checkbox interaction order cannot turn an unchanged applicability set into a value migration.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-field-order-'));

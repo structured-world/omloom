@@ -23,7 +23,7 @@ mod tests;
 pub mod transport {
     tonic::include_proto!("omloom.workspace.v1");
 }
-pub const FRAME_LIMIT: usize = 512 * 1024;
+pub const FRAME_LIMIT: usize = omloom_store::workspace::MAX_REPLY_BYTES;
 
 pub fn policy() -> Policy {
     Policy {

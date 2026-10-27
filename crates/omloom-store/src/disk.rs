@@ -287,6 +287,31 @@ fn unpack(rows: Vec<Properties>) -> Result<Vec<Properties>> {
 }
 
 impl Store {
+    /// Explicitly increases admission ceilings before a resumable format migration.
+    /// Retention and maintenance semantics remain fixed; `previous` must match disk.
+    pub fn open_with_capacity_increase(
+        path: &Path,
+        previous: &Policy,
+        policy: Policy,
+    ) -> Result<Self> {
+        let mut expected = previous.clone();
+        expected.classes = policy.classes;
+        expected.total_bytes = policy.total_bytes;
+        if !previous.valid()
+            || !policy.valid()
+            || expected != policy
+            || policy.total_bytes < previous.total_bytes
+            || policy
+                .classes
+                .iter()
+                .zip(&previous.classes)
+                .any(|(new, old)| new.rows < old.rows || new.bytes < old.bytes)
+        {
+            return Err(Error::Invalid);
+        }
+        Self::open_inner(path, policy, 32 * 1_048_576, Some(previous))
+    }
+
     pub fn open(path: &Path, policy: Policy) -> Result<Self> {
         Self::open_with_query_memory(path, policy, 32 * 1_048_576)
     }
@@ -294,6 +319,15 @@ impl Store {
     /// Opens the same durable store with an explicit host-selected statement
     /// memory ceiling. This is independent of admission and owned disk limits.
     pub fn open_with_query_memory(path: &Path, policy: Policy, bytes: u64) -> Result<Self> {
+        Self::open_inner(path, policy, bytes, None)
+    }
+
+    fn open_inner(
+        path: &Path,
+        policy: Policy,
+        bytes: u64,
+        previous: Option<&Policy>,
+    ) -> Result<Self> {
         if !policy.valid() {
             return Err(Error::Invalid);
         }
@@ -302,7 +336,7 @@ impl Store {
         db.set_query_memory_limit(bytes)
             .map_err(|_| Error::Invalid)?;
         db.set_retention_window(Duration::from_secs(1));
-        let store = Self::from_database(db, policy)?;
+        let store = Self::from_database_inner(db, policy, previous)?;
         if path
             .join("RESTORE_REQUIRED")
             .try_exists()
@@ -314,7 +348,15 @@ impl Store {
     }
 
     /// Also accepts a host-owned replicated database using the same transaction API.
-    pub fn from_database(mut db: Database, policy: Policy) -> Result<Self> {
+    pub fn from_database(db: Database, policy: Policy) -> Result<Self> {
+        Self::from_database_inner(db, policy, None)
+    }
+
+    fn from_database_inner(
+        mut db: Database,
+        policy: Policy,
+        previous: Option<&Policy>,
+    ) -> Result<Self> {
         if !policy.valid() {
             return Err(Error::Invalid);
         }
@@ -581,6 +623,9 @@ impl Store {
         }
         let store = Self { db, policy };
         if store.read(ROOT)?.is_none() {
+            if previous.is_some() {
+                return Err(Error::Missing);
+            }
             let root = store.new_root()?;
             store.db.execute_cypher_shared(
                 "CREATE (n:OmRow {key:$key}) SET n += $p",
@@ -595,7 +640,21 @@ impl Store {
         if !(2..=SCHEMA_VERSION).contains(&version) {
             return Err(Error::SchemaVersion);
         }
-        if string(&root, "policy")? != store.policy_identity() {
+        if let Some(previous) = previous {
+            // The installation revision fences concurrent policy changes. Commit
+            // the new ceiling first so an interrupted migration resumes normally.
+            let mut tx = store.begin()?;
+            if string(&tx.root, "policy")? != Self::encode_policy(previous) {
+                return Err(Error::PolicyChanged);
+            }
+            let next = store.policy_identity();
+            if tx.root.get("policy").and_then(Value::as_str) != Some(next.as_str()) {
+                tx.set_usage(usage(&tx.root)?)?;
+                tx.root.insert("policy".into(), text(next));
+                tx.changed = true;
+            }
+            tx.commit()?;
+        } else if string(&root, "policy")? != store.policy_identity() {
             return Err(Error::PolicyChanged);
         }
         if version == 2 {
@@ -634,17 +693,20 @@ impl Store {
         Ok(store)
     }
     fn policy_identity(&self) -> String {
+        Self::encode_policy(&self.policy)
+    }
+    fn encode_policy(policy: &Policy) -> String {
         let mut encoded = format!(
             "v1/{}/{}/{}/{}/{}/{}",
-            self.policy.total_bytes,
-            self.policy.detail_age_ms,
-            self.policy.batch_rows,
-            self.policy.review_age_ms,
-            self.policy.review_per_source.rows,
-            self.policy.review_per_source.bytes
+            policy.total_bytes,
+            policy.detail_age_ms,
+            policy.batch_rows,
+            policy.review_age_ms,
+            policy.review_per_source.rows,
+            policy.review_per_source.bytes
         );
         use std::fmt::Write;
-        for budget in &self.policy.classes {
+        for budget in &policy.classes {
             write!(&mut encoded, "/{}/{}", budget.rows, budget.bytes)
                 .expect("formatting into String");
         }

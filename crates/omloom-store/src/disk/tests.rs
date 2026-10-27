@@ -1,5 +1,133 @@
 use super::*;
 
+// Name projections may exhaust an old budget; explicit increases must unblock recovery without relaxing retention or restore fences.
+#[test]
+fn capacity_increase_resumes_quota_bound_name_migration()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let initial = Policy {
+        classes: [crate::Budget {
+            rows: 1024,
+            bytes: 1_048_576,
+        }; CLASSES],
+        total_bytes: 8_388_608,
+        detail_age_ms: 1000,
+        review_age_ms: 500,
+        review_per_source: crate::Budget {
+            rows: 128,
+            bytes: 1_048_576,
+        },
+        batch_rows: 128,
+    };
+    let store = Store::open(dir.path(), initial)?;
+    let mut tx = store.begin()?;
+    tx.put(
+        "asset/legacy",
+        "assets",
+        Class::Inventory,
+        props([("revision", Value::Int(4))]),
+    )?;
+    tx.put(
+        "asset/legacy/intent/name",
+        "asset/legacy",
+        Class::Inventory,
+        props([
+            ("field", text("name")),
+            ("vtype", Value::Int(1)),
+            ("vtext", text("Legacy device")),
+        ]),
+    )?;
+    tx.root.insert("schema".into(), Value::Int(7));
+    tx.root.insert("restored".into(), Value::Bool(true));
+    tx.changed = true;
+    tx.commit()?;
+    let mut previous = store.policy.clone();
+    previous.classes[Class::Inventory as usize].bytes =
+        store.usage()?.bytes[Class::Inventory as usize];
+    // Reproduce a real legacy quota, rather than reserving migration-only uncharged bytes.
+    let legacy = Store {
+        db: store.db,
+        policy: previous.clone(),
+    };
+    let mut tx = legacy.begin()?;
+    tx.root
+        .insert("policy".into(), text(legacy.policy_identity()));
+    tx.changed = true;
+    tx.commit()?;
+    drop(legacy);
+    assert!(matches!(
+        Store::open(dir.path(), previous.clone()),
+        Err(Error::Limit)
+    ));
+    let mut next = previous.clone();
+    next.classes[Class::Inventory as usize].bytes += 4096;
+    assert!(matches!(
+        Store::open(dir.path(), next.clone()),
+        Err(Error::PolicyChanged)
+    ));
+    // A committed total increase can still leave the class full. Reopening
+    // must resume against that accepted policy, without losing the old rows.
+    let mut partial = previous.clone();
+    partial.total_bytes += 4096;
+    assert!(matches!(
+        Store::open_with_capacity_increase(dir.path(), &previous, partial.clone()),
+        Err(Error::Limit)
+    ));
+    assert!(matches!(
+        Store::open(dir.path(), partial.clone()),
+        Err(Error::Limit)
+    ));
+    assert!(matches!(
+        Store::open(dir.path(), previous),
+        Err(Error::PolicyChanged)
+    ));
+    let previous = partial;
+    next.total_bytes = previous.total_bytes;
+    let store = Store::open_with_capacity_increase(dir.path(), &previous, next.clone())?;
+    assert_eq!(
+        string(&store.read("asset/legacy")?.ok_or(Error::Missing)?, "name")?,
+        "Legacy device"
+    );
+    assert_eq!(
+        number(
+            &store.read("asset/legacy")?.ok_or(Error::Missing)?,
+            "revision"
+        )?,
+        4
+    );
+    assert_eq!(
+        number(&store.read(ROOT)?.ok_or(Error::Missing)?, "schema")?,
+        SCHEMA_VERSION
+    );
+    assert_eq!(
+        store.read(ROOT)?.ok_or(Error::Missing)?.get("restored"),
+        Some(&Value::Bool(true))
+    );
+    let before = store.usage()?;
+    drop(store);
+    let store = Store::open(dir.path(), next.clone())?;
+    assert_eq!(store.usage()?, before);
+    drop(store);
+    let mut wrong = next.clone();
+    wrong.detail_age_ms += 1;
+    assert!(matches!(
+        Store::open_with_capacity_increase(dir.path(), &next, wrong),
+        Err(Error::Invalid)
+    ));
+    assert!(matches!(
+        Store::open_with_capacity_increase(dir.path(), &next, previous.clone()),
+        Err(Error::Invalid)
+    ));
+    let mut raised = next.clone();
+    raised.total_bytes += 4096;
+    assert!(matches!(
+        Store::open_with_capacity_increase(dir.path(), &previous, raised),
+        Err(Error::PolicyChanged)
+    ));
+    assert_eq!(Store::open(dir.path(), next)?.usage()?, before);
+    Ok(())
+}
+
 // Exhausting a supported statement memory ceiling is admission failure, not corruption.
 #[test]
 fn statement_memory_exhaustion_is_a_resource_limit() {

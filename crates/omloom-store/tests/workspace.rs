@@ -75,7 +75,7 @@ fn query() -> api::Query {
     }
 }
 
-// All three physical ownership forms exclude children, while roots remain selectable.
+// Physical containment and port ownership exclude children, while roots remain selectable.
 #[test]
 fn unplaced_excludes_contained_and_port_hardware() -> TestResult {
     use api::{reply::Result as Reply, request::Command};
@@ -137,6 +137,124 @@ fn unplaced_excludes_contained_and_port_hardware() -> TestResult {
     for item in page.items {
         assert!(roots.contains(&item.target.ok_or("target")?));
     }
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// Wide accepted values must page by wire bytes, preserving every requested field and identity.
+#[test]
+fn wide_pages_continue_within_transport_budget() -> TestResult {
+    use api::{reply::Result as Reply, request::Command};
+    use prost::Message;
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let mut columns = vec!["name".to_owned()];
+    for index in 0..11 {
+        let Reply::Definitions(definitions) = call(
+            &store,
+            &actor,
+            Command::Definition(api::Definition {
+                name: format!("Payload {index}"),
+                kinds: vec![K::Device as i32],
+                r#type: api::FieldType::Text as i32,
+                ..Default::default()
+            }),
+        )?
+        else {
+            panic!("definitions");
+        };
+        columns.push(
+            definitions
+                .items
+                .iter()
+                .find(|d| d.name == format!("Payload {index}"))
+                .ok_or("definition")?
+                .id
+                .clone(),
+        );
+    }
+    for index in 0..25 {
+        let mut changes = vec![text_field("name", &format!("device-{index:02}"))];
+        changes.extend(
+            columns[1..]
+                .iter()
+                .map(|name| text_field(name, &"x".repeat(2048))),
+        );
+        call(
+            &store,
+            &actor,
+            Command::Write(api::Write {
+                kind: K::Device as i32,
+                changes,
+                ..Default::default()
+            }),
+        )?;
+    }
+    let before = store.usage()?;
+    for requested in [vec!["name".into()], columns.clone()] {
+        let q = api::Query {
+            columns: requested,
+            limit: 25,
+            include_context: true,
+            ..query()
+        };
+        let mut times = Vec::new();
+        let mut bytes = 0;
+        for _ in 0..9 {
+            let start = std::time::Instant::now();
+            let result = call(&store, &actor, Command::Query(q.clone()))?;
+            times.push(start.elapsed().as_micros());
+            bytes = api::Reply {
+                result: Some(result),
+            }
+            .encoded_len();
+        }
+        times.sort_unstable();
+        eprintln!(
+            "page columns={} median_us={} reply_bytes={bytes} usage={before:?}",
+            q.columns.len(),
+            times[4]
+        );
+    }
+    let mut q = api::Query {
+        columns: columns.clone(),
+        limit: 25,
+        include_context: true,
+        ..query()
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    loop {
+        let Reply::Page(page) = call(&store, &actor, Command::Query(q.clone()))? else {
+            panic!("page");
+        };
+        assert!(
+            api::Reply {
+                result: Some(Reply::Page(page.clone()))
+            }
+            .encoded_len()
+                <= 512 * 1024
+        );
+        assert_eq!(page.total, 25);
+        assert!(!page.items.is_empty());
+        assert_eq!(page.contexts.len(), page.items.len());
+        for (item, context) in page.items.iter().zip(&page.contexts) {
+            assert_eq!(context.target, item.target);
+            assert!(seen.insert(item.target.as_ref().ok_or("target")?.asset_id.clone()));
+            assert_eq!(item.fields.len(), columns.len());
+            for field in item.fields.iter().filter(|f| f.name != "name") {
+                assert_eq!(
+                    field.value,
+                    Some(wire::field::Value::Text("x".repeat(2048)))
+                );
+            }
+        }
+        let Some(next) = page.next else {
+            break;
+        };
+        q.cursor = Some(next);
+    }
+    assert_eq!(seen.len(), 25);
     assert_eq!(store.usage()?, before);
     Ok(())
 }

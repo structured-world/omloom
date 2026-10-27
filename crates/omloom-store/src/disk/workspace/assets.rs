@@ -661,15 +661,15 @@ impl Store {
             for (path, kinds, flag) in [
                 (
                     "(probe:OmRow {key:a.key})-[:OmRelationFrom]->(placement:OmRow)",
-                    vec![wire::RelationKind::InstalledIn as i32],
+                    &[wire::RelationKind::InstalledIn as i32][..],
                     "installed",
                 ),
                 (
                     "(probe:OmRow {key:a.key})<-[:OmRelationTo]-(placement:OmRow)",
-                    vec![
+                    &[
                         wire::RelationKind::Contains as i32,
                         wire::RelationKind::HasPort as i32,
-                    ],
+                    ][..],
                     "contained",
                 ),
             ] {
@@ -974,16 +974,50 @@ impl Store {
                 fields,
             });
         }
-        let contexts = if query.include_context {
+        let mut contexts = if query.include_context {
             tx.item_contexts(context, &rows, &query)?
         } else {
             Vec::new()
         };
+        // Reserve the longest continuation and the Reply envelope once. Each
+        // item/context is measured without encoding or copying its field payload.
+        let mut bytes = api::Page {
+            total,
+            revision,
+            ..Default::default()
+        }
+        .encoded_len();
+        // Three decimal u64 components and separators bound the cursor without
+        // allocating a placeholder on every page, including terminal pages.
+        let cursor_bytes = 3 * 20 + 3 + fingerprint.len();
+        bytes += 1 + prost::length_delimiter_len(cursor_bytes) + cursor_bytes;
+        let envelope = 1 + prost::length_delimiter_len(MAX_REPLY_BYTES);
+        let mut emitted = 0;
+        for (index, item) in items.iter().enumerate() {
+            let size = item.encoded_len();
+            let mut addition = 1 + prost::length_delimiter_len(size) + size;
+            if query.include_context {
+                let size = contexts.get(index).ok_or(Error::Corrupt)?.encoded_len();
+                addition += 1 + prost::length_delimiter_len(size) + size;
+            }
+            if bytes + addition > MAX_REPLY_BYTES - envelope {
+                break;
+            }
+            bytes += addition;
+            emitted += 1;
+        }
+        if emitted == 0 && !items.is_empty() {
+            return Err(Error::Limit);
+        }
+        items.truncate(emitted);
+        if query.include_context {
+            contexts.truncate(emitted);
+        }
         tx.commit()?;
         if self.usage()?.revision != revision {
             return Err(Error::Expired);
         }
-        let next_offset = offset.checked_add(u64::from(limit)).ok_or(Error::Limit)?;
+        let next_offset = offset.checked_add(emitted as u64).ok_or(Error::Limit)?;
         Ok(api::Page {
             items,
             contexts,

@@ -281,6 +281,7 @@ export interface Item {
 export interface Page {
     /**
      * Visible requested projections, ordered under this response's revision.
+     * A page may contain fewer than the requested row limit to fit the reply byte ceiling.
      *
      * @generated from protobuf field: repeated omloom.workspace.v1.Item items = 1
      */

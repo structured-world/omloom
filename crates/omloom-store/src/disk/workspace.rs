@@ -18,6 +18,8 @@ mod views;
 mod working;
 
 pub const MAX_PAGE: usize = 100;
+/// Maximum protobuf reply bytes, shared with the host transport ceiling.
+pub const MAX_REPLY_BYTES: usize = 512 * 1024;
 pub const MAX_BULK: usize = 128;
 pub const MAX_QUERY: usize = 256;
 pub const MAX_IMPORT: usize = 128;

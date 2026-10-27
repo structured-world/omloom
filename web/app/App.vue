@@ -154,35 +154,27 @@ async function filters(predicates: model.Predicate[]) {
   if (!json || typeof json !== 'object' || Array.isArray(json)) throw Error('Invalid query definition');
   editor.value = ''; await change({ filter: predicates.length ? JSON.stringify(json.predicates) : undefined });
 }
-async function open(target: AssetRef | undefined) {
+async function open(target: AssetRef | undefined, selection: LocationQuery = route.query) {
   if (!target) return;
   if (key(detail.value?.item?.target) === key(target)) { detailHeading.value?.focus({ preventScroll: true }); return; }
   loading.value = true;
-  if (!detail.value) { returnQuery = { ...route.query }; listScroll = window.scrollY; listQuery = loadedQuery; listSelection = [...selected.value]; listFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined; }
-  const trail = parameters('trail');
-  if (detail.value?.item?.target && key(detail.value.item.target) !== key(target)) trail.push(JSON.stringify({ ...route.query, trail: undefined }));
-  await router.push({ path: '/', query: { ...route.query, origin: route.query.asset ? route.query.origin : JSON.stringify({...route.query,origin:undefined}), localSearch: undefined, localKind: undefined, localFilter: undefined, localCursor: undefined, trail: trail.length ? trail : undefined, asset: target.assetId, incarnation: target.incarnation } });
+  if (!detail.value) { returnQuery = { ...selection }; listScroll = window.scrollY; listQuery = loadedQuery; listSelection = [...selected.value]; listFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined; }
+  const trail = selection.trail === undefined ? [] : Array.isArray(selection.trail) ? selection.trail.map(String) : [String(selection.trail)];
+  if (detail.value?.item?.target && key(detail.value.item.target) !== key(target)) trail.push(JSON.stringify({ ...selection, trail: undefined }));
+  await router.push({ path: '/', query: { ...selection, origin: selection.asset ? selection.origin : JSON.stringify({...selection,origin:undefined}), localSearch: undefined, localKind: undefined, localFilter: undefined, localCursor: undefined, trail: trail.length ? trail : undefined, asset: target.assetId, incarnation: target.incarnation } });
 }
 async function closeDetail() {
   const trail = parameters('trail'); const parent = trail.pop();
   if (parent) {
     try {
-      const saved: unknown = JSON.parse(parent);
-      if (!saved || typeof saved !== 'object' || !('asset' in saved) || !('incarnation' in saved) || typeof saved.asset !== 'string' || typeof saved.incarnation !== 'string') throw Error('The parent context is invalid');
-      const state = saved as Record<string, unknown>;
-      const restored: LocationQuery = {};
-      for (const [field,value] of Object.entries(state)) {
-        if (typeof value !== 'string' && value !== null && !(Array.isArray(value) && value.every(v => v === null || typeof v === 'string'))) throw Error('The parent selection is invalid');
-        restored[field] = value;
-      }
+      const restored = selectionState(parent);
+      if (typeof restored.asset !== 'string' || typeof restored.incarnation !== 'string') throw Error('The parent context is invalid');
       await router.push({ path: '/', query: { ...restored, trail: trail.length ? trail : undefined } });
     } catch (e) { error.value = String(e); }
   } else if (returnQuery) {const query=returnQuery; returnQuery=undefined; await router.push({path:'/',query});}
   else if (typeof route.query.origin==='string') {
     try {
-      const restored:unknown=JSON.parse(route.query.origin);
-      if (!restored || typeof restored!=='object' || Array.isArray(restored) || !Object.values(restored).every(v=>typeof v==='string'||v===null||(Array.isArray(v)&&v.every(x=>typeof x==='string'||x===null)))) throw Error('The enclosing selection is invalid');
-      await router.push({path:'/',query:restored as LocationQuery});
+      await router.push({path:'/',query:selectionState(route.query.origin)});
     } catch(e){error.value=String(e);}
   }
   else await router.push({ path: '/', query: { ...route.query, asset: undefined, incarnation: undefined, trail: undefined, localSearch: undefined, localKind: undefined, localFilter: undefined, localCursor: undefined } });
@@ -199,7 +191,38 @@ watch(detail, async (value, previous) => {
     else window.scrollTo(0, 0);
   }
 });
-async function saved(target?: AssetRef) { editor.value = ''; notice.value = 'Changes saved to local storage.'; await metadata(); if (target) await open(target); else await load(); }
+function selectionState(encoded: string): LocationQuery {
+  const value: unknown = JSON.parse(encoded);
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !Object.values(value).every(v => typeof v === 'string' || v === null || (Array.isArray(v) && v.every(x => typeof x === 'string' || x === null)))) throw Error('The saved selection is invalid');
+  return value as LocationQuery;
+}
+function withoutContinuation(selection: LocationQuery, origin = true): LocationQuery {
+  const next = { ...selection };
+  delete next.cursor; delete next.localCursor;
+  if (origin && typeof next.origin === 'string') next.origin = JSON.stringify(withoutContinuation(selectionState(next.origin), false));
+  return next;
+}
+async function saved(target?: AssetRef) {
+  editor.value = ''; notice.value = 'Changes saved to local storage.';
+  try {
+    const next = withoutContinuation(route.query);
+    const trail = parameters('trail');
+    if (trail.length) next.trail = trail.map(value => JSON.stringify(withoutContinuation(selectionState(value))));
+    if (returnQuery) returnQuery = withoutContinuation(returnQuery);
+    await metadata();
+    if (target && key(target) !== key(detail.value?.item?.target)) await open(target, next);
+    else {
+      const changed = router.resolve({ path: '/', query: next }).fullPath !== route.fullPath;
+      await router.replace({ path: '/', query: next });
+      if (!changed) await load();
+    }
+  } catch (e) { error.value = String(e); loading.value = false; }
+}
+async function reloadSelection() {
+  const cursor = route.query.asset ? 'localCursor' : 'cursor';
+  if (route.query[cursor] !== undefined) await change({ cursor: undefined });
+  else await load();
+}
 function create() { editing.value = undefined; editor.value = 'asset'; }
 function edit() { editing.value = detail.value?.item; editor.value = 'asset'; }
 async function useView(v: model.SavedView) {
@@ -241,7 +264,7 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <div class="workspace-head"><div><h1>{{ currentTitle }}</h1></div><div class="actions workspace-actions" @keydown.esc="moreActions = false"><div id="workspace-secondary" class="secondary-actions" :class="{ open: moreActions }"><button class="phone-refresh" @click="load" :disabled="loading">Refresh inventory</button><button @click="exportCsv">Export CSV</button><button v-if="identity?.writable" @click="editor = 'import'">Import CSV</button><button v-if="identity?.schemaAdmin" @click="editor = 'schema'">Company fields</button></div><button v-if="identity?.writable" class="primary" @click="create">+ Create resource</button><button class="phone-more" :aria-expanded="moreActions" aria-controls="workspace-secondary" @click="moreActions = !moreActions">More</button></div></div>
 <div class="scopebar"><span class="scope-label">SCOPE</span><template v-if="detail?.item"><strong>{{ detailName || detail.item.target?.assetId.slice(-8) }}</strong><button @click="closeDetail">Enclosing selection</button></template><button v-else-if="query.roots.length" @click="change({ scope: undefined, scopeInc: undefined })">{{ query.roots.length }} selected root{{ query.roots.length === 1 ? '' : 's' }} <span aria-hidden="true">×</span></button><span v-else>All permitted infrastructure</span><small>{{ detail?.item ? 'Local components and known facts' : 'Changing views preserves this scope.' }}</small></div>
 <CategoryNav :view="query.view" :kinds="query.kinds" @select="kinds => change({kind:kinds.length?kinds.map(String):undefined})" />
-<p v-if="notice" class="notice" role="status">{{ notice }}<button aria-label="Dismiss notice" @click="notice = ''">×</button></p><p v-if="error" class="error" role="alert">{{ error }}<button @click="change({ cursor: undefined })">Reload selection</button></p>
+<p v-if="notice" class="notice" role="status">{{ notice }}<button aria-label="Dismiss notice" @click="notice = ''">×</button></p><p v-if="error" class="error" role="alert">{{ error }}<button @click="reloadSelection">Reload selection</button></p>
 <div class="workspace-content" :class="{ split: !!detail?.item }"><section class="inventory" aria-label="Inventory"><div class="inventory-toolbar"><form class="search" @submit.prevent="change({ search: search || undefined })"><input v-model="search" aria-label="Search inventory" placeholder="Search inventory…" maxlength="256"><button>Search</button></form><div class="query-tools"><button aria-label="Resource kinds" @click="editor = 'kinds'">Resource kinds<span v-if="query.kinds.length"> ({{ query.kinds.length }})</span></button><button @click="editor = 'filter'">Add filter<span v-if="query.predicates.length"> ({{ query.predicates.length }})</span></button><label class="check"><input :checked="query.unplaced" type="checkbox" @change="change({ unplaced: ($event.target as HTMLInputElement).checked ? '1' : undefined })">Unplaced</label></div></div>
 <div class="table-meta"><span>{{ page.total.toString() }} resources<span v-if="loading"> · Loading…</span></span><div><button @click="editor = 'columns'">Columns</button><button @click="editor = 'view'">Save view</button><button v-if="activeView" @click="useView(activeView)">Reset adjustments</button><button v-if="identity?.writable && query.view === model.View.NETWORK && actions.allocations.length" @click="allocate">Allocate IP / prefix</button></div></div>
 <div v-if="query.predicates.length" class="selection"><span v-for="(p, index) in query.predicates" :key="index" class="chip">{{ definitions.find(d => d.id === p.field)?.name ?? p.field }} = {{ display(p.value) }}<button :aria-label="`Remove filter ${index + 1}`" @click="filters(query.predicates.filter((_, i) => i !== index))">×</button></span></div>
