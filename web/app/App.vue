@@ -18,6 +18,7 @@ const identity = ref<model.Identity>(); const definitions = ref<model.Definition
 const page = ref(model.Page.create()); const detail = ref<model.Detail>(); const loading = ref(false); const error = ref(''); const notice = ref('');
 const networkCursor = ref<string>(); const networkLoading = ref(false);
 const preparedActions = ref(model.Actions.create());
+const participantRemoval = ref<model.Participant>();
 const actions = computed(() => loading.value ? model.Actions.create() : preparedActions.value);
 const editor = ref<'' | 'asset' | 'schema' | 'import' | 'view' | 'network' | 'bulk' | 'relation' | 'member' | 'filter' | 'kinds' | 'columns' | 'binding'>(''); const editing = ref<model.Item>();
 const initialKind = computed(() => query.value.kinds.length===1 ? query.value.kinds[0] as K : ({ [model.View.OVERVIEW]: K.DEVICE, [model.View.NETWORK]: K.ADDRESS_REFERENCE, [model.View.HARDWARE]: K.DEVICE, [model.View.VIRTUALIZATION]: K.VIRTUAL_MACHINE, [model.View.SERVICES]: K.SERVICE })[query.value.view]);
@@ -259,10 +260,8 @@ function relatedName(target: AssetRef | undefined) {
   const related = detail.value?.related.find(i => key(i.target) === key(target));
   return display(related?.fields.find(f => f.name === 'name')) || target?.assetId.slice(-8);
 }
-async function removeParticipant(participant: model.Participant) {
-  try {
-    await call({ oneofKind: 'member', member: model.Member.create({ address: detail.value?.item?.target, expected: detail.value?.item?.revision, expectedGroup: detail.value?.group?.revision, interface: participant.interface, remove: true }) }, enclosing.value); await saved();
-  } catch (e) { error.value = String(e); }
+function removeParticipant(participant: model.Participant) {
+  participantRemoval.value = participant; editor.value = 'member';
 }
 async function removeRelation(relation: import('./api').Relation) {
   // Navigation can change the focus while this relationship is still visible.
@@ -306,7 +305,7 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <ImportEditor v-if="editor === 'import'" :definitions="definitions" :working="working" @close="editor = ''" @saved="saved" />
 <ViewEditor v-if="editor === 'view' && identity" :query="query" :identity="identity" :existing="activeView" @close="editor = ''" @saved="saved" />
 <NetworkEditor v-if="editor === 'network'" :item="editing" :group="editing ? detail?.group : undefined" :definitions="definitions" :working="editing ? enclosing : working" :allocations="actions.allocations" :view="query.view" @close="editor = ''" @saved="saved" @refresh="load" />
-<MemberEditor v-if="editor === 'member' && detail" :detail="detail" :working="enclosing" @close="editor = ''" @saved="saved" />
+<MemberEditor v-if="editor === 'member' && detail" :detail="detail" :working="enclosing" :removal="participantRemoval" @close="editor = ''; participantRemoval = undefined" @saved="participantRemoval = undefined; saved()" />
 <FilterEditor v-if="editor === 'filter'" :definitions="definitions" :predicates="query.predicates" @close="editor = ''" @apply="filters" />
 <BulkEditor v-if="editor === 'bulk'" :items="selectedItems" :revision="page.revision" :definitions="definitions" :working="working" @close="editor = ''" @saved="saved" />
 <RelationEditor v-if="editor === 'relation' && detail?.item?.target" :target="detail.item.target" :working="enclosing" @close="editor = ''" @saved="saved" />

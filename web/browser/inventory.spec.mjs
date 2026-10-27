@@ -1239,6 +1239,7 @@ test('scoped participants explicitly review allocation group and interface', asy
       for (const [index, root] of [space, prefix].entries()) {
         await page.setViewportSize({ width: index ? 390 : 1440, height: 900 });
         await page.goto(`${server.url}/#/?view=1&scope=${root.assetId}&scopeInc=${root.incarnation}&asset=${target.assetId}&incarnation=${target.incarnation}`);
+        await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `Participant allocation ${sharing}`, exact: true })).toBeVisible();
         await page.getByRole('button', { name: 'Assign participant', exact: true }).click();
         const dialog = page.getByRole('dialog');
         await expect(dialog.getByLabel('Interface', { exact: true }).locator('option')).toHaveCount(1);
@@ -1259,6 +1260,14 @@ test('scoped participants explicitly review allocation group and interface', asy
         await expect(dialog).toBeHidden();
         const detail = (await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail;
         expect(detail.participants.map(p => p.interface)).toEqual([iface]);
+        expect(new URL(page.url()).hash).toContain(`scope=${root.assetId}`);
+        // Undo uses the same explicit peer review, without widening the browsing scope.
+        await page.getByRole('button', { name: 'Remove participant', exact: true }).click();
+        await dialog.getByRole('button', { name: 'Review participant removal', exact: true }).click({ timeout: 3000 });
+        await expect(dialog.getByRole('region', { name: 'Reviewed participant context' })).toContainText('Reviewed uplink');
+        await dialog.getByRole('button', { name: 'Remove participant', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        expect((await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail.participants).toEqual([]);
         expect(new URL(page.url()).hash).toContain(`scope=${root.assetId}`);
       }
     }
