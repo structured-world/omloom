@@ -1,6 +1,138 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
+fn configured_owner_attachment(create_bound: bool) -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let space = create(&store, &actor, K::AddressSpace, "space")?;
+    let owner = create(&store, &actor, K::Interface, "proposed owner")?;
+    let assigned = create(&store, &actor, K::Interface, "assigned owner")?;
+    let canonical = changed(call(
+        &store,
+        &actor,
+        Command::Network(api::Network {
+            kind: K::IpAddress as i32,
+            name: "allocation".into(),
+            cidr: "192.0.2.10/32".into(),
+            address_space: Some(space),
+            ..Default::default()
+        }),
+    )?);
+    call(
+        &store,
+        &actor,
+        Command::Member(api::Member {
+            address: Some(canonical.clone()),
+            interface: Some(assigned.clone()),
+            expected: store.asset(AssetRef::try_from(&canonical)?)?.revision,
+            ..Default::default()
+        }),
+    )?;
+    let address = api::Address {
+        address: Some("192.0.2.10".into()),
+        meaning: Some(api::AddressMeaning::Configured as i32),
+        binding: Some(canonical.clone()),
+        ..Default::default()
+    };
+    let fact = if create_bound {
+        None
+    } else {
+        Some(changed(within(
+            &store,
+            &actor,
+            api::WorkingContext {
+                expected: Some(store.usage()?.revision),
+                ..Default::default()
+            },
+            Command::Address(address.clone()),
+        )?))
+    };
+    let command = if let Some(fact) = &fact {
+        Command::Relation(api::Relationship {
+            relation: Some(wire::Relation {
+                from: Some(owner.clone()),
+                to: Some(fact.clone()),
+                kind: wire::RelationKind::Contains as i32,
+                ..Default::default()
+            }),
+            remove: false,
+        })
+    } else {
+        Command::Address(api::Address {
+            parent: Some(owner.clone()),
+            ..address.clone()
+        })
+    };
+    let before = store.usage()?;
+    let result = within(
+        &store,
+        &actor,
+        api::WorkingContext {
+            expected: Some(before.revision),
+            ..Default::default()
+        },
+        command,
+    );
+    assert!(
+        matches!(result, Err(Error::Conflict)),
+        "conflicting owner accepted: {result:?}"
+    );
+    assert_eq!(
+        store.usage()?,
+        before,
+        "rejected attachment must leave no asset, edge or audit"
+    );
+    if let Some(fact) = &fact {
+        assert!(store.relations(AssetRef::try_from(fact)?, 128)?.is_empty());
+    }
+    // The same transaction accepts the actual assigned interface, without changing the allocation.
+    let command = if let Some(fact) = fact {
+        Command::Relation(api::Relationship {
+            relation: Some(wire::Relation {
+                from: Some(assigned.clone()),
+                to: Some(fact),
+                kind: wire::RelationKind::Contains as i32,
+                ..Default::default()
+            }),
+            remove: false,
+        })
+    } else {
+        Command::Address(api::Address {
+            parent: Some(assigned.clone()),
+            ..address
+        })
+    };
+    within(
+        &store,
+        &actor,
+        api::WorkingContext {
+            expected: Some(before.revision),
+            ..Default::default()
+        },
+        command,
+    )?;
+    assert_eq!(
+        detail(&store, &actor, &canonical)?.participants[0]
+            .interface
+            .as_ref(),
+        Some(&assigned)
+    );
+    Ok(())
+}
+
+// An existing configured reference cannot acquire a parent that contradicts its bound allocation.
+#[test]
+fn configured_reference_rechecks_binding_when_adding_interface_owner() -> TestResult {
+    configured_owner_attachment(false)
+}
+
+// Creation must check the proposed parent after the reference exists inside the same transaction.
+#[test]
+fn configured_reference_rechecks_binding_when_created_with_interface_owner() -> TestResult {
+    configured_owner_attachment(true)
+}
+
 // Assignment order must not bypass configured-reference ownership, including atomic reconciliation.
 #[test]
 fn exclusive_participant_rechecks_existing_configured_references() -> TestResult {

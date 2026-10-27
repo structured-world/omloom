@@ -633,6 +633,13 @@ impl Tx<'_> {
         if let Some((child, parent)) = placement {
             self.check_physical_parent(child, parent, &key)?;
         }
+        if kind == wire::RelationKind::Contains
+            && from_kind == wire::AssetKind::Interface
+            && to_kind == wire::AssetKind::AddressReference
+        {
+            // Validate the proposed owner before either explicit or automatic attachment commits.
+            self.check_bound_address_owner(to, from)?;
+        }
         let mut data = target_props(from);
         data.extend(props([
             ("to_asset", text(to.asset.to_string())),

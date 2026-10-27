@@ -166,6 +166,41 @@ impl Store {
 }
 
 impl Tx<'_> {
+    pub(in super::super) fn check_bound_address_owner(
+        &self,
+        reference: AssetRef,
+        owner: AssetRef,
+    ) -> Result<()> {
+        let Some(fact) = self.get(&format!("network/{}", network::identity(reference)))? else {
+            return Ok(());
+        };
+        if fact.get("meaning") != Some(&text(api::AddressMeaning::Configured.as_str_name())) {
+            return Ok(());
+        }
+        let Some(binding) = fact.get("binding") else {
+            return Ok(());
+        };
+        let binding = network::groups::reference(binding.as_str().ok_or(Error::Corrupt)?)?;
+        let canonical = self
+            .get(&format!("network/{}", network::identity(binding)))?
+            .ok_or(Error::Missing)?;
+        self.check_exclusive_address_owner(&canonical, owner)
+    }
+
+    fn check_exclusive_address_owner(&self, canonical: &Properties, owner: AssetRef) -> Result<()> {
+        if canonical.get("sharing") != Some(&text(api::SharedUse::Exclusive.as_str_name())) {
+            return Ok(());
+        }
+        let binding = super::super::target(canonical)?;
+        let member_owner = network::groups::group_of(canonical)?.unwrap_or(binding);
+        for member in self.children(&format!("members/{}", network::identity(member_owner)))? {
+            if super::super::target(&member)? != owner {
+                return Err(Error::Conflict);
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn preview_address(&self, write: &api::Write) -> Result<()> {
         let request = from_write(write.clone())?;
         if request.binding.is_some() || request.clear_binding {
@@ -419,18 +454,7 @@ impl Tx<'_> {
                         if number(&owner_row, "kind")? != wire::AssetKind::Interface as u64 {
                             continue;
                         }
-                        let member_owner =
-                            network::groups::group_of(&canonical)?.unwrap_or(binding);
-                        let members =
-                            self.children(&format!("members/{}", network::identity(member_owner)))?;
-                        if canonical.get("sharing")
-                            == Some(&text(api::SharedUse::Exclusive.as_str_name()))
-                            && members
-                                .iter()
-                                .any(|r| super::super::target(r).ok() != Some(owner))
-                        {
-                            return Err(Error::Conflict);
-                        }
+                        self.check_exclusive_address_owner(&canonical, owner)?;
                     }
                 }
             }
