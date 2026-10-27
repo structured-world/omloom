@@ -267,6 +267,130 @@ fn virtualization_root_keeps_hosted_hypervisors_without_flattening_guests() -> T
     Ok(())
 }
 
+// A hidden host role cannot hide a permitted guest or leak its value through root membership.
+#[test]
+fn virtualization_root_keeps_guests_when_host_role_is_unreadable() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let host = changed(call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            kind: K::SoftwareInstallation as i32,
+            changes: vec![
+                text_field("name", "restricted host"),
+                text_field(
+                    "virtualization_role",
+                    api::VirtualizationRole::Hypervisor.as_str_name(),
+                ),
+            ],
+            ..Default::default()
+        }),
+    )?);
+    let guest = changed(within(
+        &store,
+        &actor,
+        focused(&store, &host)?,
+        Command::Write(api::Write {
+            kind: K::VirtualMachine as i32,
+            parent: Some(host.clone()),
+            changes: vec![text_field("name", "permitted guest")],
+            ..Default::default()
+        }),
+    )?);
+    let visible_host = changed(call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            kind: K::SoftwareInstallation as i32,
+            changes: vec![
+                text_field("name", "visible host"),
+                text_field(
+                    "virtualization_role",
+                    api::VirtualizationRole::Hypervisor.as_str_name(),
+                ),
+            ],
+            ..Default::default()
+        }),
+    )?);
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    let mut reader = actor.clone();
+    reader.grants[0].read = Fields::Selected(vec!["name".into(), "relations".into()]);
+    reader.grants.push(Grant {
+        scope: Scope::Targets(vec![AssetRef::try_from(&visible_host)?]),
+        read: Fields::Selected(vec!["virtualization_role".into()]),
+        write: Fields::Selected(vec![]),
+        writable: false,
+    });
+    for role in [
+        Some(api::VirtualizationRole::Hypervisor),
+        Some(api::VirtualizationRole::NotHypervisor),
+        None,
+    ] {
+        let expected = detail(&store, &actor, &host)?.item.ok_or("host")?.revision;
+        call(
+            &store,
+            &actor,
+            Command::Write(api::Write {
+                target: Some(host.clone()),
+                expected: Some(expected),
+                kind: K::SoftwareInstallation as i32,
+                changes: vec![wire::Field {
+                    name: "virtualization_role".into(),
+                    value: Some(match role {
+                        Some(role) => wire::field::Value::Text(role.as_str_name().into()),
+                        None => wire::field::Value::Clear(wire::NullValue::NullValue as i32),
+                    }),
+                }],
+                ..Default::default()
+            }),
+        )?;
+        let before = store.usage()?;
+        for kinds in [vec![], vec![K::VirtualMachine as i32]] {
+            let vm_only = !kinds.is_empty();
+            let Reply::Page(page) = call(
+                &store,
+                &reader,
+                Command::Query(api::Query {
+                    view: api::View::Virtualization as i32,
+                    level_only: true,
+                    kinds,
+                    ..query()
+                }),
+            )?
+            else {
+                panic!("page")
+            };
+            assert_eq!(page.total, if vm_only { 1 } else { 2 });
+            let targets: Vec<_> = page
+                .items
+                .iter()
+                .filter_map(|i| i.target.as_ref())
+                .collect();
+            assert!(targets.contains(&&guest));
+            assert!(!targets.contains(&&host));
+            assert_eq!(targets.contains(&&visible_host), !vm_only);
+            assert_eq!(page.items.len() as u64, page.total);
+        }
+        assert_eq!(
+            store.usage()?,
+            before,
+            "permission-filtered reads cannot write"
+        );
+        assert!(
+            !detail(&store, &reader, &host)?
+                .item
+                .ok_or("host")?
+                .fields
+                .iter()
+                .any(|f| f.name == "virtualization_role")
+        );
+    }
+    Ok(())
+}
+
 // Existing direct device placements must not hide a guest behind a filtered hardware parent.
 #[test]
 fn virtualization_root_keeps_device_hosted_vms_visible() -> TestResult {

@@ -582,9 +582,9 @@ impl Store {
                             &mut values,
                             text(api::VirtualizationRole::Hypervisor.as_str_name()),
                         );
-                        // Losing a visible host role must not make its retained guests disappear.
+                        // Only a role-visible enabled installation can group guests in this view.
                         owner.push_str(&format!(
-                            " AND NOT (a.kind={} AND p.kind={} AND {visible} AND (p.virtualization_role IS NULL OR p.virtualization_role<>{enabled}))",
+                            " AND (a.kind<>{} OR p.kind<>{} OR ({visible} AND p.virtualization_role={enabled}))",
                             wire::AssetKind::VirtualMachine as i32,
                             wire::AssetKind::SoftwareInstallation as i32,
                         ));

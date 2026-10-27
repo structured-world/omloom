@@ -72,6 +72,10 @@ to be a hypervisor remain distinct. The Proxmox preset selects its default
 hypervisor role and allows correction. Accepted role is not evidence of live
 health or successful provisioning.
 
+Guests remain discoverable when their installation's virtualization role is
+unknown, disabled or unreadable. Their accepted placement is preserved;
+listing a permitted guest does not disclose a hidden role.
+
 Device, VM and OS installation creation accept up to 16 initial IP facts, with
 optional prefix lengths and local VLAN tags. Unknown interface ownership stays
 unknown. A local VLAN tag is not a canonical VLAN or routing-domain assignment.
