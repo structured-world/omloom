@@ -359,11 +359,16 @@ impl Tx<'_> {
                 .transpose()?
         };
         if let Some(binding) = binding {
-            if request.binding.is_none() {
-                if old.as_ref().and_then(|r| r.get("address")) != data.get("address") {
-                    return Err(Error::Conflict);
-                }
-            } else {
+            if request.binding.is_none()
+                && old.as_ref().and_then(|r| r.get("address")) != data.get("address")
+            {
+                return Err(Error::Conflict);
+            }
+            // Meaning and zone changes must preserve reconciliation even when the mapping is retained.
+            if request.binding.is_some()
+                || old.as_ref().and_then(|r| r.get("meaning")) != data.get("meaning")
+                || old.as_ref().and_then(|r| r.get("zone")) != data.get("zone")
+            {
                 if request.binding.is_some() {
                     let selection = self.selection(context, working, true)?;
                     if selection.focus.is_some() {
@@ -393,8 +398,10 @@ impl Tx<'_> {
                     // RFC 4007 section 6: a host-local zone is not a portable link identity.
                     // An explicit enclosing L2 context is required to resolve the zone.
                     let link = network::groups::reference(&string(&canonical, "link_scope")?)?;
-                    self.selection(context, working, true)?
-                        .contains(link, self)?;
+                    if request.binding.is_some() {
+                        self.selection(context, working, true)?
+                            .contains(link, self)?;
+                    }
                     if address.is_ipv6() && !data.contains_key("zone") {
                         return Err(Error::Incomplete);
                     }

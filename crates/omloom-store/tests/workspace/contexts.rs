@@ -1,6 +1,211 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
+// Retaining a mapping cannot bypass exclusive-interface checks when destination knowledge becomes configuration.
+#[test]
+fn retained_binding_rechecks_configured_owner_without_explicit_rebinding() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let space = create(&store, &actor, K::AddressSpace, "namespace")?;
+    let owner = create(&store, &actor, K::Interface, "reference owner")?;
+    let participant = create(&store, &actor, K::Interface, "allocation participant")?;
+    let canonical = changed(call(
+        &store,
+        &actor,
+        Command::Network(api::Network {
+            kind: K::IpAddress as i32,
+            name: "canonical".into(),
+            cidr: "192.0.2.10/32".into(),
+            address_space: Some(space),
+            ..Default::default()
+        }),
+    )?);
+    call(
+        &store,
+        &actor,
+        Command::Member(api::Member {
+            address: Some(canonical.clone()),
+            interface: Some(participant),
+            expected: store.asset(AssetRef::try_from(&canonical)?)?.revision,
+            ..Default::default()
+        }),
+    )?;
+    let fact = changed(within(
+        &store,
+        &actor,
+        focused(&store, &owner)?,
+        Command::Address(api::Address {
+            address: Some("192.0.2.10".into()),
+            meaning: Some(api::AddressMeaning::Destination as i32),
+            parent: Some(owner),
+            ..Default::default()
+        }),
+    )?);
+    within(
+        &store,
+        &actor,
+        api::WorkingContext {
+            expected: Some(store.usage()?.revision),
+            ..Default::default()
+        },
+        Command::Address(api::Address {
+            target: Some(fact.clone()),
+            expected: Some(1),
+            binding: Some(canonical.clone()),
+            ..Default::default()
+        }),
+    )?;
+    for binding in [Some(canonical), None] {
+        let before = store.usage()?;
+        assert!(
+            matches!(
+                within(
+                    &store,
+                    &actor,
+                    api::WorkingContext {
+                        expected: Some(before.revision),
+                        ..Default::default()
+                    },
+                    Command::Address(api::Address {
+                        target: Some(fact.clone()),
+                        expected: Some(2),
+                        meaning: Some(api::AddressMeaning::Configured as i32),
+                        binding,
+                        ..Default::default()
+                    })
+                ),
+                Err(Error::Conflict)
+            ),
+            "retained and explicit mappings must enforce the same ownership invariant"
+        );
+        assert_eq!(store.usage()?, before);
+    }
+    // An unrelated local description still needs no access to the canonical allocation.
+    let mut local = actor.clone();
+    local.grants = vec![Grant {
+        scope: Scope::Targets(vec![AssetRef::try_from(&fact)?]),
+        read: Fields::All,
+        write: Fields::Selected(vec!["description".into()]),
+        writable: true,
+    }];
+    let mut edit = api::Address {
+        target: Some(fact.clone()),
+        expected: Some(2),
+        changes: vec![text_field("description", "local note")],
+        ..Default::default()
+    };
+    within(
+        &store,
+        &local,
+        focused(&store, &fact)?,
+        Command::Address(edit.clone()),
+    )?;
+    edit.expected = Some(3);
+    let before = store.usage()?;
+    within(
+        &store,
+        &local,
+        focused(&store, &fact)?,
+        Command::Address(edit),
+    )?;
+    assert_eq!(
+        store.usage()?,
+        before,
+        "identical local edits must not write"
+    );
+    assert!(
+        detail(&store, &actor, &fact)?
+            .item
+            .expect("fact")
+            .fields
+            .contains(&text_field(
+                "meaning",
+                api::AddressMeaning::Destination.as_str_name()
+            ))
+    );
+    Ok(())
+}
+
+// Clearing the required IPv6 zone must fail identically for explicit and retained reconciliation.
+#[test]
+fn retained_link_local_binding_requires_zone_after_details_change() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let space = create(&store, &actor, K::AddressSpace, "namespace")?;
+    let link = create(&store, &actor, K::L2Domain, "link")?;
+    let canonical = changed(call(
+        &store,
+        &actor,
+        Command::Network(api::Network {
+            kind: K::IpAddress as i32,
+            name: "canonical".into(),
+            cidr: "fe80::1/128".into(),
+            address_space: Some(space),
+            link: Some(link),
+            ..Default::default()
+        }),
+    )?);
+    let fact = changed(within(
+        &store,
+        &actor,
+        api::WorkingContext {
+            expected: Some(store.usage()?.revision),
+            ..Default::default()
+        },
+        Command::Address(api::Address {
+            address: Some("fe80::1".into()),
+            zone: Some("en0".into()),
+            binding: Some(canonical.clone()),
+            ..Default::default()
+        }),
+    )?);
+    for binding in [Some(canonical.clone()), None] {
+        let before = store.usage()?;
+        assert!(
+            matches!(
+                within(
+                    &store,
+                    &actor,
+                    api::WorkingContext {
+                        expected: Some(before.revision),
+                        ..Default::default()
+                    },
+                    Command::Address(api::Address {
+                        target: Some(fact.clone()),
+                        expected: Some(1),
+                        clear_zone: true,
+                        binding,
+                        ..Default::default()
+                    })
+                ),
+                Err(Error::Incomplete)
+            ),
+            "a reconciled link-local reference cannot lose its zone"
+        );
+        assert_eq!(store.usage()?, before);
+    }
+    within(
+        &store,
+        &actor,
+        focused(&store, &fact)?,
+        Command::Address(api::Address {
+            target: Some(fact.clone()),
+            expected: Some(1),
+            zone: Some("en1".into()),
+            ..Default::default()
+        }),
+    )?;
+    let fields = detail(&store, &actor, &fact)?.item.expect("fact").fields;
+    assert!(fields.contains(&text_field("zone", "en1")));
+    assert!(fields.contains(&text_field(
+        "binding",
+        &format!("{}/{}", canonical.asset_id, canonical.incarnation)
+    )));
+    Ok(())
+}
+
 // Dedicated address semantics cannot be bypassed through ordinary description/company changes.
 #[test]
 fn direct_address_changes_reject_reserved_network_fields() -> TestResult {
