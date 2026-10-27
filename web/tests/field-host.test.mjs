@@ -44,3 +44,31 @@ test('field host reports a missing executable and cleans its data', { timeout: 2
     assert.deepEqual(await readdir(parent), []);
   } finally { await rm(parent, { recursive: true, force: true }); }
 });
+
+test('field host forces an unresponsive child to exit and preserves the test error', { timeout: 5000 }, async t => {
+  // A child ignoring SIGINT must not hang teardown or replace the callback failure.
+  const parent = await mkdtemp(join(tmpdir(), 'omloom-host-shutdown-'));
+  const pidFile = join(parent, 'pid');
+  let pid, rescue;
+  t.after(async () => {
+    clearTimeout(rescue);
+    try {
+      if (Number.isInteger(pid) && pid > 0) {
+        try { process.kill(pid, 'SIGKILL'); } catch (e) { if (e.code !== 'ESRCH') throw e; }
+      }
+    } finally { await rm(parent, { recursive: true, force: true }); }
+  });
+  const script = `process.on('SIGINT', () => {}); require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); console.log('http://127.0.0.1:1'); setInterval(() => {}, 1000);`;
+  const failure = Error('callback failure');
+  const started = performance.now();
+  await assert.rejects(withFieldHost(async () => {
+    pid = Number(await readFile(pidFile, 'utf8'));
+    assert.ok(Number.isInteger(pid) && pid > 0);
+    // Bound the deliberately broken implementation too, without leaving a child behind.
+    rescue = setTimeout(() => process.kill(pid, 'SIGKILL'), 3000);
+    throw failure;
+  }, { parent, command: [process.execPath, '-e', script, '--'] }), e => e === failure);
+  assert.ok(performance.now() - started < 2500, 'shutdown must finish before emergency cleanup');
+  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+  assert.deepEqual(await readdir(parent), ['pid']);
+});

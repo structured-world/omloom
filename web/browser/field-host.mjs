@@ -19,7 +19,12 @@ export async function withFieldHost(run, { command = ['target/debug/omloom-dev']
   }
   finally {
     try {
-      if (child?.pid !== undefined && child.exitCode === null && child.signalCode === null) { const exit = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGINT'); await exit; }
+      if (child?.pid !== undefined && child.exitCode === null && child.signalCode === null) {
+        const exit = new Promise(resolve => child.once('exit', resolve));
+        child.kill('SIGINT');
+        const force = setTimeout(() => child.kill('SIGKILL'), 1000);
+        try { await exit; } finally { clearTimeout(force); }
+      }
     } finally { await rm(data, { recursive: true, force: true }); }
   }
 }
