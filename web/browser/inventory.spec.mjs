@@ -38,7 +38,7 @@ async function create(page, name, kind = 'DEVICE') {
 async function workspaceClient(url) {
   const { buildSync } = await import('esbuild');
   const { GrpcWebFetchTransport } = await import('@protobuf-ts/grpcweb-transport');
-  const built = buildSync({ stdin: { contents: 'export * from "./web/src/generated/omloom/v1/workspace"; export {AssetKind} from "./web/src/generated/omloom/v1/contracts";', resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node' });
+  const built = buildSync({ stdin: { contents: 'export * from "./web/src/generated/omloom/v1/workspace"; export {AssetKind, RelationKind} from "./web/src/generated/omloom/v1/contracts";', resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node' });
   const m = await import('data:text/javascript;base64,' + Buffer.from(built.outputFiles[0].contents).toString('base64'));
   const transport = new GrpcWebFetchTransport({ baseUrl: url, format: 'binary' });
   async function rpc(command, focus) {
@@ -107,6 +107,42 @@ test('a VLAN tag requires an initial IP before a creation request is sent', asyn
       await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
       await expect(dialog).toBeHidden();
       expect(mutations).toBe(sent + 1);
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('relationship review excludes ineligible hypervisors but permits removing their placements', async ({ page }) => {
+  // New placement qualification must not strand an existing placement when the host role changes.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-role-connections-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const make = async (kind, name) => (await rpc({ oneofKind: 'write', write: m.Write.create({ kind, changes: [{ name: 'name', value: { oneofKind: 'text', text: name } }] }) })).mutation.targets[0];
+      const host = await make(m.AssetKind.SOFTWARE_INSTALLATION, `OS ${width}`);
+      const guest = await make(m.AssetKind.VIRTUAL_MACHINE, `Guest ${width}`);
+      await page.setViewportSize({ width, height: 900 });
+      const address = `${server.url}/#/?view=3&asset=${guest.assetId}&incarnation=${guest.incarnation}`;
+      await page.goto(address);
+      await page.getByRole('button', { name: 'Connections in broader scope', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByRole('button', { name: 'Choose connection endpoints', exact: true }).click();
+      await dialog.getByLabel('Other endpoint', { exact: true }).selectOption(`${host.assetId}/${host.incarnation}`);
+      await dialog.getByRole('button', { name: 'Review connection', exact: true }).click();
+      await expect(dialog.getByLabel('Relationship', { exact: true }).locator('option')).toHaveText(['Choose the relationship meaning', 'contains']);
+      await dialog.getByRole('button', { name: 'Return to resource', exact: true }).click();
+      await rpc({ oneofKind: 'write', write: m.Write.create({ target: host, kind: m.AssetKind.SOFTWARE_INSTALLATION, expected: 1n, changes: [{ name: 'virtualization_role', value: { oneofKind: 'text', text: 'VIRTUALIZATION_ROLE_HYPERVISOR' } }] }) });
+      await rpc({ oneofKind: 'relation', relation: m.Relationship.create({ relation: { from: guest, to: host, kind: m.RelationKind.RUNS_ON } }) });
+      await rpc({ oneofKind: 'write', write: m.Write.create({ target: host, kind: m.AssetKind.SOFTWARE_INSTALLATION, expected: 2n, changes: [{ name: 'virtualization_role', value: { oneofKind: 'text', text: 'VIRTUALIZATION_ROLE_NOT_HYPERVISOR' } }] }) });
+      await page.reload();
+      await page.getByRole('button', { name: 'Connections in broader scope', exact: true }).click();
+      await dialog.getByRole('button', { name: 'Review existing connections', exact: true }).click();
+      await dialog.getByRole('button', { name: 'Review removal', exact: true }).click();
+      await expect(dialog.getByRole('button', { name: 'Remove reviewed relationship', exact: true })).toBeEnabled();
+      await dialog.getByRole('button', { name: 'Remove reviewed relationship', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      const remaining = await rpc({ oneofKind: 'read', read: m.Read.create({ target: guest }) });
+      expect(remaining.detail.relations).toHaveLength(0);
     }
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });

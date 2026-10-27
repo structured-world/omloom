@@ -137,6 +137,118 @@ fn legacy_device_role_can_be_cleared_but_never_assigned() -> TestResult {
     Ok(())
 }
 
+// New placement choices require a readable enabled role; retiring the role cannot prevent removal.
+#[test]
+fn relationship_preparation_requires_an_eligible_hypervisor_but_removal_does_not() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let host = create(&store, &actor, K::SoftwareInstallation, "OS")?;
+    let guest = create(&store, &actor, K::VirtualMachine, "Guest")?;
+    let prepare = |context: &Context| -> Result<api::Actions, Error> {
+        let Reply::Actions(actions) = call(
+            &store,
+            context,
+            Command::Prepare(api::Prepare {
+                from: Some(guest.clone()),
+                to: Some(host.clone()),
+                ..Default::default()
+            }),
+        )?
+        else {
+            return Err(Error::Corrupt);
+        };
+        Ok(actions)
+    };
+    let runs_on = wire::RelationKind::RunsOn as i32;
+    let before = store.usage()?;
+    assert!(!prepare(&actor)?.relationships.contains(&runs_on));
+    assert_eq!(store.usage()?, before);
+    for (role, expected) in [
+        ("VIRTUALIZATION_ROLE_NOT_HYPERVISOR", false),
+        ("VIRTUALIZATION_ROLE_HYPERVISOR", true),
+    ] {
+        call(
+            &store,
+            &actor,
+            Command::Write(api::Write {
+                target: Some(host.clone()),
+                expected: Some(store.asset(AssetRef::try_from(&host)?)?.revision),
+                kind: K::SoftwareInstallation as i32,
+                changes: vec![text_field("virtualization_role", role)],
+                ..Default::default()
+            }),
+        )?;
+        let before = store.usage()?;
+        assert_eq!(prepare(&actor)?.relationships.contains(&runs_on), expected);
+        assert_eq!(store.usage()?, before);
+    }
+    let mut hidden = actor.clone();
+    hidden.grants[0].read = Fields::Selected(vec!["name".into(), "relations".into()]);
+    assert!(!prepare(&hidden)?.relationships.contains(&runs_on));
+    call(
+        &store,
+        &actor,
+        Command::Relation(api::Relationship {
+            relation: Some(wire::Relation {
+                from: Some(guest.clone()),
+                to: Some(host.clone()),
+                kind: runs_on,
+                ..Default::default()
+            }),
+            remove: false,
+        }),
+    )?;
+    let Reply::Detail(shown) = call(
+        &store,
+        &actor,
+        Command::Read(api::Read {
+            target: Some(guest.clone()),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("detail")
+    };
+    let relation = shown.relations[0].clone();
+    call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            target: Some(host.clone()),
+            expected: Some(3),
+            kind: K::SoftwareInstallation as i32,
+            changes: vec![wire::Field {
+                name: "virtualization_role".into(),
+                value: Some(wire::field::Value::Clear(wire::NullValue::NullValue as i32)),
+            }],
+            ..Default::default()
+        }),
+    )?;
+    assert!(!prepare(&actor)?.relationships.contains(&runs_on));
+    call(
+        &store,
+        &hidden,
+        Command::Relation(api::Relationship {
+            relation: Some(relation),
+            remove: true,
+        }),
+    )?;
+    let Reply::Detail(shown) = call(
+        &store,
+        &actor,
+        Command::Read(api::Read {
+            target: Some(guest),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("detail")
+    };
+    assert!(shown.relations.is_empty());
+    Ok(())
+}
+
 // A bad address must roll back the whole creation, including placement and earlier facts.
 #[test]
 fn initial_addresses_are_atomic_and_do_not_invent_interfaces_or_vlans() -> TestResult {

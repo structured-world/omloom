@@ -49,7 +49,8 @@ async function prepare() {
     if (!chosen.value?.target) throw Error('Choose the other endpoint');
     const reply = await call({ oneofKind: 'prepare', prepare: model.Prepare.create({ from: source.value, to: target.value }) }, model.WorkingContext.create({ roots: scope.value }));
     if (reply.oneofKind !== 'actions') throw Error('Connection review is unavailable');
-    kinds.value = reply.actions.relationships; revision.value = reply.actions.revision;
+    // Removal reviews the existing edge, even when its target no longer qualifies for new placement.
+    kinds.value = removing.value && editing.value ? [editing.value.kind] : reply.actions.relationships; revision.value = reply.actions.revision;
     if (kind.value === undefined || !kinds.value.includes(kind.value)) kind.value = undefined;
     step.value = 'review';
   } catch (e) { error.value = String(e); } finally { busy.value = false; }

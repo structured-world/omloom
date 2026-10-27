@@ -692,11 +692,9 @@ impl Store {
                     "kind",
                 )? as i32)
                 .map_err(|_| Error::Corrupt)?;
-                let to_kind = wire::AssetKind::try_from(number(
-                    &tx.visible_asset(context, parse_target(Some(to))?)?,
-                    "kind",
-                )? as i32)
-                .map_err(|_| Error::Corrupt)?;
+                let to_row = tx.visible_asset(context, to_ref)?;
+                let to_kind = wire::AssetKind::try_from(number(&to_row, "kind")? as i32)
+                    .map_err(|_| Error::Corrupt)?;
                 if !context.field(from_ref, from_kind as i32, "relations", true)
                     || !context.field(to_ref, to_kind as i32, "relations", true)
                 {
@@ -719,6 +717,15 @@ impl Store {
                     R::DependsOn,
                 ] {
                     if !super::super::inventory::compatible(from_kind, to_kind, kind) {
+                        continue;
+                    }
+                    if kind == R::RunsOn
+                        && from_kind == wire::AssetKind::VirtualMachine
+                        && to_kind == wire::AssetKind::SoftwareInstallation
+                        && (!context.field(to_ref, to_kind as i32, "virtualization_role", false)
+                            || to_row.get("virtualization_role").and_then(Value::as_str)
+                                != Some(api::VirtualizationRole::Hypervisor.as_str_name()))
+                    {
                         continue;
                     }
                     let relation = wire::Relation {
