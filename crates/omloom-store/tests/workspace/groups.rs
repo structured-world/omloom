@@ -1,5 +1,134 @@
 use super::*;
 
+// Archival must preserve usable namespaces and participant identities referenced by current IPAM.
+#[test]
+fn archival_rejects_inbound_ipam_references() -> TestResult {
+    use api::{reply::Result as Reply, request::Command};
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let space = create(&store, &actor, K::AddressSpace, "space")?;
+    let link = create(&store, &actor, K::L2Domain, "LAN")?;
+    let routing = create(&store, &actor, K::Vrf, "routing")?;
+    let interface = create(&store, &actor, K::Interface, "eth0")?;
+    let Reply::Mutation(created) = call(
+        &store,
+        &actor,
+        Command::Network(api::Network {
+            kind: K::IpAddress as i32,
+            name: "address".into(),
+            cidr: "192.0.2.1/24".into(),
+            address_space: Some(space.clone()),
+            link: Some(link.clone()),
+            routing: Some(routing.clone()),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("address");
+    };
+    let address = created.targets[0].clone();
+    call(
+        &store,
+        &actor,
+        Command::Member(api::Member {
+            address: Some(address.clone()),
+            interface: Some(interface.clone()),
+            expected: store.asset(AssetRef::try_from(&address)?)?.revision,
+            ..Default::default()
+        }),
+    )?;
+    for target in [&space, &link, &routing, &interface] {
+        let target = AssetRef::try_from(target)?;
+        let mut asset = store.asset(target)?;
+        let revision = asset.revision;
+        asset.adoption = wire::Adoption::Archived as i32;
+        let before = store.usage()?;
+        assert!(matches!(
+            store.save_asset(
+                &admit(wire::record::Body::Asset(asset)),
+                Some(revision),
+                "operator",
+                200
+            ),
+            Err(Error::Conflict)
+        ));
+        assert_eq!(store.usage()?, before);
+        assert_eq!(
+            store.asset(target)?.adoption,
+            wire::Adoption::Adopted as i32
+        );
+        let Reply::Detail(detail) = call(
+            &store,
+            &actor,
+            Command::Read(api::Read {
+                target: Some(address.clone()),
+                ..Default::default()
+            }),
+        )?
+        else {
+            panic!("detail");
+        };
+        assert_eq!(detail.participants[0].interface.as_ref(), Some(&interface));
+    }
+    Ok(())
+}
+
+// An empty shared group still owns its L2 protocol scope after the last address is removed.
+#[test]
+fn archival_rejects_address_group_link_reference() -> TestResult {
+    use api::{reply::Result as Reply, request::Command};
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let space = create(&store, &actor, K::AddressSpace, "space")?;
+    let link = create(&store, &actor, K::L2Domain, "LAN")?;
+    let Reply::Mutation(created) = call(
+        &store,
+        &actor,
+        Command::Network(api::Network {
+            kind: K::IpAddress as i32,
+            name: "VIP".into(),
+            cidr: "192.0.2.1/24".into(),
+            address_space: Some(space),
+            link: Some(link.clone()),
+            sharing: api::SharedUse::Vrrp as i32,
+            group_name: "routers".into(),
+            vrid: Some(7),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("address");
+    };
+    call(
+        &store,
+        &actor,
+        Command::Bulk(api::Bulk {
+            targets: vec![created.targets[0].clone()],
+            expected: store.usage()?.revision,
+            remove: true,
+            changes: Vec::new(),
+        }),
+    )?;
+    let target = AssetRef::try_from(&link)?;
+    let mut asset = store.asset(target)?;
+    let revision = asset.revision;
+    asset.adoption = wire::Adoption::Archived as i32;
+    let before = store.usage()?;
+    assert!(matches!(
+        store.save_asset(
+            &admit(wire::record::Body::Asset(asset)),
+            Some(revision),
+            "operator",
+            200
+        ),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // Network-only grants may edit settings while an echoed, readable name stays unchanged.
 #[test]
 fn network_settings_do_not_require_unchanged_name_permission() -> TestResult {

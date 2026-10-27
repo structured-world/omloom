@@ -711,6 +711,22 @@ impl Tx<'_> {
         {
             return Err(Error::Conflict);
         }
+        self.require_no_ipam_references(target)
+    }
+
+    pub(super) fn require_no_ipam_references(&self, target: AssetRef) -> Result<()> {
+        let references = self.query("MATCH (n:OmRow {parent:'networks'}) WHERE $scope IN [n.address_space,n.link_scope,n.routing_context,n.group,n.binding] RETURN properties(n) AS p LIMIT 1", params([("scope", text(identity(target)))]))?;
+        if !references.is_empty() {
+            return Err(Error::Conflict);
+        }
+        let groups = self.query("MATCH (n:OmRow {parent:'address-groups'}) WHERE n.link_scope=$scope RETURN properties(n) AS p LIMIT 1", params([("scope", text(identity(target)))]))?;
+        if !groups.is_empty() {
+            return Err(Error::Conflict);
+        }
+        let memberships = self.query("MATCH (n:OmRow) WHERE n.parent STARTS WITH 'members/' AND n.asset=$asset AND n.incarnation=$incarnation RETURN properties(n) AS p LIMIT 1", params([("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string()))]))?;
+        if !memberships.is_empty() {
+            return Err(Error::Conflict);
+        }
         Ok(())
     }
 
