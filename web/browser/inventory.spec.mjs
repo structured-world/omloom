@@ -700,6 +700,41 @@ test('broader connections page beyond 25 peers and remove a later relationship',
   } finally { await server.stop(); await rm(dir,{recursive:true,force:true}); }
 });
 
+test('visible relationship removal keeps its endpoints during navigation on desktop and phone', async ({ page }) => {
+  // A pending detail navigation must not change the context of an action still shown on screen.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-relation-navigation-'));
+  const server = await host(dir);
+  let release;
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const parent = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: [{ name: 'name', value: { oneofKind: 'text', text: `Parent ${width}` } }] }) })).mutation.targets[0];
+      const child = (await rpc({ oneofKind: 'write', write: m.Write.create({ parent, kind: m.AssetKind.PORT, changes: [{ name: 'name', value: { oneofKind: 'text', text: `Port ${width}` } }] }) }, parent)).mutation.targets[0];
+      let held = false;
+      const gate = new Promise(resolve => { release = resolve; });
+      await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+        const bytes = route.request().postDataBuffer();
+        const command = bytes ? m.Request.fromBinary(bytes.subarray(5)).command : undefined;
+        if (!held && command?.oneofKind === 'query' && command.query.focus?.assetId === child.assetId) { held = true; await gate; }
+        await route.continue();
+      });
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${server.url}/#/?asset=${parent.assetId}&incarnation=${parent.incarnation}`);
+      const details = page.getByRole('region', { name: 'Resource details' });
+      await details.getByRole('button', { name: `has port · Port ${width}`, exact: true }).click();
+      await expect.poll(() => held).toBe(true);
+      await expect(details.getByRole('heading', { name: `Parent ${width}`, exact: true })).toBeVisible();
+      await details.getByRole('button', { name: 'Remove relationship', exact: true }).click();
+      await expect(details.getByRole('heading', { name: `Port ${width}`, exact: true })).toBeVisible();
+      await expect(page.getByRole('alert')).toHaveCount(0);
+      const result = await rpc({ oneofKind: 'read', read: m.Read.create({ target: parent }) });
+      expect(result.detail.relations).toHaveLength(0);
+      release(); release = undefined;
+      await page.unrouteAll({ behavior: 'wait' });
+    }
+  } finally { release?.(); await page.unrouteAll({ behavior: 'wait' }); await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('peer connection review preserves the resource context through edit and removal', async ({ page }) => {
   // Local details must never silently expose peers or edit an unseen old endpoint.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-peer-ui-')); const server = await host(dir);

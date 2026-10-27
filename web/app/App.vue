@@ -265,7 +265,9 @@ async function removeParticipant(participant: model.Participant) {
   } catch (e) { error.value = String(e); }
 }
 async function removeRelation(relation: import('./api').Relation) {
-  try { await call({ oneofKind: 'relation', relation: { relation, remove: true } }, working.value); await saved(); } catch (e) { error.value = String(e); }
+  // Navigation can change the focus while this relationship is still visible.
+  const roots = [relation.from, relation.to].filter((target): target is AssetRef => !!target);
+  try { await call({ oneofKind: 'relation', relation: { relation, remove: true } }, model.WorkingContext.create({ roots, expected: page.value.revision })); await saved(); } catch (e) { error.value = String(e); }
 }
 function allocate() { editing.value = undefined; editor.value = 'network'; }
 watch(() => route.fullPath, load);
