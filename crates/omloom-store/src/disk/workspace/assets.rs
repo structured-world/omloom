@@ -749,6 +749,10 @@ impl Store {
                 });
             }
         }
+        if network_scope {
+            predicate_joins.push(format!(" WITH {}, 'network/'+a.asset+'/'+a.incarnation AS scope_key OPTIONAL MATCH (ns:OmRow) WHERE ns.key=scope_key",bindings.join(", ")));
+            bindings.push("ns".into());
+        }
         if query.unplaced {
             predicate_joins.push(format!(
                 " WITH {} WHERE {}",
@@ -756,7 +760,7 @@ impl Store {
                 clauses.join(" AND ")
             ));
             clauses.clear();
-            // Preserve every search binding before the two indexed placement probes.
+            // Preserve search and namespace bindings before the indexed placement probes.
             for (path, kinds, flag) in [
                 (
                     "(probe:OmRow {key:a.key})-[:OmRelationFrom]->(placement:OmRow)",
@@ -776,10 +780,6 @@ impl Store {
                 bindings.push(flag.into());
                 clauses.push(format!("NOT {flag}"));
             }
-        }
-        if network_scope {
-            predicate_joins.push(format!(" WITH {}, 'network/'+a.asset+'/'+a.incarnation AS scope_key OPTIONAL MATCH (ns:OmRow) WHERE ns.key=scope_key",bindings.join(", ")));
-            bindings.push("ns".into());
         }
         // Separate MATCH clauses make the key equality an indexed correlated
         // lookup. A comma-separated pattern materializes a Cartesian product.
@@ -1055,6 +1055,26 @@ impl Store {
         let tx = self.begin()?;
         let selection = tx.selection(context, working, false)?;
         selection.contains(target, &tx)?;
+        if read.network_cursor.is_some() {
+            if read.relations_cursor.is_some() {
+                return Err(Error::Invalid);
+            }
+            let row = tx.visible_asset(context, target)?;
+            let mut detail = api::Detail::default();
+            tx.read_network_page(
+                context,
+                target,
+                number(&row, "kind")? as i32,
+                working,
+                read.network_cursor.as_deref(),
+                &mut detail,
+            )?;
+            tx.commit()?;
+            if self.usage()?.revision != basis {
+                return Err(Error::Expired);
+            }
+            return Ok(detail);
+        }
         let asset = self.asset(target)?;
         if asset.adoption != wire::Adoption::Adopted as i32 {
             return Err(Error::Missing);
@@ -1156,21 +1176,12 @@ impl Store {
         };
         let (participants, participants_complete, group) =
             self.workspace_network_fields(context, target, asset.kind, &mut fields)?;
-        let host_network = if read.relations_cursor.is_none() {
-            tx.read_host_network(context, target, asset.kind)?
-        } else {
-            Vec::new()
-        };
         let current_addresses = if read.relations_cursor.is_none() {
             tx.current_addresses(context, target, asset.kind)?
         } else {
             Vec::new()
         };
-        tx.commit()?;
-        if self.usage()?.revision != basis {
-            return Err(Error::Expired);
-        }
-        Ok(api::Detail {
+        let mut detail = api::Detail {
             item: Some(api::Item {
                 target: Some(target_wire(target)),
                 kind: asset.kind,
@@ -1184,10 +1195,19 @@ impl Store {
             participants_complete,
             group,
             related,
-            host_network,
+            host_network: Vec::new(),
             current_addresses,
             relations_next,
-        })
+            network_next: None,
+        };
+        if read.relations_cursor.is_none() {
+            tx.read_network_page(context, target, asset.kind, working, None, &mut detail)?;
+        }
+        tx.commit()?;
+        if self.usage()?.revision != basis {
+            return Err(Error::Expired);
+        }
+        Ok(detail)
     }
 
     pub(super) fn workspace_write(
@@ -1620,7 +1640,7 @@ impl Tx<'_> {
     }
 }
 
-fn query_fingerprint(query: &api::Query, context: &Context) -> String {
+pub(super) fn query_fingerprint(query: &api::Query, context: &Context) -> String {
     let mut canonical = query.clone();
     canonical.cursor = None;
     let mut digest = Sha256::new();

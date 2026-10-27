@@ -134,6 +134,46 @@ fn unplaced_search_keeps_ip_binding() -> TestResult {
     unplaced_search_matches("192.0.2.5")
 }
 
+// Placement probes must also preserve the namespace lookup used by scoped IPAM.
+#[test]
+fn unplaced_keeps_network_namespace_binding() -> TestResult {
+    use api::{reply::Result as Reply, request::Command};
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let space = create(&store, &actor, K::AddressSpace, "space")?;
+    let Reply::Mutation(ip) = call(
+        &store,
+        &actor,
+        Command::Network(api::Network {
+            kind: K::IpAddress as i32,
+            name: "address".into(),
+            cidr: "192.0.2.5/32".into(),
+            address_space: Some(space.clone()),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("allocation");
+    };
+    let Reply::Page(page) = call(
+        &store,
+        &actor,
+        Command::Query(api::Query {
+            roots: vec![space],
+            kinds: vec![K::IpAddress as i32],
+            unplaced: true,
+            ..query()
+        }),
+    )?
+    else {
+        panic!("page");
+    };
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].target.as_ref(), Some(&ip.targets[0]));
+    Ok(())
+}
+
 // Physical containment and port ownership exclude children, while roots remain selectable.
 #[test]
 fn unplaced_excludes_contained_and_port_hardware() -> TestResult {

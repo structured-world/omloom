@@ -441,6 +441,7 @@ fn dense_container_opens_without_enumerating_its_children() -> TestResult {
                     command: Some(Command::Read(api::Read {
                         target: Some(host.clone()),
                         relations_cursor: Some(cursor),
+                        network_cursor: None,
                     })),
                 },
                 100,

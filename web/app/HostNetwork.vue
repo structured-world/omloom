@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { model, type AssetRef } from './api';
 const props = defineProps<{ evidence: model.HostNetworkView }>();
 const emit = defineEmits<{ open: [target: AssetRef | undefined] }>();
@@ -20,6 +20,7 @@ function policy(kind:model.FirewallSetting_Kind) {
   return fact?.value.oneofKind==='policy' ? `${fact.value.policy.enabled?'Enabled':'Disabled'} · Observed ${new Date(Number(fact.observedAt)).toLocaleString()}` : 'Unknown';
 }
 function reset() { page.value = 0; }
+watch(() => props.evidence, reset);
 </script>
 <template><section v-if="coverage" class="host-network" aria-label="Local network observations">
 <h3>Local network observations</h3><p class="hint">{{ coverage.source }} · Latest collection {{ new Date(Number(coverage.observedAt)).toLocaleString() }}. Each fact keeps its own observation date. Dated source evidence, not live reachability.</p>

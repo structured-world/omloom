@@ -89,6 +89,12 @@ evidence bounds are eight sources and 2,048 total facts/256 KiB of value payload
 per installation; interface addresses have eight sources and 64 total claims.
 Storage admission additionally charges keys, metadata and indexes under their
 own budgets. These are development ceilings, not supported production sizing.
+Resource reads paginate network observations within the complete 512 KiB reply
+budget. Continuations are bound to the target, working context, authority and
+current revision. They return only the next evidence page, including exact
+per-fact dates and basis, source coverage and labels needed for its listeners.
+The inspector replaces its current evidence page; counts and filters apply to
+that page. Reading or continuing does not write history or freshness metadata.
 
 The on-disk migration preserves existing observations. Earlier partial
 interface collections did not retain individual dates; migrated values show

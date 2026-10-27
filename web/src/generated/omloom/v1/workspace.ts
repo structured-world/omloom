@@ -385,6 +385,13 @@ export interface Read {
      * @generated from protobuf field: optional string relations_cursor = 2
      */
     relationsCursor?: string;
+    /**
+     * Server-issued network-evidence continuation, bound to this target, working
+     * context, authority and current revision. Cannot accompany relations_cursor.
+     *
+     * @generated from protobuf field: optional string network_cursor = 3
+     */
+    networkCursor?: string;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Detail
@@ -458,6 +465,14 @@ export interface Detail {
      * @generated from protobuf field: optional string relations_next = 11
      */
     relationsNext?: string;
+    /**
+     * Next byte-bounded network-evidence page, absent at the end. Continuation
+     * responses contain only host_network and this cursor. Counts and filters
+     * apply to the supplied page; coverage retains its source-collection meaning.
+     *
+     * @generated from protobuf field: optional string network_next = 12
+     */
+    networkNext?: string;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.AddressObservation
@@ -2309,7 +2324,8 @@ class Read$Type extends MessageType<Read> {
     constructor() {
         super("omloom.workspace.v1.Read", [
             { no: 1, name: "target", kind: "message", T: () => AssetRef },
-            { no: 2, name: "relations_cursor", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 2, name: "relations_cursor", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "network_cursor", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
         ]);
     }
 }
@@ -2331,7 +2347,8 @@ class Detail$Type extends MessageType<Detail> {
             { no: 8, name: "related", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Item },
             { no: 9, name: "host_network", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostNetworkView },
             { no: 10, name: "current_addresses", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => InterfaceAddressView },
-            { no: 11, name: "relations_next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 11, name: "relations_next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 12, name: "network_next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
         ]);
     }
 }

@@ -47,6 +47,92 @@ async function workspaceClient(url) {
   return { m, rpc };
 }
 
+test('Unplaced combines with text and scoped address search in the browser', async ({ page }) => {
+  // Search and namespace bindings must survive toggling the physical-placement filter.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-unplaced-search-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'needle' } }] }) });
+    const space = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.ADDRESS_SPACE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'space' } }] }) })).mutation.targets[0];
+    await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.IP_ADDRESS, name: 'Address', cidr: '192.0.2.5/32', addressSpace: space }) });
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${server.url}/#/?view=${m.View.HARDWARE}`);
+      await page.getByRole('checkbox', { name: 'Unplaced', exact: true }).check();
+      await page.getByRole('textbox', { name: 'Search inventory', exact: true }).fill('needle');
+      await page.getByRole('button', { name: 'Search', exact: true }).click();
+      await expect(page.getByRole('button', { name: 'needle', exact: true })).toBeVisible();
+      await page.goto(`${server.url}/#/?view=${m.View.NETWORK}&unplaced=1&scope=${space.assetId}&scopeInc=${space.incarnation}`);
+      await page.getByRole('textbox', { name: 'Search inventory', exact: true }).fill('192.0.2.5');
+      await page.getByRole('button', { name: 'Search', exact: true }).click();
+      await expect(page.getByRole('button', { name: 'Address', exact: true })).toBeVisible();
+      await expect(page.getByRole('alert')).toHaveCount(0);
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('VLAN allocated inside an L2 domain remains visible on desktop and phone', async ({ page }) => {
+  // The form, namespace query and detail navigation must use the same L2 containment.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-l2-vlan-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const parent = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.L2_DOMAIN, changes: [{ name: 'name', value: { oneofKind: 'text', text: `LAN ${width}` } }] }) })).mutation.targets[0];
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${server.url}/#/?asset=${parent.assetId}&incarnation=${parent.incarnation}&view=${m.View.NETWORK}`);
+      await page.getByRole('button', { name: 'Allocate IP / prefix', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByLabel('Name', { exact: true }).fill(`VLAN ${width}`);
+      await dialog.getByLabel('VLAN ID', { exact: true }).fill('10');
+      await dialog.getByRole('button', { name: 'Allocate', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      await page.getByRole('button', { name: `VLAN ${width}`, exact: true }).click();
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `VLAN ${width}`, exact: true })).toBeVisible();
+      await page.getByRole('button', { name: width === 390 ? 'Back to parent' : 'Enclosing selection', exact: true }).click();
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `LAN ${width}`, exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: `VLAN ${width}`, exact: true })).toBeVisible();
+      await expect(page.getByRole('alert')).toHaveCount(0);
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('large network evidence pages cross the real transport on desktop and phone', async ({ page }) => {
+  // Accepted partial batches must remain accessible without truncating facts or their evidence dates.
+  test.setTimeout(90_000);
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-evidence-pages-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const target = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.SOFTWARE_INSTALLATION, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Observed OS' } }] }) })).mutation.targets[0];
+    for (let base = 0; base < 2048; base += 128) await rpc({ oneofKind: 'hostNetwork', hostNetwork: m.HostNetwork.create({ installation: target, source: 'collector', basis: 'b'.repeat(128), observedAt: BigInt(100 + base), socketCoverage: 'not collected', routeCoverage: 'not collected', applicationCoverage: 'verified', packetFilterCoverage: 'not collected', rules: Array.from({ length: 128 }, (_, i) => ({ subject: String(base + i).padStart(4,'0') + 'x'.repeat(96), action: 'allow incoming' })) }) }, target);
+    const first = (await rpc({ oneofKind: 'read', read: m.Read.create({ target }) }, target)).detail;
+    expect(first.networkNext).toBeDefined();
+    const next = (await rpc({ oneofKind: 'read', read: m.Read.create({ target, networkCursor: first.networkNext }) }, target)).detail;
+    for (const detail of [first, next]) expect(m.Reply.toBinary(m.Reply.create({ result: { oneofKind: 'detail', detail } })).length).toBeLessThanOrEqual(512 * 1024);
+    expect(next.item).toBeUndefined();
+    const facts = [...first.hostNetwork, ...next.hostNetwork].flatMap(source => source.observations);
+    expect(facts).toHaveLength(2048);
+    expect(new Set(facts.map(o => o.value.rule.subject)).size).toBe(2048);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(server.url);
+      await expect(page.getByRole('button', { name: 'Observed OS', exact: true })).toBeVisible();
+      await page.goto(`${server.url}/#/?asset=${target.assetId}&incarnation=${target.incarnation}`);
+      await page.getByRole('button', { name: /^Firewall \(/ }).click();
+      await page.getByRole('button', { name: 'Next evidence page', exact: true }).click();
+      await expect(page.getByRole('button', { name: 'First evidence page', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Next evidence page', exact: true })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: `Firewall (${next.hostNetwork[0].observations.length})`, exact: true })).toBeVisible();
+      await page.getByRole('button', { name: 'First evidence page', exact: true }).click();
+      await expect(page.getByRole('button', { name: 'Next evidence page', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: `Firewall (${first.hostNetwork[0].observations.length})`, exact: true })).toBeVisible();
+      await expect(page.getByRole('alert')).toHaveCount(0);
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('saved mutation reports metadata refresh failure without an unhandled rejection', async ({ page }) => {
   // Only the post-save metadata request fails; the write still reaches the real host and disk.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-save-refresh-'));

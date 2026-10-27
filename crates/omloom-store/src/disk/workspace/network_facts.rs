@@ -175,7 +175,131 @@ pub(super) fn socket_layer(service: AssetRef) -> String {
 }
 const PARTS: [&str; 4] = ["sockets", "routes", "rules", "policies"];
 
+struct NetworkSource {
+    coverage: Option<api::HostNetwork>,
+    observations: Vec<api::NetworkObservation>,
+    // None marks a known label already moved into the output page.
+    services: BTreeMap<AssetRef, Option<api::OwnerContext>>,
+}
+
 impl Tx<'_> {
+    pub(super) fn read_network_page(
+        &self,
+        context: &Context,
+        target: AssetRef,
+        kind: i32,
+        working: &api::WorkingContext,
+        cursor: Option<&str>,
+        detail: &mut api::Detail,
+    ) -> Result<()> {
+        let revision = number(&self.root, "revision")?;
+        let fingerprint = assets::query_fingerprint(
+            &api::Query {
+                roots: working.roots.clone(),
+                focus: Some(target_wire(target)),
+                search: format!("network/{:?}", working.focus),
+                ..Default::default()
+            },
+            context,
+        );
+        let mut offset = 0usize;
+        if let Some(cursor) = cursor {
+            if cursor.len() > 256 {
+                return Err(Error::Invalid);
+            }
+            let parts: Vec<_> = cursor.split(':').collect();
+            if parts.len() != 4
+                || parts[0].parse::<u64>().ok() != Some(revision)
+                || parts[1] != fingerprint
+                || parts[2].parse::<u64>().ok() != Some(context.authority_revision)
+            {
+                return Err(Error::Expired);
+            }
+            offset = parts[3].parse().map_err(|_| Error::Invalid)?;
+            if offset > current_facts::MAX_FACTS {
+                return Err(Error::Invalid);
+            }
+        }
+        // Reserve the cursor and outer Reply envelope. Track wire sizes without
+        // re-encoding growing pages or copying observation payloads.
+        let cursor_bytes = 3 * 20 + 3 + fingerprint.len();
+        let mut bytes =
+            detail.encoded_len() + 1 + prost::length_delimiter_len(cursor_bytes) + cursor_bytes;
+        let limit = MAX_REPLY_BYTES - 1 - prost::length_delimiter_len(MAX_REPLY_BYTES);
+        if bytes > limit {
+            return Err(Error::Limit);
+        }
+        // Reject stale cursors and oversized base details before reading facts.
+        let mut sources = self.read_host_network(context, target, kind)?;
+        debug_assert!(detail.host_network.is_empty());
+        detail.host_network = sources
+            .iter_mut()
+            .map(|source| {
+                let view = api::HostNetworkView {
+                    coverage: source.coverage.take(),
+                    ..Default::default()
+                };
+                let size = view.encoded_len();
+                bytes += 1 + prost::length_delimiter_len(size) + size;
+                view
+            })
+            .collect();
+        if bytes > limit {
+            return Err(Error::Limit);
+        }
+        let mut position = 0;
+        let mut emitted = 0;
+        let mut more = false;
+        'sources: for (source, page) in sources.into_iter().zip(&mut detail.host_network) {
+            let mut labels = source.services;
+            let mut view_bytes = page.encoded_len();
+            for observation in source.observations {
+                position += 1;
+                if position <= offset {
+                    continue;
+                }
+                let mut absent = None;
+                let label = if let Some(Fact::Socket(socket)) = &observation.value {
+                    labels
+                        .get_mut(&parse_target(socket.service.as_ref())?)
+                        .ok_or(Error::Corrupt)?
+                } else {
+                    &mut absent
+                };
+                let size = observation.encoded_len();
+                let mut addition = 1 + prost::length_delimiter_len(size) + size;
+                if let Some(label) = label {
+                    let size = label.encoded_len();
+                    addition += 1 + prost::length_delimiter_len(size) + size;
+                }
+                let next_view = view_bytes + addition;
+                let delta = addition + prost::length_delimiter_len(next_view)
+                    - prost::length_delimiter_len(view_bytes);
+                if bytes + delta > limit {
+                    if emitted == 0 {
+                        return Err(Error::Limit);
+                    }
+                    more = true;
+                    break 'sources;
+                }
+                bytes += delta;
+                view_bytes = next_view;
+                page.observations.push(observation);
+                if let Some(label) = label.take() {
+                    page.services.push(label);
+                }
+                emitted += 1;
+            }
+        }
+        if more {
+            detail.network_next = Some(format!(
+                "{revision}:{fingerprint}:{}:{}",
+                context.authority_revision,
+                offset + emitted
+            ));
+        }
+        Ok(())
+    }
     fn network_service_labels(
         &self,
         context: &Context,
@@ -336,12 +460,12 @@ impl Tx<'_> {
         Ok(())
     }
 
-    pub(super) fn read_host_network(
+    fn read_host_network(
         &self,
         context: &Context,
         target: AssetRef,
         kind: i32,
-    ) -> Result<Vec<api::HostNetworkView>> {
+    ) -> Result<Vec<NetworkSource>> {
         let installation = if kind == wire::AssetKind::SoftwareInstallation as i32 {
             target
         } else if kind == wire::AssetKind::Service as i32 {
@@ -366,7 +490,14 @@ impl Tx<'_> {
             return Ok(Vec::new());
         }
         let mut result = Vec::new();
-        for source in self.fact_rows(&source_parent(installation), current_facts::MAX_SOURCES)? {
+        let mut sources =
+            self.fact_rows(&source_parent(installation), current_facts::MAX_SOURCES)?;
+        sources.sort_unstable_by(|a, b| {
+            a.get("key")
+                .and_then(Value::as_str)
+                .cmp(&b.get("key").and_then(Value::as_str))
+        });
+        for source in sources {
             let key = string(&source, "key")?;
             let body = self
                 .get(&format!("{key}/coverage"))?
@@ -380,7 +511,7 @@ impl Tx<'_> {
                 if kind == wire::AssetKind::Service as i32 && i != 0 {
                     continue;
                 }
-                let rows = if kind == wire::AssetKind::Service as i32 {
+                let mut rows = if kind == wire::AssetKind::Service as i32 {
                     self.query("MATCH (n:OmRow {layer:$layer}) WHERE n.parent=$parent RETURN properties(n) AS p LIMIT 2049",params([("layer",text(socket_layer(target))),("parent",text(format!("{key}/{part}")))]))?
                 } else {
                     self.fact_rows(&format!("{key}/{part}"), current_facts::MAX_FACTS)?
@@ -388,6 +519,11 @@ impl Tx<'_> {
                 if rows.len() > current_facts::MAX_FACTS {
                     return Err(Error::Limit);
                 }
+                rows.sort_unstable_by(|a, b| {
+                    a.get("key")
+                        .and_then(Value::as_str)
+                        .cmp(&b.get("key").and_then(Value::as_str))
+                });
                 let windows = self.fact_windows(&rows)?;
                 let labels = if i == 0 {
                     self.network_service_labels(context, installation, &rows)?
@@ -401,13 +537,15 @@ impl Tx<'_> {
                             let socket =
                                 api::SocketBind::decode(payload).map_err(|_| Error::Corrupt)?;
                             let service = parse_target(socket.service.as_ref())?;
-                            if !socket_visible(&socket) || !labels.contains_key(&service) {
+                            if !socket_visible(&socket) {
                                 continue;
                             }
-                            services.insert(
-                                service,
-                                labels.get(&service).ok_or(Error::Corrupt)?.clone(),
-                            );
+                            let Some(label) = labels.get(&service) else {
+                                continue;
+                            };
+                            services
+                                .entry(service)
+                                .or_insert_with(|| Some(label.clone()));
                             Fact::Socket(socket)
                         }
                         1 => {
@@ -438,10 +576,10 @@ impl Tx<'_> {
                 coverage.application_coverage.clear();
                 coverage.packet_filter_coverage.clear();
             }
-            result.push(api::HostNetworkView {
+            result.push(NetworkSource {
                 coverage: Some(coverage),
                 observations,
-                services: services.into_values().collect(),
+                services,
             });
         }
         Ok(result)

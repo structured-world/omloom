@@ -16,6 +16,7 @@ import { call, model, label, display, key, kinds, AssetKind as K, RelationKind, 
 const router = useRouter(); const route = useRoute();
 const identity = ref<model.Identity>(); const definitions = ref<model.Definition[]>([]); const views = ref<model.SavedView[]>([]);
 const page = ref(model.Page.create()); const detail = ref<model.Detail>(); const loading = ref(false); const error = ref(''); const notice = ref('');
+const networkCursor = ref<string>(); const networkLoading = ref(false);
 const preparedActions = ref(model.Actions.create());
 const actions = computed(() => loading.value ? model.Actions.create() : preparedActions.value);
 const editor = ref<'' | 'asset' | 'schema' | 'import' | 'view' | 'network' | 'bulk' | 'relation' | 'member' | 'filter' | 'kinds' | 'columns' | 'binding'>(''); const editing = ref<model.Item>();
@@ -116,17 +117,30 @@ async function load() {
     if (prepared?.oneofKind === 'actions') preparedActions.value = prepared.actions;
     selected.value = selected.value.filter(id => result.page.items.some(item => key(item.target) === id));
     const next = route.query.asset && route.query.incarnation ? await read({ assetId: String(route.query.asset), incarnation: String(route.query.incarnation) }).catch(e=>{if(turn===generation)error.value=String(e);return undefined;}) : undefined;
-    if (turn === generation) detail.value = next;
+    if (turn === generation) { detail.value = next; networkCursor.value = undefined; }
   } catch (e) { if (turn === generation) { page.value = model.Page.create(); detail.value = undefined; error.value = String(e); } } finally { if (turn === generation) loading.value = false; }
 }
 async function metadata() {
   const [i, d, v] = await Promise.all([call({ oneofKind: 'identity', identity: {} }), call({ oneofKind: 'definitions', definitions: {} }), call({ oneofKind: 'views', views: {} })]);
   if (i.oneofKind === 'identity') identity.value = i.identity; if (d.oneofKind === 'definitions') definitions.value = d.definitions.items; if (v.oneofKind === 'views') views.value = v.views.items;
 }
-async function read(target: AssetRef, relationsCursor?: string) {
-  const result = await call({ oneofKind: 'read', read: { target, relationsCursor } }, model.WorkingContext.create({ roots: query.value.roots, focus: target }));
+async function read(target: AssetRef, relationsCursor?: string, networkCursor?: string) {
+  const result = await call({ oneofKind: 'read', read: { target, relationsCursor, networkCursor } }, model.WorkingContext.create({ roots: query.value.roots, focus: target }));
   if (result.oneofKind !== 'detail') throw Error('Unexpected resource response');
   return result.detail;
+}
+async function networkEvidence(cursor?: string) {
+  const current = detail.value; const target = current?.item?.target;
+  if (!target || networkLoading.value) return;
+  networkLoading.value = true;
+  try {
+    const next = await read(target, undefined, cursor);
+    if (detail.value === current) {
+      detail.value = cursor ? { ...current, hostNetwork: next.hostNetwork, networkNext: next.networkNext } : next;
+      networkCursor.value = cursor;
+    }
+  } catch(e) { error.value = String(e); }
+  finally { networkLoading.value = false; }
 }
 async function nextRelations() {
   const current=detail.value; const target=current?.item?.target;
@@ -278,7 +292,9 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <section v-if="[K.IP_ADDRESS, K.PREFIX, K.VLAN, K.ADDRESS_GROUP].includes(detail.item.kind)"><div class="section-title"><h3>Address allocation</h3><button v-if="identity?.writable" @click="editing = detail.item; editor = 'network'">Review network settings</button><button v-if="identity?.writable && [K.IP_ADDRESS, K.ADDRESS_GROUP].includes(detail.item.kind)" @click="editor = 'member'">Assign participant</button></div><p v-if="detail.group">Shared group: <button @click="open(detail.group.target)">{{ display(detail.group.fields.find(f => f.name === 'name')) }} · {{ detail.group.target?.assetId.slice(-8) }}</button></p><p v-if="!detail.participantsComplete" class="hint">Participant coverage is restricted. Missing participants do not prove the allocation is free.</p><ul><li v-for="p in detail.participants" :key="key(p.interface)"><button @click="open(p.interface)">Interface {{ p.interface?.assetId.slice(-8) }}</button><span v-if="p.priority !== undefined"> · Intended priority {{ p.priority }}</span><button v-if="identity?.writable" @click="removeParticipant(p)">Remove participant</button></li></ul></section>
 <button v-if="detail.item.kind === K.ADDRESS_REFERENCE && identity?.writable" @click="editor = 'binding'">Resolve address in broader scope</button>
 <CurrentAddresses v-for="value in detail.currentAddresses" :key="value.coverage?.source" :value="value" />
+<p v-if="detail.networkNext || networkCursor" class="hint">Showing one bounded evidence page. Observation counts and filters apply to this page.</p>
 <HostNetwork v-for="evidence in detail.hostNetwork" :key="key(detail.item.target)+'/'+evidence.coverage?.source" :evidence="evidence" @open="open" />
+<div v-if="detail.networkNext || networkCursor" class="actions"><button v-if="networkCursor" :disabled="networkLoading" @click="networkEvidence()">First evidence page</button><button v-if="detail.networkNext" :disabled="networkLoading" @click="networkEvidence(detail.networkNext)">Next evidence page</button></div>
 <div class="section-title"><h3>Typed relationships</h3><button v-if="identity?.writable" @click="relations">Connections in broader scope</button></div><p v-if="!detail.relations.length" class="hint">No relationships visible in this scope. This does not establish absence outside it.</p><ul><li v-for="r in detail.relations" :key="r.relationId"><button @click="open(key(r.from) === key(detail.item?.target) ? r.to : r.from)">{{ RelationKind[r.kind]?.replace('RELATION_KIND_', '').toLowerCase().replaceAll('_',' ') }} · {{ relatedName(key(r.from) === key(detail.item?.target) ? r.to : r.from) }}</button><button v-if="identity?.writable" @click="removeRelation(r)">Remove relationship</button></li></ul>
 <button v-if="detail.relationsNext" @click="nextRelations">Next relationships</button>
 <template v-for="section in [{ title: 'Observed evidence', items: detail.observed }, { title: 'Import proposals', items: detail.imported }]" :key="section.title"><h3>{{ section.title }}</h3><p v-if="!section.items.length" class="hint">{{ detail.hostNetwork.length && section.title === 'Observed evidence' ? 'No additional visible field evidence.' : 'No visible current evidence. Accepted values are not observations.' }}</p><div v-for="o in section.items" :key="o.evidence?.sourceId"><p class="mono">Source {{ o.evidence?.sourceId }}</p><dl><template v-for="f in o.evidence?.fields" :key="f.name"><dt>{{ f.name }}</dt><dd>{{ display(f) }}</dd></template></dl></div></template></section>

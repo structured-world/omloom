@@ -173,6 +173,9 @@ message Read {
   omloom.v1.AssetRef target = 1;
   // Server-issued relation continuation, bound to target, context and current revision.
   optional string relations_cursor = 2;
+  // Server-issued network-evidence continuation, bound to this target, working
+  // context, authority and current revision. Cannot accompany relations_cursor.
+  optional string network_cursor = 3;
 }
 message Detail {
   // Current visible inventory fields and edit revision.
@@ -199,6 +202,10 @@ message Detail {
   repeated InterfaceAddressView current_addresses = 10;
   // Next authorized relation page, absent at the end. Each page contains at most 25 relations.
   optional string relations_next = 11;
+  // Next byte-bounded network-evidence page, absent at the end. Continuation
+  // responses contain only host_network and this cursor. Counts and filters
+  // apply to the supplied page; coverage retains its source-collection meaning.
+  optional string network_next = 12;
 }
 
 message AddressObservation {

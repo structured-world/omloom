@@ -1,6 +1,194 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
+// Accepted partial batches must never make the installation inspector exceed its wire budget.
+#[test]
+fn large_network_evidence_remains_readable_within_reply_budget() -> TestResult {
+    use prost::Message;
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let os = create(&store, &actor, K::SoftwareInstallation, "OS")?;
+    let other = create(&store, &actor, K::SoftwareInstallation, "Other OS")?;
+    for base in (0..2048).step_by(128) {
+        scoped(
+            &store,
+            &actor,
+            &os,
+            Command::HostNetwork(api::HostNetwork {
+                installation: Some(os.clone()),
+                source: "collector".into(),
+                basis: "b".repeat(128),
+                observed_at: 100 + base as u64,
+                socket_coverage: "not collected".into(),
+                route_coverage: "not collected".into(),
+                application_coverage: "verified".into(),
+                packet_filter_coverage: "not collected".into(),
+                rules: (base..base + 128)
+                    .map(|index| api::ApplicationRule {
+                        subject: format!("{index:04}{}", "x".repeat(96)),
+                        action: "allow incoming".into(),
+                    })
+                    .collect(),
+                ..Default::default()
+            }),
+        )?;
+    }
+    let before = store.usage()?;
+    let result = call(
+        &store,
+        &actor,
+        Command::Read(api::Read {
+            target: Some(os.clone()),
+            ..Default::default()
+        }),
+    )?;
+    let bytes = api::Reply {
+        result: Some(result.clone()),
+    }
+    .encoded_len();
+    assert!(
+        bytes <= MAX_REPLY_BYTES,
+        "accepted evidence exceeds transport: {bytes}"
+    );
+    let Reply::Detail(mut detail) = result else {
+        panic!("detail");
+    };
+    let first_cursor = detail.network_next.clone().ok_or("expected continuation")?;
+    let mut seen = std::collections::BTreeSet::new();
+    loop {
+        assert!(
+            api::Reply {
+                result: Some(Reply::Detail(detail.clone()))
+            }
+            .encoded_len()
+                <= MAX_REPLY_BYTES
+        );
+        for source in &detail.host_network {
+            for observation in &source.observations {
+                let Some(api::network_observation::Value::Rule(rule)) = &observation.value else {
+                    panic!("rule");
+                };
+                let index: usize = rule.subject[..4].parse()?;
+                assert!(seen.insert(index));
+                assert_eq!(observation.basis, "b".repeat(128));
+                assert_eq!(observation.observed_at, 100 + (index / 128 * 128) as u64);
+            }
+        }
+        let Some(cursor) = detail.network_next else {
+            break;
+        };
+        let Reply::Detail(next) = call(
+            &store,
+            &actor,
+            Command::Read(api::Read {
+                target: Some(os.clone()),
+                network_cursor: Some(cursor),
+                ..Default::default()
+            }),
+        )?
+        else {
+            panic!("detail");
+        };
+        assert!(next.item.is_none());
+        detail = next;
+    }
+    assert_eq!(seen.len(), 2048);
+    assert_eq!(store.usage()?, before);
+    assert!(matches!(
+        call(
+            &store,
+            &actor,
+            Command::Read(api::Read {
+                target: Some(os.clone()),
+                relations_cursor: Some("unused".into()),
+                network_cursor: Some(first_cursor.clone())
+            })
+        ),
+        Err(Error::Invalid)
+    ));
+    assert!(matches!(
+        call(
+            &store,
+            &actor,
+            Command::Read(api::Read {
+                target: Some(os.clone()),
+                relations_cursor: Some(first_cursor.clone()),
+                ..Default::default()
+            })
+        ),
+        Err(Error::Expired)
+    ));
+    assert!(matches!(
+        call(
+            &store,
+            &actor,
+            Command::Read(api::Read {
+                target: Some(other),
+                network_cursor: Some(first_cursor.clone()),
+                ..Default::default()
+            })
+        ),
+        Err(Error::Expired)
+    ));
+    assert!(matches!(
+        store.workspace(
+            &actor,
+            api::Request {
+                working: Some(api::WorkingContext {
+                    focus: Some(os.clone()),
+                    ..Default::default()
+                }),
+                command: Some(Command::Read(api::Read {
+                    target: Some(os.clone()),
+                    network_cursor: Some(first_cursor.clone()),
+                    ..Default::default()
+                }))
+            },
+            100
+        ),
+        Err(Error::Expired)
+    ));
+    let mut changed = actor.clone();
+    changed.authority_revision += 1;
+    assert!(matches!(
+        call(
+            &store,
+            &changed,
+            Command::Read(api::Read {
+                target: Some(os.clone()),
+                network_cursor: Some(first_cursor.clone()),
+                ..Default::default()
+            })
+        ),
+        Err(Error::Expired)
+    ));
+    call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            target: Some(os.clone()),
+            expected: Some(store.asset(AssetRef::try_from(&os)?)?.revision),
+            kind: K::SoftwareInstallation as i32,
+            changes: vec![text_field("description", "changed")],
+            ..Default::default()
+        }),
+    )?;
+    assert!(matches!(
+        call(
+            &store,
+            &actor,
+            Command::Read(api::Read {
+                target: Some(os),
+                network_cursor: Some(first_cursor),
+                ..Default::default()
+            })
+        ),
+        Err(Error::Expired)
+    ));
+    Ok(())
+}
+
 // A service name is optional inventory data; socket ownership remains usable without it.
 #[test]
 fn unnamed_service_network_evidence_remains_readable() -> TestResult {

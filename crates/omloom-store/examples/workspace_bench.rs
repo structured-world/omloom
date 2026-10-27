@@ -150,6 +150,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         before.rows.iter().sum::<u64>()
     );
     projection_cases(&policy, &context)?;
+    network_case(&policy, &context)?;
     Ok(())
 }
 
@@ -271,5 +272,73 @@ fn projection_cases(policy: &Policy, context: &Context) -> Result<(), Box<dyn Er
         );
         assert_eq!(store.usage()?, before);
     }
+    Ok(())
+}
+
+fn network_case(policy: &Policy, context: &Context) -> Result<(), Box<dyn Error>> {
+    use api::{reply::Result as Reply, request::Command};
+    let directory = tempfile::tempdir()?;
+    let store = Store::open(directory.path(), policy.clone())?;
+    let execute = |command| {
+        store.workspace(
+            context,
+            api::Request {
+                command: Some(command),
+                working: Some(api::WorkingContext::default()),
+            },
+            100,
+        )
+    };
+    let Some(Reply::Mutation(created)) = execute(Command::Write(api::Write {
+        kind: AssetKind::SoftwareInstallation as i32,
+        changes: vec![omloom_contracts::wire::Field {
+            name: "name".into(),
+            value: Some(omloom_contracts::wire::field::Value::Text("OS".into())),
+        }],
+        ..Default::default()
+    }))?
+    .result
+    else {
+        return Err("Expected installation".into());
+    };
+    let target = created.targets[0].clone();
+    for base in (0..2048).step_by(128) {
+        execute(Command::HostNetwork(api::HostNetwork {
+            installation: Some(target.clone()),
+            source: "collector".into(),
+            basis: "b".repeat(128),
+            observed_at: 100 + base as u64,
+            socket_coverage: "not collected".into(),
+            route_coverage: "not collected".into(),
+            application_coverage: "verified".into(),
+            packet_filter_coverage: "not collected".into(),
+            rules: (base..base + 128)
+                .map(|index| api::ApplicationRule {
+                    subject: format!("{index:04}{}", "x".repeat(96)),
+                    action: "allow incoming".into(),
+                })
+                .collect(),
+            ..Default::default()
+        }))?;
+    }
+    let before = store.usage()?;
+    let mut samples = Vec::with_capacity(9);
+    let mut bytes = 0;
+    for _ in 0..9 {
+        let start = Instant::now();
+        let reply = execute(Command::Read(api::Read {
+            target: Some(target.clone()),
+            ..Default::default()
+        }))?;
+        samples.push(start.elapsed());
+        bytes = reply.encoded_len();
+    }
+    samples.sort_unstable();
+    println!(
+        "projection=network P50={:?} reply_bytes={bytes} logical_bytes={}",
+        samples[4],
+        before.bytes.iter().sum::<u64>()
+    );
+    assert_eq!(store.usage()?, before);
     Ok(())
 }
