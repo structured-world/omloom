@@ -1019,7 +1019,7 @@ fn shared_service_context_preserves_multiple_owners() -> TestResult {
     Ok(())
 }
 
-// A workstation and unrelated storage are not virtualization resources; a role is explicit.
+// Only an explicitly qualified OS installation is a hypervisor, independently of hardware.
 #[test]
 fn virtualization_requires_an_explicit_host_role() -> TestResult {
     let dir = tempfile::tempdir()?;
@@ -1027,7 +1027,12 @@ fn virtualization_requires_an_explicit_host_role() -> TestResult {
     let actor = operator();
     create(&store, &actor, K::Device, "workstation with Docker")?;
     create(&store, &actor, K::Storage, "unrelated storage")?;
-    let host = create(&store, &actor, K::Device, "virtualization host")?;
+    let host = create(
+        &store,
+        &actor,
+        K::SoftwareInstallation,
+        "virtualization host",
+    )?;
     create(&store, &actor, K::VirtualMachine, "guest")?;
     let mut q = query();
     q.view = api::View::Virtualization as i32;
@@ -1041,7 +1046,7 @@ fn virtualization_requires_an_explicit_host_role() -> TestResult {
         Command::Write(api::Write {
             target: Some(host.clone()),
             expected: Some(1),
-            kind: K::Device as i32,
+            kind: K::SoftwareInstallation as i32,
             changes: vec![text_field(
                 "virtualization_role",
                 "VIRTUALIZATION_ROLE_HYPERVISOR",

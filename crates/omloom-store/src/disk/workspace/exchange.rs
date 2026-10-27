@@ -24,7 +24,9 @@ fn csv_value(name: &str, value: &str, definitions: &[api::Definition]) -> Result
     let kind = definitions.iter().find(|d| d.id == name).map(|d| d.r#type);
     let value = if value == "<clear>" {
         field::Value::Clear(EXPLICIT_CLEAR)
-    } else if kind == Some(api::FieldType::Integer as i32) || name == "prefix_length" {
+    } else if kind == Some(api::FieldType::Integer as i32)
+        || matches!(name, "prefix_length" | "vlan_tag")
+    {
         field::Value::Integer(value.parse().map_err(|_| Error::Invalid)?)
     } else if kind == Some(api::FieldType::Boolean as i32) {
         match value {

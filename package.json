@@ -2,7 +2,13 @@
   "name": "omloom-contracts-workspace",
   "private": true,
   "type": "module",
+  "packageManager": "yarn@4.18.1",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
+    "dev": "yarn generate && yarn build:app --outDir ../../var/development-ui && cargo run --locked -p omloom-app --bin omloom-dev -- --data var/development --ui var/development-ui --fixture operator",
+    "start": "yarn dev",
     "generate": "protoc --proto_path=proto --plugin=protoc-gen-ts=node_modules/.bin/protoc-gen-ts --ts_out=web/src/generated --ts_opt=long_type_bigint,force_optimize_code_size,force_client_none proto/omloom/v1/contracts.proto proto/omloom/v1/workspace.proto",
     "typecheck": "tsc --noEmit",
     "build": "tsc && esbuild web/src/browser-corpus.ts --bundle --format=iife --outfile=dist/browser-corpus.js",

@@ -624,6 +624,14 @@ impl Tx<'_> {
         if !compatible(from_kind, to_kind, kind) {
             return Err(Error::Invalid);
         }
+        if kind == wire::RelationKind::RunsOn
+            && from_kind == wire::AssetKind::VirtualMachine
+            && to_kind == wire::AssetKind::SoftwareInstallation
+            && to_row.get("virtualization_role").and_then(Value::as_str)
+                != Some(omloom_contracts::workspace::VirtualizationRole::Hypervisor.as_str_name())
+        {
+            return Err(Error::Invalid);
+        }
         let key = format!("relation/{}", relation.relation_id);
         let old = self.get(&key)?;
         if old.as_ref().map(|p| number(p, "revision")).transpose()? != expected {
@@ -636,6 +644,8 @@ impl Tx<'_> {
         };
         if let Some((child, parent)) = placement {
             self.check_physical_parent(child, parent, &key)?;
+        } else if kind == wire::RelationKind::RunsOn {
+            self.check_placement_cycle(from, to, &key)?;
         }
         if kind == wire::RelationKind::Contains
             && from_kind == wire::AssetKind::Interface
@@ -749,17 +759,40 @@ impl Tx<'_> {
         if self.physical_parent(child, skip)?.is_some() {
             return Err(Error::Conflict);
         }
-        let mut current = Some(parent);
-        let mut seen = std::collections::BTreeSet::new();
-        while let Some(node) = current {
-            if node == child || seen.contains(&node) {
+        self.check_placement_cycle(child, parent, skip)
+    }
+    fn check_placement_cycle(&self, child: AssetRef, parent: AssetRef, skip: &str) -> Result<()> {
+        // Execution placement and containment have opposite stored arrows but share ancestry.
+        // Multiple execution parents are traversed without imposing physical-parent uniqueness.
+        let mut pending = vec![parent];
+        let mut seen = std::collections::BTreeSet::from([parent]);
+        while let Some(node) = pending.pop() {
+            if node == child {
                 return Err(Error::Invalid);
             }
-            if seen.len() == 1024 {
+            let physical = self.physical_parent(node, skip)?;
+            let hosts = self.query(
+                "MATCH (a:OmRow {key:$asset})-[:OmRelationFrom]->(r:OmRow)-[:OmRelationTo]->(p:OmRow) WHERE r.kind=$kind AND r.key<>$skip RETURN properties(p) AS p LIMIT 129",
+                params([("asset", text(asset_key(node))), ("skip", text(skip)), ("kind", Value::Int(wire::RelationKind::RunsOn as i32 as i64))]),
+            )?;
+            if hosts.len() > 128 {
                 return Err(Error::Limit);
             }
-            seen.insert(node);
-            current = self.physical_parent(node, skip)?;
+            for ancestor in physical
+                .into_iter()
+                .map(Ok)
+                .chain(hosts.iter().map(super::target))
+            {
+                let ancestor = ancestor?;
+                if seen.contains(&ancestor) {
+                    continue;
+                }
+                if seen.len() == 1024 {
+                    return Err(Error::Limit);
+                }
+                seen.insert(ancestor);
+                pending.push(ancestor);
+            }
         }
         Ok(())
     }
@@ -799,7 +832,8 @@ pub(super) fn compatible(
         R::AssignedTo => matches!((from, to), (K::IpAddress, K::Interface)),
         R::RunsOn => matches!(
             (from, to),
-            (K::VirtualMachine, K::Device) | (K::Service, K::Device | K::VirtualMachine)
+            (K::VirtualMachine, K::Device | K::SoftwareInstallation)
+                | (K::Service, K::Device | K::VirtualMachine)
         ),
         R::StoredOn => matches!((from, to), (K::VirtualMachine, K::Storage)),
         R::On => matches!(

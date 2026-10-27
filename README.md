@@ -7,6 +7,20 @@ under development. No installable product release is available yet.
 
 ## Development
 
+Install Rust, Node.js 24+, Corepack and protoc 36.2+, then run:
+
+```sh
+corepack enable
+yarn install --immutable
+yarn dev
+```
+
+`yarn dev` (also `yarn start`) generates the clients, builds the interface and
+starts the local development server. Open the printed localhost URL. Inventory
+persists in `var/development`; Ctrl+C stops the server. This uses the explicit
+test operator, not production authentication. Restart the command after source
+changes; live reload is not enabled. See [launch options](docs/inventory.md#run).
+
 See [contract development and verification](docs/contracts.md) for Rust,
 TypeScript and browser checks. Documentation checks: `scripts/check-docs.sh`
 (requires lychee). These checks do not certify an installable application.

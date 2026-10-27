@@ -24,10 +24,17 @@ fn writable_fields(
 ) -> Vec<String> {
     use wire::AssetKind as K;
     let builtins: &[&str] = if kind == K::AddressReference {
-        &["address", "prefix_length", "meaning", "zone", "description"]
-    } else if kind == K::Device {
-        &["name", "description", "serial", "virtualization_role"]
-    } else if matches!(kind, K::Rack | K::Port | K::Cable) {
+        &[
+            "address",
+            "prefix_length",
+            "meaning",
+            "zone",
+            "vlan_tag",
+            "description",
+        ]
+    } else if kind == K::SoftwareInstallation {
+        &["name", "description", "virtualization_role"]
+    } else if matches!(kind, K::Device | K::Rack | K::Port | K::Cable) {
         &["name", "description", "serial"]
     } else {
         &["name", "description"]
@@ -153,6 +160,7 @@ pub(super) fn attachment(
         (K::Device, K::VirtualMachine | K::Service) | (K::VirtualMachine, K::Service) => {
             Some((R::RunsOn, true))
         }
+        (K::SoftwareInstallation, K::VirtualMachine) => Some((R::RunsOn, true)),
         (K::Device, K::Storage) => Some((R::On, true)),
         _ => None,
     }
@@ -491,6 +499,17 @@ impl Tx<'_> {
             return Err(Error::Denied);
         }
         let (relation, reverse) = attachment(kind, child).ok_or(Error::Invalid)?;
+        if kind == wire::AssetKind::SoftwareInstallation && child == wire::AssetKind::VirtualMachine
+        {
+            if !context.field(parent, kind as i32, "virtualization_role", false) {
+                return Err(Error::Denied);
+            }
+            if row.get("virtualization_role").and_then(Value::as_str)
+                != Some(api::VirtualizationRole::Hypervisor.as_str_name())
+            {
+                return Err(Error::Invalid);
+            }
+        }
         Ok(Some((parent, relation, reverse)))
     }
 }
@@ -616,6 +635,18 @@ impl Store {
                     if attachment(parent_kind, kind).is_none() {
                         continue;
                     }
+                    if parent_kind == K::SoftwareInstallation && kind == K::VirtualMachine {
+                        let target = parse_target(parent.target.as_ref())?;
+                        if !context.field(target, parent.kind, "virtualization_role", false)
+                            || tx
+                                .asset(target)?
+                                .get("virtualization_role")
+                                .and_then(Value::as_str)
+                                != Some(api::VirtualizationRole::Hypervisor.as_str_name())
+                        {
+                            continue;
+                        }
+                    }
                 }
                 let view_kinds = super::assets::kind_for_view(view);
                 if parent_item.is_none() && !view_kinds.is_empty() && !view_kinds.contains(&kind) {
@@ -661,11 +692,9 @@ impl Store {
                     "kind",
                 )? as i32)
                 .map_err(|_| Error::Corrupt)?;
-                let to_kind = wire::AssetKind::try_from(number(
-                    &tx.visible_asset(context, parse_target(Some(to))?)?,
-                    "kind",
-                )? as i32)
-                .map_err(|_| Error::Corrupt)?;
+                let to_row = tx.visible_asset(context, to_ref)?;
+                let to_kind = wire::AssetKind::try_from(number(&to_row, "kind")? as i32)
+                    .map_err(|_| Error::Corrupt)?;
                 if !context.field(from_ref, from_kind as i32, "relations", true)
                     || !context.field(to_ref, to_kind as i32, "relations", true)
                 {
@@ -690,6 +719,15 @@ impl Store {
                     if !super::super::inventory::compatible(from_kind, to_kind, kind) {
                         continue;
                     }
+                    if kind == R::RunsOn
+                        && from_kind == wire::AssetKind::VirtualMachine
+                        && to_kind == wire::AssetKind::SoftwareInstallation
+                        && (!context.field(to_ref, to_kind as i32, "virtualization_role", false)
+                            || to_row.get("virtualization_role").and_then(Value::as_str)
+                                != Some(api::VirtualizationRole::Hypervisor.as_str_name()))
+                    {
+                        continue;
+                    }
                     let relation = wire::Relation {
                         from: Some(from.clone()),
                         to: Some(to.clone()),
@@ -706,9 +744,21 @@ impl Store {
             _ => return Err(Error::Invalid),
         }
         let fields = if let Some(focus) = selection.focus {
-            let kind = wire::AssetKind::try_from(number(&tx.asset(focus)?, "kind")? as i32)
+            let row = tx.asset(focus)?;
+            let kind = wire::AssetKind::try_from(number(&row, "kind")? as i32)
                 .map_err(|_| Error::Corrupt)?;
-            writable_fields(context, focus, kind, &definitions)
+            let mut fields = writable_fields(context, focus, kind, &definitions);
+            if kind == wire::AssetKind::Device
+                && row
+                    .get("virtualization_role")
+                    .and_then(Value::as_str)
+                    .is_some()
+                && context.field(focus, kind as i32, "virtualization_role", false)
+                && context.field(focus, kind as i32, "virtualization_role", true)
+            {
+                fields.push("virtualization_role".into());
+            }
+            fields
         } else {
             Vec::new()
         };

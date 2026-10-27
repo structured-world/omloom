@@ -502,14 +502,32 @@ impl Tx<'_> {
             return Err(Error::Invalid);
         }
         match value.name.as_str() {
+            "vlan_tag" => match (wire::AssetKind::try_from(kind), value.value.as_ref()) {
+                (
+                    Ok(wire::AssetKind::AddressReference),
+                    Some(field::Value::Integer(1..=4094) | field::Value::Clear(EXPLICIT_CLEAR)),
+                ) => Ok(()),
+                _ => Err(Error::Invalid),
+            },
             "virtualization_role" => {
-                if kind != wire::AssetKind::Device as i32 {
+                // Existing on-disk device fields may be explicitly retired, never reassigned.
+                if kind == wire::AssetKind::Device as i32
+                    && matches!(value.value, Some(field::Value::Clear(EXPLICIT_CLEAR)))
+                {
+                    return Ok(());
+                }
+                if kind != wire::AssetKind::SoftwareInstallation as i32 {
                     return Err(Error::Invalid);
                 }
                 match value.value.as_ref() {
                     Some(field::Value::Text(s))
-                        if api::VirtualizationRole::from_str_name(s)
-                            == Some(api::VirtualizationRole::Hypervisor) =>
+                        if matches!(
+                            api::VirtualizationRole::from_str_name(s),
+                            Some(
+                                api::VirtualizationRole::Hypervisor
+                                    | api::VirtualizationRole::NotHypervisor
+                            )
+                        ) =>
                     {
                         Ok(())
                     }

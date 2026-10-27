@@ -1,6 +1,941 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
+// Retired device roles remain explicitly removable without allowing new roles or bypassing grants/CAS.
+#[test]
+fn legacy_device_role_can_be_cleared_but_never_assigned() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let mut old = asset();
+    old.intended.push(wire::IntendedField {
+        field: Some(text_field(
+            "virtualization_role",
+            "VIRTUALIZATION_ROLE_HYPERVISOR",
+        )),
+        authority_id: old.intended[0].authority_id.clone(),
+    });
+    let target = old.target.clone().ok_or("target")?;
+    store.save_asset(
+        &admit(wire::record::Body::Asset(old)),
+        None,
+        "provider",
+        100,
+    )?;
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    let actions = |context: &Context| -> Result<api::Actions, Error> {
+        let Reply::Actions(actions) = within(
+            &store,
+            context,
+            focused(&store, &target)?,
+            Command::Prepare(api::Prepare::default()),
+        )?
+        else {
+            return Err(Error::Corrupt);
+        };
+        Ok(actions)
+    };
+    assert!(
+        actions(&actor)?
+            .fields
+            .iter()
+            .any(|f| f == "virtualization_role")
+    );
+    let mut hidden = actor.clone();
+    hidden.grants[0].read = Fields::Selected(vec!["name".into()]);
+    assert!(
+        !actions(&hidden)?
+            .fields
+            .iter()
+            .any(|f| f == "virtualization_role")
+    );
+    let mut denied = actor.clone();
+    denied.grants[0].write = Fields::Selected(vec!["name".into()]);
+    assert!(
+        !actions(&denied)?
+            .fields
+            .iter()
+            .any(|f| f == "virtualization_role")
+    );
+    let clear = wire::Field {
+        name: "virtualization_role".into(),
+        value: Some(wire::field::Value::Clear(wire::NullValue::NullValue as i32)),
+    };
+    let write = api::Write {
+        target: Some(target.clone()),
+        expected: Some(1),
+        kind: K::Device as i32,
+        changes: vec![clear.clone()],
+        ..Default::default()
+    };
+    let clean = create(&store, &actor, K::Device, "No retired role")?;
+    let before = store.usage()?;
+    let mut absent = write.clone();
+    absent.target = Some(clean);
+    assert!(matches!(
+        call(&store, &actor, Command::Write(absent)),
+        Err(Error::Invalid)
+    ));
+    assert!(matches!(
+        call(&store, &denied, Command::Write(write.clone())),
+        Err(Error::Denied)
+    ));
+    let mut stale = write.clone();
+    stale.expected = Some(0);
+    assert!(matches!(
+        call(&store, &actor, Command::Write(stale)),
+        Err(Error::Conflict)
+    ));
+    let mut assign = write.clone();
+    assign.changes = vec![text_field(
+        "virtualization_role",
+        "VIRTUALIZATION_ROLE_HYPERVISOR",
+    )];
+    assert!(matches!(
+        call(&store, &actor, Command::Write(assign)),
+        Err(Error::Invalid)
+    ));
+    assert!(matches!(
+        call(
+            &store,
+            &actor,
+            Command::Write(api::Write {
+                kind: K::Device as i32,
+                changes: vec![text_field("name", "new"), clear.clone()],
+                ..Default::default()
+            })
+        ),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
+    call(&store, &actor, Command::Write(write.clone()))?;
+    let fields = detail(&store, &actor, &target)?.item.ok_or("item")?.fields;
+    assert!(fields.contains(&clear));
+    assert!(fields.contains(&text_field("name", "host")));
+    assert!(
+        !actions(&actor)?
+            .fields
+            .iter()
+            .any(|f| f == "virtualization_role")
+    );
+    let after = store.usage()?;
+    let mut repeat = write;
+    repeat.expected = Some(2);
+    call(&store, &actor, Command::Write(repeat))?;
+    assert_eq!(store.usage()?, after);
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    let accepted = store.asset(AssetRef::try_from(&target)?)?;
+    assert_eq!(accepted.revision, 2);
+    assert!(
+        accepted
+            .intended
+            .iter()
+            .any(|f| f.field.as_ref() == Some(&clear))
+    );
+    Ok(())
+}
+
+// New placement choices require a readable enabled role; retiring the role cannot prevent removal.
+#[test]
+fn relationship_preparation_requires_an_eligible_hypervisor_but_removal_does_not() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let host = create(&store, &actor, K::SoftwareInstallation, "OS")?;
+    let guest = create(&store, &actor, K::VirtualMachine, "Guest")?;
+    let prepare = |context: &Context| -> Result<api::Actions, Error> {
+        let Reply::Actions(actions) = call(
+            &store,
+            context,
+            Command::Prepare(api::Prepare {
+                from: Some(guest.clone()),
+                to: Some(host.clone()),
+                ..Default::default()
+            }),
+        )?
+        else {
+            return Err(Error::Corrupt);
+        };
+        Ok(actions)
+    };
+    let runs_on = wire::RelationKind::RunsOn as i32;
+    let before = store.usage()?;
+    assert!(!prepare(&actor)?.relationships.contains(&runs_on));
+    assert_eq!(store.usage()?, before);
+    for (role, expected) in [
+        ("VIRTUALIZATION_ROLE_NOT_HYPERVISOR", false),
+        ("VIRTUALIZATION_ROLE_HYPERVISOR", true),
+    ] {
+        call(
+            &store,
+            &actor,
+            Command::Write(api::Write {
+                target: Some(host.clone()),
+                expected: Some(store.asset(AssetRef::try_from(&host)?)?.revision),
+                kind: K::SoftwareInstallation as i32,
+                changes: vec![text_field("virtualization_role", role)],
+                ..Default::default()
+            }),
+        )?;
+        let before = store.usage()?;
+        assert_eq!(prepare(&actor)?.relationships.contains(&runs_on), expected);
+        assert_eq!(store.usage()?, before);
+    }
+    let mut hidden = actor.clone();
+    hidden.grants[0].read = Fields::Selected(vec!["name".into(), "relations".into()]);
+    assert!(!prepare(&hidden)?.relationships.contains(&runs_on));
+    call(
+        &store,
+        &actor,
+        Command::Relation(api::Relationship {
+            relation: Some(wire::Relation {
+                from: Some(guest.clone()),
+                to: Some(host.clone()),
+                kind: runs_on,
+                ..Default::default()
+            }),
+            remove: false,
+        }),
+    )?;
+    let Reply::Detail(shown) = call(
+        &store,
+        &actor,
+        Command::Read(api::Read {
+            target: Some(guest.clone()),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("detail")
+    };
+    let relation = shown.relations[0].clone();
+    call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            target: Some(host.clone()),
+            expected: Some(3),
+            kind: K::SoftwareInstallation as i32,
+            changes: vec![wire::Field {
+                name: "virtualization_role".into(),
+                value: Some(wire::field::Value::Clear(wire::NullValue::NullValue as i32)),
+            }],
+            ..Default::default()
+        }),
+    )?;
+    assert!(!prepare(&actor)?.relationships.contains(&runs_on));
+    call(
+        &store,
+        &hidden,
+        Command::Relation(api::Relationship {
+            relation: Some(relation),
+            remove: true,
+        }),
+    )?;
+    let Reply::Detail(shown) = call(
+        &store,
+        &actor,
+        Command::Read(api::Read {
+            target: Some(guest),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("detail")
+    };
+    assert!(shown.relations.is_empty());
+    Ok(())
+}
+
+// Oppositely stored containment and execution edges must not close an ownership cycle in either order.
+#[test]
+fn hypervisor_ownership_cycles_are_rejected_in_both_insertion_orders() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    for containment_first in [true, false] {
+        let guest = create(&store, &actor, K::VirtualMachine, "Guest")?;
+        let host = changed(call(
+            &store,
+            &actor,
+            Command::Write(api::Write {
+                kind: K::SoftwareInstallation as i32,
+                changes: vec![
+                    text_field("name", "Host OS"),
+                    text_field("virtualization_role", "VIRTUALIZATION_ROLE_HYPERVISOR"),
+                ],
+                ..Default::default()
+            }),
+        )?);
+        let contains = api::Relationship {
+            relation: Some(wire::Relation {
+                from: Some(guest.clone()),
+                to: Some(host.clone()),
+                kind: wire::RelationKind::Contains as i32,
+                ..Default::default()
+            }),
+            remove: false,
+        };
+        let runs = api::Relationship {
+            relation: Some(wire::Relation {
+                from: Some(guest.clone()),
+                to: Some(host.clone()),
+                kind: wire::RelationKind::RunsOn as i32,
+                ..Default::default()
+            }),
+            remove: false,
+        };
+        let (first, closing) = if containment_first {
+            (contains, runs)
+        } else {
+            (runs, contains)
+        };
+        call(&store, &actor, Command::Relation(first))?;
+        let before = store.usage()?;
+        assert!(matches!(
+            call(&store, &actor, Command::Relation(closing.clone())),
+            Err(Error::Invalid)
+        ));
+        assert_eq!(store.usage()?, before);
+        // Trusted host writes share cycle enforcement with workspace writes.
+        let mut relation = closing.relation.ok_or("relation")?;
+        relation.relation_id = omloom_contracts::ids::RelationId::generate().to_string();
+        relation.authority_id = omloom_contracts::ids::AuthorityId::generate().to_string();
+        relation.revision = 1;
+        assert!(matches!(
+            store.save_relation(
+                &admit(wire::record::Body::Relation(relation)),
+                None,
+                "provider",
+                100
+            ),
+            Err(Error::Invalid)
+        ));
+        assert_eq!(store.usage()?, before);
+    }
+    Ok(())
+}
+
+// Shared acyclic execution ancestors are valid; a later edge cannot close a multi-installation cycle.
+#[test]
+fn shared_hypervisor_ancestors_are_valid_but_indirect_cycles_are_not() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let device = create(&store, &actor, K::Device, "Hardware")?;
+    let mut hosts = Vec::new();
+    for name in ["First OS", "Second OS"] {
+        hosts.push(changed(within(
+            &store,
+            &actor,
+            focused(&store, &device)?,
+            Command::Write(api::Write {
+                kind: K::SoftwareInstallation as i32,
+                parent: Some(device.clone()),
+                changes: vec![
+                    text_field("name", name),
+                    text_field("virtualization_role", "VIRTUALIZATION_ROLE_HYPERVISOR"),
+                ],
+                ..Default::default()
+            }),
+        )?));
+    }
+    let guest = create(&store, &actor, K::VirtualMachine, "Shared guest")?;
+    for host in &hosts {
+        call(
+            &store,
+            &actor,
+            Command::Relation(api::Relationship {
+                relation: Some(wire::Relation {
+                    from: Some(guest.clone()),
+                    to: Some(host.clone()),
+                    kind: wire::RelationKind::RunsOn as i32,
+                    ..Default::default()
+                }),
+                remove: false,
+            }),
+        )?;
+    }
+    let vm = create(&store, &actor, K::VirtualMachine, "Nested guest")?;
+    let nested = changed(within(
+        &store,
+        &actor,
+        focused(&store, &guest)?,
+        Command::Write(api::Write {
+            kind: K::SoftwareInstallation as i32,
+            parent: Some(guest.clone()),
+            changes: vec![
+                text_field("name", "Nested OS"),
+                text_field("virtualization_role", "VIRTUALIZATION_ROLE_HYPERVISOR"),
+            ],
+            ..Default::default()
+        }),
+    )?);
+    call(
+        &store,
+        &actor,
+        Command::Relation(api::Relationship {
+            relation: Some(wire::Relation {
+                from: Some(vm.clone()),
+                to: Some(nested),
+                kind: wire::RelationKind::RunsOn as i32,
+                ..Default::default()
+            }),
+            remove: false,
+        }),
+    )?;
+    let inner = changed(within(
+        &store,
+        &actor,
+        focused(&store, &vm)?,
+        Command::Write(api::Write {
+            kind: K::SoftwareInstallation as i32,
+            parent: Some(vm),
+            changes: vec![
+                text_field("name", "Inner OS"),
+                text_field("virtualization_role", "VIRTUALIZATION_ROLE_HYPERVISOR"),
+            ],
+            ..Default::default()
+        }),
+    )?);
+    let before = store.usage()?;
+    // Guest -> nested OS -> nested guest -> inner OS -> guest would close the cycle.
+    assert!(matches!(
+        call(
+            &store,
+            &actor,
+            Command::Relation(api::Relationship {
+                relation: Some(wire::Relation {
+                    from: Some(guest),
+                    to: Some(inner),
+                    kind: wire::RelationKind::RunsOn as i32,
+                    ..Default::default()
+                }),
+                remove: false
+            })
+        ),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// A bad address must roll back the whole creation, including placement and earlier facts.
+#[test]
+fn initial_addresses_are_atomic_and_do_not_invent_interfaces_or_vlans() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let request = api::Create {
+        kind: K::SoftwareInstallation as i32,
+        changes: vec![text_field("name", "Hypervisor")],
+        addresses: vec![
+            api::InitialAddress {
+                address: "192.0.2.10".into(),
+                prefix_length: None,
+                vlan_tag: Some(42),
+                interface_name: None,
+            },
+            api::InitialAddress {
+                address: "2001:db8::10".into(),
+                prefix_length: Some(64),
+                vlan_tag: None,
+                interface_name: None,
+            },
+        ],
+        ..Default::default()
+    };
+    let mut bad = request.clone();
+    bad.addresses[1].address = "not an address".into();
+    let before = store.usage()?;
+    assert!(matches!(
+        call(&store, &actor, Command::Create(bad)),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
+    let mut bad_prefix = request.clone();
+    bad_prefix.addresses[1].prefix_length = Some(129);
+    assert!(matches!(
+        call(&store, &actor, Command::Create(bad_prefix)),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(
+        store.usage()?,
+        before,
+        "late validation must roll back earlier staged facts"
+    );
+    let target = changed(call(&store, &actor, Command::Create(request))?);
+    let shown = detail(&store, &actor, &target)?;
+    assert_eq!(shown.relations.len(), 2);
+    assert!(
+        shown
+            .related
+            .iter()
+            .all(|i| i.kind == K::AddressReference as i32)
+    );
+    let v4 = shown
+        .related
+        .iter()
+        .find(|i| i.fields.contains(&text_field("name", "192.0.2.10")))
+        .ok_or("v4")?;
+    let fields = detail(&store, &actor, v4.target.as_ref().ok_or("target")?)?
+        .item
+        .ok_or("item")?
+        .fields;
+    assert!(
+        fields
+            .iter()
+            .any(|f| f.name == "vlan_tag" && f.value == Some(wire::field::Value::Integer(42)))
+    );
+    assert!(!fields.iter().any(|f| f.name == "prefix_length"));
+    Ok(())
+}
+
+// A hypervisor is an installation even when hardware is unknown; VM attachment is atomic.
+#[test]
+fn hypervisor_installation_owns_vms_without_inventing_hardware() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let host = changed(call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            kind: K::SoftwareInstallation as i32,
+            changes: vec![
+                text_field("name", "Proxmox"),
+                text_field("virtualization_role", "VIRTUALIZATION_ROLE_HYPERVISOR"),
+            ],
+            ..Default::default()
+        }),
+    )?);
+    let guest = changed(within(
+        &store,
+        &actor,
+        focused(&store, &host)?,
+        Command::Write(api::Write {
+            kind: K::VirtualMachine as i32,
+            parent: Some(host.clone()),
+            changes: vec![text_field("name", "Guest")],
+            ..Default::default()
+        }),
+    )?);
+    let shown = detail(&store, &actor, &host)?;
+    assert!(
+        shown
+            .relations
+            .iter()
+            .any(|r| r.from.as_ref() == Some(&guest)
+                && r.to.as_ref() == Some(&host)
+                && r.kind == wire::RelationKind::RunsOn as i32)
+    );
+    let Reply::Page(page) = call(
+        &store,
+        &actor,
+        Command::Query(api::Query {
+            view: api::View::Virtualization as i32,
+            ..query()
+        }),
+    )?
+    else {
+        panic!("page")
+    };
+    assert_eq!(page.total, 2);
+    assert!(page.items.iter().all(|i| i.kind != K::Device as i32));
+    let os = create(&store, &actor, K::SoftwareInstallation, "ordinary OS")?;
+    let before = store.usage()?;
+    let denied = within(
+        &store,
+        &actor,
+        focused(&store, &os)?,
+        Command::Write(api::Write {
+            kind: K::VirtualMachine as i32,
+            parent: Some(os),
+            changes: vec![text_field("name", "invalid guest")],
+            ..Default::default()
+        }),
+    );
+    assert!(matches!(denied, Err(Error::Invalid)));
+    assert_eq!(store.usage()?, before);
+    let mut limited = actor.clone();
+    limited.grants[0].read = Fields::Selected(vec!["name".into(), "relations".into()]);
+    let denied = within(
+        &store,
+        &limited,
+        focused(&store, &host)?,
+        Command::Write(api::Write {
+            kind: K::VirtualMachine as i32,
+            parent: Some(host.clone()),
+            changes: vec![text_field("name", "hidden role")],
+            ..Default::default()
+        }),
+    );
+    assert!(matches!(denied, Err(Error::Denied)));
+    assert_eq!(store.usage()?, before);
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    assert!(
+        detail(&store, &actor, &host)?
+            .relations
+            .iter()
+            .any(|r| r.from.as_ref() == Some(&guest))
+    );
+    Ok(())
+}
+
+// Hardware labels group the virtualization roots; their VMs remain one level below.
+#[test]
+fn virtualization_root_keeps_hosted_hypervisors_without_flattening_guests() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let server = create(&store, &actor, K::Device, "server")?;
+    let host = changed(within(
+        &store,
+        &actor,
+        focused(&store, &server)?,
+        Command::Write(api::Write {
+            kind: K::SoftwareInstallation as i32,
+            parent: Some(server),
+            changes: vec![
+                text_field("name", "Hypervisor"),
+                text_field("virtualization_role", "VIRTUALIZATION_ROLE_HYPERVISOR"),
+            ],
+            ..Default::default()
+        }),
+    )?);
+    let guest = changed(within(
+        &store,
+        &actor,
+        focused(&store, &host)?,
+        Command::Write(api::Write {
+            kind: K::VirtualMachine as i32,
+            parent: Some(host.clone()),
+            changes: vec![text_field("name", "guest")],
+            ..Default::default()
+        }),
+    )?);
+    let Reply::Page(page) = call(
+        &store,
+        &actor,
+        Command::Query(api::Query {
+            view: api::View::Virtualization as i32,
+            level_only: true,
+            ..query()
+        }),
+    )?
+    else {
+        panic!("page")
+    };
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].target.as_ref(), Some(&host));
+    // Disabling the role preserves the VM's placement fact and inventory visibility.
+    call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            target: Some(host),
+            expected: Some(1),
+            kind: K::SoftwareInstallation as i32,
+            changes: vec![text_field(
+                "virtualization_role",
+                "VIRTUALIZATION_ROLE_NOT_HYPERVISOR",
+            )],
+            ..Default::default()
+        }),
+    )?;
+    let Reply::Page(page) = call(
+        &store,
+        &actor,
+        Command::Query(api::Query {
+            view: api::View::Virtualization as i32,
+            level_only: true,
+            ..query()
+        }),
+    )?
+    else {
+        panic!("page")
+    };
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].target.as_ref(), Some(&guest));
+    let Reply::Detail(guest_detail) = call(
+        &store,
+        &actor,
+        Command::Read(api::Read {
+            target: Some(guest),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("detail")
+    };
+    let relation = guest_detail
+        .relations
+        .into_iter()
+        .find(|r| r.kind == wire::RelationKind::RunsOn as i32)
+        .ok_or("placement")?;
+    // Removing an old placement is authorized independently of the host's current capability.
+    call(
+        &store,
+        &actor,
+        Command::Relation(api::Relationship {
+            relation: Some(relation),
+            remove: true,
+        }),
+    )?;
+    Ok(())
+}
+
+// A hidden host role cannot hide a permitted guest or leak its value through root membership.
+#[test]
+fn virtualization_root_keeps_guests_when_host_role_is_unreadable() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let host = changed(call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            kind: K::SoftwareInstallation as i32,
+            changes: vec![
+                text_field("name", "restricted host"),
+                text_field(
+                    "virtualization_role",
+                    api::VirtualizationRole::Hypervisor.as_str_name(),
+                ),
+            ],
+            ..Default::default()
+        }),
+    )?);
+    let guest = changed(within(
+        &store,
+        &actor,
+        focused(&store, &host)?,
+        Command::Write(api::Write {
+            kind: K::VirtualMachine as i32,
+            parent: Some(host.clone()),
+            changes: vec![text_field("name", "permitted guest")],
+            ..Default::default()
+        }),
+    )?);
+    let visible_host = changed(call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            kind: K::SoftwareInstallation as i32,
+            changes: vec![
+                text_field("name", "visible host"),
+                text_field(
+                    "virtualization_role",
+                    api::VirtualizationRole::Hypervisor.as_str_name(),
+                ),
+            ],
+            ..Default::default()
+        }),
+    )?);
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    let mut reader = actor.clone();
+    reader.grants[0].read = Fields::Selected(vec!["name".into(), "relations".into()]);
+    reader.grants.push(Grant {
+        scope: Scope::Targets(vec![AssetRef::try_from(&visible_host)?]),
+        read: Fields::Selected(vec!["virtualization_role".into()]),
+        write: Fields::Selected(vec![]),
+        writable: false,
+    });
+    for role in [
+        Some(api::VirtualizationRole::Hypervisor),
+        Some(api::VirtualizationRole::NotHypervisor),
+        None,
+    ] {
+        let expected = detail(&store, &actor, &host)?.item.ok_or("host")?.revision;
+        call(
+            &store,
+            &actor,
+            Command::Write(api::Write {
+                target: Some(host.clone()),
+                expected: Some(expected),
+                kind: K::SoftwareInstallation as i32,
+                changes: vec![wire::Field {
+                    name: "virtualization_role".into(),
+                    value: Some(match role {
+                        Some(role) => wire::field::Value::Text(role.as_str_name().into()),
+                        None => wire::field::Value::Clear(wire::NullValue::NullValue as i32),
+                    }),
+                }],
+                ..Default::default()
+            }),
+        )?;
+        let before = store.usage()?;
+        for kinds in [vec![], vec![K::VirtualMachine as i32]] {
+            let vm_only = !kinds.is_empty();
+            let Reply::Page(page) = call(
+                &store,
+                &reader,
+                Command::Query(api::Query {
+                    view: api::View::Virtualization as i32,
+                    level_only: true,
+                    kinds,
+                    ..query()
+                }),
+            )?
+            else {
+                panic!("page")
+            };
+            assert_eq!(page.total, if vm_only { 1 } else { 2 });
+            let targets: Vec<_> = page
+                .items
+                .iter()
+                .filter_map(|i| i.target.as_ref())
+                .collect();
+            assert!(targets.contains(&&guest));
+            assert!(!targets.contains(&&host));
+            assert_eq!(targets.contains(&&visible_host), !vm_only);
+            assert_eq!(page.items.len() as u64, page.total);
+        }
+        assert_eq!(
+            store.usage()?,
+            before,
+            "permission-filtered reads cannot write"
+        );
+        assert!(
+            !detail(&store, &reader, &host)?
+                .item
+                .ok_or("host")?
+                .fields
+                .iter()
+                .any(|f| f.name == "virtualization_role")
+        );
+    }
+    Ok(())
+}
+
+// Existing direct device placements must not hide a guest behind a filtered hardware parent.
+#[test]
+fn virtualization_root_keeps_device_hosted_vms_visible() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let device = create(&store, &actor, K::Device, "existing server")?;
+    let guest = create(&store, &actor, K::VirtualMachine, "existing guest")?;
+    call(
+        &store,
+        &actor,
+        Command::Relation(api::Relationship {
+            relation: Some(wire::Relation {
+                from: Some(guest.clone()),
+                to: Some(device),
+                kind: wire::RelationKind::RunsOn as i32,
+                ..Default::default()
+            }),
+            remove: false,
+        }),
+    )?;
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    let before = store.usage()?;
+    for kinds in [vec![], vec![K::VirtualMachine as i32]] {
+        let Reply::Page(page) = call(
+            &store,
+            &actor,
+            Command::Query(api::Query {
+                view: api::View::Virtualization as i32,
+                level_only: true,
+                kinds,
+                ..query()
+            }),
+        )?
+        else {
+            panic!("page")
+        };
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].target.as_ref(), Some(&guest));
+    }
+    assert_eq!(store.usage()?, before, "browsing cannot rewrite placements");
+    Ok(())
+}
+
+// OS names cannot assert enabled virtualization; an explicit negative differs from unknown.
+#[test]
+fn windows_and_linux_become_hypervisors_only_when_the_role_is_enabled() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    for name in ["Windows Server", "Linux"] {
+        let os = create(&store, &actor, K::SoftwareInstallation, name)?;
+        call(
+            &store,
+            &actor,
+            Command::Write(api::Write {
+                target: Some(os.clone()),
+                expected: Some(1),
+                kind: K::SoftwareInstallation as i32,
+                changes: vec![text_field(
+                    "virtualization_role",
+                    "VIRTUALIZATION_ROLE_NOT_HYPERVISOR",
+                )],
+                ..Default::default()
+            }),
+        )?;
+        let Reply::Page(before) = call(
+            &store,
+            &actor,
+            Command::Query(api::Query {
+                view: api::View::Virtualization as i32,
+                ..query()
+            }),
+        )?
+        else {
+            panic!("page")
+        };
+        assert_eq!(before.total, 0);
+        call(
+            &store,
+            &actor,
+            Command::Write(api::Write {
+                target: Some(os.clone()),
+                expected: Some(2),
+                kind: K::SoftwareInstallation as i32,
+                changes: vec![text_field(
+                    "virtualization_role",
+                    "VIRTUALIZATION_ROLE_HYPERVISOR",
+                )],
+                ..Default::default()
+            }),
+        )?;
+        let Reply::Page(after) = call(
+            &store,
+            &actor,
+            Command::Query(api::Query {
+                view: api::View::Virtualization as i32,
+                ..query()
+            }),
+        )?
+        else {
+            panic!("page")
+        };
+        assert_eq!(after.total, 1);
+        call(
+            &store,
+            &actor,
+            Command::Write(api::Write {
+                target: Some(os),
+                expected: Some(3),
+                kind: K::SoftwareInstallation as i32,
+                changes: vec![text_field(
+                    "virtualization_role",
+                    "VIRTUALIZATION_ROLE_NOT_HYPERVISOR",
+                )],
+                ..Default::default()
+            }),
+        )?;
+    }
+    Ok(())
+}
+
 // Absent optional settings cannot be erased by replacement and need no read grant.
 #[test]
 fn network_replacement_allows_absent_unreadable_settings() -> TestResult {

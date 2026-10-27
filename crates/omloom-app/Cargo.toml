@@ -32,6 +32,10 @@ tonic-web = "0.14.6"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net", "sync", "time"] }
 axum = "0.8.9"
 tower-http = { version = "0.6", features = ["fs", "limit", "set-header"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "json", "form"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+rustls-graviola = "0.4.0"
+webpki-roots = "1"
 
 [build-dependencies]
 tonic-prost-build = "0.14.6"
