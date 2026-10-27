@@ -38,5 +38,9 @@ export function input(field: Field | undefined): string {
   return String(v.flag);
 }
 export function key(target: AssetRef | undefined): string { return target ? `${target.assetId}/${target.incarnation}` : ''; }
+export function enumLabel(names: Record<number, string>, value: number): string {
+  const name = names[value];
+  return name === undefined ? `unknown (${value})` : name.toLowerCase();
+}
 export function label(kind: number): string { return AssetKind[kind]?.replace('ASSET_KIND_', '').toLowerCase().replaceAll('_', ' ') ?? 'Unavailable'; }
 export const kinds = Object.values(AssetKind).filter((k): k is number => typeof k === 'number' && k > 0);

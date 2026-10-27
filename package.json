@@ -6,7 +6,7 @@
     "generate": "protoc --proto_path=proto --plugin=protoc-gen-ts=node_modules/.bin/protoc-gen-ts --ts_out=web/src/generated --ts_opt=long_type_bigint,force_optimize_code_size,force_client_none proto/omloom/v1/contracts.proto proto/omloom/v1/workspace.proto",
     "typecheck": "tsc --noEmit",
     "build": "tsc && esbuild web/src/browser-corpus.ts --bundle --format=iife --outfile=dist/browser-corpus.js",
-    "test:contracts": "node --test web/tests/contracts.test.mjs",
+    "test:contracts": "node --test web/tests/contracts.test.mjs web/tests/presentation.test.mjs web/tests/field-host.test.mjs",
     "test:browser": "playwright test",
     "clean": "node scripts/clean.mjs",
     "build:app": "node scripts/check-vue.cjs --noEmit -p web/app/tsconfig.json && vite build --config web/app/vite.config.ts"

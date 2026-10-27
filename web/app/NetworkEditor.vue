@@ -2,7 +2,7 @@
 import { ref, onMounted, computed, watch } from 'vue';
 import Dialog from './Dialog.vue';
 import AssetEditor from './AssetEditor.vue';
-import { call, model, AssetKind as K, display, input, type AssetRef } from './api';
+import { call, model, AssetKind as K, display, input, key, type AssetRef } from './api';
 const props = defineProps<{ item?: model.Item; group?: model.Item; definitions: model.Definition[]; working: model.WorkingContext; allocations: model.Creation[]; view: model.View; reviewOnly?: boolean }>();
 const parents = computed(() => [...new Map(props.allocations.filter(a => a.parent?.target).map(a => [a.parent!.target!.assetId,a.parent!])).values()]);
 const parent = ref(parents.value.length === 1 ? parents.value[0]!.target!.assetId : '');
@@ -22,6 +22,25 @@ const groupMode = ref(props.group ? 'existing' : 'new');
 const selectedGroup = ref(props.group?.target?.assetId ?? ''); const groupName = ref('');
 const lookup = ref(''); const coverage = ref('');
 const revision = ref<bigint>();
+const reviewed = ref<model.WorkingContext>();
+const contextItems = computed(() => {
+  const selected = [space.value, link.value, routing.value, selectedGroup.value];
+  const previous = ['address_space', 'link_scope', 'routing_context'].map(referenceId);
+  const references = [...selected, ...previous];
+  return items.value.filter(i => references.includes(i.target?.assetId ?? '') || key(i.target) === key(props.group?.target));
+});
+const needsReview = computed(() => !!props.item && (props.working.roots.length > 0 || !!props.working.focus));
+watch([space, link, routing, selectedGroup, sharing, groupMode, vrid, vlanId, name, cidr], () => { reviewed.value = undefined; });
+async function reviewContext() {
+  try {
+    error.value = '';
+    const roots = [props.item?.target, ...contextItems.value.map(i => i.target)].filter((t): t is AssetRef => !!t);
+    const working = model.WorkingContext.create({ roots: [...new Map(roots.map(t => [key(t), t])).values()] });
+    const reply = await call({ oneofKind: 'prepare', prepare: model.Prepare.create({ view: model.View.NETWORK }) }, working);
+    if (reply.oneofKind !== 'actions') throw Error('Network context review is unavailable');
+    reviewed.value = model.WorkingContext.create({ ...working, expected: reply.actions.revision });
+  } catch (e) { error.value = String(e); }
+}
 const matchingGroups = computed(() => items.value.filter(i => i.kind === K.ADDRESS_GROUP && input(i.fields.find(f => f.name === 'sharing')) === `SHARED_USE_${model.SharedUse[sharing.value]}`));
 async function loadOptions() {
   try {
@@ -63,6 +82,7 @@ function targetRef(id: string): AssetRef | undefined {
 }
 async function save() {
   try {
+    if (needsReview.value && !reviewed.value) throw Error('Review the broader network context before applying these settings.');
     const vlan = kind.value === K.VLAN;
     const groupEdit = kind.value === K.ADDRESS_GROUP;
     const shared = kind.value === K.IP_ADDRESS && sharing.value !== model.SharedUse.EXCLUSIVE;
@@ -79,7 +99,7 @@ async function save() {
       group: chosen?.target, expectedGroup: chosen?.revision, groupName: shared && !chosen ? groupName.value : '',
       previousGroupRevision: props.group && props.group.target?.assetId !== chosen?.target?.assetId ? props.group.revision : undefined,
     });
-    const working = model.WorkingContext.create({ ...props.working, expected: revision.value });
+    const working = reviewed.value ?? model.WorkingContext.create({ ...props.working, expected: revision.value });
     if (props.reviewOnly) { emit('reviewed',request,working,sharing.value); return; }
     await call({ oneofKind: 'network', network: request }, working); emit('saved');
   } catch (e) { error.value = String(e); }
@@ -118,6 +138,12 @@ async function save() {
       <label v-if="!reviewOnly && !item && kind === K.IP_ADDRESS" class="check"><input v-model="next" type="checkbox">Atomically allocate next available host in the supplied prefix</label>
     </template>
     <p v-if="reviewOnly" class="hint">This step only prepares the allocation. It is committed together with the address mapping after your final review.</p>
+    <section v-if="needsReview" aria-label="Reviewed network context">
+      <p>The edit uses this resource and its previous and proposed network references. Each keeps its own permissions. Your browsing scope stays unchanged.</p>
+      <ul><li>{{ name }}</li><li v-for="i in contextItems" :key="key(i.target)">{{ display(i.fields.find(f => f.name === 'name')) }} · {{ i.target?.assetId }}</li></ul>
+      <button type="button" @click="reviewContext">Review broader network context</button>
+      <p v-if="reviewed" role="status">Context reviewed. Changing the settings requires a new review.</p>
+    </section>
     <p v-if="error" role="alert">{{ error }}</p><footer><button type="button" @click="emit('close')">Cancel</button><button class="primary">{{ reviewOnly ? 'Review allocation' : item ? 'Apply reviewed settings' : 'Allocate' }}</button></footer>
   </form>
 </Dialog><AssetEditor v-if="creatingScope" :initial-kind="K.ADDRESS_SPACE" :definitions="definitions" :working="working" :view="view" @close="creatingScope = false" @saved="scopeSaved" /></template>

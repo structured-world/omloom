@@ -941,6 +941,75 @@ test('prefix context allocates and retrieves children without reselecting its na
   } finally { await server.stop(); await rm(dir,{recursive:true,force:true}); }
 });
 
+test('scoped allocation edits review their enclosing network references', async ({ page }) => {
+  // A prefix scope excludes its namespace; an edit must explicitly review both.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-network-review-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const space = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.ADDRESS_SPACE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Reviewed namespace' } }] }) })).mutation.targets[0];
+    const prefix = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name: 'Reviewed subnet', cidr: '192.0.2.0/24', addressSpace: space, sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
+    const target = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.IP_ADDRESS, name: 'Reviewed IP', cidr: '192.0.2.10/32', addressSpace: space, sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${server.url}/#/?view=1&scope=${prefix.assetId}&scopeInc=${prefix.incarnation}&asset=${target.assetId}&incarnation=${target.incarnation}`);
+      await page.getByRole('button', { name: 'Review network settings', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByLabel('Name', { exact: true }).fill(`Reviewed IP ${width}`);
+      // The initial submission must not mutate in an incomplete context.
+      await dialog.getByRole('button', { name: 'Apply reviewed settings', exact: true }).click();
+      await expect(dialog).toBeVisible();
+      await dialog.getByRole('button', { name: 'Review broader network context', exact: true }).click();
+      await expect(dialog.getByRole('region', { name: 'Reviewed network context' })).toContainText('Reviewed namespace');
+      await dialog.getByRole('button', { name: 'Apply reviewed settings', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      const item = (await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail.item;
+      expect(item.fields.find(f => f.name === 'name').value.text).toBe(`Reviewed IP ${width}`);
+      expect(item.fields.find(f => f.name === 'address_space').value.text).toBe(`${space.assetId}/${space.incarnation}`);
+      expect(new URL(page.url()).hash).toContain(`scope=${prefix.assetId}`);
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('network replacement cannot clear undisclosed references', async ({ page }) => {
+  // A host field projection must not turn hidden VRF/L2 settings into clears.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-network-projection-'));
+  let server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const object = async (kind, name) => (await rpc({ oneofKind: 'write', write: m.Write.create({ kind, changes: [{ name: 'name', value: { oneofKind: 'text', text: name } }] }) })).mutation.targets[0];
+    const space = await object(m.AssetKind.ADDRESS_SPACE, 'Visible namespace');
+    const routing = await object(m.AssetKind.VRF, 'Private routing');
+    const link = await object(m.AssetKind.L2_DOMAIN, 'Private link');
+    const target = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.IP_ADDRESS, name: 'Protected allocation', cidr: '192.0.2.20/32', addressSpace: space, link, routing, sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
+    await server.stop();
+    const grants = join(dir, 'grants.json');
+    await writeFile(grants, JSON.stringify([{ selection: { scope: 'all' }, read: { mode: 'selected', fields: ['name', 'cidr', 'address_space', 'sharing'] }, write: { mode: 'all' }, writable: true }]));
+    server = await host(dir, 'operator', grants);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${server.url}/#/?view=1&asset=${target.assetId}&incarnation=${target.incarnation}`);
+      await expect(page.getByRole('region', { name: 'Resource details' })).not.toContainText('Private routing');
+      await page.getByRole('button', { name: 'Review network settings', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByLabel('Name', { exact: true }).fill('Must not replace');
+      await dialog.getByRole('button', { name: 'Apply reviewed settings', exact: true }).click();
+      await expect(dialog.getByRole('alert')).toContainText('PERMISSION_DENIED');
+      await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+      await expect(dialog).toBeHidden();
+    }
+    await page.goto('about:blank');
+    await server.stop();
+    server = await host(dir);
+    const client = await workspaceClient(server.url);
+    const item = (await client.rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail.item;
+    const field = name => item.fields.find(f => f.name === name).value.text;
+    expect(field('name')).toBe('Protected allocation');
+    expect(field('routing_context')).toBe(`${routing.assetId}/${routing.incarnation}`);
+    expect(field('link_scope')).toBe(`${link.assetId}/${link.incarnation}`);
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('workspace creation starts with the relevant resource type', async ({ page }) => {
   // Views share inventory but should not make every creation start as a physical device.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-context-ui-'));

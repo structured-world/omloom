@@ -828,6 +828,30 @@ impl Tx<'_> {
         working: &api::WorkingContext,
         request: &api::Network,
     ) -> Result<()> {
+        if let Some(target) = request.target.as_ref() {
+            let target = parse_target(Some(target))?;
+            let columns: &[&str] = match wire::AssetKind::try_from(request.kind) {
+                Ok(wire::AssetKind::Vlan) => &["name", "link_scope", "vlan_id"],
+                Ok(wire::AssetKind::AddressGroup) => &["name", "sharing", "link_scope", "vrid"],
+                _ => &[
+                    "name",
+                    "cidr",
+                    "address_space",
+                    "link_scope",
+                    "routing_context",
+                    "sharing",
+                    "vrid",
+                ],
+            };
+            // Network is a full replacement. A projected omission is not an
+            // explicit clear, so an unreadable configuration cannot be replaced.
+            if columns
+                .iter()
+                .any(|field| !context.field(target, request.kind, field, false))
+            {
+                return Err(Error::Denied);
+            }
+        }
         let selection = self.selection(context, working, true)?;
         for reference in [
             request.target.as_ref(),

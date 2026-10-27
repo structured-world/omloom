@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { model, type AssetRef } from './api';
+import { model, enumLabel, type AssetRef } from './api';
 const props = defineProps<{ evidence: model.HostNetworkView }>();
 const emit = defineEmits<{ open: [target: AssetRef | undefined] }>();
 const serviceName = (target:AssetRef|undefined) => props.evidence.services.find(s=>s.target?.assetId===target?.assetId && s.target?.incarnation===target?.incarnation)?.name;
 const section = ref('endpoints'); const term = ref(''); const page = ref(0);
-const addressClass = (e:model.SocketBind) => e.bind === '*' ? 'all interfaces in this family' : `${model.AddressStability[e.addressStability].toLowerCase()} · ${model.AddressState[e.addressState].toLowerCase()}`;
+const addressClass = (e:model.SocketBind) => e.bind === '*' ? 'all interfaces in this family' : `${enumLabel(model.AddressStability, e.addressStability)} · ${enumLabel(model.AddressState, e.addressState)}`;
 const coverage = computed(() => props.evidence.coverage);
 const allSockets = computed(() => props.evidence.observations.flatMap(o => o.value.oneofKind === 'socket' ? [{...o.value.socket, observedAt:o.observedAt}] : []));
 const allRoutes = computed(() => props.evidence.observations.flatMap(o => o.value.oneofKind === 'route' ? [{...o.value.route, observedAt:o.observedAt}] : []));

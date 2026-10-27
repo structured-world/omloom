@@ -126,6 +126,11 @@ Allocate IP / prefix is a separate action in an address space or prefix;
 Create address space returns without losing the allocation draft.
 An explicit prefix container supplies its declared namespace and enforces its
 range. It does not supply routing or an interface configuration mask.
+Editing an allocation from a focused scope explicitly reviews a context containing
+its previous and proposed network references. Browsing scope remains unchanged.
+The network-settings operation replaces the configuration and requires read
+access to all its settings; projected omissions cannot implicitly clear hidden
+VRF or L2 references. Use the resource field editor for an independent name change.
 
 Connections in broader scope explicitly selects both endpoints before offering
 their supported relationship meanings. Editing or removing a connection checks
@@ -225,7 +230,7 @@ contracts.
 
 Fixed operation ceilings are 100 resources per query page, 128 explicit targets
 or CSV rows per mutation, 32 requested fields, 8 equality predicates, 256 KiB CSV
-and 4 pending previews per actor. A larger operation must be narrowed rather
+and one pending preview per actor. A larger operation must be narrowed rather
 than silently truncated. Query pages also fit a 512 KiB encoded reply ceiling:
 fewer rows are returned with a continuation, preserving requested values.
 Frames have strict structural, depth and allocation

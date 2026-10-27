@@ -23,7 +23,7 @@ async function apply(remove = false) {
   <label v-if="mode === 'set'">Value
     <select v-if="field?.type === model.FieldType.BOOLEAN" v-model="value" required><option disabled value="">Choose true or false</option><option value="true">True</option><option value="false">False</option></select>
     <select v-else-if="field && 'choices' in field && field.choices.length" v-model="value" required><option disabled value="">Choose a value</option><option v-for="choice in field.choices" :key="choice">{{ choice }}</option></select>
-    <input v-else v-model="value" :type="field?.type === model.FieldType.INTEGER ? 'number' : field?.type === model.FieldType.DATE ? 'date' : 'text'" maxlength="2048">
+    <input v-else v-model="value" :type="field?.type === model.FieldType.DATE ? 'date' : 'text'" :inputmode="field?.type === model.FieldType.INTEGER ? 'numeric' : undefined" maxlength="2048">
   </label>
   <p v-if="error" role="alert">{{ error }}</p><footer><button type="button" @click="emit('close')">Cancel</button><button class="danger" type="button" @click="apply(true)">Remove reviewed resources</button><button class="primary" :disabled="mode === 'preserve'">Apply reviewed change</button></footer>
 </form></Dialog></template>

@@ -656,6 +656,7 @@ fn level_browse_returns_containers_then_direct_children() -> TestResult {
 }
 
 // A small estate must not re-expand the estate for every candidate's parent probe.
+// The wall-clock ceiling is a required regression gate; indexed plans alone do not bound latency.
 #[test]
 fn level_browse_small_estate_has_bounded_latency() -> TestResult {
     let dir = tempfile::tempdir()?;

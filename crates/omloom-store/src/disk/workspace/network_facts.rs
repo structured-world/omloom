@@ -684,21 +684,28 @@ impl Store {
     }
 }
 
+pub(super) fn migrate_network_row(tx: &mut Tx<'_>, row: &Properties) -> Result<()> {
+    let mut value =
+        api::HostNetwork::decode(binary(row, "payload")?).map_err(|_| Error::Corrupt)?;
+    let target = parse_target(value.installation.as_ref())?;
+    let key = format!("{}/host-network", asset_key(target));
+    if value.observed_at == 0 {
+        value.observed_at = number(&tx.get(&key)?.ok_or(Error::Corrupt)?, "observed")?;
+    }
+    tx.accept_network(&value)?;
+    // Consume the selected legacy row even when its key differs from the payload owner.
+    tx.delete_projection(&string(row, "key")?)?;
+    tx.delete_projection(&key)?;
+    tx.delete_projection(&format!("{key}-body"))?;
+    Ok(())
+}
+
 pub(in crate::disk) fn upgrade(store: &Store) -> Result<()> {
     loop {
         let mut tx = store.begin()?;
         let old=tx.query("MATCH (n:OmRow) WHERE n.layer='host-network' OR (n.payload IS NOT NULL AND n.key ENDS WITH '/host-network') RETURN properties(n) AS p LIMIT 1",None)?;
         if let Some(row) = old.first() {
-            let mut value =
-                api::HostNetwork::decode(binary(row, "payload")?).map_err(|_| Error::Corrupt)?;
-            let target = parse_target(value.installation.as_ref())?;
-            let key = format!("{}/host-network", asset_key(target));
-            if value.observed_at == 0 {
-                value.observed_at = number(&tx.get(&key)?.ok_or(Error::Corrupt)?, "observed")?;
-            }
-            tx.accept_network(&value)?;
-            tx.delete_projection(&key)?;
-            tx.delete_projection(&format!("{key}-body"))?;
+            migrate_network_row(&mut tx, row)?;
             tx.commit()?;
             continue;
         }

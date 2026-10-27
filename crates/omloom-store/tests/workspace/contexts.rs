@@ -1,6 +1,84 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
+// A replacement cannot erase settings omitted by the actor's field projection.
+#[test]
+fn network_replacement_requires_readable_current_settings() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let space = create(&store, &actor, K::AddressSpace, "namespace")?;
+    let routing = create(&store, &actor, K::Vrf, "routing")?;
+    let link = create(&store, &actor, K::L2Domain, "link")?;
+    let request = api::Network {
+        kind: K::IpAddress as i32,
+        name: "allocation".into(),
+        cidr: "192.0.2.10/32".into(),
+        address_space: Some(space),
+        link: Some(link),
+        routing: Some(routing),
+        sharing: api::SharedUse::Exclusive as i32,
+        ..Default::default()
+    };
+    let target = changed(call(&store, &actor, Command::Network(request.clone()))?);
+    let original = detail(&store, &actor, &target)?.item;
+    for hidden in ["routing_context", "link_scope"] {
+        let mut limited = actor.clone();
+        limited.grants[0].read = Fields::Selected(
+            [
+                "name",
+                "cidr",
+                "address_space",
+                "sharing",
+                "link_scope",
+                "routing_context",
+            ]
+            .into_iter()
+            .filter(|name| *name != hidden)
+            .map(str::to_owned)
+            .collect(),
+        );
+        let shown = detail(&store, &limited, &target)?;
+        assert!(
+            shown
+                .item
+                .as_ref()
+                .ok_or("item")?
+                .fields
+                .iter()
+                .all(|f| f.name != hidden)
+        );
+        let before = store.usage()?;
+        let result = call(
+            &store,
+            &limited,
+            Command::Network(api::Network {
+                target: Some(target.clone()),
+                expected: Some(store.asset(AssetRef::try_from(&target)?)?.revision),
+                name: "renamed".into(),
+                link: if hidden == "link_scope" {
+                    None
+                } else {
+                    request.link.clone()
+                },
+                routing: if hidden == "routing_context" {
+                    None
+                } else {
+                    request.routing.clone()
+                },
+                ..request.clone()
+            }),
+        );
+        assert!(
+            matches!(result, Err(Error::Denied)),
+            "hidden {hidden}: {result:?}"
+        );
+        assert_eq!(store.usage()?, before);
+        assert_eq!(detail(&store, &actor, &target)?.item, original);
+    }
+    Ok(())
+}
+
 // Interface assignment needs a canonical allocation; missing binding is user input, not corruption.
 #[test]
 fn unbound_configured_address_assignment_is_invalid_and_atomic() -> TestResult {

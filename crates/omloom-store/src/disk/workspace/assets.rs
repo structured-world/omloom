@@ -875,8 +875,8 @@ impl Store {
             .map(|p| string(p, "key").map(text))
             .collect::<Result<_>>()?;
         let fetched = tx.query(
-            "UNWIND $keys AS key MATCH (a:OmRow) WHERE a.key=key RETURN properties(a) AS p LIMIT 101",
-            params([("keys", Value::Array(keys.clone()))]),
+            "UNWIND $keys AS key MATCH (a:OmRow) WHERE a.key=key RETURN properties(a) AS p LIMIT $ceiling",
+            params([("keys", Value::Array(keys.clone())), ("ceiling", Value::Int((MAX_PAGE + 1) as i64))]),
         )?;
         let mut by_key = fetched
             .into_iter()
@@ -886,8 +886,9 @@ impl Store {
             .iter()
             .map(|item| by_key.remove(&string(item, "key")?).ok_or(Error::Corrupt))
             .collect::<Result<Vec<_>>>()?;
-        let fields = tx.query("UNWIND $keys AS owner UNWIND $fields AS name MATCH (f:OmRow) WHERE f.key=owner+'/intent/'+name RETURN properties(f) AS p LIMIT 4097", params([
+        let fields = tx.query("UNWIND $keys AS owner UNWIND $fields AS name MATCH (f:OmRow) WHERE f.key=owner+'/intent/'+name RETURN properties(f) AS p LIMIT $ceiling", params([
             ("keys", Value::Array(keys)), ("fields", strings(&query.columns)),
+            ("ceiling", Value::Int((MAX_PAGE * MAX_FIELDS + 1) as i64)),
         ]))?;
         if fields.len() > MAX_PAGE * MAX_FIELDS {
             return Err(Error::Limit);
@@ -920,8 +921,8 @@ impl Store {
             })
             .collect::<Result<Vec<_>>>()?;
         let networks = tx.query(
-            "UNWIND $keys AS key MATCH (n:OmRow) WHERE n.key=key RETURN properties(n) AS p LIMIT 101",
-            params([("keys", Value::Array(network_keys))]),
+            "UNWIND $keys AS key MATCH (n:OmRow) WHERE n.key=key RETURN properties(n) AS p LIMIT $ceiling",
+            params([("keys", Value::Array(network_keys)), ("ceiling", Value::Int((MAX_PAGE + 1) as i64))]),
         )?;
         let mut group_metadata = BTreeMap::new();
         if query.columns.iter().any(|field| field == "vrid") {
@@ -938,7 +939,7 @@ impl Store {
                 .map(|t| text(network::identity(t)))
                 .collect::<Vec<_>>();
             if !group_refs.is_empty() {
-                let settings = tx.query("UNWIND $groups AS selected MATCH (g:OmRow) WHERE g.key='group/'+selected MATCH (a:OmRow) WHERE a.key='asset/'+g.asset WITH a,g WHERE a.incarnation=g.incarnation AND a.adoption=$adopted RETURN properties(g) AS p LIMIT 101", params([("groups", Value::Array(group_refs)), ("adopted", Value::Int(wire::Adoption::Adopted as i32 as i64))]))?;
+                let settings = tx.query("UNWIND $groups AS selected MATCH (g:OmRow) WHERE g.key='group/'+selected MATCH (a:OmRow) WHERE a.key='asset/'+g.asset WITH a,g WHERE a.incarnation=g.incarnation AND a.adoption=$adopted RETURN properties(g) AS p LIMIT $ceiling", params([("groups", Value::Array(group_refs)), ("adopted", Value::Int(wire::Adoption::Adopted as i32 as i64)), ("ceiling", Value::Int((MAX_PAGE + 1) as i64))]))?;
                 for row in settings {
                     group_metadata.insert(target(&row)?, row);
                 }

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { model } from './api';
+import { model, enumLabel } from './api';
 defineProps<{value:model.InterfaceAddressView}>();
-const stability=(value:model.AddressStability)=>model.AddressStability[value].toLowerCase();
-const state=(value:model.AddressState)=>model.AddressState[value].toLowerCase();
+const stability=(value:model.AddressStability)=>enumLabel(model.AddressStability, value);
+const state=(value:model.AddressState)=>enumLabel(model.AddressState, value);
 </script>
 <template><section v-if="value.coverage" aria-label="Current interface addresses">
   <h3>Current interface addresses</h3>

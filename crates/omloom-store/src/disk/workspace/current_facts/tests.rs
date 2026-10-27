@@ -39,6 +39,37 @@ fn evidence(target: AssetRef) -> api::HostNetwork {
     }
 }
 
+// Each migration iteration must consume its matched row, even at a legacy alias key.
+#[test]
+fn legacy_network_migration_consumes_the_matched_key() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let owner = new_target();
+    let value = evidence(owner);
+    let mut tx = store.begin()?;
+    let key = "legacy-alias/host-network";
+    tx.put(
+        key,
+        &asset_key(owner),
+        Class::Inventory,
+        props([
+            ("layer", text("host-network")),
+            ("payload", Value::Binary(value.encode_to_vec())),
+        ]),
+    )?;
+    let row = tx.get(key)?.ok_or("legacy row")?;
+    super::super::network_facts::migrate_network_row(&mut tx, &row)?;
+    assert!(
+        tx.get(key)?.is_none(),
+        "the upgrade loop would select the same row forever"
+    );
+    tx.commit()?;
+    let before = store.usage()?;
+    super::super::network_facts::upgrade(&store)?;
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // Reopening old disk state migrates values once and never invents precision lost by the old format.
 #[test]
 fn legacy_network_and_address_rows_migrate_atomically_once() -> TestResult {
