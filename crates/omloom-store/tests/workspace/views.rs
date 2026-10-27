@@ -31,7 +31,7 @@ fn definition_cleanup_progresses_past_retained_fields() -> TestResult {
         );
     }
     let first = store.diagnostic_database().execute_cypher_shared(
-        "MATCH (n:OmRow {parent:'definitions'}) RETURN n.key AS key LIMIT 16",
+        "MATCH (n:OmRow {parent:'definitions'}) RETURN n.key AS key ORDER BY n.key LIMIT 16",
         None,
         None,
         None,
@@ -71,7 +71,11 @@ fn definition_cleanup_progresses_past_retained_fields() -> TestResult {
     let before = store.usage()?;
     let started = std::time::Instant::now();
     let mut removed = 0;
-    let mut cursor = None;
+    let first = store.workspace_cleanup_definitions(16, None)?;
+    assert_eq!(first.pinned, 16);
+    assert_eq!(first.removed, 0);
+    assert!(first.cursor.is_some());
+    let mut cursor = first.cursor;
     for _ in 0..3 {
         let page = store.workspace_cleanup_definitions(16, cursor.as_deref())?;
         assert!(page.removed + page.pinned <= 16);
