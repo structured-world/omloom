@@ -30,16 +30,19 @@ const contextItems = computed(() => {
   return items.value.filter(i => references.includes(i.target?.assetId ?? '') || key(i.target) === key(props.group?.target));
 });
 const needsReview = computed(() => !!props.item && (props.working.roots.length > 0 || !!props.working.focus));
-watch([space, link, routing, selectedGroup, sharing, groupMode, vrid, vlanId, name, cidr], () => { reviewed.value = undefined; });
+let reviewTurn = 0;
+watch([space, link, routing, selectedGroup, sharing, groupMode, vrid, vlanId, name, cidr], () => { reviewTurn++; reviewed.value = undefined; }, { flush: 'sync' });
 async function reviewContext() {
+  const turn = ++reviewTurn;
+  reviewed.value = undefined;
   try {
     error.value = '';
     const roots = [props.item?.target, ...contextItems.value.map(i => i.target)].filter((t): t is AssetRef => !!t);
     const working = model.WorkingContext.create({ roots: [...new Map(roots.map(t => [key(t), t])).values()] });
     const reply = await call({ oneofKind: 'prepare', prepare: model.Prepare.create({ view: model.View.NETWORK }) }, working);
     if (reply.oneofKind !== 'actions') throw Error('Network context review is unavailable');
-    reviewed.value = model.WorkingContext.create({ ...working, expected: reply.actions.revision });
-  } catch (e) { error.value = String(e); }
+    if (turn === reviewTurn) reviewed.value = model.WorkingContext.create({ ...working, expected: reply.actions.revision });
+  } catch (e) { if (turn === reviewTurn) error.value = String(e); }
 }
 const matchingGroups = computed(() => items.value.filter(i => i.kind === K.ADDRESS_GROUP && input(i.fields.find(f => f.name === 'sharing')) === `SHARED_USE_${model.SharedUse[sharing.value]}`));
 async function loadOptions() {

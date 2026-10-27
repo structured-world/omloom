@@ -959,6 +959,27 @@ test('scoped allocation edits review their enclosing network references', async 
       // The initial submission must not mutate in an incomplete context.
       await dialog.getByRole('button', { name: 'Apply reviewed settings', exact: true }).click();
       await expect(dialog).toBeVisible();
+      // Delay the real prepare reply while the user edits; it must not certify the new values.
+      let release, received;
+      const pending = new Promise(resolve => { received = resolve; });
+      const gate = new Promise(resolve => { release = resolve; });
+      const delayed = async route => {
+        const request = m.Request.fromBinary(route.request().postDataBuffer().subarray(5));
+        if (request.command.oneofKind !== 'prepare') return route.continue();
+        const response = await route.fetch(); received(); await gate;
+        await route.fulfill({ response });
+      };
+      await page.route('**/omloom.workspace.v1.Workspace/Call', delayed);
+      await dialog.getByRole('button', { name: 'Review broader network context', exact: true }).click();
+      await pending;
+      await dialog.getByLabel('Name', { exact: true }).fill(`Reviewed IP changed ${width}`);
+      const replied = page.waitForResponse(response => response.url().endsWith('/omloom.workspace.v1.Workspace/Call'));
+      release();
+      await replied;
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      await expect(dialog.getByText('Context reviewed. Changing the settings requires a new review.', { exact: true })).toBeHidden({ timeout: 1000 });
+      await page.unroute('**/omloom.workspace.v1.Workspace/Call', delayed);
+      await dialog.getByLabel('Name', { exact: true }).fill(`Reviewed IP ${width}`);
       await dialog.getByRole('button', { name: 'Review broader network context', exact: true }).click();
       await expect(dialog.getByRole('region', { name: 'Reviewed network context' })).toContainText('Reviewed namespace');
       await dialog.getByRole('button', { name: 'Apply reviewed settings', exact: true }).click();
