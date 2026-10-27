@@ -81,12 +81,27 @@ fn network_replacement_requires_readable_current_settings() -> TestResult {
                 "sharing",
                 "link_scope",
                 "routing_context",
+                "vrid",
             ]
             .into_iter()
             .filter(|name| *name != hidden)
             .map(str::to_owned)
             .collect(),
         );
+        // Positive control: restoring only this field must admit the same replacement.
+        let mut readable = limited.clone();
+        if let Fields::Selected(fields) = &mut readable.grants[0].read {
+            fields.push(hidden.into());
+        }
+        call(
+            &store,
+            &readable,
+            Command::Network(api::Network {
+                target: Some(target.clone()),
+                expected: Some(store.asset(AssetRef::try_from(&target)?)?.revision),
+                ..request.clone()
+            }),
+        )?;
         let shown = detail(&store, &limited, &target)?;
         assert!(
             shown
