@@ -34,26 +34,83 @@ fn old_strict_catalog_upgrades_without_recreating_the_database()
         batch_rows: 128,
     };
     let store = Store::open(dir.path(), policy.clone())?;
-    let mut old = store
+    let old = store
         .db
         .label_schemas()?
         .into_iter()
         .find(|s| s.name == "OmRow")
         .ok_or(Error::Corrupt)?;
-    for field in [
-        "address",
-        "meaning",
-        "zone",
-        "binding",
-        "ip_order",
-        "prefix_length",
-        "working",
-    ] {
-        old.properties.remove(field);
-    }
     let expected_revision = old.schema_revision;
+    // The complete version-2 declaration is independent of the current schema.
     let mut declaration = LabelSchema::new_node_id("OmRow");
-    declaration.properties = old.properties;
+    declaration.add_property(PropertyDef::new("key", PropertyType::String).not_null());
+    for name in [
+        "candidate",
+        "cursor",
+        "snapshot",
+        "parent",
+        "policy",
+        "asset",
+        "incarnation",
+        "layer",
+        "authority",
+        "connection",
+        "object_kind",
+        "object_id",
+        "lifetime",
+        "field",
+        "source",
+        "claim",
+        "source_revision",
+        "scan",
+        "operation",
+        "caller",
+        "action",
+        "provider_task",
+        "worker",
+        "actor",
+        "to_asset",
+        "to_incarnation",
+        "vtext",
+    ] {
+        declaration.add_property(PropertyDef::new(name, PropertyType::String));
+    }
+    for name in [
+        "completeness",
+        "review_rows",
+        "review_bytes",
+        "schema",
+        "revision",
+        "class",
+        "size",
+        "kind",
+        "adoption",
+        "observed",
+        "valid",
+        "inventory_revision",
+        "state",
+        "outcome",
+        "at",
+        "expires",
+        "epoch",
+        "until",
+        "vtype",
+        "vint",
+        "settlement_rows",
+        "settlement_bytes",
+    ] {
+        declaration.add_property(PropertyDef::new(name, PropertyType::Int));
+    }
+    for name in ["restored", "pinned", "vflag", "settled"] {
+        declaration.add_property(PropertyDef::new(name, PropertyType::Bool));
+    }
+    for name in ["counts", "sizes"] {
+        declaration.add_property(PropertyDef::new(
+            name,
+            PropertyType::Array(Box::new(PropertyType::Int)),
+        ));
+    }
+    declaration.add_property(PropertyDef::new("digest", PropertyType::Binary));
     let publication = store.db.publish_schema(SchemaPackage {
         labels: vec![LabelDeclaration {
             schema: declaration,
@@ -68,14 +125,36 @@ fn old_strict_catalog_upgrades_without_recreating_the_database()
             .all_ready()
     );
     let mut tx = store.begin()?;
+    tx.put(
+        "preserved-v2-field",
+        "legacy",
+        Class::Inventory,
+        props([
+            ("field", text("description")),
+            ("vtype", Value::Int(1)),
+            ("vtext", text("preserved value")),
+        ]),
+    )?;
     tx.root.insert("schema".into(), Value::Int(2));
     tx.changed = true;
     tx.commit()?;
     drop(store);
-    let store = Store::open(dir.path(), policy)?;
+    let store = Store::open(dir.path(), policy.clone())?;
     assert_eq!(
         number(&store.read(ROOT)?.ok_or(Error::Corrupt)?, "schema")?,
         SCHEMA_VERSION
+    );
+    assert_eq!(
+        inventory::read_field(&store.read("preserved-v2-field")?.ok_or(Error::Missing)?)?.value,
+        Some(wire::field::Value::Text("preserved value".into()))
+    );
+    let before = store.usage()?;
+    drop(store);
+    let store = Store::open(dir.path(), policy)?;
+    assert_eq!(
+        store.usage()?,
+        before,
+        "reopening an upgraded catalog must not rewrite it"
     );
     Ok(())
 }
