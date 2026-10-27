@@ -6,13 +6,14 @@ const props = defineProps<{ definitions: model.Definition[]; working: model.Work
 const emit = defineEmits<{ close: []; saved: [] }>();
 const csv = ref(''); const source = ref(''); const kind = ref<number>(AssetKind.DEVICE); const preview = ref<model.Preview>(); const error = ref('');
 const actions = ref<model.Actions>(); const parent = ref('');
+const revision = ref<bigint>();
 const parents = computed(() => [...new Map(actions.value?.creations.flatMap(c => c.parent?.target ? [[key(c.parent.target), c.parent] as const] : [])).values()]);
 const choices = computed(() => actions.value?.creations.filter(c => key(c.parent?.target) === parent.value) ?? []);
 const choice = computed(() => choices.value.find(c => c.kind === kind.value));
 watch(choices, options => { if (!options.some(c => c.kind === kind.value) && options[0]) kind.value = options[0].kind; });
 onMounted(async () => { try {
   const result = await call({ oneofKind: 'prepare', prepare: model.Prepare.create() }, model.WorkingContext.create({ ...props.working, expected: undefined }));
-  if (result.oneofKind !== 'actions') throw Error('Import context is unavailable'); actions.value = result.actions;
+  if (result.oneofKind !== 'actions') throw Error('Import context is unavailable'); actions.value = result.actions; revision.value = result.actions.revision;
   if (parents.value.length === 1) parent.value = key(parents.value[0]!.target);
 } catch (e) { error.value = String(e); } });
 const mappings = ref([{ source: 'name', field: 'name' }]);
@@ -20,10 +21,11 @@ const destinations = computed(() => [{ id: 'name', name: 'Name' }, { id: 'descri
 async function run(apply: boolean) {
   error.value = '';
   try {
-    if (!actions.value || !choice.value) throw Error('Choose an applicable kind and actual parent');
+    if (!actions.value || revision.value === undefined || !choice.value) throw Error('Choose an applicable kind and actual parent');
     if (!apply && mappings.value.some(m => !destinations.value.some(f => f.id === m.field))) throw Error('Review mappings that do not apply in this context');
-    const result = await call({ oneofKind: 'import', import: model.Import.create(apply ? { preview: preview.value?.id } : { csv: csv.value, source: source.value, kind: kind.value, mappings: mappings.value, parent: choice.value.parent?.target }) }, model.WorkingContext.create({ ...props.working, expected: apply ? preview.value?.revision : actions.value.revision }));
-    if (apply) emit('saved'); else if (result.oneofKind === 'preview') preview.value = result.preview;
+    const result = await call({ oneofKind: 'import', import: model.Import.create(apply ? { preview: preview.value?.id } : { csv: csv.value, source: source.value, kind: kind.value, mappings: mappings.value, parent: choice.value.parent?.target }) }, model.WorkingContext.create({ ...props.working, expected: apply ? preview.value?.revision : revision.value }));
+    // Editing the draft clears its preview, but must retain the revision acknowledged by the store.
+    if (apply) emit('saved'); else if (result.oneofKind === 'preview') { preview.value = result.preview; revision.value = result.preview.revision; }
   } catch (e) { error.value = String(e); }
 }
 </script>

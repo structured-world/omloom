@@ -881,6 +881,56 @@ test('departments share one backup host while namespace and host projections rem
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
 
+test('CSV draft revisions survive repeated previews on desktop and phone', async ({ page }) => {
+  // Preview writes advance the revision; editing a draft must retain that fence and detect unrelated writes.
+  for (const width of [1440,390]) {
+    const dir = await mkdtemp(join(tmpdir(), 'omloom-import-revision-'));
+    const server = await host(dir);
+    try {
+      await page.setViewportSize({width,height:900});
+      await page.goto(server.url);
+      if (width===390) await page.getByRole('button',{name:'More',exact:true}).click();
+      await page.getByRole('button',{name:'Import CSV',exact:true}).click();
+      const dialog=page.getByRole('dialog',{name:'Import inventory',exact:true});
+      await dialog.getByLabel('Source name',{exact:true}).fill('first source');
+      await dialog.getByLabel('CSV',{exact:true}).fill('external_id,name,other\nedge-1,Original name,Original alternative');
+      await dialog.getByRole('button',{name:'Prepare preview',exact:true}).click();
+      await expect(dialog.getByRole('heading',{name:'Review 1 rows',exact:true})).toBeVisible();
+      await expect(dialog).toContainText('Original name');
+      await dialog.getByLabel('CSV',{exact:true}).fill('external_id,name,other\nedge-1,Revised name,Final name');
+      await dialog.getByRole('button',{name:'Prepare preview',exact:true}).click();
+      await expect(dialog.getByRole('heading',{name:'Review 1 rows',exact:true})).toBeVisible();
+      await expect(dialog).toContainText('Name: Revised name');
+      await dialog.getByLabel('Source name',{exact:true}).fill('revised source');
+      await dialog.getByRole('button',{name:'Prepare preview',exact:true}).click();
+      await expect(dialog.getByRole('heading',{name:'Review 1 rows',exact:true})).toBeVisible();
+      await expect(dialog).toContainText('Name: Revised name');
+      await dialog.getByLabel('CSV column',{exact:true}).fill('other');
+      await dialog.getByRole('button',{name:'Prepare preview',exact:true}).click();
+      await expect(dialog.getByRole('heading',{name:'Review 1 rows',exact:true})).toBeVisible();
+      await expect(dialog).toContainText('Name: Final name');
+      await expect(page.getByRole('button',{name:'Final name',exact:true})).toHaveCount(0);
+      await dialog.getByRole('button',{name:'Accept reviewed rows',exact:true}).click();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByRole('button',{name:'Final name',exact:true})).toBeVisible();
+      await expect(page.getByRole('button',{name:'Original name',exact:true})).toHaveCount(0);
+      await expect(page.getByRole('button',{name:'Revised name',exact:true})).toHaveCount(0);
+      if (!await page.getByRole('button',{name:'Import CSV',exact:true}).isVisible()) await page.getByRole('button',{name:'More',exact:true}).click();
+      await page.getByRole('button',{name:'Import CSV',exact:true}).click();
+      await dialog.getByLabel('Source name',{exact:true}).fill('concurrent source');
+      await dialog.getByLabel('CSV',{exact:true}).fill('external_id,name\nedge-2,Before other edit');
+      await dialog.getByRole('button',{name:'Prepare preview',exact:true}).click();
+      await expect(dialog.getByRole('heading',{name:'Review 1 rows',exact:true})).toBeVisible();
+      const other=await page.context().newPage();
+      try { await other.goto(server.url); await create(other,'Unrelated edit'); } finally { await other.close(); }
+      await dialog.getByLabel('CSV',{exact:true}).fill('external_id,name\nedge-2,Conflicting draft');
+      await dialog.getByRole('button',{name:'Prepare preview',exact:true}).click();
+      await expect(dialog.getByRole('alert')).toContainText('Code: ABORTED');
+      await expect(dialog.getByRole('button',{name:'Accept reviewed rows',exact:true})).toHaveCount(0);
+    } finally { await server.stop(); await rm(dir,{recursive:true,force:true}); }
+  }
+});
+
 test('CSV preview validates before acceptance and scope is selected by the server', async ({ page }) => {
   // No browser login mock or API interception: both fixture hosts open real disk state.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-import-ui-'));
