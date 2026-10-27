@@ -203,21 +203,28 @@ fn field_value<'a>(fields: &'a [wire::Field], name: &str) -> Option<&'a field::V
         .and_then(|f| f.value.as_ref())
 }
 pub(super) fn hot_fields(asset: &wire::Asset, data: &mut Properties) -> Result<()> {
-    let name = asset.intended.iter().find_map(|f| {
-        f.field
-            .as_ref()
-            .filter(|f| f.name == "name")
-            .and_then(|f| match f.value.as_ref() {
-                Some(field::Value::Text(s)) => Some(s.as_str()),
-                _ => None,
-            })
-    });
-    if let Some(name) = name {
-        if name.len() > 160 {
-            return Err(Error::Invalid);
+    for intended in &asset.intended {
+        if let Some(field) = &intended.field {
+            hot_field(field, data)?;
         }
-        data.insert("name".into(), text(name));
-        data.insert("name_sort".into(), text(name.to_lowercase()));
+    }
+    Ok(())
+}
+fn hot_field(field: &wire::Field, data: &mut Properties) -> Result<()> {
+    if let Some(field::Value::Text(value)) = &field.value {
+        match field.name.as_str() {
+            "name" => {
+                if value.len() > 160 {
+                    return Err(Error::Invalid);
+                }
+                data.insert("name".into(), text(value));
+                data.insert("name_sort".into(), text(value.to_lowercase()));
+            }
+            "virtualization_role" => {
+                data.insert("virtualization_role".into(), text(value));
+            }
+            _ => {}
+        }
     }
     Ok(())
 }

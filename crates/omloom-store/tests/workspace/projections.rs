@@ -876,10 +876,51 @@ fn virtualization_requires_an_explicit_host_role() -> TestResult {
             ..Default::default()
         }),
     )?;
-    let Reply::Page(after) = call(&store, &actor, Command::Query(q))? else {
+    let Reply::Page(after) = call(&store, &actor, Command::Query(q.clone()))? else {
         panic!("page");
     };
     assert_eq!(after.total, 2);
     assert!(after.items.iter().any(|i| i.target.as_ref() == Some(&host)));
+    // A full-intent writer must preserve the role projection on an unrelated edit.
+    let target = AssetRef::try_from(&host)?;
+    let mut accepted = store.asset(target)?;
+    accepted.intended.push(wire::IntendedField {
+        field: Some(text_field("description", "updated description")),
+        authority_id: accepted.intended[0].authority_id.clone(),
+    });
+    let expected = accepted.revision;
+    let record = admit(wire::record::Body::Asset(accepted));
+    store.save_asset(&record, Some(expected), "operator", 200)?;
+    let Reply::Page(edited) = call(&store, &actor, Command::Query(q.clone()))? else {
+        panic!("page");
+    };
+    assert_eq!(edited.total, 2);
+    assert!(
+        edited
+            .items
+            .iter()
+            .any(|i| i.target.as_ref() == Some(&host))
+    );
+    let unchanged = store.usage()?;
+    store.save_asset(&record, Some(expected + 1), "operator", 201)?;
+    assert_eq!(store.usage()?, unchanged);
+    let mut accepted = store.asset(target)?;
+    let expected = accepted.revision;
+    accepted.intended.retain(|value| {
+        value
+            .field
+            .as_ref()
+            .is_none_or(|f| f.name != "virtualization_role")
+    });
+    store.save_asset(
+        &admit(wire::record::Body::Asset(accepted)),
+        Some(expected),
+        "operator",
+        202,
+    )?;
+    let Reply::Page(cleared) = call(&store, &actor, Command::Query(q))? else {
+        panic!("page");
+    };
+    assert_eq!(cleared.total, 1);
     Ok(())
 }

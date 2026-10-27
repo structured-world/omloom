@@ -1417,16 +1417,10 @@ impl Tx<'_> {
             ),
             ("revision", int(revision)?),
         ]));
-        let name = self.get(&format!("{key}/intent/name"))?;
-        if let Some(name) = name.as_ref().filter(|p| number(p, "vtype").ok() == Some(1)) {
-            let name = string(name, "vtext")?;
-            row.insert("name".into(), text(&name));
-            row.insert("name_sort".into(), text(name.to_lowercase()));
-        }
-        if let Some(role) = self.get(&format!("{key}/intent/virtualization_role"))?
-            && role.get("vtype") == Some(&Value::Int(1))
-        {
-            row.insert("virtualization_role".into(), text(string(&role, "vtext")?));
+        for field in ["name", "virtualization_role"] {
+            if let Some(value) = self.get(&format!("{key}/intent/{field}"))? {
+                hot_field(&inventory::read_field(&value)?, &mut row)?;
+            }
         }
         self.put_against(&key, "assets", Class::Inventory, row, old.as_ref())?;
         self.audit(&key, &context.actor, "inventory.accepted", revision, now)?;
