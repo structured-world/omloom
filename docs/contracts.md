@@ -2,7 +2,9 @@
 
 The protobuf schema in `proto/omloom/v1/contracts.proto` generates Rust wire
 types at build time and TypeScript types with `yarn generate`. It describes
-inventory and operations; there is no runnable server, installer or user UI yet.
+inventory and operations. The [development inventory host](inventory.md) exercises
+them with a persistent store and browser UI under explicit test identities;
+there is no supported installer or production authentication integration yet.
 
 Rust admission is `omloom_contracts::decode(frame, limits, &budget)`. It returns
 an immutable validated record or a stable error class. Wire types are untrusted
