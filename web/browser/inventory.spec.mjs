@@ -48,6 +48,33 @@ async function workspaceClient(url) {
   return { m, rpc };
 }
 
+test('leaving hypervisor through another resource kind discards its role', async ({ page }) => {
+  // A hidden draft role must not make a subsequently selected ordinary installation a hypervisor.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-kind-roundtrip-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${server.url}/#/?view=0`);
+      await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      const kind = dialog.getByLabel('Resource kind', { exact: true });
+      await kind.selectOption({ label: 'Hypervisor (OS installation)' });
+      await kind.selectOption({ label: 'device' });
+      await kind.selectOption({ label: 'software installation' });
+      await expect(dialog.getByLabel('Virtualization role', { exact: true })).toHaveValue('unknown');
+      await dialog.getByLabel('Name', { exact: true }).fill(`Ordinary installation ${width}`);
+      await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      const params = new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
+      const target = { assetId: params.get('asset'), incarnation: params.get('incarnation') };
+      const saved = await rpc({ oneofKind: 'read', read: m.Read.create({ target }) }, target);
+      expect(saved.detail.item.fields.some(f => f.name === 'virtualization_role')).toBe(false);
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('placement defaults to unknown and description is editable immediately', async ({ page }) => {
   // Optional placement must not block creation or force a separate field-enable action.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-create-inputs-'));

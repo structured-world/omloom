@@ -32,7 +32,7 @@ const resourceType = computed({
     hypervisor.value = value === 'hypervisor' || (props.view === model.View.VIRTUALIZATION && Number(value) === AssetKind.SOFTWARE_INSTALLATION);
     kind.value = value === 'hypervisor' ? AssetKind.SOFTWARE_INSTALLATION : Number(value);
     if (hypervisor.value) { values.virtualization_role = virtualizationChoices[0]!.value; modes.virtualization_role = 'set'; }
-    else if (previous && kind.value === AssetKind.SOFTWARE_INSTALLATION) { values.virtualization_role = ''; modes.virtualization_role = 'preserve'; }
+    else if (previous) { values.virtualization_role = ''; modes.virtualization_role = 'preserve'; }
   },
 });
 const known = computed(() => kind.value === AssetKind.ADDRESS_REFERENCE);
