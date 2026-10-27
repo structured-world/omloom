@@ -515,6 +515,35 @@ impl Store {
         {
             return Err(Error::Conflict);
         }
+        if sharing == api::SharedUse::Exclusive.as_str_name() && !member.remove {
+            // Check the inverse write order too, including uncommitted atomic reconciliation.
+            let references = tx.query(
+                "MATCH (n:OmRow {parent:'networks'}) WHERE n.binding=$binding AND n.meaning=$meaning RETURN properties(n) AS p LIMIT 129",
+                params([
+                    ("binding", text(identity(address))),
+                    ("meaning", text(api::AddressMeaning::Configured.as_str_name())),
+                ]),
+            )?;
+            if references.len() > 128 {
+                return Err(Error::Limit);
+            }
+            for reference in references {
+                let fact = super::super::target(&reference)?;
+                for relation in tx.working_relations(fact)? {
+                    if relation.kind != wire::RelationKind::Contains as i32
+                        || parse_target(relation.to.as_ref())? != fact
+                    {
+                        continue;
+                    }
+                    let owner = parse_target(relation.from.as_ref())?;
+                    if owner != interface
+                        && number(&tx.asset(owner)?, "kind")? == wire::AssetKind::Interface as u64
+                    {
+                        return Err(Error::Conflict);
+                    }
+                }
+            }
+        }
         if member.priority.is_some()
             && (sharing != api::SharedUse::Vrrp.as_str_name()
                 || !matches!(member.priority, Some(1..=255)))

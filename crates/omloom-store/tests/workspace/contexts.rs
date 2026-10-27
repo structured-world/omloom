@@ -1,6 +1,126 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
+// Assignment order must not bypass configured-reference ownership, including atomic reconciliation.
+#[test]
+fn exclusive_participant_rechecks_existing_configured_references() -> TestResult {
+    for atomic in [false, true] {
+        let dir = tempfile::tempdir()?;
+        let store = Store::open(dir.path(), policy())?;
+        let actor = operator();
+        let space = create(&store, &actor, K::AddressSpace, "space")?;
+        let owner = create(&store, &actor, K::Interface, "configured owner")?;
+        let other = create(&store, &actor, K::Interface, "other interface")?;
+        let canonical = changed(call(
+            &store,
+            &actor,
+            Command::Network(api::Network {
+                kind: K::IpAddress as i32,
+                name: "allocation".into(),
+                cidr: "192.0.2.10/32".into(),
+                address_space: Some(space),
+                ..Default::default()
+            }),
+        )?);
+        let fact = changed(within(
+            &store,
+            &actor,
+            focused(&store, &owner)?,
+            Command::Address(api::Address {
+                address: Some("192.0.2.10".into()),
+                meaning: Some(api::AddressMeaning::Configured as i32),
+                parent: Some(owner.clone()),
+                ..Default::default()
+            }),
+        )?);
+        if !atomic {
+            within(
+                &store,
+                &actor,
+                api::WorkingContext {
+                    expected: Some(store.usage()?.revision),
+                    ..Default::default()
+                },
+                Command::Address(api::Address {
+                    target: Some(fact.clone()),
+                    expected: Some(1),
+                    binding: Some(canonical.clone()),
+                    ..Default::default()
+                }),
+            )?;
+        }
+        let before = store.usage()?;
+        let command = if atomic {
+            Command::Address(api::Address {
+                target: Some(fact.clone()),
+                expected: Some(1),
+                binding: Some(canonical.clone()),
+                interface: Some(Box::new(other)),
+                ..Default::default()
+            })
+        } else {
+            Command::Member(api::Member {
+                address: Some(canonical.clone()),
+                interface: Some(other),
+                expected: store.asset(AssetRef::try_from(&canonical)?)?.revision,
+                ..Default::default()
+            })
+        };
+        let result = within(
+            &store,
+            &actor,
+            api::WorkingContext {
+                expected: Some(before.revision),
+                ..Default::default()
+            },
+            command,
+        );
+        assert!(
+            matches!(result, Err(Error::Conflict)),
+            "conflicting assignment accepted (atomic={atomic}): {result:?}"
+        );
+        assert_eq!(
+            store.usage()?,
+            before,
+            "conflicting assignment must roll back the whole command"
+        );
+        assert!(detail(&store, &actor, &canonical)?.participants.is_empty());
+        if atomic {
+            assert!(
+                detail(&store, &actor, &fact)?
+                    .item
+                    .expect("fact")
+                    .fields
+                    .iter()
+                    .all(|f| f.name != "binding")
+            );
+        }
+        // The configured owner can still accept its own allocation.
+        within(
+            &store,
+            &actor,
+            api::WorkingContext {
+                expected: Some(before.revision),
+                ..Default::default()
+            },
+            Command::Address(api::Address {
+                target: Some(fact),
+                expected: Some(if atomic { 1 } else { 2 }),
+                binding: Some(canonical.clone()),
+                interface: Some(Box::new(owner.clone())),
+                ..Default::default()
+            }),
+        )?;
+        assert_eq!(
+            detail(&store, &actor, &canonical)?.participants[0]
+                .interface
+                .as_ref(),
+            Some(&owner)
+        );
+    }
+    Ok(())
+}
+
 // Retaining a mapping cannot bypass exclusive-interface checks when destination knowledge becomes configuration.
 #[test]
 fn retained_binding_rechecks_configured_owner_without_explicit_rebinding() -> TestResult {
