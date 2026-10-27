@@ -828,6 +828,19 @@ impl Tx<'_> {
         working: &api::WorkingContext,
         request: &api::Network,
     ) -> Result<()> {
+        let existing = if let Some(target) = request.target.as_ref() {
+            let collection = if request.kind == wire::AssetKind::AddressGroup as i32 {
+                "group"
+            } else {
+                "network"
+            };
+            self.get(&format!(
+                "{collection}/{}",
+                identity(parse_target(Some(target))?)
+            ))?
+        } else {
+            None
+        };
         if let Some(target) = request.target.as_ref() {
             let target = parse_target(Some(target))?;
             let columns: &[&str] = match wire::AssetKind::try_from(request.kind) {
@@ -843,12 +856,15 @@ impl Tx<'_> {
                     "vrid",
                 ],
             };
-            // Network is a full replacement. A projected omission is not an
-            // explicit clear, so an unreadable configuration cannot be replaced.
-            if columns
-                .iter()
-                .any(|field| !context.field(target, request.kind, field, false))
-            {
+            // A replacement needs every stored setting to be readable. Name
+            // lives on the asset root; absent optional settings cannot be lost.
+            if columns.iter().any(|field| {
+                (*field == "name"
+                    || existing
+                        .as_ref()
+                        .is_some_and(|row| row.contains_key(*field)))
+                    && !context.field(target, request.kind, field, false)
+            }) {
                 return Err(Error::Denied);
             }
         }
@@ -888,16 +904,13 @@ impl Tx<'_> {
             }
             selection.contains(parse_target(Some(reference))?, self)?;
         }
-        if let Some(target) = &request.target {
-            let target = parse_target(Some(target))?;
-            if let Some(old) = self.get(&format!("network/{}", identity(target)))? {
-                for field in ["address_space", "link_scope", "routing_context", "group"] {
-                    if let Some(value) = old.get(field) {
-                        selection.contains(
-                            groups::reference(value.as_str().ok_or(Error::Corrupt)?)?,
-                            self,
-                        )?;
-                    }
+        if let Some(old) = existing {
+            for field in ["address_space", "link_scope", "routing_context", "group"] {
+                if let Some(value) = old.get(field) {
+                    selection.contains(
+                        groups::reference(value.as_str().ok_or(Error::Corrupt)?)?,
+                        self,
+                    )?;
                 }
             }
         }

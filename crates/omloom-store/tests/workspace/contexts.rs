@@ -1,6 +1,55 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
+// Absent optional settings cannot be erased by replacement and need no read grant.
+#[test]
+fn network_replacement_allows_absent_unreadable_settings() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let space = create(&store, &actor, K::AddressSpace, "namespace")?;
+    let mut limited = actor.clone();
+    limited.grants[0].read = Fields::Selected(
+        ["name", "cidr", "address_space", "sharing"]
+            .map(str::to_owned)
+            .into(),
+    );
+    for (kind, cidr) in [
+        (K::IpAddress, "192.0.2.10/32"),
+        (K::Prefix, "198.51.100.0/24"),
+    ] {
+        let request = api::Network {
+            kind: kind as i32,
+            name: "allocation".into(),
+            cidr: cidr.into(),
+            address_space: Some(space.clone()),
+            sharing: api::SharedUse::Exclusive as i32,
+            ..Default::default()
+        };
+        let target = changed(call(&store, &actor, Command::Network(request.clone()))?);
+        call(
+            &store,
+            &limited,
+            Command::Network(api::Network {
+                target: Some(target.clone()),
+                expected: Some(store.asset(AssetRef::try_from(&target)?)?.revision),
+                name: "renamed".into(),
+                ..request
+            }),
+        )?;
+        assert!(
+            detail(&store, &actor, &target)?
+                .item
+                .ok_or("item")?
+                .fields
+                .iter()
+                .any(|f| f.name == "name"
+                    && f.value == Some(wire::field::Value::Text("renamed".into())))
+        );
+    }
+    Ok(())
+}
+
 // A replacement cannot erase settings omitted by the actor's field projection.
 #[test]
 fn network_replacement_requires_readable_current_settings() -> TestResult {
