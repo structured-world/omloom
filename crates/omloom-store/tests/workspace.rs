@@ -75,6 +75,65 @@ fn query() -> api::Query {
     }
 }
 
+fn unplaced_search_matches(search: &str) -> TestResult {
+    use api::{reply::Result as Reply, request::Command};
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let device = create(&store, &actor, K::Device, "needle")?;
+    let space = create(&store, &actor, K::AddressSpace, "space")?;
+    let Reply::Mutation(ip) = call(
+        &store,
+        &actor,
+        Command::Network(api::Network {
+            kind: K::IpAddress as i32,
+            name: "address".into(),
+            cidr: "192.0.2.5/32".into(),
+            address_space: Some(space),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("allocation");
+    };
+    let expected = if search == "needle" {
+        device
+    } else {
+        ip.targets[0].clone()
+    };
+    let before = store.usage()?;
+    for unplaced in [false, true] {
+        let Reply::Page(page) = call(
+            &store,
+            &actor,
+            Command::Query(api::Query {
+                search: search.into(),
+                unplaced,
+                ..query()
+            }),
+        )?
+        else {
+            panic!("page");
+        };
+        assert_eq!(page.total, 1, "unplaced={unplaced}");
+        assert_eq!(page.items[0].target.as_ref(), Some(&expected));
+    }
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// Adding physical-placement probes must preserve non-level text-search bindings.
+#[test]
+fn unplaced_search_keeps_text_binding() -> TestResult {
+    unplaced_search_matches("needle")
+}
+
+// Exact address search must retain its namespace-row binding through placement probes.
+#[test]
+fn unplaced_search_keeps_ip_binding() -> TestResult {
+    unplaced_search_matches("192.0.2.5")
+}
+
 // Physical containment and port ownership exclude children, while roots remain selectable.
 #[test]
 fn unplaced_excludes_contained_and_port_hardware() -> TestResult {

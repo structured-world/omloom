@@ -649,35 +649,6 @@ impl Store {
             }
             clauses.push(format!("({})", selected.join(" OR ")));
         }
-        if query.unplaced {
-            predicate_joins.push(format!(
-                " WITH {} WHERE {}",
-                bindings.join(", "),
-                clauses.join(" AND ")
-            ));
-            clauses.clear();
-            // Physical ownership has two orientations. Keep both probes in the
-            // top-level plan so each starts from the indexed current asset.
-            for (path, kinds, flag) in [
-                (
-                    "(probe:OmRow {key:a.key})-[:OmRelationFrom]->(placement:OmRow)",
-                    &[wire::RelationKind::InstalledIn as i32][..],
-                    "installed",
-                ),
-                (
-                    "(probe:OmRow {key:a.key})<-[:OmRelationTo]-(placement:OmRow)",
-                    &[
-                        wire::RelationKind::Contains as i32,
-                        wire::RelationKind::HasPort as i32,
-                    ][..],
-                    "contained",
-                ),
-            ] {
-                predicate_joins.push(format!(" OPTIONAL MATCH {path} WHERE placement.kind IN {kinds:?} WITH {}, placement IS NOT NULL AS {flag}", bindings.join(", ")));
-                bindings.push(flag.into());
-                clauses.push(format!("NOT {flag}"));
-            }
-        }
         if !query.search.trim().is_empty() {
             let term = query.search.trim().to_lowercase();
             if term.parse::<AssetId>().is_ok() {
@@ -765,6 +736,34 @@ impl Store {
                 } else {
                     format!("({})", search_scopes.join(" OR "))
                 });
+            }
+        }
+        if query.unplaced {
+            predicate_joins.push(format!(
+                " WITH {} WHERE {}",
+                bindings.join(", "),
+                clauses.join(" AND ")
+            ));
+            clauses.clear();
+            // Preserve every search binding before the two indexed placement probes.
+            for (path, kinds, flag) in [
+                (
+                    "(probe:OmRow {key:a.key})-[:OmRelationFrom]->(placement:OmRow)",
+                    &[wire::RelationKind::InstalledIn as i32][..],
+                    "installed",
+                ),
+                (
+                    "(probe:OmRow {key:a.key})<-[:OmRelationTo]-(placement:OmRow)",
+                    &[
+                        wire::RelationKind::Contains as i32,
+                        wire::RelationKind::HasPort as i32,
+                    ][..],
+                    "contained",
+                ),
+            ] {
+                predicate_joins.push(format!(" OPTIONAL MATCH {path} WHERE placement.kind IN {kinds:?} WITH {}, placement IS NOT NULL AS {flag}", bindings.join(", ")));
+                bindings.push(flag.into());
+                clauses.push(format!("NOT {flag}"));
             }
         }
         if network_scope {
