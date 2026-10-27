@@ -249,6 +249,7 @@ impl Store {
         use api::request::Command as C;
         let working = request.working;
         match request.command.ok_or(Error::Invalid)? {
+            C::ObserveProxmox(_) => Err(Error::Invalid),
             C::Identity(_) => Ok(reply(api::reply::Result::Identity(api::Identity {
                 name: context.actor.clone(),
                 fixture: context.fixture.clone(),
@@ -265,6 +266,12 @@ impl Store {
             C::Write(write) => {
                 self.workspace_write(context, write, working.as_ref().ok_or(Error::Invalid)?, now)
             }
+            C::Create(create) => self.workspace_create(
+                context,
+                create,
+                working.as_ref().ok_or(Error::Invalid)?,
+                now,
+            ),
             C::Bulk(bulk) => {
                 self.workspace_bulk(context, bulk, working.as_ref().ok_or(Error::Invalid)?, now)
             }

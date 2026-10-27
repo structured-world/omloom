@@ -1,6 +1,396 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
+// A bad address must roll back the whole creation, including placement and earlier facts.
+#[test]
+fn initial_addresses_are_atomic_and_do_not_invent_interfaces_or_vlans() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let request = api::Create {
+        kind: K::SoftwareInstallation as i32,
+        changes: vec![text_field("name", "Hypervisor")],
+        addresses: vec![
+            api::InitialAddress {
+                address: "192.0.2.10".into(),
+                prefix_length: None,
+                vlan_tag: Some(42),
+                interface_name: None,
+            },
+            api::InitialAddress {
+                address: "2001:db8::10".into(),
+                prefix_length: Some(64),
+                vlan_tag: None,
+                interface_name: None,
+            },
+        ],
+        ..Default::default()
+    };
+    let mut bad = request.clone();
+    bad.addresses[1].address = "not an address".into();
+    let before = store.usage()?;
+    assert!(matches!(
+        call(&store, &actor, Command::Create(bad)),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
+    let mut bad_prefix = request.clone();
+    bad_prefix.addresses[1].prefix_length = Some(129);
+    assert!(matches!(
+        call(&store, &actor, Command::Create(bad_prefix)),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(
+        store.usage()?,
+        before,
+        "late validation must roll back earlier staged facts"
+    );
+    let target = changed(call(&store, &actor, Command::Create(request))?);
+    let shown = detail(&store, &actor, &target)?;
+    assert_eq!(shown.relations.len(), 2);
+    assert!(
+        shown
+            .related
+            .iter()
+            .all(|i| i.kind == K::AddressReference as i32)
+    );
+    let v4 = shown
+        .related
+        .iter()
+        .find(|i| i.fields.contains(&text_field("name", "192.0.2.10")))
+        .ok_or("v4")?;
+    let fields = detail(&store, &actor, v4.target.as_ref().ok_or("target")?)?
+        .item
+        .ok_or("item")?
+        .fields;
+    assert!(
+        fields
+            .iter()
+            .any(|f| f.name == "vlan_tag" && f.value == Some(wire::field::Value::Integer(42)))
+    );
+    assert!(!fields.iter().any(|f| f.name == "prefix_length"));
+    Ok(())
+}
+
+// A hypervisor is an installation even when hardware is unknown; VM attachment is atomic.
+#[test]
+fn hypervisor_installation_owns_vms_without_inventing_hardware() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let host = changed(call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            kind: K::SoftwareInstallation as i32,
+            changes: vec![
+                text_field("name", "Proxmox"),
+                text_field("virtualization_role", "VIRTUALIZATION_ROLE_HYPERVISOR"),
+            ],
+            ..Default::default()
+        }),
+    )?);
+    let guest = changed(within(
+        &store,
+        &actor,
+        focused(&store, &host)?,
+        Command::Write(api::Write {
+            kind: K::VirtualMachine as i32,
+            parent: Some(host.clone()),
+            changes: vec![text_field("name", "Guest")],
+            ..Default::default()
+        }),
+    )?);
+    let shown = detail(&store, &actor, &host)?;
+    assert!(
+        shown
+            .relations
+            .iter()
+            .any(|r| r.from.as_ref() == Some(&guest)
+                && r.to.as_ref() == Some(&host)
+                && r.kind == wire::RelationKind::RunsOn as i32)
+    );
+    let Reply::Page(page) = call(
+        &store,
+        &actor,
+        Command::Query(api::Query {
+            view: api::View::Virtualization as i32,
+            ..query()
+        }),
+    )?
+    else {
+        panic!("page")
+    };
+    assert_eq!(page.total, 2);
+    assert!(page.items.iter().all(|i| i.kind != K::Device as i32));
+    let os = create(&store, &actor, K::SoftwareInstallation, "ordinary OS")?;
+    let before = store.usage()?;
+    let denied = within(
+        &store,
+        &actor,
+        focused(&store, &os)?,
+        Command::Write(api::Write {
+            kind: K::VirtualMachine as i32,
+            parent: Some(os),
+            changes: vec![text_field("name", "invalid guest")],
+            ..Default::default()
+        }),
+    );
+    assert!(matches!(denied, Err(Error::Invalid)));
+    assert_eq!(store.usage()?, before);
+    let mut limited = actor.clone();
+    limited.grants[0].read = Fields::Selected(vec!["name".into(), "relations".into()]);
+    let denied = within(
+        &store,
+        &limited,
+        focused(&store, &host)?,
+        Command::Write(api::Write {
+            kind: K::VirtualMachine as i32,
+            parent: Some(host.clone()),
+            changes: vec![text_field("name", "hidden role")],
+            ..Default::default()
+        }),
+    );
+    assert!(matches!(denied, Err(Error::Denied)));
+    assert_eq!(store.usage()?, before);
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    assert!(
+        detail(&store, &actor, &host)?
+            .relations
+            .iter()
+            .any(|r| r.from.as_ref() == Some(&guest))
+    );
+    Ok(())
+}
+
+// Hardware labels group the virtualization roots; their VMs remain one level below.
+#[test]
+fn virtualization_root_keeps_hosted_hypervisors_without_flattening_guests() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let server = create(&store, &actor, K::Device, "server")?;
+    let host = changed(within(
+        &store,
+        &actor,
+        focused(&store, &server)?,
+        Command::Write(api::Write {
+            kind: K::SoftwareInstallation as i32,
+            parent: Some(server),
+            changes: vec![
+                text_field("name", "Hypervisor"),
+                text_field("virtualization_role", "VIRTUALIZATION_ROLE_HYPERVISOR"),
+            ],
+            ..Default::default()
+        }),
+    )?);
+    let guest = changed(within(
+        &store,
+        &actor,
+        focused(&store, &host)?,
+        Command::Write(api::Write {
+            kind: K::VirtualMachine as i32,
+            parent: Some(host.clone()),
+            changes: vec![text_field("name", "guest")],
+            ..Default::default()
+        }),
+    )?);
+    let Reply::Page(page) = call(
+        &store,
+        &actor,
+        Command::Query(api::Query {
+            view: api::View::Virtualization as i32,
+            level_only: true,
+            ..query()
+        }),
+    )?
+    else {
+        panic!("page")
+    };
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].target.as_ref(), Some(&host));
+    // Disabling the role preserves the VM's placement fact and inventory visibility.
+    call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            target: Some(host),
+            expected: Some(1),
+            kind: K::SoftwareInstallation as i32,
+            changes: vec![text_field(
+                "virtualization_role",
+                "VIRTUALIZATION_ROLE_NOT_HYPERVISOR",
+            )],
+            ..Default::default()
+        }),
+    )?;
+    let Reply::Page(page) = call(
+        &store,
+        &actor,
+        Command::Query(api::Query {
+            view: api::View::Virtualization as i32,
+            level_only: true,
+            ..query()
+        }),
+    )?
+    else {
+        panic!("page")
+    };
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].target.as_ref(), Some(&guest));
+    let Reply::Detail(guest_detail) = call(
+        &store,
+        &actor,
+        Command::Read(api::Read {
+            target: Some(guest),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("detail")
+    };
+    let relation = guest_detail
+        .relations
+        .into_iter()
+        .find(|r| r.kind == wire::RelationKind::RunsOn as i32)
+        .ok_or("placement")?;
+    // Removing an old placement is authorized independently of the host's current capability.
+    call(
+        &store,
+        &actor,
+        Command::Relation(api::Relationship {
+            relation: Some(relation),
+            remove: true,
+        }),
+    )?;
+    Ok(())
+}
+
+// Existing direct device placements must not hide a guest behind a filtered hardware parent.
+#[test]
+fn virtualization_root_keeps_device_hosted_vms_visible() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let device = create(&store, &actor, K::Device, "existing server")?;
+    let guest = create(&store, &actor, K::VirtualMachine, "existing guest")?;
+    call(
+        &store,
+        &actor,
+        Command::Relation(api::Relationship {
+            relation: Some(wire::Relation {
+                from: Some(guest.clone()),
+                to: Some(device),
+                kind: wire::RelationKind::RunsOn as i32,
+                ..Default::default()
+            }),
+            remove: false,
+        }),
+    )?;
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    let before = store.usage()?;
+    for kinds in [vec![], vec![K::VirtualMachine as i32]] {
+        let Reply::Page(page) = call(
+            &store,
+            &actor,
+            Command::Query(api::Query {
+                view: api::View::Virtualization as i32,
+                level_only: true,
+                kinds,
+                ..query()
+            }),
+        )?
+        else {
+            panic!("page")
+        };
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].target.as_ref(), Some(&guest));
+    }
+    assert_eq!(store.usage()?, before, "browsing cannot rewrite placements");
+    Ok(())
+}
+
+// OS names cannot assert enabled virtualization; an explicit negative differs from unknown.
+#[test]
+fn windows_and_linux_become_hypervisors_only_when_the_role_is_enabled() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    for name in ["Windows Server", "Linux"] {
+        let os = create(&store, &actor, K::SoftwareInstallation, name)?;
+        call(
+            &store,
+            &actor,
+            Command::Write(api::Write {
+                target: Some(os.clone()),
+                expected: Some(1),
+                kind: K::SoftwareInstallation as i32,
+                changes: vec![text_field(
+                    "virtualization_role",
+                    "VIRTUALIZATION_ROLE_NOT_HYPERVISOR",
+                )],
+                ..Default::default()
+            }),
+        )?;
+        let Reply::Page(before) = call(
+            &store,
+            &actor,
+            Command::Query(api::Query {
+                view: api::View::Virtualization as i32,
+                ..query()
+            }),
+        )?
+        else {
+            panic!("page")
+        };
+        assert_eq!(before.total, 0);
+        call(
+            &store,
+            &actor,
+            Command::Write(api::Write {
+                target: Some(os.clone()),
+                expected: Some(2),
+                kind: K::SoftwareInstallation as i32,
+                changes: vec![text_field(
+                    "virtualization_role",
+                    "VIRTUALIZATION_ROLE_HYPERVISOR",
+                )],
+                ..Default::default()
+            }),
+        )?;
+        let Reply::Page(after) = call(
+            &store,
+            &actor,
+            Command::Query(api::Query {
+                view: api::View::Virtualization as i32,
+                ..query()
+            }),
+        )?
+        else {
+            panic!("page")
+        };
+        assert_eq!(after.total, 1);
+        call(
+            &store,
+            &actor,
+            Command::Write(api::Write {
+                target: Some(os),
+                expected: Some(3),
+                kind: K::SoftwareInstallation as i32,
+                changes: vec![text_field(
+                    "virtualization_role",
+                    "VIRTUALIZATION_ROLE_NOT_HYPERVISOR",
+                )],
+                ..Default::default()
+            }),
+        )?;
+    }
+    Ok(())
+}
+
 // Absent optional settings cannot be erased by replacement and need no read grant.
 #[test]
 fn network_replacement_allows_absent_unreadable_settings() -> TestResult {

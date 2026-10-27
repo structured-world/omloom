@@ -952,6 +952,126 @@ export interface Relationship {
     remove: boolean;
 }
 /**
+ * @generated from protobuf message omloom.workspace.v1.InitialAddress
+ */
+export interface InitialAddress {
+    /**
+     * User-known IPv4/IPv6 literal associated with this installation or machine.
+     * Interface, VRF and allocation identity remain unknown unless separately supplied.
+     *
+     * @generated from protobuf field: string address = 1
+     */
+    address: string;
+    /**
+     * User-known assignment mask; absent does not invent a host mask.
+     *
+     * @generated from protobuf field: optional uint32 prefix_length = 2
+     */
+    prefixLength?: number;
+    /**
+     * User-known local 802.1Q tag (1-4094), not a globally identified VLAN/L2 domain.
+     *
+     * @generated from protobuf field: optional uint32 vlan_tag = 3
+     */
+    vlanTag?: number;
+    /**
+     * Actual reported OS interface name, absent when the interface is unknown.
+     * Accepting it creates a logical interface, never a physical connector.
+     *
+     * @generated from protobuf field: optional string interface_name = 4
+     */
+    interfaceName?: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.ObserveProxmox
+ */
+export interface ObserveProxmox {
+    /**
+     * User-selected HTTPS API origin, optionally ending in /api2/json. Credentials
+     * are sent only to this origin; redirects are never followed.
+     *
+     * @generated from protobuf field: string endpoint = 1
+     */
+    endpoint: string;
+    /**
+     * Explicit Proxmox account including its realm, used only for ticket login.
+     *
+     * @generated from protobuf field: string username = 2
+     */
+    username: string;
+    /**
+     * Transient password for this request only; never inventory, logs or retained state.
+     *
+     * @generated from protobuf field: string password = 3
+     */
+    password: string;
+    /**
+     * Explicit Proxmox API token identity, mutually exclusive with ticket login.
+     *
+     * @generated from protobuf field: string token_id = 4
+     */
+    tokenId: string;
+    /**
+     * Transient API token secret, never included in responses or persisted.
+     *
+     * @generated from protobuf field: string token_secret = 5
+     */
+    tokenSecret: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.ObservedHypervisor
+ */
+export interface ObservedHypervisor {
+    /**
+     * Provider-reported node name, not a physical server identity or a merge key.
+     *
+     * @generated from protobuf field: string name = 1
+     */
+    name: string;
+    /**
+     * Configured non-local addresses with their actual OS interface names.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.InitialAddress addresses = 2
+     */
+    addresses: InitialAddress[];
+    /**
+     * Provider-reported CPU model when available; absence is unknown.
+     *
+     * @generated from protobuf field: optional string cpu_model = 3
+     */
+    cpuModel?: string;
+    /**
+     * Provider-reported physical/assigned memory bytes, not proof of bare-metal placement.
+     *
+     * @generated from protobuf field: optional uint64 memory_bytes = 4
+     */
+    memoryBytes?: bigint;
+    /**
+     * Explicit coverage gaps; omissions are never proof of absent configuration.
+     *
+     * @generated from protobuf field: repeated string limitations = 5
+     */
+    limitations: string[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.ObservationPreview
+ */
+export interface ObservationPreview {
+    /**
+     * API-reported Proxmox version. The response is an ephemeral review, not accepted inventory.
+     *
+     * @generated from protobuf field: string version = 1
+     */
+    version: string;
+    /**
+     * At most 16 authorized nodes. The user chooses the actual installation;
+     * names, IPs and hardware hints never merge existing identities automatically.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.ObservedHypervisor nodes = 2
+     */
+    nodes: ObservedHypervisor[];
+}
+/**
  * @generated from protobuf message omloom.workspace.v1.Write
  */
 export interface Write {
@@ -986,6 +1106,35 @@ export interface Write {
      * @generated from protobuf field: optional omloom.v1.AssetRef parent = 5
      */
     parent?: AssetRef;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.Create
+ */
+export interface Create {
+    /**
+     * User-selected kind of the new inventory resource, not an external provisioning request.
+     *
+     * @generated from protobuf field: omloom.v1.AssetKind kind = 1
+     */
+    kind: AssetKind;
+    /**
+     * Explicit initial accepted fields, validated using the ordinary write contract.
+     *
+     * @generated from protobuf field: repeated omloom.v1.Field changes = 2
+     */
+    changes: Field[];
+    /**
+     * Actual existing parent selected in the current working context, if known.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef parent = 3
+     */
+    parent?: AssetRef;
+    /**
+     * At most 16 initial address facts, committed with the new device, VM or installation.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.InitialAddress addresses = 4
+     */
+    addresses: InitialAddress[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Bulk
@@ -1930,6 +2079,22 @@ export interface Request {
          */
         interfaceAddresses: InterfaceAddresses;
     } | {
+        oneofKind: "create";
+        /**
+         * Create inventory and its initial local address facts in one transaction.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.Create create = 21
+         */
+        create: Create;
+    } | {
+        oneofKind: "observeProxmox";
+        /**
+         * Perform a bounded read-only Proxmox probe with transient credentials.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.ObserveProxmox observe_proxmox = 22
+         */
+        observeProxmox: ObserveProxmox;
+    } | {
         oneofKind: undefined;
     };
 }
@@ -2023,6 +2188,14 @@ export interface Reply {
          */
         actions: Actions;
     } | {
+        oneofKind: "observation";
+        /**
+         * Ephemeral provider facts for explicit review, with no inventory mutation.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.ObservationPreview observation = 11
+         */
+        observation: ObservationPreview;
+    } | {
         oneofKind: undefined;
     };
 }
@@ -2052,17 +2225,30 @@ export enum View {
     SERVICES = 4
 }
 /**
+ * Explicit current role of an OS installation, independently of its product name.
+ * Missing or unspecified means unknown, not disabled virtualization.
+ *
  * @generated from protobuf enum omloom.workspace.v1.VirtualizationRole
  */
 export enum VirtualizationRole {
     /**
+     * No assertion about installed and enabled virtualization.
+     *
      * @generated from protobuf enum value: VIRTUALIZATION_ROLE_UNSPECIFIED = 0;
      */
     UNSPECIFIED = 0,
     /**
+     * The installation has the required virtualization components installed and enabled.
+     *
      * @generated from protobuf enum value: VIRTUALIZATION_ROLE_HYPERVISOR = 1;
      */
-    HYPERVISOR = 1
+    HYPERVISOR = 1,
+    /**
+     * Known not to be an active hypervisor, including absent or disabled components.
+     *
+     * @generated from protobuf enum value: VIRTUALIZATION_ROLE_NOT_HYPERVISOR = 2;
+     */
+    NOT_HYPERVISOR = 2
 }
 /**
  * @generated from protobuf enum omloom.workspace.v1.FieldType
@@ -2562,6 +2748,66 @@ class Relationship$Type extends MessageType<Relationship> {
  */
 export const Relationship = new Relationship$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class InitialAddress$Type extends MessageType<InitialAddress> {
+    constructor() {
+        super("omloom.workspace.v1.InitialAddress", [
+            { no: 1, name: "address", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "prefix_length", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ },
+            { no: 3, name: "vlan_tag", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ },
+            { no: 4, name: "interface_name", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.InitialAddress
+ */
+export const InitialAddress = new InitialAddress$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class ObserveProxmox$Type extends MessageType<ObserveProxmox> {
+    constructor() {
+        super("omloom.workspace.v1.ObserveProxmox", [
+            { no: 1, name: "endpoint", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "username", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "password", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "token_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 5, name: "token_secret", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.ObserveProxmox
+ */
+export const ObserveProxmox = new ObserveProxmox$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class ObservedHypervisor$Type extends MessageType<ObservedHypervisor> {
+    constructor() {
+        super("omloom.workspace.v1.ObservedHypervisor", [
+            { no: 1, name: "name", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "addresses", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => InitialAddress },
+            { no: 3, name: "cpu_model", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "memory_bytes", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 5, name: "limitations", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.ObservedHypervisor
+ */
+export const ObservedHypervisor = new ObservedHypervisor$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class ObservationPreview$Type extends MessageType<ObservationPreview> {
+    constructor() {
+        super("omloom.workspace.v1.ObservationPreview", [
+            { no: 1, name: "version", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "nodes", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => ObservedHypervisor }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.ObservationPreview
+ */
+export const ObservationPreview = new ObservationPreview$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class Write$Type extends MessageType<Write> {
     constructor() {
         super("omloom.workspace.v1.Write", [
@@ -2577,6 +2823,21 @@ class Write$Type extends MessageType<Write> {
  * @generated MessageType for protobuf message omloom.workspace.v1.Write
  */
 export const Write = new Write$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class Create$Type extends MessageType<Create> {
+    constructor() {
+        super("omloom.workspace.v1.Create", [
+            { no: 1, name: "kind", kind: "enum", T: () => ["omloom.v1.AssetKind", AssetKind, "ASSET_KIND_"] },
+            { no: 2, name: "changes", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Field },
+            { no: 3, name: "parent", kind: "message", T: () => AssetRef },
+            { no: 4, name: "addresses", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => InitialAddress }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.Create
+ */
+export const Create = new Create$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class Bulk$Type extends MessageType<Bulk> {
     constructor() {
@@ -2947,7 +3208,9 @@ class Request$Type extends MessageType<Request> {
             { no: 16, name: "prepare", kind: "message", oneof: "command", T: () => Prepare },
             { no: 17, name: "address", kind: "message", oneof: "command", T: () => Address },
             { no: 19, name: "host_network", kind: "message", oneof: "command", T: () => HostNetwork },
-            { no: 20, name: "interface_addresses", kind: "message", oneof: "command", T: () => InterfaceAddresses }
+            { no: 20, name: "interface_addresses", kind: "message", oneof: "command", T: () => InterfaceAddresses },
+            { no: 21, name: "create", kind: "message", oneof: "command", T: () => Create },
+            { no: 22, name: "observe_proxmox", kind: "message", oneof: "command", T: () => ObserveProxmox }
         ]);
     }
 }
@@ -2968,7 +3231,8 @@ class Reply$Type extends MessageType<Reply> {
             { no: 7, name: "preview", kind: "message", oneof: "result", T: () => Preview },
             { no: 8, name: "download", kind: "message", oneof: "result", T: () => Download },
             { no: 9, name: "migration_preview", kind: "message", oneof: "result", T: () => MigrationPreview },
-            { no: 10, name: "actions", kind: "message", oneof: "result", T: () => Actions }
+            { no: 10, name: "actions", kind: "message", oneof: "result", T: () => Actions },
+            { no: 11, name: "observation", kind: "message", oneof: "result", T: () => ObservationPreview }
         ]);
     }
 }

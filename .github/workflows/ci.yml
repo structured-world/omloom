@@ -22,8 +22,9 @@ jobs:
           version: "36.2"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - run: cargo install cargo-nextest --locked
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - run: corepack enable
+      - run: yarn install --immutable
+      - run: yarn playwright install --with-deps chromium
       - run: sh scripts/check-contracts.sh
   docs:
     name: Documentation

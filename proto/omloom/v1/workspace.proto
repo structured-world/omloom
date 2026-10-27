@@ -15,9 +15,15 @@ enum View {
   VIEW_VIRTUALIZATION = 3;
   VIEW_SERVICES = 4;
 }
+// Explicit current role of an OS installation, independently of its product name.
+// Missing or unspecified means unknown, not disabled virtualization.
 enum VirtualizationRole {
+  // No assertion about installed and enabled virtualization.
   VIRTUALIZATION_ROLE_UNSPECIFIED = 0;
+  // The installation has the required virtualization components installed and enabled.
   VIRTUALIZATION_ROLE_HYPERVISOR = 1;
+  // Known not to be an active hypervisor, including absent or disabled components.
+  VIRTUALIZATION_ROLE_NOT_HYPERVISOR = 2;
 }
 enum FieldType {
   FIELD_TYPE_TEXT = 0;
@@ -381,6 +387,50 @@ message Relationship {
   // Explicit revision-checked removal of this relationship only.
   bool remove = 2;
 }
+message InitialAddress {
+  // User-known IPv4/IPv6 literal associated with this installation or machine.
+  // Interface, VRF and allocation identity remain unknown unless separately supplied.
+  string address = 1;
+  // User-known assignment mask; absent does not invent a host mask.
+  optional uint32 prefix_length = 2;
+  // User-known local 802.1Q tag (1-4094), not a globally identified VLAN/L2 domain.
+  optional uint32 vlan_tag = 3;
+  // Actual reported OS interface name, absent when the interface is unknown.
+  // Accepting it creates a logical interface, never a physical connector.
+  optional string interface_name = 4;
+}
+message ObserveProxmox {
+  // User-selected HTTPS API origin, optionally ending in /api2/json. Credentials
+  // are sent only to this origin; redirects are never followed.
+  string endpoint = 1;
+  // Explicit Proxmox account including its realm, used only for ticket login.
+  string username = 2;
+  // Transient password for this request only; never inventory, logs or retained state.
+  string password = 3;
+  // Explicit Proxmox API token identity, mutually exclusive with ticket login.
+  string token_id = 4;
+  // Transient API token secret, never included in responses or persisted.
+  string token_secret = 5;
+}
+message ObservedHypervisor {
+  // Provider-reported node name, not a physical server identity or a merge key.
+  string name = 1;
+  // Configured non-local addresses with their actual OS interface names.
+  repeated InitialAddress addresses = 2;
+  // Provider-reported CPU model when available; absence is unknown.
+  optional string cpu_model = 3;
+  // Provider-reported physical/assigned memory bytes, not proof of bare-metal placement.
+  optional uint64 memory_bytes = 4;
+  // Explicit coverage gaps; omissions are never proof of absent configuration.
+  repeated string limitations = 5;
+}
+message ObservationPreview {
+  // API-reported Proxmox version. The response is an ephemeral review, not accepted inventory.
+  string version = 1;
+  // At most 16 authorized nodes. The user chooses the actual installation;
+  // names, IPs and hardware hints never merge existing identities automatically.
+  repeated ObservedHypervisor nodes = 2;
+}
 message Write {
   // Existing target for an edit; absent means explicitly create a new identity.
   optional omloom.v1.AssetRef target = 1;
@@ -393,6 +443,16 @@ message Write {
   // Explicit existing parent selected for creation in an enclosing context.
   // The server derives the typed attachment and commits it with the child.
   optional omloom.v1.AssetRef parent = 5;
+}
+message Create {
+  // User-selected kind of the new inventory resource, not an external provisioning request.
+  omloom.v1.AssetKind kind = 1;
+  // Explicit initial accepted fields, validated using the ordinary write contract.
+  repeated omloom.v1.Field changes = 2;
+  // Actual existing parent selected in the current working context, if known.
+  optional omloom.v1.AssetRef parent = 3;
+  // At most 16 initial address facts, committed with the new device, VM or installation.
+  repeated InitialAddress addresses = 4;
 }
 message Bulk {
   // Explicit bounded target identities reviewed by the user.
@@ -727,6 +787,10 @@ message Request {
     HostNetwork host_network = 19;
     // Current source/interface address facts; temporary addresses are rejected.
     InterfaceAddresses interface_addresses = 20;
+    // Create inventory and its initial local address facts in one transaction.
+    Create create = 21;
+    // Perform a bounded read-only Proxmox probe with transient credentials.
+    ObserveProxmox observe_proxmox = 22;
   }
 }
 message Reply {
@@ -752,5 +816,7 @@ message Reply {
     MigrationPreview migration_preview = 9;
     // Applicable context-specific actions under the current application revision.
     Actions actions = 10;
+    // Ephemeral provider facts for explicit review, with no inventory mutation.
+    ObservationPreview observation = 11;
   }
 }

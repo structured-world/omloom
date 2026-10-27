@@ -18,7 +18,7 @@ const categories:Record<model.View,{name:string;kinds:number[]}[]>={
     {name:'Shared IP groups',kinds:[K.ADDRESS_GROUP]},{name:'Ports & cables',kinds:[K.PORT,K.CABLE]},
   ],
   [model.View.VIRTUALIZATION]:[
-    {name:'Virtual machines',kinds:[K.VIRTUAL_MACHINE]},{name:'Hypervisors',kinds:[K.DEVICE]},
+    {name:'Virtual machines',kinds:[K.VIRTUAL_MACHINE]},{name:'Hypervisors',kinds:[K.SOFTWARE_INSTALLATION]},
     {name:'Clusters',kinds:[K.CLUSTER]},
   ],
   [model.View.SERVICES]:[

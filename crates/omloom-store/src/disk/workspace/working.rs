@@ -24,10 +24,17 @@ fn writable_fields(
 ) -> Vec<String> {
     use wire::AssetKind as K;
     let builtins: &[&str] = if kind == K::AddressReference {
-        &["address", "prefix_length", "meaning", "zone", "description"]
-    } else if kind == K::Device {
-        &["name", "description", "serial", "virtualization_role"]
-    } else if matches!(kind, K::Rack | K::Port | K::Cable) {
+        &[
+            "address",
+            "prefix_length",
+            "meaning",
+            "zone",
+            "vlan_tag",
+            "description",
+        ]
+    } else if kind == K::SoftwareInstallation {
+        &["name", "description", "virtualization_role"]
+    } else if matches!(kind, K::Device | K::Rack | K::Port | K::Cable) {
         &["name", "description", "serial"]
     } else {
         &["name", "description"]
@@ -153,6 +160,7 @@ pub(super) fn attachment(
         (K::Device, K::VirtualMachine | K::Service) | (K::VirtualMachine, K::Service) => {
             Some((R::RunsOn, true))
         }
+        (K::SoftwareInstallation, K::VirtualMachine) => Some((R::RunsOn, true)),
         (K::Device, K::Storage) => Some((R::On, true)),
         _ => None,
     }
@@ -491,6 +499,17 @@ impl Tx<'_> {
             return Err(Error::Denied);
         }
         let (relation, reverse) = attachment(kind, child).ok_or(Error::Invalid)?;
+        if kind == wire::AssetKind::SoftwareInstallation && child == wire::AssetKind::VirtualMachine
+        {
+            if !context.field(parent, kind as i32, "virtualization_role", false) {
+                return Err(Error::Denied);
+            }
+            if row.get("virtualization_role").and_then(Value::as_str)
+                != Some(api::VirtualizationRole::Hypervisor.as_str_name())
+            {
+                return Err(Error::Invalid);
+            }
+        }
         Ok(Some((parent, relation, reverse)))
     }
 }
@@ -615,6 +634,18 @@ impl Store {
                         wire::AssetKind::try_from(parent.kind).map_err(|_| Error::Corrupt)?;
                     if attachment(parent_kind, kind).is_none() {
                         continue;
+                    }
+                    if parent_kind == K::SoftwareInstallation && kind == K::VirtualMachine {
+                        let target = parse_target(parent.target.as_ref())?;
+                        if !context.field(target, parent.kind, "virtualization_role", false)
+                            || tx
+                                .asset(target)?
+                                .get("virtualization_role")
+                                .and_then(Value::as_str)
+                                != Some(api::VirtualizationRole::Hypervisor.as_str_name())
+                        {
+                            continue;
+                        }
                     }
                 }
                 let view_kinds = super::assets::kind_for_view(view);

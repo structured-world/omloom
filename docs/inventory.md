@@ -3,8 +3,8 @@
 The development host runs the actual inventory API, Vue interface and on-disk
 CoordiNode store. It requires an explicit synthetic fixture context and binds
 only to `127.0.0.1`. It is not a production login, installer or permission
-provider. Use test-owned data. No connector credentials or external effects
-are supported by this host.
+provider. Use test-owned data. Persistent connector credentials and external
+mutations are not supported; the request-scoped read-only observer is described below.
 
 HTTP requests must name `127.0.0.1` or `localhost` with the actual listener port
 in their Host header or HTTP/2 authority. Foreign, missing or conflicting
@@ -13,20 +13,30 @@ website from acquiring fixture access through DNS rebinding.
 
 ## Run
 
-With Rust, Node.js, protoc and the repository dependencies installed:
+With Rust, Node.js 24+, Corepack and protoc 36.2+ installed:
 
 ```sh
-npm ci
-npm run generate
-npm run build:app
-cargo build --locked -p omloom-app
-target/debug/omloom-dev --data var/inventory-fixture --ui dist/app --fixture operator --port 9086
+corepack enable
+yarn install --immutable
+yarn dev
 ```
 
-Select another unused local port when necessary. Omitting `--port` selects a
-free port and prints its URL. `--data`, `--ui` and `--fixture` are required.
-Closing and restarting the host with the same data path preserves inventory.
-Never open the same directory from two independent host processes.
+`yarn start` is an alias. The command generates clients, checks/builds the UI
+into `var/development-ui`, then compiles and starts the Rust host with the
+`operator` fixture and persistent database `var/development`. It selects a free
+loopback port and prints its URL. The first Rust compilation can take several
+minutes. Ctrl+C stops the host; restart after source changes (no live reload).
+
+Pass host options directly, for example:
+
+```sh
+yarn dev --port 9086 --fixture viewer --data var/viewer-test
+```
+
+Explicit options override the development defaults. Choose a different port if
+one is occupied. Closing and restarting with the same data path preserves
+inventory. Never open the same directory from two independent host processes.
+The command does not open or import another existing local database implicitly.
 
 The host allows 128 MiB of query execution memory per database statement.
 Use `--query-memory-mib MIB` to select another finite budget. This controls
@@ -46,6 +56,35 @@ Create resources independently of a hierarchy or integration. Name collisions
 do not merge identities. Edit with explicit preserve, set and clear operations;
 the accepted revision prevents a stale form from replacing a newer edit.
 Observed evidence, import proposals and accepted values remain separate.
+
+In Virtualization, create a **Hypervisor (OS installation)** independently of
+the physical server. Search for a permitted existing server or leave the single
+placement field **Unknown**. A hypervisor is an OS installation with a virtualization
+role; the same hardware may have other installations. A VM can select its
+hypervisor immediately, or explicitly leave placement unknown. Creating from
+the parent resource pins that parent. Placement search stays within the current
+scope, uses pages, and checks creation and relationship permissions before save.
+The resource and its selected placement commit together.
+Windows requires installed and enabled Hyper-V; Linux likewise requires its
+virtualization components installed and enabled. The OS name alone assigns no
+role. Choose the current virtualization role explicitly; unknown and known not
+to be a hypervisor remain distinct. The Proxmox preset selects its default
+hypervisor role and allows correction. Accepted role is not evidence of live
+health or successful provisioning.
+
+Device, VM and OS installation creation accept up to 16 initial IP facts, with
+optional prefix lengths and local VLAN tags. Unknown interface ownership stays
+unknown. A local VLAN tag is not a canonical VLAN or routing-domain assignment.
+
+The development host includes a read-only Proxmox VE observer. Enter an HTTPS
+endpoint and optional one-time login credentials or API token, then choose
+**Observe**. Review node name, CPU and memory hints, and interface addresses
+before selecting values for the unsaved form. Credentials clear after the read
+and never enter inventory storage. Provider certificates must validate; redirects
+are disabled. Missing permissions and unavailable reads remain visible as limits.
+This preview does not identify a physical chassis, adopt VMs or execute actions.
+Only saving the resource changes inventory, including its selected placement and
+reviewed interfaces and addresses in one transaction.
 
 Presentation and scope are independent. Switching Hardware, Network or another
 view retains the selected root. Details, filters, columns and selection are
