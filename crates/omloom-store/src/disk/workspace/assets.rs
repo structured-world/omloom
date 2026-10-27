@@ -522,6 +522,7 @@ impl Store {
             if [
                 wire::AssetKind::AddressSpace as u64,
                 wire::AssetKind::Prefix as u64,
+                wire::AssetKind::L2Domain as u64,
             ]
             .contains(&number(&row, "kind")?)
             {
@@ -611,6 +612,16 @@ impl Store {
                 use working::NetworkScope as N;
                 let space = match scope {
                     N::Space(space) | N::Prefix { space, .. } => *space,
+                    N::Link(link) => {
+                        network_scope = true;
+                        let visible = visible_clause(context, Some("link_scope"), &mut values);
+                        let link = parameter(&mut values, text(network::identity(*link)));
+                        selected.push(format!(
+                            "(a.kind={} AND {visible} AND ns.link_scope={link})",
+                            wire::AssetKind::Vlan as i32
+                        ));
+                        continue;
+                    }
                 };
                 let mut terms = vec![format!(
                     "ns.address_space={}",

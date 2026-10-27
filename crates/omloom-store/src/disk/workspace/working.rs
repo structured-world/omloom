@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) enum NetworkScope {
     Space(AssetRef),
+    Link(AssetRef),
     Prefix {
         space: AssetRef,
         block: ipnet::IpNet,
@@ -74,6 +75,23 @@ impl Selection<'_> {
             let root = tx.visible_asset(self.context, target)?;
             let kind = wire::AssetKind::try_from(number(&root, "kind")? as i32)
                 .map_err(|_| Error::Corrupt)?;
+            if kind == wire::AssetKind::Vlan {
+                if !self.context.field(target, kind as i32, "link_scope", false) {
+                    return Err(Error::Denied);
+                }
+                let row = tx
+                    .get(&format!("network/{}", network::identity(target)))?
+                    .ok_or(Error::Missing)?;
+                for scope in &self.networks {
+                    if let NetworkScope::Link(link) = scope
+                        && row.get("link_scope").and_then(Value::as_str)
+                            == Some(network::identity(*link).as_str())
+                    {
+                        return Ok(());
+                    }
+                }
+                return Err(Error::Denied);
+            }
             if !matches!(kind, wire::AssetKind::IpAddress | wire::AssetKind::Prefix)
                 || !self
                     .context
@@ -353,6 +371,9 @@ impl Tx<'_> {
         }
         if kind == wire::AssetKind::AddressSpace as i32 {
             return Ok(Some(NetworkScope::Space(target)));
+        }
+        if kind == wire::AssetKind::L2Domain as i32 {
+            return Ok(Some(NetworkScope::Link(target)));
         }
         if kind != wire::AssetKind::Prefix as i32 {
             return Ok(None);

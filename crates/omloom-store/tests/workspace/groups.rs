@@ -1,5 +1,107 @@
 use super::*;
 
+// VLAN allocation inside an L2 domain must remain readable in that exact namespace.
+#[test]
+fn l2_domain_contains_only_its_scoped_vlans() -> TestResult {
+    use api::{reply::Result as Reply, request::Command};
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let first = create(&store, &actor, K::L2Domain, "first")?;
+    let second = create(&store, &actor, K::L2Domain, "second")?;
+    let mut vlans = Vec::new();
+    for link in [&first, &second] {
+        let Some(Reply::Mutation(created)) = store
+            .workspace(
+                &actor,
+                api::Request {
+                    working: Some(api::WorkingContext {
+                        focus: Some(link.clone()),
+                        expected: Some(store.usage()?.revision),
+                        ..Default::default()
+                    }),
+                    command: Some(Command::Network(api::Network {
+                        parent: Some(Box::new(link.clone())),
+                        kind: K::Vlan as i32,
+                        name: "VLAN 10".into(),
+                        vlan_id: Some(10),
+                        ..Default::default()
+                    })),
+                },
+                100,
+            )?
+            .result
+        else {
+            panic!("vlan");
+        };
+        vlans.push(created.targets[0].clone());
+    }
+    let before = store.usage()?;
+    for focused in [false, true] {
+        let working = api::WorkingContext {
+            roots: if focused {
+                Vec::new()
+            } else {
+                vec![first.clone()]
+            },
+            focus: focused.then(|| first.clone()),
+            ..Default::default()
+        };
+        let Reply::Page(page) = call(
+            &store,
+            &actor,
+            Command::Query(api::Query {
+                view: api::View::Network as i32,
+                kinds: vec![K::Vlan as i32],
+                roots: working.roots.clone(),
+                focus: working.focus.clone(),
+                level_only: true,
+                ..query()
+            }),
+        )?
+        else {
+            panic!("page");
+        };
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].target.as_ref(), Some(&vlans[0]));
+        for (index, target) in vlans.iter().enumerate() {
+            let read = store.workspace(
+                &actor,
+                api::Request {
+                    working: Some(working.clone()),
+                    command: Some(Command::Read(api::Read {
+                        target: Some(target.clone()),
+                        ..Default::default()
+                    })),
+                },
+                100,
+            );
+            if index == 0 {
+                assert!(read.is_ok());
+            } else {
+                assert!(matches!(read, Err(Error::Denied)));
+            }
+        }
+    }
+    let mut restricted = actor.clone();
+    restricted.grants[0].read = Fields::Selected(vec!["name".into(), "relations".into()]);
+    let Reply::Page(page) = call(
+        &store,
+        &restricted,
+        Command::Query(api::Query {
+            kinds: vec![K::Vlan as i32],
+            roots: vec![first],
+            ..query()
+        }),
+    )?
+    else {
+        panic!("page");
+    };
+    assert_eq!(page.total, 0);
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // Archival must preserve usable namespaces and participant identities referenced by current IPAM.
 #[test]
 fn archival_rejects_inbound_ipam_references() -> TestResult {
