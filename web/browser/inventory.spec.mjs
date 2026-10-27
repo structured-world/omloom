@@ -1340,6 +1340,10 @@ test('shared gateway addresses use one durable group and intended participant se
     await page.goto(server.url + hash);
     await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('Intended priority 255');
     await page.getByRole('button', { name: 'Remove participant', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Review participant removal', exact: true }).click();
+    await expect(dialog.getByRole('region', { name: 'Reviewed participant context' })).toContainText('Router uplink');
+    await dialog.getByRole('button', { name: 'Remove participant', exact: true }).click();
+    await expect(dialog).toBeHidden();
     await expect(page.getByRole('button', { name: 'Remove participant', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
     await page.getByRole('button', { name: 'Gateway A', exact: true }).click();

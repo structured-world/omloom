@@ -129,11 +129,13 @@ range. It does not supply routing or an interface configuration mask.
 Editing an allocation from a focused scope explicitly reviews a context containing
 its previous and proposed network references. Browsing scope remains unchanged.
 The network-settings operation replaces the configuration and requires read
-access to all its settings; projected omissions cannot implicitly clear hidden
+access to all its stored settings; absent optional settings need no read grant.
+Projected omissions cannot implicitly clear hidden
 VRF or L2 references. Use the resource field editor for an independent name change.
 Participant assignment can explicitly search across permitted inventory from an
 IPAM scope. Before committing, review the allocation, its shared group when
 applicable, and the selected interface; browsing scope and permissions stay unchanged.
+Removing a participant uses the same explicit context review and keeps both resources.
 
 Connections in broader scope explicitly selects both endpoints before offering
 their supported relationship meanings. Editing or removing a connection checks
