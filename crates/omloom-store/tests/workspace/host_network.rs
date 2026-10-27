@@ -1,6 +1,76 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
+// A service name is optional inventory data; socket ownership remains usable without it.
+#[test]
+fn unnamed_service_network_evidence_remains_readable() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let os = create(&store, &actor, K::SoftwareInstallation, "OS")?;
+    let Reply::Mutation(created) = scoped(
+        &store,
+        &actor,
+        &os,
+        Command::Write(api::Write {
+            parent: Some(os.clone()),
+            kind: K::Service as i32,
+            changes: vec![text_field("description", "unnamed listener")],
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("service");
+    };
+    let service = created.targets[0].clone();
+    scoped(
+        &store,
+        &actor,
+        &os,
+        Command::HostNetwork(api::HostNetwork {
+            installation: Some(os.clone()),
+            source: "collector".into(),
+            basis: "boot".into(),
+            observed_at: 100,
+            socket_coverage: "verified".into(),
+            route_coverage: "not collected".into(),
+            application_coverage: "not collected".into(),
+            packet_filter_coverage: "not collected".into(),
+            sockets: vec![api::SocketBind {
+                service: Some(service.clone()),
+                protocol: "tcp".into(),
+                family: "IPv4".into(),
+                bind: "192.0.2.10".into(),
+                port: 8080,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+    )?;
+    let before = store.usage()?;
+    for owner in [&os, &service] {
+        let Reply::Detail(detail) = call(
+            &store,
+            &actor,
+            Command::Read(api::Read {
+                target: Some(owner.clone()),
+                ..Default::default()
+            }),
+        )?
+        else {
+            panic!("detail");
+        };
+        assert_eq!(detail.host_network[0].observations.len(), 1);
+        assert_eq!(
+            detail.host_network[0].services[0].target.as_ref(),
+            Some(&service)
+        );
+        assert!(detail.host_network[0].services[0].name.is_empty());
+    }
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // Bulk retirement must reclaim incarnation-owned observations, not just direct asset children.
 #[test]
 fn bulk_removal_reclaims_current_network_and_address_facts() -> TestResult {

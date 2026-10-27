@@ -327,7 +327,7 @@ export interface OwnerContext {
      */
     kind: AssetKind;
     /**
-     * Permitted current owner label, without unrelated owner fields.
+     * Permitted current owner label, empty when no name is accepted; no unrelated owner fields.
      *
      * @generated from protobuf field: string name = 3
      */

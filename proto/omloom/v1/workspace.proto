@@ -152,7 +152,7 @@ message OwnerContext {
   omloom.v1.AssetRef target = 1;
   // Actual owner kind, preserving OS/container/host distinctions.
   omloom.v1.AssetKind kind = 2;
-  // Permitted current owner label, without unrelated owner fields.
+  // Permitted current owner label, empty when no name is accepted; no unrelated owner fields.
   string name = 3;
 }
 message ItemContext {

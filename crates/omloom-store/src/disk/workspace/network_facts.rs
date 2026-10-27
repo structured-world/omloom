@@ -215,7 +215,11 @@ impl Tx<'_> {
                     api::OwnerContext {
                         target: Some(target_wire(service)),
                         kind: wire::AssetKind::Service as i32,
-                        name: string(&row, "name")?,
+                        name: match row.get("name") {
+                            Some(Value::String(name)) => name.clone(),
+                            None => String::new(),
+                            _ => return Err(Error::Corrupt),
+                        },
                     },
                 );
             }
