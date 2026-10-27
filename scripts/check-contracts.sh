@@ -6,6 +6,7 @@ npm run generate
 git diff --exit-code -- web/src/generated
 npm run typecheck
 npm run build
+npm run build:app
 cargo fmt --all -- --check
 cargo build --locked --workspace --all-targets --all-features
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings

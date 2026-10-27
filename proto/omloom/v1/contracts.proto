@@ -29,6 +29,14 @@ enum AssetKind {
   ASSET_KIND_CLUSTER = 15;
   ASSET_KIND_LAG = 16;
   ASSET_KIND_LOCATION = 17;
+  ASSET_KIND_ADDRESS_SPACE = 18;
+  ASSET_KIND_L2_DOMAIN = 19;
+  ASSET_KIND_ADDRESS_GROUP = 20;
+  // Current source-attributed address fact with optional network knowledge.
+  // This identity is not a canonical allocation and never reserves an address.
+  ASSET_KIND_ADDRESS_REFERENCE = 21;
+  // Concrete installed OS/firmware context, independent of hardware and boot session.
+  ASSET_KIND_SOFTWARE_INSTALLATION = 22;
 }
 
 // Scoped provider identity is matching evidence, never authority.

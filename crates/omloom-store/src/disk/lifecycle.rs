@@ -182,12 +182,16 @@ impl Store {
                 {
                     continue;
                 }
-                let scope = scopes.entry(string(&p, "connection")?).or_default();
-                scope.0 += 1;
-                scope.1 = scope
-                    .1
-                    .checked_add(number(&p, "size")?)
-                    .ok_or(Error::Limit)?;
+                if p.contains_key("connection") {
+                    let scope = scopes.entry(string(&p, "connection")?).or_default();
+                    scope.0 += 1;
+                    scope.1 = scope
+                        .1
+                        .checked_add(number(&p, "size")?)
+                        .ok_or(Error::Limit)?;
+                } else if parent != "workspace-previews" && !parent.starts_with("preview/") {
+                    return Err(Error::Corrupt);
+                }
                 tx.delete(key)?;
                 removed += 1;
                 continue;

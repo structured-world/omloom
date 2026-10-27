@@ -19,6 +19,9 @@
 pub mod wire {
     include!(concat!(env!("OUT_DIR"), "/omloom.v1.rs"));
 }
+pub mod workspace {
+    include!(concat!(env!("OUT_DIR"), "/omloom.workspace.v1.rs"));
+}
 pub mod ids;
 mod preflight;
 mod validate;
@@ -54,6 +57,34 @@ impl std::error::Error for Error {}
 pub struct Record {
     value: wire::Record,
     _reservation: preflight::Reservation,
+}
+
+/// Bounded application frame. Keep this owner alive while executing its request;
+/// the reservation covers decoding and bounded validation scratch together.
+pub struct WorkspaceRequest {
+    value: workspace::Request,
+    _reservation: preflight::Reservation,
+}
+impl WorkspaceRequest {
+    pub fn take(&mut self) -> workspace::Request {
+        core::mem::take(&mut self.value)
+    }
+}
+pub fn decode_workspace(
+    bytes: &[u8],
+    limits: Limits,
+    budget: &MemoryBudget,
+) -> Result<WorkspaceRequest, Error> {
+    let charge = preflight::check_workspace(bytes, limits)?;
+    let reservation = budget.reserve(charge)?;
+    let value = workspace::Request::decode(bytes).map_err(|_| Error::Wire)?;
+    if value.command.is_none() {
+        return Err(Error::Missing);
+    }
+    Ok(WorkspaceRequest {
+        value,
+        _reservation: reservation,
+    })
 }
 impl Record {
     pub fn wire(&self) -> &wire::Record {
