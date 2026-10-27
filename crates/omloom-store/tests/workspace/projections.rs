@@ -214,6 +214,7 @@ fn membership_address_hints_cover_interfaces_services_and_field_permissions() ->
             Command::Network(api::Network {
                 kind: K::IpAddress as i32,
                 name: format!("address {index:02}"),
+                sharing: api::SharedUse::Exclusive as i32,
                 cidr: format!("192.0.2.{}/32", index + 1),
                 address_space: Some(space.clone()),
                 ..Default::default()

@@ -55,7 +55,7 @@ test('Unplaced combines with text and scoped address search in the browser', asy
     const { m, rpc } = await workspaceClient(server.url);
     await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'needle' } }] }) });
     const space = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.ADDRESS_SPACE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'space' } }] }) })).mutation.targets[0];
-    await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.IP_ADDRESS, name: 'Address', cidr: '192.0.2.5/32', addressSpace: space }) });
+    await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.IP_ADDRESS, name: 'Address', cidr: '192.0.2.5/32', addressSpace: space, sharing: m.SharedUse.EXCLUSIVE }) });
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto(`${server.url}/#/?view=${m.View.HARDWARE}`);
@@ -415,7 +415,7 @@ test('network rename preserves scopes beyond the bounded options window', async 
     }
     const link = await object(m.AssetKind.L2_DOMAIN, 'Z selected L2');
     const routing = await object(m.AssetKind.VRF, 'Z selected VRF');
-    const target = (await rpc({ oneofKind:'network', network:m.Network.create({ kind:m.AssetKind.IP_ADDRESS, name:'Scoped address', cidr:'192.0.2.10/32', addressSpace:space, link, routing }) })).mutation.targets[0];
+    const target = (await rpc({ oneofKind:'network', network:m.Network.create({ kind:m.AssetKind.IP_ADDRESS, name:'Scoped address', cidr:'192.0.2.10/32', addressSpace:space, link, routing, sharing:m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
     const url = `${server.url}/#/?view=1&asset=${target.assetId}&incarnation=${target.incarnation}`;
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height:900 });
@@ -760,7 +760,7 @@ test('assigned allocations identify interfaces and services on desktop and phone
     const space=await object(m.AssetKind.ADDRESS_SPACE,'Assignment namespace');
     const service=await object(m.AssetKind.SERVICE,'Assigned service');
     const iface=await object(m.AssetKind.INTERFACE,'Assigned interface',service);
-    const address=(await rpc({oneofKind:'network',network:m.Network.create({kind:m.AssetKind.IP_ADDRESS,name:'Canonical allocation',cidr:'192.0.2.51/32',addressSpace:space})})).mutation.targets[0];
+    const address=(await rpc({oneofKind:'network',network:m.Network.create({kind:m.AssetKind.IP_ADDRESS,name:'Canonical allocation',cidr:'192.0.2.51/32',addressSpace:space,sharing:m.SharedUse.EXCLUSIVE})})).mutation.targets[0];
     const detail=(await rpc({oneofKind:'read',read:m.Read.create({target:address})})).detail;
     await rpc({oneofKind:'member',member:m.Member.create({address,interface:iface,expected:detail.item.revision})});
     for (const parent of [iface,service]) {

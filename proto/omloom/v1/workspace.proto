@@ -27,10 +27,10 @@ enum FieldType {
   FIELD_TYPE_CHOICE = 4;
 }
 enum SharedUse {
-  SHARED_USE_EXCLUSIVE = 0;
-  SHARED_USE_VRRP = 1;
-  SHARED_USE_ANYCAST = 2;
-  SHARED_USE_UNSPECIFIED = 3;
+  SHARED_USE_UNSPECIFIED = 0;
+  SHARED_USE_EXCLUSIVE = 1;
+  SHARED_USE_VRRP = 2;
+  SHARED_USE_ANYCAST = 3;
 }
 
 message Predicate {
@@ -597,7 +597,8 @@ message Network {
   optional omloom.v1.AssetRef link = 6;
   // Explicit routing context, independent of address-space identity.
   optional omloom.v1.AssetRef routing = 7;
-  // Reviewed allocation mechanism; ordinary duplicates cannot set sharing implicitly.
+  // User-reviewed allocation mechanism, required explicitly for ungrouped creation
+  // or conversion. Omitted/unspecified cannot implicitly select exclusive use.
   SharedUse sharing = 8;
   // Protocol VRID for VRRP, scoped to L2 domain and IP family, not a global identity.
   optional uint32 vrid = 9;

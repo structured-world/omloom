@@ -92,6 +92,7 @@ fn unplaced_search_matches(search: &str) -> TestResult {
             name: "address".into(),
             cidr: "192.0.2.5/32".into(),
             address_space: Some(space),
+            sharing: api::SharedUse::Exclusive as i32,
             ..Default::default()
         }),
     )?
@@ -152,6 +153,7 @@ fn unplaced_keeps_network_namespace_binding() -> TestResult {
             name: "address".into(),
             cidr: "192.0.2.5/32".into(),
             address_space: Some(space.clone()),
+            sharing: api::SharedUse::Exclusive as i32,
             ..Default::default()
         }),
     )?
@@ -828,6 +830,7 @@ fn allocations_scoped_unique_and_point_to_point() -> TestResult {
         address_space: Some(one),
         cidr: "192.0.2.0/31".into(),
         name: "uplink".into(),
+        sharing: api::SharedUse::Exclusive as i32,
         ..Default::default()
     };
     call(
@@ -1208,6 +1211,7 @@ fn link_local_scopes_and_shared_conversion() -> TestResult {
         link: Some(a),
         cidr: "fe80::1/64".into(),
         name: "gateway".into(),
+        sharing: api::SharedUse::Exclusive as i32,
         ..Default::default()
     };
     let api::reply::Result::Mutation(created) = call(

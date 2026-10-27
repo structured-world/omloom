@@ -179,6 +179,10 @@ resumes that cursor and safely restarts the pass after a process restart.
 Skipping retained definitions creates no durable cursor or idle writes.
 
 Network allocation distinguishes address space, L2 domain and routing context.
+Requests explicitly select exclusive, VRRP or anycast use; omitted sharing is
+unspecified and cannot convert a shared address into an exclusive allocation.
+Selecting an existing group uses unspecified sharing and its reviewed revision;
+the server derives the mechanism from that group.
 An ordinary address is unique in its address space; link-local identities also
 include the selected link. Prefixes retain their mask and may be nested. Next
 available allocation is atomic and does not enumerate IPv6 hosts. Shared use

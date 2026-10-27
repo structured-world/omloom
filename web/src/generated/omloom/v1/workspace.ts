@@ -1531,7 +1531,8 @@ export interface Network {
      */
     routing?: AssetRef;
     /**
-     * Reviewed allocation mechanism; ordinary duplicates cannot set sharing implicitly.
+     * User-reviewed allocation mechanism, required explicitly for ungrouped creation
+     * or conversion. Omitted/unspecified cannot implicitly select exclusive use.
      *
      * @generated from protobuf field: omloom.workspace.v1.SharedUse sharing = 8
      */
@@ -2093,21 +2094,21 @@ export enum FieldType {
  */
 export enum SharedUse {
     /**
-     * @generated from protobuf enum value: SHARED_USE_EXCLUSIVE = 0;
+     * @generated from protobuf enum value: SHARED_USE_UNSPECIFIED = 0;
      */
-    EXCLUSIVE = 0,
+    UNSPECIFIED = 0,
     /**
-     * @generated from protobuf enum value: SHARED_USE_VRRP = 1;
+     * @generated from protobuf enum value: SHARED_USE_EXCLUSIVE = 1;
      */
-    VRRP = 1,
+    EXCLUSIVE = 1,
     /**
-     * @generated from protobuf enum value: SHARED_USE_ANYCAST = 2;
+     * @generated from protobuf enum value: SHARED_USE_VRRP = 2;
      */
-    ANYCAST = 2,
+    VRRP = 2,
     /**
-     * @generated from protobuf enum value: SHARED_USE_UNSPECIFIED = 3;
+     * @generated from protobuf enum value: SHARED_USE_ANYCAST = 3;
      */
-    UNSPECIFIED = 3
+    ANYCAST = 3
 }
 /**
  * @generated from protobuf enum omloom.workspace.v1.AddressStability

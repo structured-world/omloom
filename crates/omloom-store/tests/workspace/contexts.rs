@@ -77,6 +77,7 @@ fn configured_owner_attachment(create_bound: bool) -> TestResult {
         Command::Network(api::Network {
             kind: K::IpAddress as i32,
             name: "allocation".into(),
+            sharing: api::SharedUse::Exclusive as i32,
             cidr: "192.0.2.10/32".into(),
             address_space: Some(space),
             ..Default::default()
@@ -212,6 +213,7 @@ fn exclusive_participant_rechecks_existing_configured_references() -> TestResult
             Command::Network(api::Network {
                 kind: K::IpAddress as i32,
                 name: "allocation".into(),
+                sharing: api::SharedUse::Exclusive as i32,
                 cidr: "192.0.2.10/32".into(),
                 address_space: Some(space),
                 ..Default::default()
@@ -332,6 +334,7 @@ fn retained_binding_rechecks_configured_owner_without_explicit_rebinding() -> Te
             kind: K::IpAddress as i32,
             name: "canonical".into(),
             cidr: "192.0.2.10/32".into(),
+            sharing: api::SharedUse::Exclusive as i32,
             address_space: Some(space),
             ..Default::default()
         }),
@@ -458,6 +461,7 @@ fn retained_link_local_binding_requires_zone_after_details_change() -> TestResul
             name: "canonical".into(),
             cidr: "fe80::1/128".into(),
             address_space: Some(space),
+            sharing: api::SharedUse::Exclusive as i32,
             link: Some(link),
             ..Default::default()
         }),
@@ -614,6 +618,7 @@ fn next_available_skips_ipv6_subnet_router_anycast() -> TestResult {
             Command::Network(api::Network {
                 kind: K::Prefix as i32,
                 name: cidr.into(),
+                sharing: api::SharedUse::Exclusive as i32,
                 cidr: cidr.into(),
                 address_space: Some(space.clone()),
                 ..Default::default()
@@ -622,6 +627,7 @@ fn next_available_skips_ipv6_subnet_router_anycast() -> TestResult {
         let request = api::Network {
             kind: K::IpAddress as i32,
             name: "automatic allocation".into(),
+            sharing: api::SharedUse::Exclusive as i32,
             parent: Some(Box::new(prefix.clone())),
             cidr: cidr.into(),
             next_available: true,
@@ -681,6 +687,7 @@ fn next_available_rejects_ranges_outside_the_parent_prefix() -> TestResult {
             Command::Network(api::Network {
                 kind: K::Prefix as i32,
                 name: parent_cidr.into(),
+                sharing: api::SharedUse::Exclusive as i32,
                 cidr: parent_cidr.into(),
                 address_space: Some(space.clone()),
                 ..Default::default()
@@ -689,6 +696,7 @@ fn next_available_rejects_ranges_outside_the_parent_prefix() -> TestResult {
         let mut request = api::Network {
             kind: K::IpAddress as i32,
             name: "first available".into(),
+            sharing: api::SharedUse::Exclusive as i32,
             parent: Some(Box::new(prefix.clone())),
             cidr: wider.into(),
             next_available: true,
@@ -735,6 +743,7 @@ fn canonical_address_edit_preserves_bound_facts_without_participants() -> TestRe
         kind: K::IpAddress as i32,
         name: "canonical".into(),
         cidr: "192.0.2.10/32".into(),
+        sharing: api::SharedUse::Exclusive as i32,
         address_space: Some(space),
         ..Default::default()
     };
@@ -802,6 +811,7 @@ fn link_local_bindings_require_zones_only_for_ipv6() -> TestResult {
             Command::Network(api::Network {
                 kind: K::IpAddress as i32,
                 name: address.into(),
+                sharing: api::SharedUse::Exclusive as i32,
                 cidr: cidr.into(),
                 address_space: Some(space.clone()),
                 link: Some(link.clone()),
@@ -860,6 +870,7 @@ fn prefix_creation_remains_visible_without_reselecting_upstream_topology() -> Te
         Command::Network(api::Network {
             kind: K::Prefix as i32,
             name: "subnet".into(),
+            sharing: api::SharedUse::Exclusive as i32,
             cidr: "192.0.2.0/24".into(),
             parent: Some(Box::new(space)),
             ..Default::default()
@@ -868,6 +879,7 @@ fn prefix_creation_remains_visible_without_reselecting_upstream_topology() -> Te
     let request = api::Network {
         kind: K::IpAddress as i32,
         name: "host".into(),
+        sharing: api::SharedUse::Exclusive as i32,
         cidr: "192.0.2.10/32".into(),
         parent: Some(Box::new(prefix.clone())),
         ..Default::default()
@@ -931,6 +943,7 @@ fn link_local_prefix_context_preserves_the_explicit_link_boundary() -> TestResul
                 name: name.into(),
                 cidr: "fe80::/64".into(),
                 address_space: Some(space.clone()),
+                sharing: api::SharedUse::Exclusive as i32,
                 link: Some(link),
                 ..Default::default()
             }),
@@ -944,6 +957,7 @@ fn link_local_prefix_context_preserves_the_explicit_link_boundary() -> TestResul
                 name: name.into(),
                 cidr: "fe80::1/128".into(),
                 parent: Some(Box::new(prefix.clone())),
+                sharing: api::SharedUse::Exclusive as i32,
                 ..Default::default()
             }),
         )?;
@@ -989,6 +1003,7 @@ fn address_resolution_is_atomic_and_preserves_conflicting_facts() -> TestResult 
             name: "canonical".into(),
             cidr: "192.0.2.20/32".into(),
             address_space: Some(space),
+            sharing: api::SharedUse::Exclusive as i32,
             ..Default::default()
         })),
         interface: Some(Box::new(interface.clone())),

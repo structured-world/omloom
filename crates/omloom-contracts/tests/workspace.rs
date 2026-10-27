@@ -1,6 +1,29 @@
 use omloom_contracts::{Error, Limits, MemoryBudget, decode_workspace, workspace as api};
 use prost::Message;
 
+// Omitted wire input cannot implicitly request an exclusive allocation.
+#[test]
+fn network_sharing_requires_an_explicit_mechanism() {
+    let omitted = api::Network::decode([].as_slice()).expect("empty network");
+    assert_eq!(omitted.sharing, api::SharedUse::Unspecified as i32);
+    for mechanism in [
+        api::SharedUse::Exclusive,
+        api::SharedUse::Vrrp,
+        api::SharedUse::Anycast,
+    ] {
+        let request = api::Network {
+            sharing: mechanism as i32,
+            ..Default::default()
+        };
+        let bytes = request.encode_to_vec();
+        assert!(!bytes.is_empty());
+        assert_eq!(
+            api::Network::decode(bytes.as_slice()).expect("network"),
+            request
+        );
+    }
+}
+
 // Reservations cover the decoded request until its owner, not just its wire buffer, drops.
 #[test]
 fn application_frame_has_owned_memory_and_strict_preflight() {

@@ -1,5 +1,75 @@
 use super::*;
 
+// A reviewed prior revision does not make an omitted allocation mechanism an explicit conversion.
+#[test]
+fn omitted_sharing_cannot_detach_a_shared_address() -> TestResult {
+    use api::{reply::Result as Reply, request::Command};
+    use prost::Message;
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let space = create(&store, &actor, K::AddressSpace, "space")?;
+    let Reply::Mutation(created) = call(
+        &store,
+        &actor,
+        Command::Network(api::Network {
+            kind: K::IpAddress as i32,
+            name: "Shared address".into(),
+            cidr: "192.0.2.10/32".into(),
+            address_space: Some(space.clone()),
+            sharing: api::SharedUse::Anycast as i32,
+            group_name: "gateways".into(),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("address");
+    };
+    let address = created.targets[0].clone();
+    let Reply::Detail(detail) = call(
+        &store,
+        &actor,
+        Command::Read(api::Read {
+            target: Some(address.clone()),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("detail");
+    };
+    let group = detail.group.ok_or("group")?;
+    let request = api::Network {
+        target: Some(address.clone()),
+        expected: Some(detail.item.ok_or("item")?.revision),
+        kind: K::IpAddress as i32,
+        name: "Rename only".into(),
+        cidr: "192.0.2.10/32".into(),
+        address_space: Some(space),
+        previous_group_revision: Some(group.revision),
+        ..Default::default()
+    };
+    let request = api::Network::decode(request.encode_to_vec().as_slice())?;
+    let before = store.usage()?;
+    assert!(matches!(
+        call(&store, &actor, Command::Network(request)),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
+    let Reply::Detail(after) = call(
+        &store,
+        &actor,
+        Command::Read(api::Read {
+            target: Some(address),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("detail");
+    };
+    assert_eq!(after.group, Some(group));
+    Ok(())
+}
+
 // Retyping through the public asset writer cannot invalidate live IPAM owners or namespaces.
 #[test]
 fn kind_changes_refuse_retained_ipam_state_without_changes() -> TestResult {
@@ -118,6 +188,7 @@ fn l2_domain_contains_only_its_scoped_vlans() -> TestResult {
                         parent: Some(Box::new(link.clone())),
                         kind: K::Vlan as i32,
                         name: "VLAN 10".into(),
+                        sharing: api::SharedUse::Exclusive as i32,
                         vlan_id: Some(10),
                         ..Default::default()
                     })),
@@ -217,6 +288,7 @@ fn archival_rejects_inbound_ipam_references() -> TestResult {
             address_space: Some(space.clone()),
             link: Some(link.clone()),
             routing: Some(routing.clone()),
+            sharing: api::SharedUse::Exclusive as i32,
             ..Default::default()
         }),
     )?
@@ -340,6 +412,7 @@ fn network_settings_do_not_require_unchanged_name_permission() -> TestResult {
         api::Network {
             kind: K::IpAddress as i32,
             name: "Address".into(),
+            sharing: api::SharedUse::Exclusive as i32,
             cidr: "192.0.2.10/32".into(),
             address_space: Some(space.clone()),
             ..Default::default()
@@ -347,6 +420,7 @@ fn network_settings_do_not_require_unchanged_name_permission() -> TestResult {
         api::Network {
             kind: K::Vlan as i32,
             name: "VLAN".into(),
+            sharing: api::SharedUse::Exclusive as i32,
             vlan_id: Some(10),
             link: Some(link.clone()),
             ..Default::default()
@@ -439,6 +513,7 @@ fn archival_refuses_live_ipam_state_without_changes() -> TestResult {
     let request = api::Network {
         kind: K::IpAddress as i32,
         name: "retained allocation".into(),
+        sharing: api::SharedUse::Exclusive as i32,
         cidr: "192.0.2.10/32".into(),
         address_space: Some(space),
         ..Default::default()
@@ -490,6 +565,7 @@ fn prefix_allocation_accepts_matching_existing_vrrp_link() -> TestResult {
             kind: K::Prefix as i32,
             cidr: "fe80::/64".into(),
             name: "link-local prefix".into(),
+            sharing: api::SharedUse::Exclusive as i32,
             address_space: Some(space.clone()),
             link: Some(link.clone()),
             ..Default::default()
