@@ -17,6 +17,108 @@ pub(super) fn local_address(address: std::net::IpAddr) -> bool {
 }
 
 impl Tx<'_> {
+    fn assigned_addresses(
+        &self,
+        context: &Context,
+        interfaces: &BTreeSet<AssetRef>,
+        owners: &BTreeMap<AssetRef, BTreeSet<AssetRef>>,
+        by_owner: &mut BTreeMap<AssetRef, BTreeSet<String>>,
+    ) -> Result<()> {
+        let ids: BTreeSet<_> = interfaces
+            .iter()
+            .filter(|t| {
+                context.field(**t, wire::AssetKind::Interface as i32, "network", false)
+                    && context.field(**t, wire::AssetKind::Interface as i32, "relations", false)
+            })
+            .map(|t| t.asset.to_string())
+            .collect();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        // Use the actual membership rows, with one indexed batch for displayed interfaces.
+        let members = self.query(
+            "UNWIND $ids AS id MATCH (m:OmRow {asset:id}) WHERE m.parent='members/'+m.group RETURN properties(m) AS p LIMIT 2049",
+            params([("ids", Value::Array(ids.iter().map(text).collect()))]),
+        )?;
+        if members.len() > MAX_CONTEXT {
+            return Err(Error::Limit);
+        }
+        let mut memberships: BTreeMap<AssetRef, BTreeSet<AssetRef>> = BTreeMap::new();
+        for member in members {
+            let interface = target(&member)?;
+            if interfaces.contains(&interface) {
+                let owner = network::groups::reference(&string(&member, "group")?)?;
+                memberships.entry(owner).or_default().insert(interface);
+            }
+        }
+        if memberships.is_empty() {
+            return Ok(());
+        }
+        let roots = self.query(
+            "UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN properties(n) AS p LIMIT 2049",
+            params([(
+                "keys",
+                Value::Array(memberships.keys().map(|t| text(asset_key(*t))).collect()),
+            )]),
+        )?;
+        let mut direct = Vec::new();
+        let mut groups = Vec::new();
+        for root in roots {
+            let owner = target(&root)?;
+            let kind = number(&root, "kind")? as i32;
+            if number(&root, "adoption")? != wire::Adoption::Adopted as u64
+                || !context.field(owner, kind, "network", false)
+                || !context.field(owner, kind, "relations", false)
+            {
+                continue;
+            }
+            if kind == wire::AssetKind::IpAddress as i32 {
+                direct.push(text(format!("network/{}", network::identity(owner))));
+            } else if kind == wire::AssetKind::AddressGroup as i32 {
+                groups.push(text(network::identity(owner)));
+            }
+        }
+        let mut attached = 0;
+        for (property, keys) in [("key", direct), ("group", groups)] {
+            if keys.is_empty() {
+                continue;
+            }
+            let mut values = HashMap::from([("keys".into(), Value::Array(keys))]);
+            let visible = ["cidr", "network", "relations"]
+                .map(|field| assets::visible_clause_for(context, Some(field), &mut values, "a"))
+                .join(" AND ");
+            let rows = self.query(
+                &format!("UNWIND $keys AS key MATCH (n:OmRow {{{property}:key}}) WHERE n.parent='networks' WITH n, 'asset/'+n.asset AS asset_key MATCH (a:OmRow {{key:asset_key}}) WHERE a.incarnation=n.incarnation AND a.kind={} AND a.adoption={} AND {visible} RETURN properties(n) AS p LIMIT 2049", wire::AssetKind::IpAddress as i32, wire::Adoption::Adopted as i32),
+                Some(values),
+            )?;
+            if rows.len() > MAX_CONTEXT {
+                return Err(Error::Limit);
+            }
+            for row in rows {
+                let address = target(&row)?;
+                let owner = network::groups::group_of(&row)?.unwrap_or(address);
+                let cidr: ipnet::IpNet =
+                    string(&row, "cidr")?.parse().map_err(|_| Error::Corrupt)?;
+                if local_address(cidr.addr()) {
+                    continue;
+                }
+                for interface in memberships.get(&owner).into_iter().flatten() {
+                    if attached == MAX_CONTEXT {
+                        return Err(Error::Limit);
+                    }
+                    attached += 1;
+                    for owner in owners.get(interface).into_iter().flatten() {
+                        by_owner
+                            .entry(*owner)
+                            .or_default()
+                            .insert(cidr.addr().to_string());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn context_edges(
         &self,
         context: &Context,
@@ -221,6 +323,7 @@ impl Tx<'_> {
             return Err(Error::Limit);
         }
         let mut by_owner: BTreeMap<AssetRef, BTreeSet<String>> = BTreeMap::new();
+        self.assigned_addresses(context, &interfaces, &owners, &mut by_owner)?;
         for row in addresses {
             let a = target(&row)?;
             let root = address_nodes.get(&a).ok_or(Error::Corrupt)?;

@@ -30,6 +30,11 @@ without rewriting the value or incrementing the accepted intent revision.
 Explicit clears remain claims. Different sources never overwrite each other.
 Repeated identical input and retrieval do not create application history.
 
+Interface and service address hints resolve current participant rows, including
+shared-group allocations. Indexes on the existing asset and group fields bound
+these lookups to the displayed interfaces and their assignments; no duplicate
+assignment records or persisted hint snapshots are maintained.
+
 The installation record serializes admission accounting and query revisions
 through database CAS, rather than a process-local lock. Uniqueness is enforced
 in the database. Pagination expires when its application revision changes.

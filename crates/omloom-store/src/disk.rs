@@ -534,6 +534,9 @@ impl Store {
             ("omloom_parent", "parent"),
             ("omloom_class", "class"),
             ("omloom_layer", "layer"),
+            // Reverse membership lookup and shared-address expansion for visible interface hints.
+            ("omloom_asset", "asset"),
+            ("omloom_group", "group"),
         ] {
             match db.execute_cypher(&format!("CREATE INDEX {name} ON :OmRow({property})")) {
                 Ok(_) => {}

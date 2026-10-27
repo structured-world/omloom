@@ -1,6 +1,221 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
+// Direct and shared assignments are visible hints only through authorized interface membership.
+#[test]
+fn membership_address_hints_cover_interfaces_services_and_field_permissions() -> TestResult {
+    use prost::Message;
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let space = create(&store, &actor, K::AddressSpace, "space")?;
+    let mut expected = Vec::new();
+    for index in 0..25 {
+        let service = create(&store, &actor, K::Service, &format!("service {index:02}"))?;
+        let interface = child(
+            &store,
+            &actor,
+            &service,
+            K::Interface,
+            &format!("interface {index:02}"),
+        )?;
+        let Reply::Mutation(created) = call(
+            &store,
+            &actor,
+            Command::Network(api::Network {
+                kind: K::IpAddress as i32,
+                name: format!("address {index:02}"),
+                cidr: format!("192.0.2.{}/32", index + 1),
+                address_space: Some(space.clone()),
+                ..Default::default()
+            }),
+        )?
+        else {
+            panic!("allocation")
+        };
+        let address = created.targets[0].clone();
+        call(
+            &store,
+            &actor,
+            Command::Member(api::Member {
+                address: Some(address.clone()),
+                interface: Some(interface.clone()),
+                expected: store.asset(AssetRef::try_from(&address)?)?.revision,
+                ..Default::default()
+            }),
+        )?;
+        expected.push((service, interface, format!("192.0.2.{}", index + 1)));
+    }
+    let Reply::Mutation(created) = call(
+        &store,
+        &actor,
+        Command::Network(api::Network {
+            kind: K::IpAddress as i32,
+            name: "shared first".into(),
+            cidr: "198.51.100.1/32".into(),
+            address_space: Some(space.clone()),
+            sharing: api::SharedUse::Anycast as i32,
+            group_name: "shared".into(),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("shared address")
+    };
+    let first = created.targets[0].clone();
+    let Reply::Detail(detail) = call(
+        &store,
+        &actor,
+        Command::Read(api::Read {
+            target: Some(first.clone()),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("group")
+    };
+    let group = detail.group.expect("group");
+    call(
+        &store,
+        &actor,
+        Command::Network(api::Network {
+            kind: K::IpAddress as i32,
+            name: "shared second".into(),
+            cidr: "198.51.100.2/32".into(),
+            address_space: Some(space),
+            group: group.target.clone(),
+            expected_group: Some(group.revision),
+            sharing: api::SharedUse::Unspecified as i32,
+            ..Default::default()
+        }),
+    )?;
+    let group = group.target.expect("group target");
+    call(
+        &store,
+        &actor,
+        Command::Member(api::Member {
+            address: Some(group.clone()),
+            interface: Some(expected[0].1.clone()),
+            expected: store.asset(AssetRef::try_from(&group)?)?.revision,
+            ..Default::default()
+        }),
+    )?;
+    store.diagnostic_database().persist()?;
+    store.diagnostic_database().query_registry().reset();
+    let before = store.usage()?;
+    let mut pages = Vec::new();
+    for kind in [K::Interface, K::Service] {
+        let mut q = query();
+        q.kinds = vec![kind as i32];
+        q.limit = 25;
+        q.include_context = true;
+        let mut samples = Vec::new();
+        let mut last = None;
+        for _ in 0..9 {
+            let start = std::time::Instant::now();
+            let Reply::Page(page) = call(&store, &actor, Command::Query(q.clone()))? else {
+                panic!("page")
+            };
+            samples.push(start.elapsed());
+            last = Some(page);
+        }
+        samples.sort_unstable();
+        let page = last.expect("page");
+        eprintln!(
+            "membership hints {kind:?}: median={:?} max_sample={:?} response_bytes={} logical_bytes={}",
+            samples[4],
+            samples[8],
+            page.encoded_len(),
+            before.bytes.iter().sum::<u64>()
+        );
+        pages.push(page);
+    }
+    assert_eq!(store.usage()?, before, "projections must not write");
+    let plans = store
+        .diagnostic_database()
+        .query_registry()
+        .top_by_impact(64);
+    for index in ["omloom_asset(asset)", "omloom_group(group)"] {
+        assert!(
+            plans
+                .iter()
+                .any(|q| q.last_plan.as_ref().is_some_and(|p| p.contains(index))),
+            "membership hints must use {index}"
+        );
+    }
+    for (index, page) in pages.iter().enumerate() {
+        for (service, interface, address) in &expected {
+            let target = if index == 0 { interface } else { service };
+            let hints = &page
+                .contexts
+                .iter()
+                .find(|c| c.target.as_ref() == Some(target))
+                .expect("context")
+                .addresses;
+            let mut wanted = vec![address.clone()];
+            if target
+                == (if index == 0 {
+                    &expected[0].1
+                } else {
+                    &expected[0].0
+                })
+            {
+                wanted.extend(["198.51.100.1".into(), "198.51.100.2".into()]);
+            }
+            assert_eq!(
+                hints, &wanted,
+                "assignments must be visible at their actual interface and service"
+            );
+        }
+    }
+    // Neither an interface-only grant nor hidden network/cidr fields can reveal allocations.
+    for hidden in ["network", "cidr", "relations", "group", "asset"] {
+        let mut limited = actor.clone();
+        limited.grants = vec![Grant {
+            scope: if hidden == "asset" {
+                Scope::Kinds(vec![K::Service, K::Interface])
+            } else {
+                Scope::All
+            },
+            read: Fields::Selected(
+                ["name", "relations", "network", "cidr"]
+                    .into_iter()
+                    .filter(|f| *f != hidden)
+                    .map(str::to_owned)
+                    .collect(),
+            ),
+            write: Fields::All,
+            writable: true,
+        }];
+        if hidden == "group" {
+            limited.grants[0].scope = Scope::Kinds(vec![K::Service, K::Interface, K::IpAddress]);
+        }
+        let mut q = query();
+        q.kinds = vec![K::Interface as i32];
+        q.limit = 25;
+        q.include_context = true;
+        let Reply::Page(page) = call(&store, &limited, Command::Query(q))? else {
+            panic!("limited page")
+        };
+        for context in page.contexts {
+            if hidden == "group" {
+                assert!(
+                    context
+                        .addresses
+                        .iter()
+                        .all(|ip| !ip.starts_with("198.51.100."))
+                );
+            } else {
+                assert!(
+                    context.addresses.is_empty(),
+                    "hidden {hidden} leaked an address"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 // Domain categories filter before pagination; host labels do not make devices services.
 #[test]
 fn service_category_does_not_return_hardware() -> TestResult {

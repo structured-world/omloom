@@ -390,6 +390,39 @@ test('peer connection review preserves the resource context through edit and rem
   } finally { await server.stop(); await rm(dir,{recursive:true,force:true}); }
 });
 
+test('assigned allocations identify interfaces and services on desktop and phone', async ({ page }) => {
+  // A real participant assignment must supply row hints without an address reference or observation.
+  const { buildSync } = await import('esbuild');
+  const { GrpcWebFetchTransport } = await import('@protobuf-ts/grpcweb-transport');
+  const built = buildSync({ stdin:{ contents:'export * from "./web/src/generated/omloom/v1/workspace"; export {AssetKind} from "./web/src/generated/omloom/v1/contracts";', resolveDir:process.cwd() }, bundle:true, write:false, format:'esm', platform:'node' });
+  const m = await import('data:text/javascript;base64,' + Buffer.from(built.outputFiles[0].contents).toString('base64'));
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-assignment-hints-')); const server = await host(dir);
+  try {
+    const transport = new GrpcWebFetchTransport({ baseUrl:server.url, format:'binary' });
+    async function rpc(command, focus) {
+      const q = (await transport.unary(m.Workspace.methods[0], m.Request.create({command:{oneofKind:'query',query:m.Query.create({limit:1})}}),transport.mergeOptions())).response.result;
+      return (await transport.unary(m.Workspace.methods[0],m.Request.create({command,working:{focus,expected:q.page.revision}}),transport.mergeOptions())).response.result;
+    }
+    async function object(kind,name,parent) { return (await rpc({oneofKind:'write',write:m.Write.create({kind,parent,changes:[{name:'name',value:{oneofKind:'text',text:name}}]})},parent)).mutation.targets[0]; }
+    const space=await object(m.AssetKind.ADDRESS_SPACE,'Assignment namespace');
+    const service=await object(m.AssetKind.SERVICE,'Assigned service');
+    const iface=await object(m.AssetKind.INTERFACE,'Assigned interface',service);
+    const address=(await rpc({oneofKind:'network',network:m.Network.create({kind:m.AssetKind.IP_ADDRESS,name:'Canonical allocation',cidr:'192.0.2.51/32',addressSpace:space})})).mutation.targets[0];
+    const detail=(await rpc({oneofKind:'read',read:m.Read.create({target:address})})).detail;
+    await rpc({oneofKind:'member',member:m.Member.create({address,interface:iface,expected:detail.item.revision})});
+    for (const width of [1440,390]) {
+      await page.setViewportSize({width,height:900});
+      for (const name of ['Assigned service','Assigned interface']) {
+        await page.goto(`${server.url}/#/?view=0&search=${encodeURIComponent(name)}`);
+        const row=page.getByRole('row').filter({has:page.getByRole('button',{name,exact:true})});
+        await expect(row).toContainText('192.0.2.51');
+        await page.getByRole('button',{name,exact:true}).click();
+        await expect(page.getByRole('region',{name:'Resource details'}).getByRole('heading',{name,exact:true})).toBeVisible();
+      }
+    }
+  } finally { await server.stop(); await rm(dir,{recursive:true,force:true}); }
+});
+
 test('VRRP reconciliation submits intended priority for existing and prepared allocations', async ({ page }) => {
   // All three reconciliation paths commit real membership, including a prepared address in an existing group.
   const { buildSync } = await import('esbuild');
