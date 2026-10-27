@@ -26,6 +26,33 @@ pub const MAX_FIELDS: usize = 32;
 pub const MAX_DEFINITIONS: usize = 128;
 const EXPLICIT_CLEAR: i32 = wire::NullValue::NullValue as i32;
 
+pub(super) fn upgrade_asset_names(store: &Store) -> Result<()> {
+    let mut after = String::new();
+    loop {
+        let mut tx = store.begin()?;
+        let rows = tx.query("MATCH (n:OmRow {parent:'assets'}) WHERE n.key>$after RETURN properties(n) AS p ORDER BY n.key LIMIT 128", params([("after", text(&after))]))?;
+        if rows.is_empty() {
+            tx.commit()?;
+            return Ok(());
+        }
+        for old in &rows {
+            let key = string(old, "key")?;
+            if let Some(field) = tx.get(&format!("{key}/intent/name"))?
+                && let Some(field::Value::Text(name)) = inventory::read_field(&field)?.value
+            {
+                let mut data = old.clone();
+                operations::strip_envelope(&mut data);
+                data.insert("name_sort".into(), text(name.to_lowercase()));
+                data.insert("name".into(), text(name));
+                // Rebuild only derived columns, preserving domain revisions and restore fences.
+                tx.put_projection(&key, "assets", Class::Inventory, data, Some(old))?;
+            }
+            after = key;
+        }
+        tx.commit()?;
+    }
+}
+
 pub(super) fn upgrade_network_order(store: &Store) -> Result<()> {
     loop {
         let mut tx = store.begin()?;

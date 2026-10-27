@@ -22,7 +22,7 @@ use std::{
 type Properties = BTreeMap<String, Value>;
 type Result<T> = std::result::Result<T, Error>;
 const ROOT: &str = "installation";
-const SCHEMA_VERSION: u64 = 7;
+const SCHEMA_VERSION: u64 = 8;
 const MAX_CHILDREN: usize = 2048;
 mod inventory;
 mod lifecycle;
@@ -604,9 +604,11 @@ impl Store {
         if version < 7 {
             workspace::network_facts::upgrade(&store)?;
         }
+        if version < 8 {
+            workspace::upgrade_asset_names(&store)?;
+        }
         if version < SCHEMA_VERSION {
-            // One-direction admission of scoped address facts. Older readers
-            // must refuse the new kind; unbound old previews expire on acceptance.
+            // Publish the format only after all resumable projections are ready.
             let mut tx = store.begin()?;
             if number(&tx.root, "schema")? < SCHEMA_VERSION {
                 tx.root.insert("schema".into(), int(SCHEMA_VERSION)?);

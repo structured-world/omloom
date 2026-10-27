@@ -135,6 +135,24 @@ fn old_strict_catalog_upgrades_without_recreating_the_database()
             ("vtext", text("preserved value")),
         ]),
     )?;
+    for (key, name) in [("asset/zulu", "Alpha"), ("asset/alpha", "Zulu")] {
+        tx.put(
+            key,
+            "assets",
+            Class::Inventory,
+            props([("revision", Value::Int(4))]),
+        )?;
+        tx.put(
+            &format!("{key}/intent/name"),
+            key,
+            Class::Inventory,
+            props([
+                ("field", text("name")),
+                ("vtype", Value::Int(1)),
+                ("vtext", text(name)),
+            ]),
+        )?;
+    }
     tx.root.insert("schema".into(), Value::Int(2));
     tx.changed = true;
     tx.commit()?;
@@ -149,6 +167,15 @@ fn old_strict_catalog_upgrades_without_recreating_the_database()
         Some(wire::field::Value::Text("preserved value".into()))
     );
     let before = store.usage()?;
+    let tx = store.begin()?;
+    let named = tx.query(
+        "MATCH (n:OmRow {parent:'assets'}) RETURN properties(n) AS p ORDER BY n.name_sort",
+        None,
+    )?;
+    assert_eq!(string(&named[0], "name")?, "Alpha");
+    assert_eq!(string(&named[1], "name")?, "Zulu");
+    assert_eq!(number(&named[0], "revision")?, 4);
+    tx.commit()?;
     drop(store);
     let store = Store::open(dir.path(), policy)?;
     assert_eq!(
@@ -183,6 +210,24 @@ fn network_projection_upgrade_resumes_without_removing_restore_fence()
         let store = Store::open(dir.path(), policy.clone())?;
         let mut tx = store.begin()?;
         for index in 0..130 {
+            let key = format!("asset/{index:03}");
+            let name = format!("Resource {index:03}");
+            let mut asset = props([("revision", Value::Int(3))]);
+            if index < 128 {
+                asset.insert("name".into(), text(&name));
+                asset.insert("name_sort".into(), text(name.to_lowercase()));
+            }
+            tx.put(&key, "assets", Class::Inventory, asset)?;
+            tx.put(
+                &format!("{key}/intent/name"),
+                &key,
+                Class::Inventory,
+                props([
+                    ("field", text("name")),
+                    ("vtype", Value::Int(1)),
+                    ("vtext", text(name)),
+                ]),
+            )?;
             let mut data = props([("cidr", text(format!("192.0.2.{index}/32")))]);
             // The first batch models an already committed migration prefix.
             if index < 128 {
@@ -206,6 +251,7 @@ fn network_projection_upgrade_resumes_without_removing_restore_fence()
         assert_eq!(number(&tx.root, "schema")?, SCHEMA_VERSION);
         assert_eq!(tx.root.get("restored"), Some(&Value::Bool(restored)));
         assert!(tx.query("MATCH (n:OmRow {parent:'networks'}) WHERE n.ip_order IS NULL OR n.prefix_len IS NULL RETURN properties(n) AS p",None)?.is_empty());
+        assert!(tx.query("MATCH (n:OmRow {parent:'assets'}) WHERE n.name IS NULL OR n.name_sort IS NULL OR n.revision<>3 RETURN properties(n) AS p",None)?.is_empty());
         if restored {
             assert!(matches!(
                 tx.put("blocked", "assets", Class::Inventory, Properties::new()),
