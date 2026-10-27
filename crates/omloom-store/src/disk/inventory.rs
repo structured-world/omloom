@@ -384,7 +384,7 @@ impl Store {
                 ("adoption", Value::Int(asset.adoption.into())),
                 ("revision", int(revision)?),
             ]));
-            workspace::hot_fields(asset, &mut data)?;
+            workspace::hot_fields(asset, &mut data);
             tx.put_against(&key, "assets", Class::Inventory, data, old.as_ref())?;
             tx.audit(&key, actor, "inventory.accepted", revision, now)?;
         }

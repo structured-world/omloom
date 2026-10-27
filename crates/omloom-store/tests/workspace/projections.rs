@@ -1,4 +1,71 @@
 use super::*;
+
+// Provider-valid names must survive projection rebuilds without weakening workspace input limits.
+#[test]
+fn provider_names_survive_workspace_projection_and_edits() -> TestResult {
+    use api::{reply::Result as Reply, request::Command};
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let mut asset = asset();
+    let name = "N".repeat(4096);
+    asset.intended[0].field = Some(text_field("name", &name));
+    let target = target(&asset);
+    store.save_asset(
+        &admit(wire::record::Body::Asset(asset)),
+        None,
+        "provider",
+        100,
+    )?;
+    let target_wire = store.asset(target)?.target.ok_or("target")?;
+    call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            target: Some(target_wire.clone()),
+            expected: Some(1),
+            kind: K::Device as i32,
+            changes: vec![text_field("description", "Edited locally")],
+            ..Default::default()
+        }),
+    )?;
+    let before = store.usage()?;
+    assert!(matches!(
+        call(
+            &store,
+            &actor,
+            Command::Write(api::Write {
+                target: Some(target_wire.clone()),
+                expected: Some(2),
+                kind: K::Device as i32,
+                changes: vec![text_field("name", &"x".repeat(161))],
+                ..Default::default()
+            })
+        ),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    let Reply::Detail(detail) = call(
+        &store,
+        &actor,
+        Command::Read(api::Read {
+            target: Some(target_wire),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("detail");
+    };
+    let item = detail.item.ok_or("item")?;
+    assert!(item.fields.contains(&text_field("name", &name)));
+    assert!(
+        item.fields
+            .contains(&text_field("description", "Edited locally"))
+    );
+    Ok(())
+}
 use api::{reply::Result as Reply, request::Command};
 
 // Destination knowledge remains an address fact, never an interface's or service's local address.

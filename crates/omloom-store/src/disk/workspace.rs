@@ -204,21 +204,18 @@ fn field_value<'a>(fields: &'a [wire::Field], name: &str) -> Option<&'a field::V
         .find(|f| f.name == name)
         .and_then(|f| f.value.as_ref())
 }
-pub(super) fn hot_fields(asset: &wire::Asset, data: &mut Properties) -> Result<()> {
+pub(super) fn hot_fields(asset: &wire::Asset, data: &mut Properties) {
     for intended in &asset.intended {
         if let Some(field) = &intended.field {
-            hot_field(field, data)?;
+            hot_field(field, data);
         }
     }
-    Ok(())
 }
-fn hot_field(field: &wire::Field, data: &mut Properties) -> Result<()> {
+// Projection accepts the stored provider contract; workspace input limits apply before writes.
+fn hot_field(field: &wire::Field, data: &mut Properties) {
     if let Some(field::Value::Text(value)) = &field.value {
         match field.name.as_str() {
             "name" => {
-                if value.len() > 160 {
-                    return Err(Error::Invalid);
-                }
                 data.insert("name".into(), text(value));
                 data.insert("name_sort".into(), text(value.to_lowercase()));
             }
@@ -228,7 +225,6 @@ fn hot_field(field: &wire::Field, data: &mut Properties) -> Result<()> {
             _ => {}
         }
     }
-    Ok(())
 }
 fn binary<'a>(p: &'a Properties, key: &str) -> Result<&'a [u8]> {
     match p.get(key) {

@@ -1522,7 +1522,7 @@ impl Tx<'_> {
         ]));
         for field in ["name", "virtualization_role"] {
             if let Some(value) = self.get(&format!("{key}/intent/{field}"))? {
-                hot_field(&inventory::read_field(&value)?, &mut row)?;
+                hot_field(&inventory::read_field(&value)?, &mut row);
             }
         }
         self.put_against(&key, "assets", Class::Inventory, row, old.as_ref())?;
