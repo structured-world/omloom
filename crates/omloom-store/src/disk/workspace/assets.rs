@@ -650,8 +650,33 @@ impl Store {
             clauses.push(format!("({})", selected.join(" OR ")));
         }
         if query.unplaced {
-            // An accepted physical placement alone removes an object from Unplaced.
-            clauses.push("NOT EXISTS { MATCH (a)-[:OmRelationFrom]->(placement:OmRow) WHERE placement.kind=1 }".into());
+            predicate_joins.push(format!(
+                " WITH {} WHERE {}",
+                bindings.join(", "),
+                clauses.join(" AND ")
+            ));
+            clauses.clear();
+            // Physical ownership has two orientations. Keep both probes in the
+            // top-level plan so each starts from the indexed current asset.
+            for (path, kinds, flag) in [
+                (
+                    "(probe:OmRow {key:a.key})-[:OmRelationFrom]->(placement:OmRow)",
+                    vec![wire::RelationKind::InstalledIn as i32],
+                    "installed",
+                ),
+                (
+                    "(probe:OmRow {key:a.key})<-[:OmRelationTo]-(placement:OmRow)",
+                    vec![
+                        wire::RelationKind::Contains as i32,
+                        wire::RelationKind::HasPort as i32,
+                    ],
+                    "contained",
+                ),
+            ] {
+                predicate_joins.push(format!(" OPTIONAL MATCH {path} WHERE placement.kind IN {kinds:?} WITH {}, placement IS NOT NULL AS {flag}", bindings.join(", ")));
+                bindings.push(flag.into());
+                clauses.push(format!("NOT {flag}"));
+            }
         }
         if !query.search.trim().is_empty() {
             let term = query.search.trim().to_lowercase();

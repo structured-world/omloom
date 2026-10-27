@@ -75,6 +75,72 @@ fn query() -> api::Query {
     }
 }
 
+// All three physical ownership forms exclude children, while roots remain selectable.
+#[test]
+fn unplaced_excludes_contained_and_port_hardware() -> TestResult {
+    use api::{reply::Result as Reply, request::Command};
+    use prost::Message;
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let mut roots = Vec::new();
+    for index in 0..2 {
+        let parent = create(&store, &actor, K::Device, &format!("parent-{index:02}"))?;
+        roots.push(parent.clone());
+        for (kind, relation) in [
+            (K::Device, wire::RelationKind::Contains),
+            (K::Port, wire::RelationKind::HasPort),
+        ] {
+            let child = create(&store, &actor, kind, &format!("child-{index:02}-{kind:?}"))?;
+            call(
+                &store,
+                &actor,
+                Command::Relation(api::Relationship {
+                    relation: Some(wire::Relation {
+                        from: Some(parent.clone()),
+                        to: Some(child),
+                        kind: relation as i32,
+                        ..Default::default()
+                    }),
+                    remove: false,
+                }),
+            )?;
+        }
+    }
+    eprintln!("unplaced fixture complete");
+    let q = api::Query {
+        view: api::View::Hardware as i32,
+        unplaced: true,
+        limit: 100,
+        ..query()
+    };
+    let before = store.usage()?;
+    let mut times = Vec::new();
+    let mut measured = None;
+    for _ in 0..9 {
+        let start = std::time::Instant::now();
+        let Reply::Page(page) = call(&store, &actor, Command::Query(q.clone()))? else {
+            panic!("page");
+        };
+        times.push(start.elapsed().as_micros());
+        measured = Some(page);
+    }
+    times.sort_unstable();
+    let page = measured.ok_or("measurement")?;
+    eprintln!(
+        "unplaced median_us={} encoded_bytes={} usage={before:?}",
+        times[4],
+        page.encoded_len()
+    );
+    assert_eq!(page.total, roots.len() as u64);
+    assert_eq!(page.items.len(), roots.len());
+    for item in page.items {
+        assert!(roots.contains(&item.target.ok_or("target")?));
+    }
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // Removing an imported asset releases only its mappings; a new import gets a new identity.
 #[test]
 fn removed_import_mapping_does_not_poison_reimport() -> TestResult {
