@@ -1196,6 +1196,75 @@ test('phone inventory opens a dedicated detail and returns to the same search', 
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
 
+test('known address display names work as typed name filters', async ({ page }) => {
+  // The rendered label and typed name filter must agree without inventing an intent field.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-address-name-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const address of ['192.0.2.10', '2001:db8::10']) await rpc({ oneofKind: 'address', address: m.Address.create({ address }) });
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const address of ['192.0.2.10', '2001:db8::10']) {
+        await page.goto(`${server.url}/#/?view=1&kind=${m.AssetKind.ADDRESS_REFERENCE}`);
+        await page.getByRole('button', { name: 'Add filter', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await dialog.getByLabel('Field', { exact: true }).selectOption('name');
+        await dialog.getByLabel('Equals', { exact: true }).fill(address);
+        await dialog.getByRole('button', { name: 'Apply filter', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        await expect(page.getByRole('button', { name: address, exact: true })).toBeVisible();
+        await page.reload();
+        await expect(page.getByRole('button', { name: address, exact: true })).toBeVisible();
+        await page.getByRole('button', { name: address, exact: true }).click();
+        await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: address, exact: true })).toBeVisible();
+      }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('scoped participants explicitly review allocation group and interface', async ({ page }) => {
+  // Namespace membership is not interface containment; assignment needs a reviewed peer context.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-member-context-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const object = async (kind, name) => (await rpc({ oneofKind: 'write', write: m.Write.create({ kind, changes: [{ name: 'name', value: { oneofKind: 'text', text: name } }] }) })).mutation.targets[0];
+    const space = await object(m.AssetKind.ADDRESS_SPACE, 'Participant namespace');
+    const prefix = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name: 'Participant subnet', cidr: '192.0.2.0/24', addressSpace: space, sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
+    const link = await object(m.AssetKind.L2_DOMAIN, 'Participant LAN');
+    const iface = await object(m.AssetKind.INTERFACE, 'Reviewed uplink');
+    for (const sharing of [m.SharedUse.EXCLUSIVE, m.SharedUse.VRRP]) {
+      const target = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.IP_ADDRESS, name: `Participant allocation ${sharing}`, cidr: `192.0.2.${10 + sharing}/32`, addressSpace: space, sharing, link: sharing === m.SharedUse.VRRP ? link : undefined, vrid: sharing === m.SharedUse.VRRP ? 7 : undefined, groupName: sharing === m.SharedUse.VRRP ? 'Reviewed routers' : '' }) })).mutation.targets[0];
+      for (const [index, root] of [space, prefix].entries()) {
+        await page.setViewportSize({ width: index ? 390 : 1440, height: 900 });
+        await page.goto(`${server.url}/#/?view=1&scope=${root.assetId}&scopeInc=${root.incarnation}&asset=${target.assetId}&incarnation=${target.incarnation}`);
+        await page.getByRole('button', { name: 'Assign participant', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await expect(dialog.getByLabel('Interface', { exact: true }).locator('option')).toHaveCount(1);
+        await dialog.getByRole('button', { name: 'Choose across permitted inventory', exact: true }).click({ timeout: 3000 });
+        await dialog.getByLabel('Interface', { exact: true }).selectOption(`${iface.assetId}/${iface.incarnation}`);
+        if (sharing === m.SharedUse.VRRP) await dialog.getByLabel('Intended priority', { exact: true }).fill('150');
+        await dialog.getByRole('button', { name: 'Review participant assignment', exact: true }).click();
+        const review = dialog.getByRole('region', { name: 'Reviewed participant context' });
+        await expect(review).toContainText('Reviewed uplink');
+        if (sharing === m.SharedUse.VRRP) await expect(review).toContainText('Reviewed routers');
+        // Changing the endpoint invalidates the reviewed tuple, even if reselected.
+        await dialog.getByLabel('Interface', { exact: true }).selectOption('');
+        await expect(review).toBeHidden();
+        await dialog.getByLabel('Interface', { exact: true }).selectOption(`${iface.assetId}/${iface.incarnation}`);
+        await dialog.getByRole('button', { name: 'Review participant assignment', exact: true }).click();
+        await expect(review).toBeVisible();
+        await dialog.getByRole('button', { name: 'Assign participant', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        const detail = (await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail;
+        expect(detail.participants.map(p => p.interface)).toEqual([iface]);
+        expect(new URL(page.url()).hash).toContain(`scope=${root.assetId}`);
+      }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('shared gateway addresses use one durable group and intended participant set', async ({ page }) => {
   // One group spans two IPs; the UI must send its revision when editing through either address.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-ipam-ui-'));
@@ -1230,6 +1299,7 @@ test('shared gateway addresses use one durable group and intended participant se
     const dialog = page.getByRole('dialog');
     await dialog.getByLabel('Interface', { exact: true }).selectOption({ label: await dialog.getByLabel('Interface', { exact: true }).locator('option').filter({ hasText: 'Router uplink' }).textContent() });
     await dialog.getByLabel('Intended priority', { exact: true }).fill('255');
+    await dialog.getByRole('button', { name: 'Review participant assignment', exact: true }).click();
     await dialog.getByRole('button', { name: 'Assign participant', exact: true }).click();
     await expect(dialog).toBeHidden();
     await page.getByRole('button', { name: 'Close resource details', exact: true }).click();

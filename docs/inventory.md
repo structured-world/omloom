@@ -131,6 +131,9 @@ its previous and proposed network references. Browsing scope remains unchanged.
 The network-settings operation replaces the configuration and requires read
 access to all its settings; projected omissions cannot implicitly clear hidden
 VRF or L2 references. Use the resource field editor for an independent name change.
+Participant assignment can explicitly search across permitted inventory from an
+IPAM scope. Before committing, review the allocation, its shared group when
+applicable, and the selected interface; browsing scope and permissions stay unchanged.
 
 Connections in broader scope explicitly selects both endpoints before offering
 their supported relationship meanings. Editing or removing a connection checks

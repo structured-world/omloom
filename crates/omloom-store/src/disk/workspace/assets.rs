@@ -785,6 +785,18 @@ impl Store {
         // lookup. A comma-separated pattern materializes a Cartesian product.
         for (index, predicate) in query.predicates.iter().enumerate() {
             validate_predicate(predicate, &definitions)?;
+            if predicate.field == "name"
+                && let Some(field::Value::Text(name)) = predicate
+                    .value
+                    .as_ref()
+                    .and_then(|value| value.value.as_ref())
+            {
+                // Display/sort names already live on the root, including derived
+                // address labels that have no intent/name row.
+                clauses.push(visible_clause(context, Some("name"), &mut values));
+                clauses.push(format!("a.name={}", parameter(&mut values, text(name))));
+                continue;
+            }
             let alias = format!("f{index}");
             let network = network_column(&predicate.field);
             let lookup = if network {

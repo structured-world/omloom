@@ -68,6 +68,109 @@ fn provider_names_survive_workspace_projection_and_edits() -> TestResult {
 }
 use api::{reply::Result as Reply, request::Command};
 
+// Address-reference names are derived from the address, without an intent/name record.
+#[test]
+fn derived_address_names_match_filters_without_disclosing_hidden_addresses() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let device = create(&store, &actor, K::Device, "192.0.2.10")?;
+    let mut references = Vec::new();
+    for address in ["192.0.2.10", "192.0.2.10", "2001:db8::10"] {
+        let Reply::Mutation(result) = call(
+            &store,
+            &actor,
+            Command::Address(api::Address {
+                address: Some(address.into()),
+                ..Default::default()
+            }),
+        )?
+        else {
+            panic!("address")
+        };
+        references.push(result.targets[0].clone());
+    }
+    let before = store.usage()?;
+    let syncs = store.diagnostic_database().engine().journal_syncs();
+    for (name, expected) in [
+        (
+            "192.0.2.10",
+            vec![device.clone(), references[0].clone(), references[1].clone()],
+        ),
+        ("2001:db8::10", vec![references[2].clone()]),
+        ("192.0.2.11", vec![]),
+    ] {
+        let mut q = query();
+        q.predicates = vec![api::Predicate {
+            field: "name".into(),
+            value: Some(text_field("name", name)),
+            ..Default::default()
+        }];
+        q.limit = 1;
+        let mut found = Vec::new();
+        let start = std::time::Instant::now();
+        loop {
+            let Reply::Page(page) = call(&store, &actor, Command::Query(q.clone()))? else {
+                panic!("page")
+            };
+            eprintln!(
+                "name predicate {name}: {} matches, {:?}, {} retained bytes",
+                page.total,
+                start.elapsed(),
+                before.bytes.iter().sum::<u64>()
+            );
+            assert_eq!(page.total, expected.len() as u64);
+            found.extend(
+                page.items
+                    .into_iter()
+                    .map(|item| item.target.expect("target")),
+            );
+            if page.next.is_none() {
+                break;
+            }
+            q.cursor = page.next;
+        }
+        assert_eq!(found.len(), expected.len());
+        assert!(expected.iter().all(|target| found.contains(target)));
+        q.cursor = None;
+        for fields in [vec!["name"], vec!["address"], vec!["name", "address"]] {
+            let mut limited = actor.clone();
+            limited.grants[0].read =
+                Fields::Selected(fields.iter().map(|s| s.to_string()).collect());
+            let Reply::Page(page) = call(&store, &limited, Command::Query(q.clone()))? else {
+                panic!("page")
+            };
+            let visible = if fields.len() == 2 {
+                expected.len()
+            } else if fields == ["name"] && name == "192.0.2.10" {
+                1
+            } else {
+                0
+            };
+            assert_eq!(page.total, visible as u64, "read fields {fields:?}");
+        }
+    }
+    let mut q = query();
+    q.predicates = vec![api::Predicate {
+        field: "name".into(),
+        value: Some(wire::Field {
+            name: "name".into(),
+            value: Some(wire::field::Value::Clear(0)),
+        }),
+        ..Default::default()
+    }];
+    let Reply::Page(page) = call(&store, &actor, Command::Query(q))? else {
+        panic!("page")
+    };
+    assert_eq!(
+        page.total, 0,
+        "a derived address name is not explicitly cleared"
+    );
+    assert_eq!(store.usage()?, before);
+    assert_eq!(store.diagnostic_database().engine().journal_syncs(), syncs);
+    Ok(())
+}
+
 // Destination knowledge remains an address fact, never an interface's or service's local address.
 #[test]
 fn destination_references_do_not_become_local_address_hints() -> TestResult {
