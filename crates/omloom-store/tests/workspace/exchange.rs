@@ -56,6 +56,37 @@ fn csv_address_vlan_tag_remains_typed() -> TestResult {
             .iter()
             .any(|f| f.name == "vlan_tag" && f.value == Some(wire::field::Value::Integer(42)))
     );
+    // Typed filters must find the imported integer and reject text instead of silently missing it.
+    let before = store.usage()?;
+    for (value, expected) in [(42, 1), (43, 0)] {
+        let mut q = query();
+        q.predicates = vec![api::Predicate {
+            field: "vlan_tag".into(),
+            value: Some(wire::Field {
+                name: "vlan_tag".into(),
+                value: Some(wire::field::Value::Integer(value)),
+            }),
+            ..Default::default()
+        }];
+        let Reply::Page(page) = call(&store, &actor, Command::Query(q))? else {
+            panic!("page")
+        };
+        assert_eq!(page.total, expected);
+        if expected == 1 {
+            assert_eq!(page.items[0].target, Some(mutation.targets[0].clone()));
+        }
+    }
+    let mut q = query();
+    q.predicates = vec![api::Predicate {
+        field: "vlan_tag".into(),
+        value: Some(text_field("vlan_tag", "42")),
+        ..Default::default()
+    }];
+    assert!(matches!(
+        call(&store, &actor, Command::Query(q)),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
     Ok(())
 }
 

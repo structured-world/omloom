@@ -1872,11 +1872,13 @@ pub(super) fn validate_predicate(
             Some(field::Value::Integer(_))
                 if predicate.field == "vrid"
                     || predicate.field == "vlan_id"
+                    || predicate.field == "vlan_tag"
                     || predicate.field == "prefix_length" => {}
             Some(field::Value::Text(s))
                 if s.len() <= 2048
                     && predicate.field != "vrid"
                     && predicate.field != "vlan_id"
+                    && predicate.field != "vlan_tag"
                     && predicate.field != "prefix_length" => {}
             Some(field::Value::Clear(EXPLICIT_CLEAR)) if !network_column(&predicate.field) => {}
             _ => return Err(Error::Invalid),
