@@ -704,6 +704,16 @@ impl Store {
     }
 }
 impl Tx<'_> {
+    pub(in super::super) fn require_no_ipam_state(&self, target: AssetRef) -> Result<()> {
+        let identity = identity(target);
+        if self.get(&format!("network/{identity}"))?.is_some()
+            || self.get(&format!("group/{identity}"))?.is_some()
+        {
+            return Err(Error::Conflict);
+        }
+        Ok(())
+    }
+
     fn resolve_allocation_parent(
         &self,
         context: &Context,

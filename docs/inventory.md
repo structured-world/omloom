@@ -181,6 +181,8 @@ of the group's stable identity. VRID changes update the group once; address
 cards and filters read that current value rather than stored copies.
 Removing a participant does not release the address. Intended priority is not
 evidence of an active gateway. Restricted participant coverage remains explicit.
+Resources with retained IPAM state cannot be archived through the generic
+asset writer. Explicit IPAM removal owns reference checks and allocation release.
 
 ## CSV and storage bounds
 

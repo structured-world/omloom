@@ -1,5 +1,50 @@
 use super::*;
 
+// Archival cannot hide an active allocation or silently release its reserved address.
+#[test]
+fn archival_refuses_live_ipam_state_without_changes() -> TestResult {
+    use api::{reply::Result as Reply, request::Command};
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let space = create(&store, &actor, K::AddressSpace, "space")?;
+    let request = api::Network {
+        kind: K::IpAddress as i32,
+        name: "retained allocation".into(),
+        cidr: "192.0.2.10/32".into(),
+        address_space: Some(space),
+        ..Default::default()
+    };
+    let Reply::Mutation(created) = call(&store, &actor, Command::Network(request.clone()))? else {
+        panic!("allocation");
+    };
+    let target = AssetRef::try_from(&created.targets[0])?;
+    let mut asset = store.asset(target)?;
+    let expected = asset.revision;
+    asset.adoption = wire::Adoption::Archived as i32;
+    let before = store.usage()?;
+    let result = store.save_asset(
+        &admit(wire::record::Body::Asset(asset)),
+        Some(expected),
+        "operator",
+        200,
+    );
+    assert!(
+        matches!(result, Err(Error::Conflict)),
+        "active allocation archived: {result:?}"
+    );
+    assert_eq!(store.usage()?, before);
+    assert_eq!(
+        store.asset(target)?.adoption,
+        wire::Adoption::Adopted as i32
+    );
+    assert!(matches!(
+        call(&store, &actor, Command::Network(request)),
+        Err(Error::Conflict)
+    ));
+    Ok(())
+}
+
 // A link-local prefix supplies its L2 domain; joining a group accepts only that same domain.
 #[test]
 fn prefix_allocation_accepts_matching_existing_vrrp_link() -> TestResult {

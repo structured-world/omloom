@@ -191,6 +191,8 @@ impl Store {
         }
         if asset.adoption == wire::Adoption::Archived as i32 {
             let old = old.as_ref().ok_or(Error::Invalid)?;
+            // IPAM owns allocation release and reference checks; archival must not orphan it.
+            tx.require_no_ipam_state(target)?;
             let pending=tx.query("MATCH (n:OmRow) WHERE n.parent='operations' AND n.class=$class AND n.asset=$asset RETURN properties(n) AS p LIMIT 1",params([("class",int(Class::Pending as u64)?),("asset",text(target.asset.to_string()))]))?;
             if !pending.is_empty() {
                 return Err(Error::Conflict);
