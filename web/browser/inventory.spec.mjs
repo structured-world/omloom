@@ -67,6 +67,7 @@ test('leaving hypervisor through another resource kind discards its role', async
       await dialog.getByLabel('Name', { exact: true }).fill(`Ordinary installation ${width}`);
       await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
       await expect(dialog).toBeHidden();
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `Ordinary installation ${width}`, exact: true })).toBeVisible();
       const params = new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
       const target = { assetId: params.get('asset'), incarnation: params.get('incarnation') };
       const saved = await rpc({ oneofKind: 'read', read: m.Read.create({ target }) }, target);
