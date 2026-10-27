@@ -148,6 +148,37 @@ test('relationship review excludes ineligible hypervisors but permits removing t
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
 
+test('a VM cannot run on its own installation through the relationship editor', async ({ page }) => {
+  // Rejecting the cycle must leave the containment edge and discoverable root intact.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-cycle-review-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const guest = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.VIRTUAL_MACHINE, changes: [{ name: 'name', value: { oneofKind: 'text', text: `Cycle guest ${width}` } }] }) })).mutation.targets[0];
+      const host = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.SOFTWARE_INSTALLATION, parent: guest, changes: [{ name: 'name', value: { oneofKind: 'text', text: `Nested hypervisor ${width}` } }, { name: 'virtualization_role', value: { oneofKind: 'text', text: 'VIRTUALIZATION_ROLE_HYPERVISOR' } }] }) }, guest)).mutation.targets[0];
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${server.url}/#/?view=3&asset=${guest.assetId}&incarnation=${guest.incarnation}`);
+      await page.getByRole('button', { name: 'Connections in broader scope', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByRole('button', { name: 'Choose connection endpoints', exact: true }).click();
+      await dialog.getByLabel('Other endpoint', { exact: true }).selectOption(`${host.assetId}/${host.incarnation}`);
+      await dialog.getByRole('button', { name: 'Review connection', exact: true }).click();
+      await dialog.getByLabel('Relationship', { exact: true }).selectOption({ label: 'runs on' });
+      const before = (await rpc({ oneofKind: 'query', query: m.Query.create({ limit: 1 }) })).page.revision;
+      await dialog.getByRole('button', { name: 'Add relationship', exact: true }).click();
+      await expect(dialog.getByRole('alert')).toContainText('INVALID_ARGUMENT');
+      expect((await rpc({ oneofKind: 'query', query: m.Query.create({ limit: 1 }) })).page.revision).toBe(before);
+      const detail = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: guest }) })).detail;
+      expect(detail.relations.map(r => r.kind)).toEqual([m.RelationKind.CONTAINS]);
+      const roots = (await rpc({ oneofKind: 'query', query: m.Query.create({ view: m.View.VIRTUALIZATION, levelOnly: true, limit: 100 }) })).page;
+      expect(roots.items.some(i => i.target.assetId === guest.assetId)).toBe(true);
+      await dialog.getByRole('button', { name: 'Return to resource', exact: true }).click();
+      await expect(dialog).toBeHidden();
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('placement defaults to unknown and description is editable immediately', async ({ page }) => {
   // Optional placement must not block creation or force a separate field-enable action.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-create-inputs-'));

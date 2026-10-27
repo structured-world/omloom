@@ -80,6 +80,10 @@ Guests remain discoverable when their installation's virtualization role is
 unknown, disabled or unreadable. Their accepted placement is preserved;
 listing a permitted guest does not disclose a hidden role.
 
+Containment and execution placement are checked together for cycles before a
+relationship commits. A VM cannot run on its own OS installation. Removing an
+existing placement remains available when the host role is disabled or unknown.
+
 Device, VM and OS installation creation accept up to 16 initial IP facts, with
 optional prefix lengths and local VLAN tags. Unknown interface ownership stays
 unknown. A local VLAN tag is not a canonical VLAN or routing-domain assignment.

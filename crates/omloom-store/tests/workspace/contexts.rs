@@ -249,6 +249,179 @@ fn relationship_preparation_requires_an_eligible_hypervisor_but_removal_does_not
     Ok(())
 }
 
+// Oppositely stored containment and execution edges must not close an ownership cycle in either order.
+#[test]
+fn hypervisor_ownership_cycles_are_rejected_in_both_insertion_orders() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    for containment_first in [true, false] {
+        let guest = create(&store, &actor, K::VirtualMachine, "Guest")?;
+        let host = changed(call(
+            &store,
+            &actor,
+            Command::Write(api::Write {
+                kind: K::SoftwareInstallation as i32,
+                changes: vec![
+                    text_field("name", "Host OS"),
+                    text_field("virtualization_role", "VIRTUALIZATION_ROLE_HYPERVISOR"),
+                ],
+                ..Default::default()
+            }),
+        )?);
+        let contains = api::Relationship {
+            relation: Some(wire::Relation {
+                from: Some(guest.clone()),
+                to: Some(host.clone()),
+                kind: wire::RelationKind::Contains as i32,
+                ..Default::default()
+            }),
+            remove: false,
+        };
+        let runs = api::Relationship {
+            relation: Some(wire::Relation {
+                from: Some(guest.clone()),
+                to: Some(host.clone()),
+                kind: wire::RelationKind::RunsOn as i32,
+                ..Default::default()
+            }),
+            remove: false,
+        };
+        let (first, closing) = if containment_first {
+            (contains, runs)
+        } else {
+            (runs, contains)
+        };
+        call(&store, &actor, Command::Relation(first))?;
+        let before = store.usage()?;
+        assert!(matches!(
+            call(&store, &actor, Command::Relation(closing.clone())),
+            Err(Error::Invalid)
+        ));
+        assert_eq!(store.usage()?, before);
+        // Trusted host writes share cycle enforcement with workspace writes.
+        let mut relation = closing.relation.ok_or("relation")?;
+        relation.relation_id = omloom_contracts::ids::RelationId::generate().to_string();
+        relation.authority_id = omloom_contracts::ids::AuthorityId::generate().to_string();
+        relation.revision = 1;
+        assert!(matches!(
+            store.save_relation(
+                &admit(wire::record::Body::Relation(relation)),
+                None,
+                "provider",
+                100
+            ),
+            Err(Error::Invalid)
+        ));
+        assert_eq!(store.usage()?, before);
+    }
+    Ok(())
+}
+
+// Shared acyclic execution ancestors are valid; a later edge cannot close a multi-installation cycle.
+#[test]
+fn shared_hypervisor_ancestors_are_valid_but_indirect_cycles_are_not() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let device = create(&store, &actor, K::Device, "Hardware")?;
+    let mut hosts = Vec::new();
+    for name in ["First OS", "Second OS"] {
+        hosts.push(changed(within(
+            &store,
+            &actor,
+            focused(&store, &device)?,
+            Command::Write(api::Write {
+                kind: K::SoftwareInstallation as i32,
+                parent: Some(device.clone()),
+                changes: vec![
+                    text_field("name", name),
+                    text_field("virtualization_role", "VIRTUALIZATION_ROLE_HYPERVISOR"),
+                ],
+                ..Default::default()
+            }),
+        )?));
+    }
+    let guest = create(&store, &actor, K::VirtualMachine, "Shared guest")?;
+    for host in &hosts {
+        call(
+            &store,
+            &actor,
+            Command::Relation(api::Relationship {
+                relation: Some(wire::Relation {
+                    from: Some(guest.clone()),
+                    to: Some(host.clone()),
+                    kind: wire::RelationKind::RunsOn as i32,
+                    ..Default::default()
+                }),
+                remove: false,
+            }),
+        )?;
+    }
+    let vm = create(&store, &actor, K::VirtualMachine, "Nested guest")?;
+    let nested = changed(within(
+        &store,
+        &actor,
+        focused(&store, &guest)?,
+        Command::Write(api::Write {
+            kind: K::SoftwareInstallation as i32,
+            parent: Some(guest.clone()),
+            changes: vec![
+                text_field("name", "Nested OS"),
+                text_field("virtualization_role", "VIRTUALIZATION_ROLE_HYPERVISOR"),
+            ],
+            ..Default::default()
+        }),
+    )?);
+    call(
+        &store,
+        &actor,
+        Command::Relation(api::Relationship {
+            relation: Some(wire::Relation {
+                from: Some(vm.clone()),
+                to: Some(nested),
+                kind: wire::RelationKind::RunsOn as i32,
+                ..Default::default()
+            }),
+            remove: false,
+        }),
+    )?;
+    let inner = changed(within(
+        &store,
+        &actor,
+        focused(&store, &vm)?,
+        Command::Write(api::Write {
+            kind: K::SoftwareInstallation as i32,
+            parent: Some(vm),
+            changes: vec![
+                text_field("name", "Inner OS"),
+                text_field("virtualization_role", "VIRTUALIZATION_ROLE_HYPERVISOR"),
+            ],
+            ..Default::default()
+        }),
+    )?);
+    let before = store.usage()?;
+    // Guest -> nested OS -> nested guest -> inner OS -> guest would close the cycle.
+    assert!(matches!(
+        call(
+            &store,
+            &actor,
+            Command::Relation(api::Relationship {
+                relation: Some(wire::Relation {
+                    from: Some(guest),
+                    to: Some(inner),
+                    kind: wire::RelationKind::RunsOn as i32,
+                    ..Default::default()
+                }),
+                remove: false
+            })
+        ),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // A bad address must roll back the whole creation, including placement and earlier facts.
 #[test]
 fn initial_addresses_are_atomic_and_do_not_invent_interfaces_or_vlans() -> TestResult {
