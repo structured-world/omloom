@@ -75,6 +75,46 @@ fn query() -> api::Query {
     }
 }
 
+// A bounded CSV writer must report admission overflow, not malformed user input.
+#[test]
+fn csv_export_overflow_reports_limit() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let long = "x".repeat(2048);
+    for i in 0..128 {
+        let target = create(&store, &actor, K::Device, &format!("Export {i}"))?;
+        call(
+            &store,
+            &actor,
+            api::request::Command::Write(api::Write {
+                target: Some(target),
+                expected: Some(1),
+                kind: K::Device as i32,
+                changes: vec![text_field("description", &long)],
+                ..Default::default()
+            }),
+        )?;
+    }
+    let before = store.usage()?;
+    let mut q = query();
+    q.columns = vec!["name".into(), "description".into()];
+    let result = call(
+        &store,
+        &actor,
+        api::request::Command::Export(api::Export {
+            query: Some(q),
+            spreadsheet: true,
+        }),
+    );
+    assert!(
+        matches!(result, Err(Error::Limit)),
+        "unexpected export: {result:?}"
+    );
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // A malformed mapped value identifies its column without retaining a rejected preview.
 #[test]
 fn csv_errors_identify_the_failing_field_without_writes() -> TestResult {

@@ -1,6 +1,12 @@
 use super::*;
 
 struct CsvOutput(Vec<u8>);
+fn csv_write_error(error: csv::Error) -> Error {
+    match error.kind() {
+        csv::ErrorKind::Io(_) => Error::Limit,
+        _ => Error::Invalid,
+    }
+}
 impl std::io::Write for CsvOutput {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         if bytes.len() > MAX_CSV - self.0.len() {
@@ -318,7 +324,7 @@ impl Store {
             "kind".to_owned(),
         ];
         headers.extend(columns.iter().cloned());
-        writer.write_record(&headers).map_err(|_| Error::Invalid)?;
+        writer.write_record(&headers).map_err(csv_write_error)?;
         let mut basis = None;
         let mut emitted = 0usize;
         loop {
@@ -360,7 +366,7 @@ impl Store {
                     }
                     row.push(cell);
                 }
-                writer.write_record(row).map_err(|_| Error::Invalid)?;
+                writer.write_record(row).map_err(csv_write_error)?;
             }
             match page.next {
                 Some(cursor) => query.cursor = Some(cursor),
