@@ -212,8 +212,11 @@ which checks their typed scopes and uniqueness. The generic CSV preview rejects
 these creation modes instead of promising a change that cannot be accepted.
 
 Export applies the current object and field projection before counts and output.
-Spreadsheet-safe CSV protects formula-leading cells; the typed API can request
-lossless machine CSV separately. These are different output contracts.
+Spreadsheet CSV prefixes dangerous text with an apostrophe, including leading
+tab, CR/LF and full-width formula characters. Typed integers and flags retain
+their values. The typed API can request lossless machine CSV separately.
+Spreadsheet editors can alter escaping on resave; these are different output
+contracts.
 
 Fixed operation ceilings are 100 resources per query page, 128 explicit targets
 or CSV rows per mutation, 32 requested fields, 8 equality predicates, 256 KiB CSV

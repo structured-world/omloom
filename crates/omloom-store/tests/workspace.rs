@@ -10,6 +10,8 @@ use support::*;
 mod contexts;
 #[path = "workspace/definitions.rs"]
 mod definitions;
+#[path = "workspace/exchange.rs"]
+mod exchange;
 #[path = "workspace/groups.rs"]
 mod groups;
 #[path = "workspace/host_network.rs"]

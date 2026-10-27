@@ -348,22 +348,27 @@ impl Store {
                         .into(),
                 ];
                 for name in &columns {
-                    let mut cell = match field_value(&item.fields, name) {
+                    let cell = match field_value(&item.fields, name) {
                         None => String::new(),
                         Some(field::Value::Clear(EXPLICIT_CLEAR)) => "<clear>".into(),
+                        // OWASP CSV Injection: protect literal text, including control
+                        // and full-width prefixes. Typed numbers cannot contain formulas.
+                        // https://community.owasp.org/attacks/CSV_Injection
+                        Some(field::Value::Text(s))
+                            if export.spreadsheet
+                                && (s.starts_with(['\t', '\r', '\n'])
+                                    || s.trim_start_matches([' ', '\t', '\r', '\n'])
+                                        .starts_with([
+                                            '=', '+', '-', '@', '＝', '＋', '－', '＠',
+                                        ])) =>
+                        {
+                            format!("'{s}")
+                        }
                         Some(field::Value::Text(s)) => s.clone(),
                         Some(field::Value::Integer(n)) => n.to_string(),
                         Some(field::Value::Flag(b)) => b.to_string(),
                         _ => return Err(Error::Corrupt),
                     };
-                    // Spreadsheet presentation is distinct from the lossless machine value.
-                    if export.spreadsheet
-                        && cell
-                            .trim_start_matches([' ', '\t', '\r', '\n'])
-                            .starts_with(['=', '+', '-', '@'])
-                    {
-                        cell.insert(0, '\'');
-                    }
                     row.push(cell);
                 }
                 writer.write_record(row).map_err(csv_write_error)?;
