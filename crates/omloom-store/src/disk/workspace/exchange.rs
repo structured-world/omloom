@@ -242,8 +242,23 @@ impl Store {
         };
         if valid {
             let pending = tx.query("MATCH (n:OmRow {parent:'workspace-previews'}) WHERE n.owner=$owner RETURN properties(n) AS p LIMIT 5", params([("owner", text(&context.actor))]))?;
-            if pending.len() >= 4 {
+            if pending.len() > 4 {
                 return Err(Error::Limit);
+            }
+            // Committing this preview invalidates earlier revisions. Replace only this actor's drafts.
+            for prior in pending {
+                if number(&prior, "revision")? > base {
+                    return Err(Error::Corrupt);
+                }
+                let key = string(&prior, "key")?;
+                let children = tx.children(&key)?;
+                if children.len() > MAX_IMPORT {
+                    return Err(Error::Limit);
+                }
+                for child in children {
+                    tx.delete(&string(&child, "key")?)?;
+                }
+                tx.delete(&key)?;
             }
             let id = AuthorityId::generate().to_string();
             let key = format!("preview/{id}");

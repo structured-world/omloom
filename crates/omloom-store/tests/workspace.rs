@@ -508,6 +508,176 @@ fn allocations_scoped_unique_and_point_to_point() -> TestResult {
 
 // Preview rows must reclaim through the owned bounded lifecycle, never grow indefinitely.
 #[test]
+fn replacing_import_preview_reclaims_invalidated_rows_within_owner() -> TestResult {
+    use omloom_store::Class;
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let mut peer = actor.clone();
+    peer.actor = "other importer".into();
+    let mut import = api::Import {
+        csv: "external_id,name\nedge-1,Draft 00".into(),
+        source: "register".into(),
+        kind: K::Device as i32,
+        mappings: vec![api::Mapping {
+            source: "name".into(),
+            field: "name".into(),
+        }],
+        ..Default::default()
+    };
+    let api::reply::Result::Preview(peer_preview) =
+        call(&store, &peer, api::request::Command::Import(import.clone()))?
+    else {
+        panic!("peer preview")
+    };
+    let mut prior = None;
+    let mut retained_bytes = None;
+    for index in 0..8 {
+        import.csv = format!("external_id,name\nedge-1,Draft {index:02}");
+        let api::reply::Result::Preview(preview) = call(
+            &store,
+            &actor,
+            api::request::Command::Import(import.clone()),
+        )?
+        else {
+            panic!("preview")
+        };
+        let usage = store.usage()?;
+        assert_eq!(
+            usage.rows[Class::Review as usize],
+            4,
+            "only one parent/child pair per importer may remain"
+        );
+        if let Some(bytes) = retained_bytes {
+            assert_eq!(
+                usage.bytes[Class::Review as usize],
+                bytes,
+                "draft revisions must not accumulate payloads"
+            );
+        }
+        retained_bytes = Some(usage.bytes[Class::Review as usize]);
+        if let Some(old) = prior {
+            let before = store.usage()?;
+            assert!(matches!(
+                call(
+                    &store,
+                    &actor,
+                    api::request::Command::Import(api::Import {
+                        preview: Some(old),
+                        ..Default::default()
+                    })
+                ),
+                Err(Error::Expired)
+            ));
+            assert_eq!(store.usage()?, before);
+        }
+        prior = preview.id;
+    }
+    let before = store.usage()?;
+    import.csv = "external_id,name\n,invalid identity".into();
+    let api::reply::Result::Preview(invalid) =
+        call(&store, &actor, api::request::Command::Import(import))?
+    else {
+        panic!("invalid preview")
+    };
+    assert!(invalid.id.is_none());
+    assert_eq!(
+        store.usage()?,
+        before,
+        "invalid input cannot discard the accepted review draft"
+    );
+    // The other user's stale preview remains theirs to refresh or expire.
+    assert!(matches!(
+        call(
+            &store,
+            &peer,
+            api::request::Command::Import(api::Import {
+                preview: peer_preview.id,
+                ..Default::default()
+            })
+        ),
+        Err(Error::Conflict)
+    ));
+    call(
+        &store,
+        &actor,
+        api::request::Command::Import(api::Import {
+            preview: prior,
+            ..Default::default()
+        }),
+    )?;
+    assert_eq!(store.usage()?.rows[Class::Review as usize], 2);
+    let assets = store.assets(None, None, 10)?.assets;
+    assert_eq!(assets.len(), 1);
+    assert!(
+        store
+            .asset(assets[0].target)?
+            .intended
+            .iter()
+            .any(|v| v.field.as_ref() == Some(&text_field("name", "Draft 07")))
+    );
+    Ok(())
+}
+
+// A failed replacement after deleting old rows must restore the still-usable original preview.
+#[test]
+fn import_preview_replacement_rolls_back_when_new_draft_exceeds_budget() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let mut budget = policy();
+    budget.classes[omloom_store::Class::Review as usize].rows = 2;
+    let store = Store::open(dir.path(), budget)?;
+    let actor = operator();
+    let mut import = api::Import {
+        csv: "external_id,name\none,Original draft".into(),
+        source: "register".into(),
+        kind: K::Device as i32,
+        mappings: vec![api::Mapping {
+            source: "name".into(),
+            field: "name".into(),
+        }],
+        ..Default::default()
+    };
+    let api::reply::Result::Preview(prior) = call(
+        &store,
+        &actor,
+        api::request::Command::Import(import.clone()),
+    )?
+    else {
+        panic!("preview")
+    };
+    let before = store.usage()?;
+    import.csv = "external_id,name\none,Replacement\ntwo,Too many rows".into();
+    assert!(matches!(
+        call(&store, &actor, api::request::Command::Import(import)),
+        Err(Error::Limit)
+    ));
+    assert_eq!(
+        store.usage()?,
+        before,
+        "failed replacement must roll back reclamation"
+    );
+    call(
+        &store,
+        &actor,
+        api::request::Command::Import(api::Import {
+            preview: prior.id,
+            ..Default::default()
+        }),
+    )?;
+    let assets = store.assets(None, None, 10)?.assets;
+    assert_eq!(assets.len(), 1);
+    assert!(
+        store
+            .asset(assets[0].target)?
+            .intended
+            .iter()
+            .any(|v| v.field.as_ref() == Some(&text_field("name", "Original draft")))
+    );
+    Ok(())
+}
+
+// Preview rows must reclaim through the owned bounded lifecycle, never grow indefinitely.
+#[test]
 fn import_preview_expiry_and_idempotent_acceptance() -> TestResult {
     let dir = tempfile::tempdir()?;
     let store = Store::open(dir.path(), policy())?;

@@ -180,6 +180,9 @@ an explicit clear. Invalid rows identify the failing row and mapped column witho
 echoing its value or persisting a rejected preview; invalid input cannot be
 partially accepted. A valid preview expires, and applying it rechecks the current
 application revision, actor scope and field types. Raw CSV history is not saved.
+Preparing a replacement atomically reclaims that importer's earlier review-only
+drafts and their rows. Failed preparation preserves the prior draft; another
+importer's previews remain under their own expiry and revision checks.
 New IPs, prefixes, VLANs and shared groups use the network allocation form,
 which checks their typed scopes and uniqueness. The generic CSV preview rejects
 these creation modes instead of promising a change that cannot be accepted.
