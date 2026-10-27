@@ -1,6 +1,69 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
+// Interface assignment needs a canonical allocation; missing binding is user input, not corruption.
+#[test]
+fn unbound_configured_address_assignment_is_invalid_and_atomic() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let interface = create(&store, &actor, K::Interface, "eth0")?;
+    let request = api::Address {
+        parent: Some(interface.clone()),
+        address: Some("192.0.2.10".into()),
+        meaning: Some(api::AddressMeaning::Configured as i32),
+        ..Default::default()
+    };
+    let before = store.usage()?;
+    let result = within(
+        &store,
+        &actor,
+        api::WorkingContext {
+            expected: Some(before.revision),
+            ..Default::default()
+        },
+        Command::Address(api::Address {
+            interface: Some(Box::new(interface.clone())),
+            ..request.clone()
+        }),
+    );
+    assert!(
+        matches!(result, Err(Error::Invalid)),
+        "unexpected creation result: {result:?}"
+    );
+    assert_eq!(store.usage()?, before);
+    let fact = changed(within(
+        &store,
+        &actor,
+        api::WorkingContext {
+            expected: Some(before.revision),
+            ..Default::default()
+        },
+        Command::Address(request),
+    )?);
+    let before = store.usage()?;
+    let result = within(
+        &store,
+        &actor,
+        api::WorkingContext {
+            expected: Some(before.revision),
+            ..Default::default()
+        },
+        Command::Address(api::Address {
+            expected: Some(store.asset(AssetRef::try_from(&fact)?)?.revision),
+            target: Some(fact),
+            interface: Some(Box::new(interface)),
+            ..Default::default()
+        }),
+    );
+    assert!(
+        matches!(result, Err(Error::Invalid)),
+        "unexpected update result: {result:?}"
+    );
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 fn configured_owner_attachment(create_bound: bool) -> TestResult {
     let dir = tempfile::tempdir()?;
     let store = Store::open(dir.path(), policy())?;

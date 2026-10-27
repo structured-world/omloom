@@ -138,7 +138,8 @@ impl Store {
             if fact.get("meaning") != Some(&text(api::AddressMeaning::Configured.as_str_name())) {
                 return Err(Error::Invalid);
             }
-            let canonical = network::groups::reference(&string(&fact, "binding")?)?;
+            let binding = fact.get("binding").ok_or(Error::Invalid)?;
+            let canonical = network::groups::reference(binding.as_str().ok_or(Error::Corrupt)?)?;
             let root = tx.asset(canonical)?;
             let row = tx
                 .get(&format!("network/{}", network::identity(canonical)))?
