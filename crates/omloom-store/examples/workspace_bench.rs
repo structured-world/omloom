@@ -1,6 +1,7 @@
 //! Reproducible current-workspace qualification through the actual bounded import API.
 use omloom_contracts::{wire::AssetKind, workspace as api};
 use omloom_store::{Budget, CLASSES, Policy, Store, workspace::*};
+use prost::Message;
 use std::{error::Error, time::Instant};
 fn main() -> Result<(), Box<dyn Error>> {
     let count: usize = std::env::args()
@@ -31,7 +32,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .parse()?;
     let store = Store::open_with_query_memory(
         directory.path(),
-        policy,
+        policy.clone(),
         memory_mib
             .checked_mul(1_048_576)
             .ok_or("Memory size overflow")?,
@@ -148,5 +149,127 @@ fn main() -> Result<(), Box<dyn Error>> {
         before.bytes.iter().sum::<u64>(),
         before.rows.iter().sum::<u64>()
     );
+    projection_cases(&policy, &context)?;
+    Ok(())
+}
+
+fn projection_cases(policy: &Policy, context: &Context) -> Result<(), Box<dyn Error>> {
+    use api::{reply::Result as Reply, request::Command};
+    use omloom_contracts::wire::{Field, RelationKind, field};
+    for wide in [false, true] {
+        let directory = tempfile::tempdir()?;
+        let store = Store::open(directory.path(), policy.clone())?;
+        let execute = |command| {
+            store.workspace(
+                context,
+                api::Request {
+                    command: Some(command),
+                    working: Some(api::WorkingContext::default()),
+                },
+                100,
+            )
+        };
+        let field = |name: &str, value: String| Field {
+            name: name.into(),
+            value: Some(field::Value::Text(value)),
+        };
+        let mut columns = vec!["name".to_owned()];
+        if wide {
+            for index in 0..11 {
+                let name = format!("Payload {index}");
+                let Some(Reply::Definitions(definitions)) =
+                    execute(Command::Definition(api::Definition {
+                        name: name.clone(),
+                        kinds: vec![AssetKind::Device as i32],
+                        r#type: api::FieldType::Text as i32,
+                        ..Default::default()
+                    }))?
+                    .result
+                else {
+                    return Err("Expected definitions".into());
+                };
+                columns.push(
+                    definitions
+                        .items
+                        .iter()
+                        .find(|d| d.name == name)
+                        .ok_or("Missing definition")?
+                        .id
+                        .clone(),
+                );
+            }
+        }
+        for index in 0..if wide { 25 } else { 2 } {
+            let mut changes = vec![field("name", format!("device-{index:02}"))];
+            if wide {
+                changes.extend(
+                    columns[1..]
+                        .iter()
+                        .map(|name| field(name, "x".repeat(2048))),
+                );
+            }
+            let Some(Reply::Mutation(parent)) = execute(Command::Write(api::Write {
+                kind: AssetKind::Device as i32,
+                changes,
+                ..Default::default()
+            }))?
+            .result
+            else {
+                return Err("Expected resource".into());
+            };
+            if !wide {
+                for (kind, relation) in [
+                    (AssetKind::Device, RelationKind::Contains),
+                    (AssetKind::Port, RelationKind::HasPort),
+                ] {
+                    let Some(Reply::Mutation(child)) = execute(Command::Write(api::Write {
+                        kind: kind as i32,
+                        changes: vec![field("name", format!("child-{index}-{kind:?}"))],
+                        ..Default::default()
+                    }))?
+                    .result
+                    else {
+                        return Err("Expected child".into());
+                    };
+                    execute(Command::Relation(api::Relationship {
+                        relation: Some(omloom_contracts::wire::Relation {
+                            from: Some(parent.targets[0].clone()),
+                            to: Some(child.targets[0].clone()),
+                            kind: relation as i32,
+                            ..Default::default()
+                        }),
+                        remove: false,
+                    }))?;
+                }
+            }
+        }
+        let before = store.usage()?;
+        let mut samples = Vec::with_capacity(9);
+        let mut bytes = 0;
+        for _ in 0..9 {
+            let start = Instant::now();
+            let response = execute(Command::Query(api::Query {
+                limit: 25,
+                columns: columns.clone(),
+                unplaced: !wide,
+                include_context: wide,
+                ..Default::default()
+            }))?;
+            samples.push(start.elapsed());
+            bytes = response.encoded_len();
+            let Some(Reply::Page(page)) = response.result else {
+                return Err("Expected page".into());
+            };
+            assert_eq!(page.total, if wide { 25 } else { 2 });
+        }
+        samples.sort_unstable();
+        println!(
+            "projection={} P50={:?} reply_bytes={bytes} logical_bytes={}",
+            if wide { "wide" } else { "unplaced" },
+            samples[4],
+            before.bytes.iter().sum::<u64>()
+        );
+        assert_eq!(store.usage()?, before);
+    }
     Ok(())
 }

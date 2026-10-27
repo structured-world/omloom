@@ -138,7 +138,6 @@ fn unplaced_search_keeps_ip_binding() -> TestResult {
 #[test]
 fn unplaced_excludes_contained_and_port_hardware() -> TestResult {
     use api::{reply::Result as Reply, request::Command};
-    use prost::Message;
     let dir = tempfile::tempdir()?;
     let store = Store::open(dir.path(), policy())?;
     let actor = operator();
@@ -166,7 +165,6 @@ fn unplaced_excludes_contained_and_port_hardware() -> TestResult {
             )?;
         }
     }
-    eprintln!("unplaced fixture complete");
     let q = api::Query {
         view: api::View::Hardware as i32,
         unplaced: true,
@@ -174,23 +172,9 @@ fn unplaced_excludes_contained_and_port_hardware() -> TestResult {
         ..query()
     };
     let before = store.usage()?;
-    let mut times = Vec::new();
-    let mut measured = None;
-    for _ in 0..9 {
-        let start = std::time::Instant::now();
-        let Reply::Page(page) = call(&store, &actor, Command::Query(q.clone()))? else {
-            panic!("page");
-        };
-        times.push(start.elapsed().as_micros());
-        measured = Some(page);
-    }
-    times.sort_unstable();
-    let page = measured.ok_or("measurement")?;
-    eprintln!(
-        "unplaced median_us={} encoded_bytes={} usage={before:?}",
-        times[4],
-        page.encoded_len()
-    );
+    let Reply::Page(page) = call(&store, &actor, Command::Query(q))? else {
+        panic!("page");
+    };
     assert_eq!(page.total, roots.len() as u64);
     assert_eq!(page.items.len(), roots.len());
     for item in page.items {
@@ -251,31 +235,6 @@ fn wide_pages_continue_within_transport_budget() -> TestResult {
         )?;
     }
     let before = store.usage()?;
-    for requested in [vec!["name".into()], columns.clone()] {
-        let q = api::Query {
-            columns: requested,
-            limit: 25,
-            include_context: true,
-            ..query()
-        };
-        let mut times = Vec::new();
-        let mut bytes = 0;
-        for _ in 0..9 {
-            let start = std::time::Instant::now();
-            let result = call(&store, &actor, Command::Query(q.clone()))?;
-            times.push(start.elapsed().as_micros());
-            bytes = api::Reply {
-                result: Some(result),
-            }
-            .encoded_len();
-        }
-        times.sort_unstable();
-        eprintln!(
-            "page columns={} median_us={} reply_bytes={bytes} usage={before:?}",
-            q.columns.len(),
-            times[4]
-        );
-    }
     let mut q = api::Query {
         columns: columns.clone(),
         limit: 25,
