@@ -30,6 +30,24 @@ without rewriting the value or incrementing the accepted intent revision.
 Explicit clears remain claims. Different sources never overwrite each other.
 Repeated identical input and retrieval do not create application history.
 
+Resource responsibility adds at most four current assignment rows per asset.
+Only explicit assignments have an issuer/subject lookup digest, used by the
+owner-filter consumer; the full reference is checked before a match. Inherited
+assignments retain the accepted relation identity and revision, not a duplicate
+parent or effective-owner copy. Reads resolve only the required facets through
+transaction-local indexed batches. Editing a parent does not rewrite children.
+These current rows live with the resource and follow its explicit retirement;
+they are not time-series observations or a party directory.
+
+Selected account metadata, bounded resource bindings and a source-identity
+uniqueness mapping also use current inventory rows. They contain no credentials.
+Owner-action requests reuse operation intent, retry checkpoints and attributed
+operation evidence. They have no work outbox entry and remain protected pending
+state until resolved through an appropriate verification workflow. Expiring a
+request deadline cannot reclaim unresolved effect evidence or re-enable a retry.
+An owner report records a claim, not provider-verified completion. Account edits
+and reads do not manufacture credential versions or account-history snapshots.
+
 Interface and service address hints resolve current participant rows, including
 shared-group allocations. Indexes on the existing asset and group fields bound
 these lookups to the displayed interfaces and their assignments; no duplicate
@@ -90,8 +108,8 @@ envelope, but are **application accounting**, not total filesystem allocation.
 Pinned detail and unresolved work count against their budgets. Admission fails
 atomically when it cannot fit; it does not evict safety state.
 
-This unreleased storage format uses schema version 8. Supported versions 2
-through 7 upgrade in bounded restartable batches, including asset name/sort
+This unreleased storage format uses schema version 9. Supported versions 2
+through 8 upgrade in bounded restartable batches, including asset name/sort
 projections from accepted intent, normalized IP
 ordering and source-scoped current observation facts with separate freshness
 and accounting. No inventory history is added. The upgrade keeps restore fences

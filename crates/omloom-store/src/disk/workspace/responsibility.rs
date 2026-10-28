@@ -74,6 +74,13 @@ fn field_name(facet: Facet) -> Result<&'static str> {
 fn inheritable(facet: Facet) -> bool {
     matches!(facet, Facet::ClaimedOwner | Facet::Operator)
 }
+pub(super) fn validate_filter(filter: &api::ResponsibilityFilter) -> Result<Facet> {
+    let facet = Facet::try_from(filter.facet).map_err(|_| Error::Invalid)?;
+    field_name(facet)?;
+    bounded_value(&filter.issuer, 256, true)?;
+    bounded_value(&filter.subject, 256, true)?;
+    Ok(facet)
+}
 fn assignment_key(target: AssetRef, facet: Facet) -> String {
     format!("{}/responsibility/{}", asset_key(target), facet as i32)
 }
@@ -241,7 +248,7 @@ impl Store {
                 .map(|target| text(asset_key(*target)))
                 .collect();
             tx.query(
-                "UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN properties(n) AS p",
+                "UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN {asset:n.asset,incarnation:n.incarnation,kind:n.kind,adoption:n.adoption,revision:n.revision} AS p",
                 params([("keys", Value::Array(keys))]),
             )?
             .into_iter()

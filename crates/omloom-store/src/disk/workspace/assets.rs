@@ -894,7 +894,7 @@ impl Store {
                 tx.responsibility_filter(context, filter)?
             } else {
                 let scoped = format!(
-                    "{entry}{} WITH {} WHERE {} RETURN DISTINCT properties(a) AS p LIMIT 4097",
+                    "{entry}{} WITH {} WHERE {} RETURN DISTINCT {{asset:a.asset,incarnation:a.incarnation,kind:a.kind,adoption:a.adoption}} AS p LIMIT 4097",
                     predicate_joins.join(""),
                     bindings.join(", "),
                     clauses.join(" AND ")

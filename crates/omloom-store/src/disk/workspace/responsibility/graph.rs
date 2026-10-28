@@ -52,7 +52,7 @@ impl Graph {
                 }
                 if !keys.is_empty() {
                     let rows = tx.query(
-                        "UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN properties(n) AS p",
+                    "UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN {asset:n.asset,incarnation:n.incarnation,kind:n.kind,adoption:n.adoption,revision:n.revision} AS p",
                         params([("keys", Value::Array(keys.clone()))]),
                     )?;
                     for row in rows {
@@ -63,7 +63,7 @@ impl Graph {
                             node.row = Some(row);
                         }
                     }
-                    let rows = tx.query("UNWIND $keys AS key MATCH (n:OmRow {parent:key}) WHERE n.facet IS NOT NULL RETURN properties(n) AS p LIMIT 257", params([("keys", Value::Array(keys.clone()))]))?;
+                    let rows = tx.query("UNWIND $keys AS key MATCH (n:OmRow {parent:key}) WHERE n.facet IS NOT NULL RETURN {parent:n.parent,facet:n.facet,mode:n.mode,issuer:n.issuer,subject:n.subject,party_kind:n.party_kind,name:n.name,contact:n.contact,source_relation:n.source_relation,source_binding_revision:n.source_binding_revision} AS p LIMIT 257", params([("keys", Value::Array(keys.clone()))]))?;
                     if rows.len() > chunk.len() * FACETS.len() {
                         return Err(Error::Corrupt);
                     }
@@ -102,7 +102,7 @@ impl Graph {
                 }
                 if !bindings.is_empty() {
                     let keys = bindings.keys().map(text).collect();
-                    let rows=tx.raw("UNWIND $keys AS key MATCH (r:OmRow {key:key})-[:OmRelationFrom|OmRelationTo]-(p:OmRow) WHERE p.parent='assets' RETURN properties(r) AS relation, properties(p) AS source LIMIT 513",params([("keys",Value::Array(keys))]).ok_or(Error::Corrupt)?)?;
+                    let rows=tx.raw("UNWIND $keys AS key MATCH (r:OmRow {key:key})-[:OmRelationFrom|OmRelationTo]-(p:OmRow) WHERE p.parent='assets' RETURN {key:r.key,asset:r.asset,incarnation:r.incarnation,to_asset:r.to_asset,to_incarnation:r.to_incarnation,kind:r.kind,revision:r.revision,authority:r.authority} AS relation, {asset:p.asset,incarnation:p.incarnation,kind:p.kind} AS source LIMIT 513",params([("keys",Value::Array(keys))]).ok_or(Error::Corrupt)?)?;
                     if rows.len() > 512 || rows.len() > MAX_EDGES - edges {
                         return Err(Error::Limit);
                     }
@@ -314,12 +314,9 @@ impl Tx<'_> {
         context: &Context,
         filter: &api::ResponsibilityFilter,
     ) -> Result<Vec<String>> {
-        let facet = Facet::try_from(filter.facet).map_err(|_| Error::Invalid)?;
-        field_name(facet)?;
-        bounded_value(&filter.issuer, 256, true)?;
-        bounded_value(&filter.subject, 256, true)?;
+        let facet = validate_filter(filter)?;
         let seeds = self.query(
-            "MATCH (n:OmRow {party_lookup:$party}) RETURN properties(n) AS p LIMIT 4097",
+            "MATCH (n:OmRow {party_lookup:$party}) RETURN {parent:n.parent} AS p LIMIT 4097",
             params([(
                 "party",
                 text(party_lookup(facet, &filter.issuer, &filter.subject)),
@@ -333,7 +330,7 @@ impl Tx<'_> {
             .map(|r| r.get("parent").cloned().ok_or(Error::Corrupt))
             .collect::<Result<_>>()?;
         let rows = self.query(
-            "UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN properties(n) AS p",
+            "UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN {asset:n.asset,incarnation:n.incarnation} AS p",
             params([("keys", Value::Array(keys))]),
         )?;
         let mut candidates = BTreeSet::new();
@@ -345,39 +342,42 @@ impl Tx<'_> {
         while !pending.is_empty() && inheritable(facet) {
             let mut next = Vec::new();
             for chunk in pending.chunks(64) {
-                let keys = chunk.iter().map(|t| text(asset_key(*t))).collect();
-                let rows = self.raw("UNWIND $keys AS key MATCH (p:OmRow {key:key})-[:OmRelationFrom|OmRelationTo]-(r:OmRow)-[:OmRelationFrom|OmRelationTo]-(a:OmRow) WHERE a.parent='assets' AND a.key<>p.key AND r.kind IN $kinds RETURN properties(p) AS source, properties(a) AS child, properties(r) AS relation LIMIT 8193", params([("keys", Value::Array(keys)), ("kinds", Value::Array([wire::RelationKind::Contains, wire::RelationKind::HasPort, wire::RelationKind::Carries, wire::RelationKind::RunsOn].into_iter().map(|k| Value::Int(k as i64)).collect()))]).ok_or(Error::Corrupt)?)?;
+                let ids =
+                    || Value::Array(chunk.iter().map(|t| text(t.asset.to_string())).collect());
+                let mut rows = self.query("UNWIND $ids AS id MATCH (r:OmRow {asset:id}) WHERE r.parent='relations' AND r.kind IN $kinds RETURN properties(r) AS p LIMIT 8193", params([("ids", ids()), ("kinds", Value::Array([wire::RelationKind::Contains, wire::RelationKind::HasPort, wire::RelationKind::Carries].into_iter().map(|k| Value::Int(k as i64)).collect()))]))?;
+                rows.extend(self.query("UNWIND $ids AS id MATCH (r:OmRow {to_asset:id}) WHERE r.parent='relations' AND r.kind=$kind RETURN properties(r) AS p LIMIT 8193", params([("ids", ids()), ("kind", Value::Int(wire::RelationKind::RunsOn as i64))]))?);
                 if rows.len() > 8192 || rows.len() > MAX_EDGES - edges {
                     return Err(Error::Limit);
                 }
                 edges += rows.len();
-                for mut row in rows {
-                    let (
-                        Some(Value::Map(source)),
-                        Some(Value::Map(child)),
-                        Some(Value::Map(relation)),
-                    ) = (
-                        row.remove("source"),
-                        row.remove("child"),
-                        row.remove("relation"),
-                    )
-                    else {
-                        return Err(Error::Corrupt);
+                let mut endpoints = BTreeSet::new();
+                let mut relations = Vec::new();
+                for row in rows {
+                    let relation = inventory::relation_projection(&row)?;
+                    let from = parse_target(relation.from.as_ref())?;
+                    let to = parse_target(relation.to.as_ref())?;
+                    let (parent, child) = if relation.kind == wire::RelationKind::RunsOn as i32 {
+                        (to, from)
+                    } else {
+                        (from, to)
                     };
-                    let parent = super::super::super::target(&source)?;
-                    let target = super::super::super::target(&child)?;
-                    let pk = wire::AssetKind::try_from(number(&source, "kind")? as i32)
-                        .map_err(|_| Error::Corrupt)?;
-                    let ck = wire::AssetKind::try_from(number(&child, "kind")? as i32)
-                        .map_err(|_| Error::Corrupt)?;
-                    if !qualified(
-                        target,
-                        ck,
-                        parent,
-                        pk,
-                        &inventory::relation_projection(&relation)?,
-                        true,
-                    )? {
+                    if !chunk.contains(&parent) {
+                        continue;
+                    }
+                    endpoints.insert(parent);
+                    endpoints.insert(child);
+                    relations.push((parent, child, relation));
+                }
+                let keys = endpoints.iter().map(|t| text(asset_key(*t))).collect();
+                let mut kinds = BTreeMap::new();
+                for row in self.query("UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN {asset:n.asset,incarnation:n.incarnation,kind:n.kind} AS p", params([("keys", Value::Array(keys))]))? {
+                    kinds.insert(super::super::super::target(&row)?, wire::AssetKind::try_from(number(&row,"kind")? as i32).map_err(|_| Error::Corrupt)?);
+                }
+                for (parent, target, relation) in relations {
+                    let (Some(pk), Some(ck)) = (kinds.get(&parent), kinds.get(&target)) else {
+                        continue;
+                    };
+                    if !qualified(target, *ck, parent, *pk, &relation, true)? {
                         continue;
                     }
                     if !candidates.contains(&target) {
@@ -397,7 +397,7 @@ impl Tx<'_> {
             .map(|target| text(asset_key(*target)))
             .collect();
         let rows = self.query(
-            "UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN properties(n) AS p",
+            "UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN {asset:n.asset,incarnation:n.incarnation,kind:n.kind,adoption:n.adoption} AS p",
             params([("keys", Value::Array(keys))]),
         )?;
         self.responsibility_filter_rows(context, filter, rows)
@@ -411,10 +411,8 @@ impl Tx<'_> {
         if rows.len() > MAX_NODES {
             return Err(Error::Limit);
         }
-        let facet = Facet::try_from(filter.facet).map_err(|_| Error::Invalid)?;
+        let facet = validate_filter(filter)?;
         let field = field_name(facet)?;
-        bounded_value(&filter.issuer, 256, true)?;
-        bounded_value(&filter.subject, 256, true)?;
         let mut targets = Vec::new();
         for row in rows {
             let target = super::super::super::target(&row)?;

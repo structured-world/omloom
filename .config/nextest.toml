@@ -9,3 +9,6 @@ threads-required = "num-test-threads"
 [[profile.default.overrides]]
 filter = 'test(/^responsibility::responsibility_reads_and_parent_changes_are_bounded$/)'
 threads-required = "num-test-threads"
+# Fixture writes and 100 samples have a separate total budget; each read retains
+# the asserted two-second P99 ceiling.
+slow-timeout = { period = "120s", terminate-after = 2 }

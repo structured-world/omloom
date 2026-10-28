@@ -83,6 +83,18 @@ test('responsibility editing, inherited components and typed import work on desk
       await dialog.getByRole('button',{name:'Review import',exact:true}).click();await expect(dialog.getByText('1 resources validated. No changes have been saved.',{exact:true})).toBeVisible();
       const bounds=await dialog.boundingBox();expect(bounds.width).toBeLessThanOrEqual(width);
       await dialog.getByRole('button',{name:'Apply import',exact:true}).click();await expect(dialog).toBeHidden();await expect(panel.getByText('Developer A',{exact:true})).toBeVisible();
+      await page.goto(`${server.url}/#/?view=1`);
+      await page.getByRole('button',{name:'Add filter',exact:true}).click();dialog=page.getByRole('dialog');
+      await dialog.getByLabel('Filter by effective responsibility',{exact:true}).check();
+      await dialog.getByLabel('Responsibility facet',{exact:true}).selectOption(String(m.ResponsibilityFacet.CLAIMED_OWNER));
+      await dialog.getByLabel('Party namespace',{exact:true}).fill('company.example');await dialog.getByLabel('Party identity',{exact:true}).fill('developer-a');
+      await dialog.getByRole('button',{name:'Apply filter',exact:true}).click();await expect(dialog).toBeHidden();
+      await expect(page.getByRole('region',{name:'Inventory'}).getByText(`NIC ${width}`,{exact:true})).toBeVisible();
+      await page.getByRole('button',{name:'Save view',exact:true}).click();dialog=page.getByRole('dialog');await dialog.getByLabel('Name',{exact:true}).fill(`Owned NIC ${width}`);
+      await dialog.getByRole('button',{name:'Save personal view',exact:true}).click();await expect(dialog).toBeHidden();
+      await page.getByRole('button',{name:'Remove responsibility filter',exact:true}).click();
+      await page.getByRole('button',{name:`◦ Owned NIC ${width}`,exact:true}).click();
+      await expect(page.getByRole('button',{name:'Remove responsibility filter',exact:true})).toBeVisible();
       expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
     }
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
@@ -109,6 +121,14 @@ test('personal registrar owner requests retain exact changes without claiming pr
       await dialog.getByLabel('Party namespace',{exact:true}).fill('people.example');await dialog.getByLabel('Party identity',{exact:true}).fill('founder');await dialog.getByLabel('Party label',{exact:true}).fill('Founder');
       await dialog.getByRole('button',{name:'Review assignment',exact:true}).click();await dialog.getByRole('button',{name:'Apply assignment',exact:true}).click();await expect(dialog).toBeHidden();
       await expect(page.getByRole('region',{name:'Ownership and responsibility'}).getByText('Founder',{exact:true})).toBeVisible();
+      await page.getByRole('button',{name:'Share account view',exact:true}).click();dialog=page.getByRole('dialog');
+      await dialog.getByLabel('Name',{exact:true}).fill(`Registrar reference ${width}`);await dialog.getByLabel('operations',{exact:true}).check();
+      await dialog.getByRole('button',{name:'Preview publication',exact:true}).click();
+      await expect(dialog.getByText("Data remains restricted by each reader's rights.",{exact:false})).toBeVisible();
+      await dialog.getByRole('button',{name:'Publish reviewed definition',exact:true}).click();await expect(dialog).toBeHidden();
+      await page.getByRole('button',{name:'Close resource details',exact:true}).click();
+      await expect(page.getByRole('button',{name:`♧ Registrar reference ${width}`,exact:true})).toBeVisible();
+      await page.getByRole('button',{name:`♧ Registrar reference ${width}`,exact:true}).click();
       await page.getByRole('button',{name:'Request owner action',exact:true}).click();dialog=page.getByRole('dialog');
       await dialog.getByLabel('Managed resource',{exact:true}).selectOption({label:`Company domain ${width}`});
       await dialog.getByLabel('Requested action',{exact:true}).fill('set-description');await dialog.getByLabel('Proposed value',{exact:true}).fill(`Company-managed domain ${width}`);

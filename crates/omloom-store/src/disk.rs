@@ -656,6 +656,8 @@ impl Store {
             ("omloom_layer", "layer"),
             // Reverse membership lookup and shared-address expansion for visible interface hints.
             ("omloom_asset", "asset"),
+            // Reverse administrative inheritance follows exact relation endpoints.
+            ("omloom_to_asset", "to_asset"),
             ("omloom_group", "group"),
             ("omloom_party_lookup", "party_lookup"),
             ("omloom_request_account", "request_account"),
@@ -733,6 +735,11 @@ impl Store {
             "MATCH (n:OmRow {parent:'assets'}) RETURN n.key AS key LIMIT 1",
             &class_probe,
             "MATCH (n:OmRow {layer:'intent'}) RETURN n.key AS key LIMIT 1",
+            "MATCH (n:OmRow {asset:'probe'}) RETURN n.key AS key LIMIT 1",
+            "MATCH (n:OmRow {to_asset:'probe'}) RETURN n.key AS key LIMIT 1",
+            "MATCH (n:OmRow {group:'probe'}) RETURN n.key AS key LIMIT 1",
+            "MATCH (n:OmRow {party_lookup:'probe'}) RETURN n.key AS key LIMIT 1",
+            "MATCH (n:OmRow {request_account:'probe'}) RETURN n.key AS key LIMIT 1",
         ] {
             store
                 .db
@@ -869,11 +876,32 @@ struct Tx<'a> {
 }
 impl Tx<'_> {
     fn query(&self, q: &str, p: Option<HashMap<String, Value>>) -> Result<Vec<Properties>> {
-        unpack(
-            self.store
-                .db
-                .execute_in_transaction(self.id.ok_or(Error::Corrupt)?, q, p)?,
-        )
+        unpack(self.execute(q, p)?)
+    }
+    fn execute(
+        &self,
+        q: &str,
+        p: Option<HashMap<String, Value>>,
+    ) -> Result<Vec<BTreeMap<String, Value>>> {
+        #[cfg(feature = "diagnostics")]
+        let started = if std::env::var_os("OMLOOM_QUERY_TIMINGS").is_some() {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
+        let rows = self
+            .store
+            .db
+            .execute_in_transaction(self.id.ok_or(Error::Corrupt)?, q, p)?;
+        #[cfg(feature = "diagnostics")]
+        if let Some(started) = started {
+            eprintln!(
+                "query timing {:?}, rows={}: {q}",
+                started.elapsed(),
+                rows.len()
+            );
+        }
+        Ok(rows)
     }
     fn get(&self, key: &str) -> Result<Option<Properties>> {
         Ok(self

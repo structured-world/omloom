@@ -285,6 +285,78 @@ fn owner_requests_reuse_durable_operations_without_dispatch() -> TestResult {
     Ok(())
 }
 
+// A controller edit invalidates the previously accepted account basis, even with a fresh client revision.
+#[test]
+fn owner_request_cannot_cross_controller_revision() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let (domain, account) = setup(&store)?;
+    let actor = operator();
+    let current = store.asset(AssetRef::try_from(&account)?)?.revision;
+    let state = owner_call(
+        &store,
+        &actor,
+        api::OwnerRequest {
+            action: api::OwnerRequestAction::Create as i32,
+            account: Some(account.clone()),
+            target: Some(domain.clone()),
+            account_revision: Some(current),
+            target_revision: Some(store.asset(AssetRef::try_from(&domain)?)?.revision),
+            change: "set-description".into(),
+            arguments: vec![text_field("description", "Requested change")],
+            retry_key: "controller-change".into(),
+            expires_at_ms: 10_000,
+            ..Default::default()
+        },
+    )?;
+    store.workspace(
+        &actor,
+        api::Request {
+            working: Some(api::WorkingContext {
+                expected: Some(store.usage()?.revision),
+                ..Default::default()
+            }),
+            command: Some(Command::Responsibility(api::Responsibility {
+                target: Some(account.clone()),
+                expected: Some(current),
+                action: api::ResponsibilityAction::Apply as i32,
+                changes: vec![api::ResponsibilityAssignment {
+                    facet: api::ResponsibilityFacet::AccountController as i32,
+                    mode: api::AssignmentMode::Explicit as i32,
+                    party: Some(api::PartyRef {
+                        issuer: "people.example".into(),
+                        subject: "successor".into(),
+                        kind: api::PartyKind::Individual as i32,
+                        name: "Successor".into(),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+        },
+        100,
+    )?;
+    let operation = state.operation.ok_or("operation")?;
+    let before = store.usage()?;
+    assert!(matches!(
+        owner_call(
+            &store,
+            &actor,
+            api::OwnerRequest {
+                action: api::OwnerRequestAction::Approve as i32,
+                account: Some(account.clone()),
+                account_revision: Some(store.asset(AssetRef::try_from(&account)?)?.revision),
+                operation_id: Some(operation.operation_id),
+                expected: Some(operation.revision),
+                ..Default::default()
+            }
+        ),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // Removing/retyping a referenced target or an account with pending owner work must not strand it.
 #[test]
 fn account_references_protect_resource_lifecycles() -> TestResult {
@@ -569,14 +641,50 @@ fn account_card_sharing_requires_its_own_capability() -> TestResult {
 // Denying binding disclosure must not bypass the account's hard selected-binding admission limit.
 #[test]
 fn hidden_binding_projection_cannot_bypass_account_limits() -> TestResult {
-    let dir=tempfile::tempdir()?;let store=Store::open(dir.path(),policy())?;let(_,account)=setup(&store)?;
-    let actor=operator();let mut links=Vec::new();
-    for index in 0..32{links.push(api::AccountLink{kind:api::AccountLinkKind::ManagedResource as i32,target:Some(create(&store,&actor,K::Domain,&format!("domain-{index}.test"))?)});}
-    let extra=links.pop().ok_or("extra")?;
-    let mut restricted=actor;restricted.grants[0].read=Fields::Selected(vec!["name".into()]);restricted.grants[0].write=Fields::Selected(vec!["account.bindings".into()]);
-    account_call(&store,&restricted,api::ExternalAccount{target:Some(account.clone()),expected:Some(2),add:links,..Default::default()})?;
-    let before=store.usage()?;
-    assert!(matches!(account_call(&store,&restricted,api::ExternalAccount{target:Some(account),expected:Some(3),add:vec![extra],..Default::default()}),Err(Error::Limit)));
-    assert_eq!(store.usage()?,before);
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let (_, account) = setup(&store)?;
+    let actor = operator();
+    let mut links = Vec::new();
+    for index in 0..32 {
+        links.push(api::AccountLink {
+            kind: api::AccountLinkKind::ManagedResource as i32,
+            target: Some(create(
+                &store,
+                &actor,
+                K::Domain,
+                &format!("domain-{index}.test"),
+            )?),
+        });
+    }
+    let extra = links.pop().ok_or("extra")?;
+    let mut restricted = actor;
+    restricted.grants[0].read = Fields::Selected(vec!["name".into()]);
+    restricted.grants[0].write = Fields::Selected(vec!["account.bindings".into()]);
+    account_call(
+        &store,
+        &restricted,
+        api::ExternalAccount {
+            target: Some(account.clone()),
+            expected: Some(2),
+            add: links,
+            ..Default::default()
+        },
+    )?;
+    let before = store.usage()?;
+    assert!(matches!(
+        account_call(
+            &store,
+            &restricted,
+            api::ExternalAccount {
+                target: Some(account),
+                expected: Some(3),
+                add: vec![extra],
+                ..Default::default()
+            }
+        ),
+        Err(Error::Limit)
+    ));
+    assert_eq!(store.usage()?, before);
     Ok(())
 }

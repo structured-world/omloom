@@ -153,6 +153,7 @@ async function save() {
 <p v-else-if="parents.length === 1" class="context-chip">{{ kind === AssetKind.VIRTUAL_MACHINE && parents[0]!.kind === AssetKind.SOFTWARE_INSTALLATION ? 'Hypervisor: ' : hypervisor && parents[0]!.kind === AssetKind.DEVICE ? 'Server: ' : 'Inside ' }}{{ parentLabel(parents[0]!) }}</p>
 <label v-else-if="parents.length" for="creation-parent">Create inside</label>
 <select v-if="!item && parents.length > 1" id="creation-parent" v-model="selectedParent" required><option value="" disabled>Choose the actual parent</option><option v-for="p in parents" :key="key(p.target)" :value="key(p.target)">{{ parentLabel(p) }} · {{ label(p.kind) }}</option></select>
+<p v-if="!item && choice?.parent" class="hint">Owned components inherit claimed owner and operator from this component binding. Physical hosting alone does not assign responsibility. Review or override the assignment in the new resource's responsibility card.</p>
 <label for="resource-kind">Resource kind</label>
 <select id="resource-kind" v-model="resourceType" :disabled="!!item || busy" required>
 <option v-if="item" :value="item.kind">{{ label(item.kind) }}</option>

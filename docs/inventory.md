@@ -54,7 +54,7 @@ qualify authentication or deployment for other users.
 
 ### Ownership and responsibility
 
-Open a resource's **Ownership & responsibility** card to inspect or edit its
+Open a resource's **Ownership and responsibility** card to inspect or edit its
 claimed owner, operator, beneficiary and external account controller. Parties
 are selected issuer-qualified references, not an imported directory. Equal
 labels in different namespaces never merge identities. A recorded owner is a

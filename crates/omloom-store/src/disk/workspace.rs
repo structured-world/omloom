@@ -380,10 +380,7 @@ impl Tx<'_> {
         query: &str,
         values: HashMap<String, Value>,
     ) -> Result<Vec<BTreeMap<String, Value>>> {
-        self.store
-            .db
-            .execute_in_transaction(self.id.ok_or(Error::Corrupt)?, query, Some(values))
-            .map_err(Into::into)
+        self.execute(query, Some(values))
     }
     fn visible_asset(&self, context: &Context, target: AssetRef) -> Result<Properties> {
         let row = self.asset(target)?;

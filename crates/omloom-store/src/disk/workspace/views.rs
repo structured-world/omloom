@@ -62,6 +62,9 @@ impl Store {
         for column in &query.columns {
             super::assets::validate_column(column, &definitions)?;
         }
+        if let Some(filter) = &query.responsibility {
+            super::responsibility::validate_filter(filter)?;
+        }
         let mut tx = self.begin()?;
         let old = if view.id.is_empty() {
             if view.revision != 0 || (!view.owner.is_empty() && view.owner != context.actor) {

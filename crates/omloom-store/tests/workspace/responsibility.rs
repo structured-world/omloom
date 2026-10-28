@@ -58,6 +58,75 @@ fn owner(subject: &str) -> api::ResponsibilityAssignment {
         ..Default::default()
     }
 }
+
+// Ambiguous attachment and cycles must be refused atomically; adjacency cannot become authority.
+#[test]
+fn responsibility_rejects_ambiguous_cycles_and_sideways_sources() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let server = create(&store, &actor, K::Device, "Server")?;
+    let Reply::Mutation(port) = call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            kind: K::Port as i32,
+            parent: Some(server.clone()),
+            changes: vec![text_field("name", "Port")],
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("port");
+    };
+    let port = port.targets[0].clone();
+    let nic = create(&store, &actor, K::Interface, "NIC")?;
+    connect(&store, &server, &nic, wire::RelationKind::Contains)
+        .map_err(|e| format!("server NIC: {e:?}"))?;
+    connect(&store, &port, &nic, wire::RelationKind::Carries)
+        .map_err(|e| format!("port NIC: {e:?}"))?;
+    let inherited = api::ResponsibilityAssignment {
+        facet: Facet::ClaimedOwner as i32,
+        mode: Mode::Inherit as i32,
+        ..Default::default()
+    };
+    let before = store.usage()?;
+    assert!(matches!(
+        responsibility(&store, &actor, &nic, Action::Apply, vec![inherited.clone()]),
+        Err(Error::Incomplete)
+    ));
+    assert_eq!(store.usage()?, before);
+    let software = create(&store, &actor, K::SoftwareInstallation, "Runtime")?;
+    let service = create(&store, &actor, K::Service, "Service")?;
+    connect(&store, &software, &service, wire::RelationKind::Contains)
+        .map_err(|e| format!("runtime service: {e:?}"))?;
+    let before = store.usage()?;
+    assert!(matches!(
+        connect(&store, &service, &software, wire::RelationKind::Contains),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
+    let peer = create(&store, &actor, K::Device, "Gateway dependency")?;
+    let peer_link = connect(&store, &service, &peer, wire::RelationKind::DependsOn)
+        .map_err(|e| format!("peer link: {e:?}"))?;
+    let before = store.usage()?;
+    assert!(matches!(
+        responsibility(
+            &store,
+            &actor,
+            &peer,
+            Action::Apply,
+            vec![api::ResponsibilityAssignment {
+                source_relation: Some(peer_link.relation_id),
+                source_revision: Some(1),
+                ..inherited
+            }]
+        ),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
 fn connect(
     store: &Store,
     from: &wire::AssetRef,
@@ -308,13 +377,9 @@ fn responsibility_filter_precedes_pagination_and_disclosure() -> TestResult {
         Action::Apply,
         vec![owner("devops")],
     )?;
-    responsibility(
-        &store,
-        &actor,
-        &other,
-        Action::Apply,
-        vec![owner("different")],
-    )?;
+    let mut same_label = owner("devops");
+    same_label.party.as_mut().ok_or("party")?.issuer = "another-company.example".into();
+    responsibility(&store, &actor, &other, Action::Apply, vec![same_label])?;
     let mut query = api::Query {
         responsibility: Some(api::ResponsibilityFilter {
             facet: Facet::ClaimedOwner as i32,
@@ -692,7 +757,7 @@ fn responsibility_filter_resolves_only_its_selected_scope() -> TestResult {
 // Qualify a real 100-server estate: current reads write nothing and a parent edit never rewrites descendants.
 #[test]
 fn responsibility_reads_and_parent_changes_are_bounded() -> TestResult {
-    let qualification_started=std::time::Instant::now();
+    let qualification_started = std::time::Instant::now();
     let dir = tempfile::tempdir()?;
     let store = Store::open(dir.path(), policy())?;
     let actor = operator();
@@ -726,7 +791,10 @@ fn responsibility_reads_and_parent_changes_are_bounded() -> TestResult {
         parents.push(server);
     }
     store.diagnostic_database().persist()?;
-    eprintln!("responsibility fixture ready after {:?}",qualification_started.elapsed());
+    eprintln!(
+        "responsibility fixture ready after {:?}",
+        qualification_started.elapsed()
+    );
     let mut taps = Vec::new();
     for partition in coordinode_storage::engine::partition::Partition::all() {
         let (tap, _) = store
@@ -756,7 +824,13 @@ fn responsibility_reads_and_parent_changes_are_bounded() -> TestResult {
         samples.push(start.elapsed());
         assert_eq!(page.total, 250);
         assert_eq!(page.items.len(), 25);
-        if sample%10==0{eprintln!("responsibility sample {sample}: {:?}; total elapsed {:?}",samples.last().ok_or("sample")?,qualification_started.elapsed());}
+        if sample % 10 == 0 {
+            eprintln!(
+                "responsibility sample {sample}: {:?}; total elapsed {:?}",
+                samples.last().ok_or("sample")?,
+                qualification_started.elapsed()
+            );
+        }
     }
     let Reply::ResponsibilityTransfer(page) = call(
         &store,
@@ -778,15 +852,19 @@ fn responsibility_reads_and_parent_changes_are_bounded() -> TestResult {
     };
     assert_eq!(page.entries.len(), 100);
     assert_eq!(store.usage()?, before);
-    assert_eq!(store.diagnostic_database().engine().journal_syncs(), syncs);
+    let after_syncs = store.diagnostic_database().engine().journal_syncs();
+    eprintln!("read journal syncs: {syncs:?} -> {after_syncs:?}");
     for tap in &taps {
+        let writes = tap.take();
+        eprintln!("read partition {:?}: {writes:?}", tap.partition());
         assert_eq!(
-            tap.take(),
+            writes,
             coordinode_storage::engine::tap::Tapped::Keys(Vec::new()),
             "read wrote partition {:?}",
             tap.partition()
         );
     }
+    assert_eq!(after_syncs, syncs);
     samples.sort_unstable();
     eprintln!(
         "responsibility qualification: 100 servers + 400 interfaces, owner filter+context p50={:?} p95={:?} p99={:?}; logical bytes={}; read partition writes=0, journal syncs=0",

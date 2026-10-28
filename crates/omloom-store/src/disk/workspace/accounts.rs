@@ -112,6 +112,42 @@ impl Store {
         {
             return Err(Error::Conflict);
         }
+        if (!request.add.is_empty() || !request.remove.is_empty())
+            && !permitted(context, account, "account.bindings", true)
+        {
+            return Err(Error::Denied);
+        }
+        if !request.add.is_empty() {
+            let rows=tx.query("MATCH (n:OmRow {parent:$key}) WHERE n.link_kind IS NOT NULL RETURN {key:n.key} AS p LIMIT 33",params([("key",text(asset_key(account)))]))?;
+            if rows.len() > 32 {
+                return Err(Error::Limit);
+            }
+            let mut keys = rows
+                .iter()
+                .map(|row| string(row, "key"))
+                .collect::<Result<BTreeSet<_>>>()?;
+            for link in &request.remove {
+                let kind = LinkKind::try_from(link.kind).map_err(|_| Error::Invalid)?;
+                if kind == LinkKind::Unspecified {
+                    return Err(Error::Invalid);
+                }
+                keys.remove(&link_key(
+                    account,
+                    kind,
+                    parse_target(link.target.as_ref())?,
+                ));
+            }
+            for link in &request.add {
+                let kind = LinkKind::try_from(link.kind).map_err(|_| Error::Invalid)?;
+                if kind == LinkKind::Unspecified {
+                    return Err(Error::Invalid);
+                }
+                keys.insert(link_key(account, kind, parse_target(link.target.as_ref())?));
+            }
+            if keys.len() > 32 {
+                return Err(Error::Limit);
+            }
+        }
         let mut changed = false;
         if let Some(metadata) = &request.metadata {
             let data = metadata_props(metadata)?;
