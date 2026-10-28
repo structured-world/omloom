@@ -35,6 +35,76 @@ fn metadata(kind: api::ExternalAccountKind) -> api::AccountMetadata {
         ..Default::default()
     }
 }
+
+// A replacement cannot implicitly delete a redacted credential-provider reference.
+#[test]
+fn account_metadata_rejects_omitted_unreadable_values() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let account = create(&store, &operator(), K::ProviderAccount, "Selected account")?;
+    let mut saved = metadata(api::ExternalAccountKind::Administration);
+    saved.credential_binding_id = Some(account.asset_id.clone());
+    account_call(
+        &store,
+        &operator(),
+        api::ExternalAccount {
+            target: Some(account.clone()),
+            expected: Some(1),
+            metadata: Some(saved.clone()),
+            ..Default::default()
+        },
+    )?;
+    let mut limited = operator();
+    limited.grants[0].read = Fields::Selected(vec![
+        "name".into(),
+        "issuer".into(),
+        "subject".into(),
+        "account_kind".into(),
+        "delegation".into(),
+        "login".into(),
+    ]);
+    let before = store.usage()?;
+    assert!(matches!(
+        account_call(
+            &store,
+            &limited,
+            api::ExternalAccount {
+                target: Some(account.clone()),
+                expected: Some(2),
+                metadata: Some(metadata(api::ExternalAccountKind::Administration)),
+                ..Default::default()
+            }
+        ),
+        Err(Error::Denied)
+    ));
+    assert_eq!(store.usage()?, before);
+    assert_eq!(
+        account_call(
+            &store,
+            &operator(),
+            api::ExternalAccount {
+                target: Some(account.clone()),
+                ..Default::default()
+            }
+        )?
+        .metadata,
+        Some(saved.clone())
+    );
+    // An explicit write-only replacement remains permitted; omission is the ambiguous case.
+    saved.credential_binding_id =
+        Some(create(&store, &operator(), K::Domain, "binding.test")?.asset_id);
+    account_call(
+        &store,
+        &limited,
+        api::ExternalAccount {
+            target: Some(account),
+            expected: Some(2),
+            metadata: Some(saved),
+            ..Default::default()
+        },
+    )?;
+    Ok(())
+}
 fn setup(store: &Store) -> Result<(wire::AssetRef, wire::AssetRef), Error> {
     let actor = operator();
     let domain = create(store, &actor, K::Domain, "example.test")?;
@@ -78,6 +148,41 @@ fn owner_call(
         return Err(Error::Corrupt);
     };
     Ok(state)
+}
+
+// The durable owner-action namespace must not reduce the advertised 64-byte token range.
+#[test]
+fn owner_request_accepts_the_full_action_token_range() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let (domain, account) = setup(&store)?;
+    for length in [58, 59, 64, 65] {
+        let request = api::OwnerRequest {
+            action: api::OwnerRequestAction::Create as i32,
+            account: Some(account.clone()),
+            account_revision: Some(2),
+            target: Some(domain.clone()),
+            target_revision: Some(1),
+            change: "a".repeat(length),
+            retry_key: format!("length-{length}"),
+            expires_at_ms: 10_000,
+            ..Default::default()
+        };
+        let before = store.usage()?;
+        if length == 65 {
+            assert!(matches!(
+                owner_call(&store, &operator(), request),
+                Err(Error::Invalid)
+            ));
+            assert_eq!(store.usage()?, before);
+        } else {
+            let saved = owner_call(&store, &operator(), request.clone())?;
+            assert_eq!(saved.change, request.change);
+            let replay = owner_call(&store, &operator(), request)?;
+            assert_eq!(saved.operation, replay.operation);
+        }
+    }
+    Ok(())
 }
 
 // Selected account identity and metadata persist once; hidden fields and capabilities remain independent.

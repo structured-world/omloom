@@ -411,6 +411,13 @@ export interface ResponsibilityState {
      * @generated from protobuf field: repeated omloom.workspace.v1.ResponsibilitySource sources = 6
      */
     sources: ResponsibilitySource[];
+    /**
+     * Facets whose local declaration and contact are both readable. A replacement
+     * form requires this disclosure independently of the caller's write permission.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.ResponsibilityFacet fully_readable = 7
+     */
+    fullyReadable: ResponsibilityFacet[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.ResponsibilitySource
@@ -3395,7 +3402,8 @@ class ResponsibilityState$Type extends MessageType<ResponsibilityState> {
             { no: 3, name: "effective", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => EffectiveResponsibility },
             { no: 4, name: "writable", kind: "enum", repeat: 1 /*RepeatType.PACKED*/, T: () => ["omloom.workspace.v1.ResponsibilityFacet", ResponsibilityFacet, "RESPONSIBILITY_FACET_"] },
             { no: 5, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
-            { no: 6, name: "sources", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => ResponsibilitySource }
+            { no: 6, name: "sources", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => ResponsibilitySource },
+            { no: 7, name: "fully_readable", kind: "enum", repeat: 1 /*RepeatType.PACKED*/, T: () => ["omloom.workspace.v1.ResponsibilityFacet", ResponsibilityFacet, "RESPONSIBILITY_FACET_"] }
         ]);
     }
 }

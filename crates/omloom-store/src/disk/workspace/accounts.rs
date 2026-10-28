@@ -154,6 +154,12 @@ impl Store {
             let key = account_key(account);
             let old = tx.get(&key)?;
             for field in METADATA_FIELDS {
+                if !data.contains_key(field)
+                    && old.as_ref().is_some_and(|row| row.contains_key(field))
+                    && !permitted(context, account, field, false)
+                {
+                    return Err(Error::Denied);
+                }
                 if old.as_ref().and_then(|r| r.get(field)) != data.get(field)
                     && !permitted(context, account, field, true)
                 {

@@ -59,6 +59,38 @@ fn owner(subject: &str) -> api::ResponsibilityAssignment {
     }
 }
 
+// A redacted contact must not become an implicit clear in a replacement declaration.
+#[test]
+fn responsibility_replacement_cannot_clear_an_unreadable_contact() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let target = create(&store, &actor, K::Device, "Selected server")?;
+    let mut assignment = owner("devops");
+    assignment.contact = Some("mailto:private@example.test".into());
+    responsibility(&store, &actor, &target, Action::Apply, vec![assignment])?;
+    let mut limited = operator();
+    limited.grants[0].read = Fields::Selected(vec!["name".into(), "claimed_owner".into()]);
+    let before = store.usage()?;
+    assert!(matches!(
+        responsibility(
+            &store,
+            &limited,
+            &target,
+            Action::Apply,
+            vec![owner("updated")]
+        ),
+        Err(Error::Denied)
+    ));
+    assert_eq!(store.usage()?, before);
+    let state = responsibility(&store, &actor, &target, Action::Read, vec![])?;
+    assert_eq!(
+        state.assignments[0].contact.as_deref(),
+        Some("mailto:private@example.test")
+    );
+    Ok(())
+}
+
 // A source picker needs ancestors, never the full set of a server's components.
 #[test]
 fn responsibility_source_picker_does_not_enumerate_children() -> TestResult {
@@ -948,6 +980,34 @@ fn responsibility_global_filter_excludes_unselected_hosting_sources() -> TestRes
     assert_eq!(page.total, 1);
     assert_eq!(page.items[0].target.as_ref(), Some(&second));
     assert_eq!(store.usage()?, before);
+    // Excluded stale guests cannot invalidate a complete kind/view-restricted result.
+    for restricted in [
+        api::Query {
+            kinds: vec![K::Domain as i32],
+            ..query()
+        },
+        api::Query {
+            view: api::View::Services as i32,
+            ..query()
+        },
+    ] {
+        let Reply::Page(page) = call(
+            &store,
+            &actor,
+            Command::Query(api::Query {
+                responsibility: Some(api::ResponsibilityFilter {
+                    facet: Facet::ClaimedOwner as i32,
+                    issuer: "company.example".into(),
+                    subject: "other".into(),
+                }),
+                ..restricted
+            }),
+        )?
+        else {
+            panic!("page");
+        };
+        assert_eq!(page.total, 0);
+    }
     // The actually selected source is still stale and must not become a complete count.
     assert!(matches!(
         call(

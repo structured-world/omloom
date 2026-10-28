@@ -226,6 +226,9 @@ message ResponsibilityState {
   uint64 revision = 5;
   // Bounded actual downward source choices, independently filtered for disclosure.
   repeated ResponsibilitySource sources = 6;
+  // Facets whose local declaration and contact are both readable. A replacement
+  // form requires this disclosure independently of the caller's write permission.
+  repeated ResponsibilityFacet fully_readable = 7;
 }
 message ResponsibilitySource {
   // Existing accepted relation and current revision selected as the inheritance basis.

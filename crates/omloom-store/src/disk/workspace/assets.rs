@@ -560,17 +560,14 @@ impl Store {
                     clauses.join(" AND ")
                 ));
                 clauses.clear();
-                // Keep the anti-join in the optimized top-level plan, with an
-                // explicit key for its per-resource parent lookup.
+                // Probe indexed relation endpoints directly; repeating a resource
+                // probe adds a join before reaching the same adjacent relation.
                 for (reverse, path) in [
                     (
                         false,
-                        "(probe:OmRow {key:a.key})<-[:OmRelationTo]-(r:OmRow)<-[:OmRelationFrom]-(p:OmRow)",
+                        "(r:OmRow {to_asset:a.asset})<-[:OmRelationFrom]-(p:OmRow)",
                     ),
-                    (
-                        true,
-                        "(probe:OmRow {key:a.key})-[:OmRelationFrom]->(r:OmRow)-[:OmRelationTo]->(p:OmRow)",
-                    ),
+                    (true, "(r:OmRow {asset:a.asset})-[:OmRelationTo]->(p:OmRow)"),
                 ] {
                     let mut owner =
                         browse_clause(context, &mut values, Some(reverse), &child_kinds);
@@ -893,6 +890,8 @@ impl Store {
                 && query.focus.is_none()
                 && query.search.trim().is_empty()
                 && query.predicates.is_empty()
+                && query.kinds.is_empty()
+                && view == api::View::Overview
             {
                 tx.responsibility_filter(context, filter)?
             } else {

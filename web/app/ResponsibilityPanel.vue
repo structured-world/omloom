@@ -96,7 +96,8 @@ async function acceptImport() {
   <span v-if="entry.source"><button @click="emit('open',entry.source)">Assignment source</button></span>
   <span v-if="entry.contact">Contact: {{entry.contact}}</span>
 </dd></template></dl>
-<div v-if="state" class="actions"><button v-for="f in facets.filter(f=>state?.writable.includes(f))" :key="f" :disabled="busy" @click="edit(f)">Edit {{names[f].toLowerCase()}}</button><button @click="download">Export responsibility</button><button v-if="state.writable.length" @click="importing=true;error='';importPreview=undefined">Import responsibility</button></div>
+<p v-if="state?.writable.some(f=>!state?.fullyReadable.includes(f))" class="hint">Editing a complete assignment requires permission to read its declaration and contact.</p>
+<div v-if="state" class="actions"><button v-for="f in facets.filter(f=>state?.writable.includes(f)&&state?.fullyReadable.includes(f))" :key="f" :disabled="busy" @click="edit(f)">Edit {{names[f].toLowerCase()}}</button><button @click="download">Export responsibility</button><button v-if="state.writable.length" @click="importing=true;error='';importPreview=undefined">Import responsibility</button></div>
 </section>
 <Dialog v-if="editing" :title="'Edit '+names[facet].toLowerCase()" @close="editing=false"><p v-if="error" role="alert">{{error}}</p>
 <form v-if="!preview" @submit.prevent="review"><label for="responsibility-assignment">Assignment</label><select id="responsibility-assignment" v-model.number="mode"><option :value="model.AssignmentMode.EXPLICIT">Explicit assignment</option><option v-if="inheritable" :value="model.AssignmentMode.INHERIT">Inherit from a qualified source</option><option :value="model.AssignmentMode.UNASSIGNED">Unassigned, stop inheritance</option></select>

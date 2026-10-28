@@ -796,12 +796,14 @@ fn level_browse_small_estate_has_bounded_latency() -> TestResult {
         if query.canonical_query.contains("forward_owned") {
             browse_plans += 1;
             let plan = query.last_plan.ok_or("missing browse plan")?;
-            assert_eq!(
-                plan.matches("IndexScan(probe:OmRow ON omloom_key(key))")
-                    .count(),
-                2,
-                "parent probes must use point indexes: {plan}"
-            );
+            for index in ["omloom_asset(asset)", "omloom_to_asset(to_asset)"] {
+                assert_eq!(
+                    plan.matches(&format!("IndexScan(r:OmRow ON {index})"))
+                        .count(),
+                    1,
+                    "each parent probe must use its endpoint index: {plan}"
+                );
+            }
             eprintln!("browse statement: {} us", query.total_time_us);
         }
     }

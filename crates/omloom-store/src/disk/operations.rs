@@ -9,10 +9,16 @@ enum Change<'a> {
     },
 }
 
-fn digest(plan: &Plan<'_>, target: &Properties) -> Result<[u8; 32]> {
+fn digest(plan: &Plan<'_>, target: &Properties, owner_request: bool) -> Result<[u8; 32]> {
     bounded(plan.caller)?;
     bounded(plan.retry_key)?;
-    if !token(plan.action) || plan.arguments.len() > 64 {
+    // The host adds this namespace; the external action retains its full token budget.
+    let action = if owner_request {
+        plan.action.strip_prefix("owner.").ok_or(Error::Invalid)?
+    } else {
+        plan.action
+    };
+    if !token(action) || plan.arguments.len() > 64 {
         return Err(Error::Invalid);
     }
     let mut sorted = BTreeMap::new();
@@ -204,7 +210,7 @@ impl Tx<'_> {
             return Err(Error::Expired);
         }
         let target_fields = target_props(plan.target);
-        let hash = digest(plan, &target_fields)?;
+        let hash = digest(plan, &target_fields, account.is_some())?;
         let checkpoint = checkpoint(plan);
         if self.root.get("restored") == Some(&Value::Bool(true)) {
             return Err(Error::RecoveryRequired);

@@ -92,6 +92,10 @@ Requests have fixed work ceilings of 64 ancestor levels, 4096 resources and
 The source picker reads up to 128 candidate parent bindings. A resource's
 children are not candidates and do not consume that selection limit.
 
+The assignment replacement form requires permission to read both the declaration
+and its contact. An omitted unreadable saved contact cannot be implicitly cleared,
+even when the caller can write it. Explicit write-only values remain supported.
+
 **Export responsibility** downloads permitted local declarations as typed JSON.
 **Import responsibility** previews and atomically accepts up to 100 exact
 existing resources under the same validation and revision checks as the form.
@@ -129,6 +133,10 @@ flow and separately checks account sharing authority. Recipients still need
 their own inventory rights. Publishing a definition releases no secret and
 grants no provider access. The capability display describes trusted host
 decisions, not qualification of a provider or vault integration.
+
+Replacing account metadata cannot implicitly clear an unreadable saved field.
+The complete metadata form requires disclosure of every metadata field; selected
+binding changes retain their independent permissions.
 
 For a personal account without delegation, the card says **Account owner action
 required**. A company approver cannot acquire that account. A request retains

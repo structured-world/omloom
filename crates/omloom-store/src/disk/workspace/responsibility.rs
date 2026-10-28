@@ -407,6 +407,12 @@ impl Tx<'_> {
                 }
                 let key = assignment_key(target, facet);
                 let old = tx.get(&key)?;
+                if !data.contains_key("contact")
+                    && old.as_ref().is_some_and(|row| row.contains_key("contact"))
+                    && !context.field(target, kind, &format!("{field}.contact"), false)
+                {
+                    return Err(Error::Denied);
+                }
                 if old.as_ref().and_then(|row| row.get("contact")) != data.get("contact")
                     && !context.field(target, kind, &format!("{field}.contact"), true)
                 {
@@ -454,6 +460,9 @@ impl Tx<'_> {
             }
             if !context.field(target, kind, field, false) {
                 continue;
+            }
+            if context.field(target, kind, &format!("{field}.contact"), false) {
+                result.fully_readable.push(facet as i32);
             }
             if let Some(local) = graph.assignment(target, facet) {
                 let mut declaration = local.clone();
