@@ -5,6 +5,8 @@ use tokio::{
     process::Command,
     time::{Instant, timeout_at},
 };
+#[cfg(test)]
+mod tests;
 
 const OUTPUT: usize = 1024 * 1024;
 pub(super) struct Runner {
@@ -29,14 +31,18 @@ impl Runner {
             return Err("Collection execution budget exhausted".into());
         }
         self.calls += 1;
-        let limit = OUTPUT.min(self.remaining / 2);
+        if self.remaining < 4 {
+            return Err("Collection byte budget exhausted".into());
+        }
+        let limit = OUTPUT.min(self.remaining / 2 - 1);
         if limit == 0 {
             return Err("Collection byte budget exhausted".into());
         }
         // Reserve both pipe capacities before launching. Neither raw stream is logged.
+        let reserved = 2 * (limit + 1);
+        self.remaining -= reserved;
         let out = Vec::with_capacity(limit + 1);
         let err = Vec::with_capacity(limit + 1);
-        self.remaining -= 2 * limit;
         let mut child = Command::new(executable)
             .args(args)
             .env("LC_ALL", "C")
@@ -57,7 +63,7 @@ impl Runner {
                         .await
                         .map_err(|_| "Command wait failed".to_owned())
                 })?;
-            self.remaining += 2 * limit - out.len() - err.len();
+            self.remaining += reserved - out.len() - err.len();
             if !status.success() {
                 let denied = err.windows(6).any(|v| v == b"denied")
                     || err.windows(13).any(|v| v == b"not permitted");
@@ -73,9 +79,19 @@ impl Runner {
                 warnings: !err.is_empty(),
             })
         };
-        timeout_at(deadline, work)
-            .await
-            .map_err(|_| "Command deadline exceeded".to_owned())?
+        match timeout_at(deadline, work).await {
+            Ok(result) => result,
+            Err(_) => {
+                child
+                    .start_kill()
+                    .map_err(|_| "Cannot terminate timed-out command")?;
+                tokio::time::timeout(Duration::from_secs(1), child.wait())
+                    .await
+                    .map_err(|_| "Timed-out command termination not confirmed")?
+                    .map_err(|_| "Timed-out command wait failed")?;
+                Err("Command deadline exceeded".into())
+            }
+        }
     }
 }
 async fn read(reader: impl AsyncRead + Unpin, mut bytes: Vec<u8>, limit: usize) -> Result<Vec<u8>> {

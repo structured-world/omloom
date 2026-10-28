@@ -39,6 +39,22 @@ pub(super) fn json(input: &str) -> Result<Value> {
     if input.len() > 1024 * 1024 || quoted || depth != 0 {
         return Err("Invalid structured output".into());
     }
+    // At most one Value per structural token: 512 bytes includes B-tree
+    // entry overhead and doubling Vec capacity. Twice the source length covers
+    // decoded string capacity and parser scratch. Refuse before allocation.
+    let reservation = tokens
+        .checked_mul(512)
+        .and_then(|n| {
+            input
+                .len()
+                .checked_mul(2)
+                .and_then(|bytes| n.checked_add(bytes))
+        })
+        .and_then(|n| n.checked_add(1024))
+        .ok_or("JSON allocation budget exceeded")?;
+    if reservation > 16 * 1024 * 1024 {
+        return Err("JSON allocation budget exceeded".into());
+    }
     serde_json::from_str(input).map_err(|_| "Invalid structured command output".into())
 }
 fn string<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
@@ -162,16 +178,16 @@ pub(super) async fn identity(
 fn result(report: &mut api::HostReport, module: &str, outcome: Result<()>, note: &str) {
     match outcome {
         Ok(()) => coverage(report, module, "verified", note),
-        Err(error) => coverage(
-            report,
-            module,
-            if error == "Permission denied" {
-                "blocked"
-            } else {
-                "failed"
-            },
-            &error,
-        ),
+        Err(error) => coverage(report, module, failure_status(&error), &error),
+    }
+}
+pub(super) fn failure_status(error: &str) -> &'static str {
+    if error == "Permission denied" {
+        "blocked"
+    } else if error.starts_with("Command unavailable (") {
+        "unavailable"
+    } else {
+        "failed"
     }
 }
 pub(super) async fn collect(runner: &mut Runner, report: &mut api::HostReport) -> Result<()> {
@@ -235,18 +251,25 @@ pub(super) async fn collect(runner: &mut Runner, report: &mut api::HostReport) -
     Ok(())
 }
 
-fn redact_literals(report: &mut api::HostReport, excluded: &std::collections::BTreeSet<String>) {
-    fn literal(value: &str) -> &str {
-        value.split(['/', '%']).next().unwrap_or(value)
+pub(super) fn redact_literals(
+    report: &mut api::HostReport,
+    excluded: &std::collections::BTreeSet<String>,
+) {
+    fn is_excluded(value: &str, excluded: &std::collections::BTreeSet<String>) -> bool {
+        let value = value.split(['/', '%']).next().unwrap_or(value);
+        match value.parse::<std::net::IpAddr>() {
+            Ok(value) => excluded.contains(&value.to_string()),
+            Err(_) => false,
+        }
     }
     report.binds.retain(|v| {
         v.value
             .as_ref()
-            .is_some_and(|v| !excluded.contains(literal(&v.bind)))
+            .is_some_and(|v| !is_excluded(&v.bind, excluded))
     });
     if let Some(network) = &mut report.network {
         network.routes.retain(|v| {
-            !excluded.contains(literal(&v.destination)) && !excluded.contains(literal(&v.gateway))
+            !is_excluded(&v.destination, excluded) && !is_excluded(&v.gateway, excluded)
         });
     }
     report.findings.retain(|v| {
@@ -434,7 +457,7 @@ async fn windows_interfaces(
     report: &mut api::HostReport,
     excluded: &mut std::collections::BTreeSet<String>,
 ) -> Result<()> {
-    let output = ps(runner,"$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); @(Get-NetIPAddress | Select-Object InterfaceIndex,InterfaceAlias,IPAddress,PrefixLength,@{n='State';e={$_.AddressState.ToString()}},@{n='Origin';e={$_.SuffixOrigin.ToString()}}) | ConvertTo-Json -Depth 4 -Compress").await?;
+    let output = ps(runner,"$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); ConvertTo-Json -InputObject @(Get-NetIPAddress | Select-Object InterfaceIndex,InterfaceAlias,IPAddress,PrefixLength,@{n='State';e={$_.AddressState.ToString()}},@{n='Origin';e={$_.SuffixOrigin.ToString()}}) -Depth 4 -Compress").await?;
     let value = json(&output)?;
     let mut rows = std::collections::BTreeMap::<u64, api::HostFinding>::new();
     for item in array(&value)? {
@@ -559,12 +582,16 @@ async fn sockets(runner: &mut Runner, report: &mut api::HostReport) -> Result<()
             network.sockets_complete = false;
         }
         "linux" => {
-            let output = runner.run("ss", &["-H", "-lntup"]).await?;
-            parse_ss(&output.text, report)?;
+            let mut complete = true;
+            for (flag, family) in [("-4", "IPv4"), ("-6", "IPv6")] {
+                let output = runner.run("ss", &[flag, "-H", "-lntup"]).await?;
+                parse_ss(&output.text, family, report)?;
+                complete &= !output.warnings;
+            }
             let network = report.network.as_mut().ok_or("Missing network")?;
             network.socket_coverage =
                 "Kernel TCP listeners and UDP binds; inaccessible owners remain unresolved".into();
-            network.sockets_complete = !output.warnings;
+            network.sockets_complete = complete;
         }
         "windows" => {
             let output=ps(runner,"$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $rows=@(); foreach($s in Get-NetTCPConnection -State Listen){$rows+=@{protocol='tcp';bind=$s.LocalAddress;port=$s.LocalPort;pid=$s.OwningProcess}}; foreach($s in Get-NetUDPEndpoint){$rows+=@{protocol='udp';bind=$s.LocalAddress;port=$s.LocalPort;pid=$s.OwningProcess}}; ConvertTo-Json -InputObject @($rows) -Depth 4 -Compress").await?;
@@ -779,7 +806,7 @@ pub(super) fn parse_mac_sockets(
     }
     Ok(())
 }
-pub(super) fn parse_ss(input: &str, report: &mut api::HostReport) -> Result<()> {
+pub(super) fn parse_ss(input: &str, family: &str, report: &mut api::HostReport) -> Result<()> {
     for line in input.lines() {
         let row: Vec<_> = line.split_whitespace().take(8).collect();
         if row.len() < 5 {
@@ -791,7 +818,25 @@ pub(super) fn parse_ss(input: &str, report: &mut api::HostReport) -> Result<()> 
         let Some((ip, port)) = row[4].rsplit_once(':') else {
             return Err("Unrecognized socket endpoint".into());
         };
+        let port: u32 = port.parse().map_err(|_| "Invalid socket port")?;
+        let ip = ip.trim_matches(['[', ']']);
         let Some((_, owner)) = line.split_once("pid=") else {
+            if local(ip) {
+                continue;
+            }
+            if report.binds.len() == MAX_FACTS {
+                return Err("Socket count limit exceeded".into());
+            }
+            report.binds.push(api::HostBind {
+                owner: String::new(),
+                value: Some(api::SocketBind {
+                    protocol: row[0].into(),
+                    family: family.into(),
+                    bind: ip.into(),
+                    port,
+                    ..Default::default()
+                }),
+            });
             continue;
         };
         let pid = owner
@@ -805,15 +850,7 @@ pub(super) fn parse_ss(input: &str, report: &mut api::HostReport) -> Result<()> 
             .nth(1)
             .and_then(|v| v.split('"').next())
             .ok_or("Missing process name")?;
-        bind(
-            report,
-            pid,
-            name,
-            row[0],
-            if ip.contains(':') { "IPv6" } else { "IPv4" },
-            ip.trim_matches(['[', ']']),
-            port.parse().map_err(|_| "Invalid socket port")?,
-        )?;
+        bind(report, pid, name, row[0], family, ip, port)?;
     }
     Ok(())
 }
@@ -886,7 +923,7 @@ async fn routes(runner: &mut Runner, report: &mut api::HostReport) -> Result<()>
             }
         }
         "windows" => {
-            let output=ps(runner,"$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); @(Get-NetRoute -IncludeAllCompartments | Select-Object DestinationPrefix,NextHop,InterfaceIndex,@{n='Family';e={$_.AddressFamily.ToString()}},@{n='Protocol';e={$_.Protocol.ToString()}}) | ConvertTo-Json -Depth 4 -Compress").await?;
+            let output=ps(runner,"$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); ConvertTo-Json -InputObject @(Get-NetRoute -IncludeAllCompartments | Select-Object DestinationPrefix,NextHop,InterfaceIndex,CompartmentId,@{n='Family';e={$_.AddressFamily.ToString()}},@{n='Protocol';e={$_.Protocol.ToString()}}) -Depth 4 -Compress").await?;
             let values = json(&output)?;
             for value in array(&values)? {
                 rows.push(api::LocalRoute {
@@ -898,7 +935,14 @@ async fn routes(runner: &mut Runner, report: &mut api::HostReport) -> Result<()>
                         .ok_or("Route interface missing")?
                         .to_string(),
                     family: string(value, "Family")?.into(),
-                    flags: string(value, "Protocol")?.into(),
+                    flags: format!(
+                        "protocol={};compartment={}",
+                        string(value, "Protocol")?,
+                        value
+                            .get("CompartmentId")
+                            .and_then(Value::as_u64)
+                            .ok_or("Route compartment missing")?
+                    ),
                     link_layer: false,
                 });
             }

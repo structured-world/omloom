@@ -23,7 +23,12 @@ pub(super) async fn collect(runner: &mut Runner, report: &mut api::HostReport) -
         ),
         Err(error) => {
             report.findings.truncate(before);
-            coverage(report, "docker", "blocked", &error);
+            coverage(
+                report,
+                "docker",
+                super::native::failure_status(&error),
+                &error,
+            );
         }
     }
     match netbird(runner, report).await {
@@ -33,7 +38,12 @@ pub(super) async fn collect(runner: &mut Runner, report: &mut api::HostReport) -
             "verified",
             "Only local daemon IP/interface evidence; no peer, key or management endpoint retained",
         ),
-        Err(error) => coverage(report, "netbird", "blocked", &error),
+        Err(error) => coverage(
+            report,
+            "netbird",
+            super::native::failure_status(&error),
+            &error,
+        ),
     }
     Ok(())
 }

@@ -118,7 +118,7 @@ impl Tx<'_> {
         if request.selection.is_empty()
             || request.selection.len() > MAX_IMPORT
             || request.source.is_empty()
-            || request.source.len() > 100
+            || request.source.len() > 80
             || request.source.chars().any(char::is_control)
         {
             return Err(Error::Invalid);
@@ -150,6 +150,23 @@ impl Tx<'_> {
                 &node.key,
             );
             let old = self.get(&key)?;
+            let mut hash = Sha256::new();
+            for field in &node.fields {
+                hash.update((field.encoded_len() as u64).to_be_bytes());
+                hash.update(field.encode_to_vec());
+            }
+            let digest = hash.finalize().to_vec();
+            let mut accepted_fields = false;
+            if let Some(old) = &old {
+                let observed = number(old, "observed")?;
+                accepted_fields = binary(old, "digest")? == digest;
+                if observed > report.observed_at
+                    || (observed == report.observed_at
+                        && (!accepted_fields || string(old, "vtext")? != report.boot_basis))
+                {
+                    return Err(Error::Conflict);
+                }
+            }
             let prior = old.as_ref().map(super::super::target).transpose()?;
             let explicit = explicit.map(|v| parse_target(Some(v))).transpose()?;
             if explicit.is_some() && prior.is_some() && explicit != prior {
@@ -181,7 +198,7 @@ impl Tx<'_> {
             } else {
                 working.clone()
             };
-            let change = api::Write {
+            let mut change = api::Write {
                 target: existing.map(target_wire),
                 expected,
                 kind: node.kind,
@@ -192,7 +209,12 @@ impl Tx<'_> {
                     None
                 },
             };
-            let target = self.context_write(context, change.clone(), &local, now)?;
+            let target = if accepted_fields {
+                change.changes.clear();
+                existing.ok_or(Error::Corrupt)?
+            } else {
+                self.context_write(context, change.clone(), &local, now)?
+            };
             // An existing match must retain the reviewed local ownership, not
             // silently move across machines when a source key is reused.
             if let Some(parent) = parent.filter(|_| existing.is_some())
@@ -252,6 +274,11 @@ impl Tx<'_> {
             }
             let mut data = target_props(target);
             data.insert("source".into(), text(&request.source));
+            // One current checkpoint fences stale replay and same-instant
+            // equivocation; it does not retain another report or field history.
+            data.insert("observed".into(), int(report.observed_at)?);
+            data.insert("digest".into(), Value::Binary(digest));
+            data.insert("vtext".into(), text(&report.boot_basis));
             self.put_projection(
                 &key,
                 &format!("{}/host-mappings", asset_key(target)),
@@ -263,7 +290,9 @@ impl Tx<'_> {
             rows.push(api::ImportRow {
                 row: rows.len() as u32 + 1,
                 change: Some(change),
-                diagnostic: if existing.is_some() {
+                diagnostic: if accepted_fields {
+                    "Keep previously accepted identity and local fields"
+                } else if existing.is_some() {
                     "Update reviewed existing identity"
                 } else {
                     "Adopt a new identity"
@@ -276,7 +305,6 @@ impl Tx<'_> {
         {
             let mut network = source.clone();
             network.installation = Some(target_wire(*installation));
-            network.source = request.source.clone();
             network.observed_at = report.observed_at;
             network.basis = report.boot_basis.clone();
             network.sockets.clear();
@@ -292,7 +320,6 @@ impl Tx<'_> {
                 value.service = Some(target_wire(*service));
                 network.sockets.push(value);
             }
-            network_facts::validate(&network)?;
             if !context.field(
                 *installation,
                 wire::AssetKind::SoftwareInstallation as i32,
@@ -314,7 +341,43 @@ impl Tx<'_> {
             }
             // Partial selection cannot remove a hidden/unselected service's facts.
             network.sockets_complete = false;
-            self.accept_network(&network)?;
+            // Independent projection sources let a user select another section
+            // of the same file without inventing a new observation timestamp.
+            for part in &request.network_parts {
+                let mut selected = network.clone();
+                let part = api::HostNetworkPart::try_from(*part).map_err(|_| Error::Invalid)?;
+                let suffix = match part {
+                    api::HostNetworkPart::Sockets => "sockets",
+                    api::HostNetworkPart::Routes => "routes",
+                    api::HostNetworkPart::ApplicationFirewall => "application-fw",
+                    _ => return Err(Error::Invalid),
+                };
+                selected.source = format!("{} / {suffix}", request.source);
+                if part != api::HostNetworkPart::Sockets {
+                    selected.sockets.clear();
+                    selected.sockets_complete = false;
+                    selected.socket_coverage = "Not selected for this projection source".into();
+                }
+                if part != api::HostNetworkPart::Routes {
+                    selected.routes.clear();
+                    selected.routes_complete = false;
+                    selected.route_coverage = "Not selected for this projection source".into();
+                }
+                if part != api::HostNetworkPart::ApplicationFirewall {
+                    selected.rules.clear();
+                    selected.rules_complete = false;
+                    selected.firewall_enabled = None;
+                    selected.block_all = None;
+                    selected.allow_builtin_signed = None;
+                    selected.allow_downloaded_signed = None;
+                    selected.application_coverage =
+                        "Not selected for this projection source".into();
+                    selected.packet_filter_coverage =
+                        "Not selected for this projection source".into();
+                }
+                network_facts::validate(&selected)?;
+                self.accept_network(&selected)?;
+            }
         }
         Ok(rows)
     }
@@ -420,6 +483,9 @@ impl Store {
         let base = number(&tx.root, "revision")?;
         drop(tx);
         let (rows, changed) = {
+            // CoordiNode interactive transactions buffer until commit. Running
+            // the real mutation checks here and rolling back validates the whole
+            // ancestry atomically without journal writes or a second validator.
             let mut dry = self.begin()?;
             let rows = dry.apply_host(context, &request, working, now)?;
             (rows, dry.changed)

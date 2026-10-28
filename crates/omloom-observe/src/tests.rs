@@ -65,6 +65,27 @@ fn kernel_and_process_tables_preserve_unresolved_and_dual_stack_binds() {
         "IPv4+IPv6"
     );
 }
+
+// ss can read a socket whose process is hidden from this OS account. Preserve
+// its family-specific bind without guessing a service or IPv4 dual-stack support.
+#[test]
+fn linux_kernel_only_binds_keep_family_and_unknown_owner() {
+    let mut value = report();
+    native::parse_ss(
+        "tcp LISTEN 0 4096 *:443 *:*\nudp UNCONN 0 0 [::]:5353 [::]:*\n",
+        "IPv6",
+        &mut value,
+    )
+    .expect("accessible kernel facts");
+    assert_eq!(value.binds.len(), 2);
+    assert!(value.findings.is_empty());
+    assert!(
+        value
+            .binds
+            .iter()
+            .all(|v| v.owner.is_empty() && v.value.as_ref().expect("bind").family == "IPv6")
+    );
+}
 // Decoder work is refused before constructing a deeply nested JSON object tree.
 #[test]
 fn structured_input_has_a_stack_safety_ceiling() {
@@ -135,6 +156,33 @@ fn temporary_bind_cannot_be_serialized() {
         }),
     });
     assert!(encode(value).is_err());
+}
+
+// Equivalent IPv6 spelling and scoped/prefixed literals must not bypass the
+// generation filter when the same temporary address appears in other sources.
+#[test]
+fn temporary_literals_are_removed_from_routes_and_binds() {
+    let mut value = report();
+    value.binds.push(api::HostBind {
+        owner: String::new(),
+        value: Some(api::SocketBind {
+            bind: "2001:db8:0:0::1%en0".into(),
+            ..Default::default()
+        }),
+    });
+    value.network = Some(api::HostNetwork {
+        routes: vec![api::LocalRoute {
+            destination: "2001:db8::1/128".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    native::redact_literals(
+        &mut value,
+        &std::collections::BTreeSet::from(["2001:db8::1".into()]),
+    );
+    assert!(value.binds.is_empty());
+    assert!(value.network.expect("network").routes.is_empty());
 }
 
 // This runs on the actual native host. Fixtures cannot substitute for working

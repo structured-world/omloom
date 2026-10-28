@@ -2258,7 +2258,8 @@ export interface HostImport {
      */
     report?: HostReport;
     /**
-     * Explicit source configuration name within the caller's import namespace.
+     * Explicit source configuration name within the caller's import namespace,
+     * at most 80 UTF-8 bytes. Network sections have independent named projections.
      *
      * @generated from protobuf field: string source = 2
      */

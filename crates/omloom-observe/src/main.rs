@@ -84,7 +84,7 @@ async fn collect() -> Result<api::HostReport> {
     let mut report = api::HostReport {
         version: 1,
         platform: platform.into(),
-        source_basis: digest(&source),
+        source_basis: digest(&format!("omloom-native/1/{platform}/{source}")),
         boot_basis: digest(&boot),
         observed_at,
         ..Default::default()

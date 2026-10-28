@@ -935,7 +935,8 @@ message HostSelection {
 message HostImport {
   // Native report being reviewed; absent when accepting the prepared preview.
   HostReport report = 1;
-  // Explicit source configuration name within the caller's import namespace.
+  // Explicit source configuration name within the caller's import namespace,
+  // at most 80 UTF-8 bytes. Network sections have independent named projections.
   string source = 2;
   // Selected candidates and explicit existing matches. Unselected findings
   // are not persisted. Required unknown parents must be resolved by the user.
