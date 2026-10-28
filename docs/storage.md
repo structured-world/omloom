@@ -10,7 +10,7 @@ synthetic contexts for test-owned data. These qualify application projection
 without claiming identity-provider enforcement.
 
 The backend pins CoordiNode Git revision
-`d7dae1f28097f6cb58bcdf58042949d68405dba9` and a consumer lockfile. This source
+`1862962a3da20e5e57d7ab5126e69bd5817d7c61` and a consumer lockfile. This source
 revision includes nullable Boolean, correlated lookup and edge-orientation
 corrections required by inventory queries. It is not a published embedded release. Its
 filesystem capability requires the `std` feature. Policy types also compile
@@ -30,7 +30,7 @@ without rewriting the value or incrementing the accepted intent revision.
 Explicit clears remain claims. Different sources never overwrite each other.
 Repeated identical input and retrieval do not create application history.
 
-Resource responsibility adds at most four current assignment rows per asset.
+Resource responsibility adds at most five current assignment rows per asset.
 Only explicit assignments have an issuer/subject lookup digest, used by the
 owner-filter consumer; the full reference is checked before a match. Inherited
 assignments retain the accepted relation identity and revision, not a duplicate
