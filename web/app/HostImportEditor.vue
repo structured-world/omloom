@@ -72,6 +72,7 @@ async function matchScope(candidate:string){
 <fieldset :disabled="busy"><legend>Choose observations</legend>
 <label>Host report file<input type="file" accept=".omloom,.bin" @change="file"></label>
 <label>Source name<input v-model="source" required maxlength="80" @input="preview=undefined"></label>
+<p class="hint">Reuse the exact source name for later imports from this configuration. A different name selects a separate source and may propose new resources. It does not rename the existing source.</p>
 <section v-if="report"><h3>{{ report.platform }} collection</h3>
 <p>Observed {{ new Date(Number(report.observedAt)).toISOString() }}. This is the source collection time, not current freshness.</p>
 <ul><li v-for="coverage in report.coverage" :key="coverage.module"><strong>{{ coverage.module }}: {{ coverage.status }}</strong> {{ coverage.detail }}</li></ul>

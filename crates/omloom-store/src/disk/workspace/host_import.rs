@@ -3,6 +3,8 @@
 use super::*;
 
 fn mapping(actor: &str, source: &str, basis: &str, key: &str) -> String {
+    // Source names select independent import configurations, not cosmetic
+    // labels. Equal unauthenticated source evidence cannot merge configurations.
     let mut hash = Sha256::new();
     for part in [actor, source, basis, key] {
         hash.update((part.len() as u64).to_be_bytes());

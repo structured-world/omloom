@@ -507,6 +507,12 @@ Names, matching addresses, process names and Compose labels do not establish
 continuity, ownership or permission. Review the proposed changes before acceptance.
 The same flow works on a phone, including selecting a report from its file picker.
 
+The source name selects an import configuration within your actor's namespace.
+Reuse it exactly for repeat imports. A changed name selects an independent
+source, rather than renaming a display label, and can propose new identities.
+Equal report source evidence does not merge separate configurations; match
+existing resources explicitly when that is intended.
+
 The OS cannot prove whether its execution host is physical or virtual. For a new
 host, explicitly choose **Physical device** or **Virtual machine**. Alternatively,
 match the current device/VM scope or another reviewed existing resource. That
