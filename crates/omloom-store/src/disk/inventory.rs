@@ -189,6 +189,9 @@ impl Store {
             // archival or retyping; hidden endpoints would strand those records.
             tx.require_no_ipam_state(target)?;
             tx.require_no_account_references(target)?;
+            if children.iter().any(|row| row.contains_key("link_kind")) {
+                return Err(Error::Conflict);
+            }
             let attached=tx.query("MATCH (n:OmRow) WHERE n.parent='relations' AND (n.asset=$asset OR n.to_asset=$asset) RETURN {} AS p LIMIT 1",params([("asset",text(target.asset.to_string()))]))?;
             if !attached.is_empty() {
                 return Err(Error::Conflict);

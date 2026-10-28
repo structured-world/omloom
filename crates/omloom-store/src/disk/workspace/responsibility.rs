@@ -376,13 +376,10 @@ impl Tx<'_> {
                 }
                 if assignment.mode == Mode::Inherit as i32 && assignment.source_relation.is_none() {
                     let mut source = None;
-                    for relation in tx.working_relations(target)? {
-                        let properties = tx
-                            .get(&format!("relation/{}", relation.relation_id))?
-                            .ok_or(Error::Corrupt)?;
+                    for properties in tx.responsibility_relations(target, false)? {
                         match tx.responsibility_source(target, &properties, false) {
                             Ok(_) if source.is_some() => return Err(Error::Incomplete),
-                            Ok(_) => source = Some(relation),
+                            Ok(_) => source = Some(inventory::relation_projection(&properties)?),
                             Err(Error::Invalid) => {}
                             Err(error) => return Err(error),
                         }
@@ -477,21 +474,13 @@ impl Tx<'_> {
                 .push(graph.resolve(context, target, facet)?);
         }
         if include_sources && context.field(target, kind, "relations", false) {
-            let mut rows = tx.query("MATCH (r:OmRow {to_asset:$asset}) WHERE r.parent='relations' AND r.to_incarnation=$incarnation AND r.kind IN $kinds RETURN properties(r) AS p LIMIT 129", params([
-                ("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string())),
-                ("kinds", Value::Array([wire::RelationKind::Contains, wire::RelationKind::HasPort, wire::RelationKind::Carries].into_iter().map(|k| Value::Int(k as i64)).collect()))
-            ]))?;
-            if matches!(
-                wire::AssetKind::try_from(kind),
-                Ok(wire::AssetKind::VirtualMachine | wire::AssetKind::Service)
-            ) {
-                rows.extend(tx.query("MATCH (r:OmRow {asset:$asset}) WHERE r.parent='relations' AND r.incarnation=$incarnation AND r.kind=$kind RETURN properties(r) AS p LIMIT 129", params([
-                    ("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string())), ("kind", Value::Int(wire::RelationKind::RunsOn as i64))
-                ]))?);
-            }
-            if rows.len() > 128 {
-                return Err(Error::Limit);
-            }
+            let rows = tx.responsibility_relations(
+                target,
+                matches!(
+                    wire::AssetKind::try_from(kind),
+                    Ok(wire::AssetKind::VirtualMachine | wire::AssetKind::Service)
+                ),
+            )?;
             let mut candidates = Vec::with_capacity(rows.len());
             let mut parents = BTreeSet::new();
             for row in rows {
@@ -579,6 +568,27 @@ impl Tx<'_> {
 }
 
 impl Tx<'_> {
+    // Both source discovery and editing inspect parent bindings, never all children.
+    fn responsibility_relations(
+        &self,
+        target: AssetRef,
+        include_hosting: bool,
+    ) -> Result<Vec<Properties>> {
+        let mut rows = self.query("MATCH (r:OmRow {to_asset:$asset}) WHERE r.parent='relations' AND r.to_incarnation=$incarnation AND r.kind IN $kinds RETURN properties(r) AS p LIMIT 129", params([
+            ("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string())),
+            ("kinds", Value::Array([wire::RelationKind::Contains, wire::RelationKind::HasPort, wire::RelationKind::Carries].into_iter().map(|kind| Value::Int(kind as i64)).collect()))
+        ]))?;
+        if include_hosting {
+            rows.extend(self.query("MATCH (r:OmRow {asset:$asset}) WHERE r.parent='relations' AND r.incarnation=$incarnation AND r.kind=$kind RETURN properties(r) AS p LIMIT 129", params([
+                ("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string())), ("kind", Value::Int(wire::RelationKind::RunsOn as i64))
+            ]))?);
+        }
+        if rows.len() > 128 {
+            return Err(Error::Limit);
+        }
+        Ok(rows)
+    }
+
     pub(in super::super) fn initialize_responsibility(
         &mut self,
         child: AssetRef,

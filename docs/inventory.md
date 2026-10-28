@@ -107,9 +107,15 @@ administration/programmatic kind, known delegation capability, permitted login
 and sender constraints, an optional opaque credential-binding UUID and a known
 recovery route. Do not enter passwords, tokens or recovery answers. Provider
 identity remains stable across rename and credential rotation.
+The metadata form replaces the complete record and requires read and write
+permission for every metadata field. Undisclosed optional values are not known
+empty values. Binding edits remain independently available under their own rights.
 
 An account can bind up to 32 selected managed resources, services, endpoints and
 consumer workloads. Bindings do not copy resources or establish ownership.
+Adding or removing a binding reviews the selected account and resource together
+in an explicit relationship context. The server checks both endpoints against
+that context and their current field permissions.
 Each endpoint and its label require independent disclosure rights. Two products
 can use separate SMTP account references while mail administration and other
 consumers remain hidden. Removing a binding does not revoke external mail access

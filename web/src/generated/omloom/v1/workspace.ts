@@ -633,6 +633,15 @@ export interface ExternalAccountState {
      * @generated from protobuf field: optional string requests_next = 9
      */
     requestsNext?: string;
+    /**
+     * Server-derived disclosure completeness for the whole metadata record.
+     * True only when every metadata field is readable, independently of write
+     * permission. Whole-record editors require this so an undisclosed optional
+     * value cannot silently become an explicit clear; it grants no write authority.
+     *
+     * @generated from protobuf field: bool metadata_fully_readable = 10
+     */
+    metadataFullyReadable: boolean;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.OwnerRequest
@@ -3494,7 +3503,8 @@ class ExternalAccountState$Type extends MessageType<ExternalAccountState> {
             { no: 6, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 7, name: "related", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Item },
             { no: 8, name: "requests", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Operation },
-            { no: 9, name: "requests_next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 9, name: "requests_next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 10, name: "metadata_fully_readable", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
         ]);
     }
 }

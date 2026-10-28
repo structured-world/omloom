@@ -96,6 +96,7 @@ fn accounts_keep_selected_current_metadata_without_secret_or_grant_copies() -> T
         },
     )?;
     assert_eq!(state.links.len(), 1);
+    assert!(state.metadata_fully_readable);
     let before = store.usage()?;
     account_call(
         &store,
@@ -125,6 +126,7 @@ fn accounts_keep_selected_current_metadata_without_secret_or_grant_copies() -> T
     assert!(permitted.login.is_none());
     assert!(state.links.is_empty());
     assert!(state.authorized.is_empty());
+    assert!(!state.metadata_fully_readable);
     assert!(matches!(
         account_call(
             &store,
@@ -285,6 +287,86 @@ fn owner_requests_reuse_durable_operations_without_dispatch() -> TestResult {
     Ok(())
 }
 
+// Owner assertions refine uncertainty but cannot contradict a previously definite effect.
+#[test]
+fn owner_reports_preserve_definite_effect_knowledge() -> TestResult {
+    for definite in [
+        wire::EffectOutcome::Confirmed,
+        wire::EffectOutcome::ConfirmedNoEffect,
+    ] {
+        let dir = tempfile::tempdir()?;
+        let store = Store::open(dir.path(), policy())?;
+        let (domain, account) = setup(&store)?;
+        let actor = operator();
+        let created = owner_call(
+            &store,
+            &actor,
+            api::OwnerRequest {
+                action: api::OwnerRequestAction::Create as i32,
+                account: Some(account.clone()),
+                account_revision: Some(2),
+                target: Some(domain),
+                target_revision: Some(1),
+                change: "set-description".into(),
+                arguments: vec![text_field("description", "Requested description")],
+                retry_key: "monotonic-report".into(),
+                expires_at_ms: 10_000,
+                ..Default::default()
+            },
+        )?
+        .operation
+        .ok_or("operation")?;
+        let mut transition = api::OwnerRequest {
+            action: api::OwnerRequestAction::Approve as i32,
+            account: Some(account),
+            account_revision: Some(2),
+            operation_id: Some(created.operation_id.clone()),
+            expected: Some(created.revision),
+            ..Default::default()
+        };
+        let approved = owner_call(&store, &actor, transition.clone())?
+            .operation
+            .ok_or("operation")?;
+        transition.action = api::OwnerRequestAction::Report as i32;
+        transition.expected = Some(approved.revision);
+        transition.reported_outcome = wire::EffectOutcome::Unknown as i32;
+        let unknown = owner_call(&store, &actor, transition.clone())?
+            .operation
+            .ok_or("operation")?;
+        transition.expected = Some(unknown.revision);
+        transition.reported_outcome = definite as i32;
+        let known = owner_call(&store, &actor, transition.clone())?
+            .operation
+            .ok_or("operation")?;
+        transition.expected = Some(known.revision);
+        let before = store.usage()?;
+        owner_call(&store, &actor, transition.clone())?;
+        assert_eq!(store.usage()?, before);
+        for other in [
+            wire::EffectOutcome::Unknown,
+            wire::EffectOutcome::Confirmed,
+            wire::EffectOutcome::ConfirmedNoEffect,
+        ] {
+            if other == definite {
+                continue;
+            }
+            transition.reported_outcome = other as i32;
+            assert!(matches!(
+                owner_call(&store, &actor, transition.clone()),
+                Err(Error::UnsafeTransition)
+            ));
+            assert_eq!(store.usage()?, before);
+        }
+        drop(store);
+        let store = Store::open(dir.path(), policy())?;
+        assert_eq!(
+            store.operation(created.operation_id.parse()?)?.outcome,
+            definite
+        );
+    }
+    Ok(())
+}
+
 // A controller edit invalidates the previously accepted account basis, even with a fresh client revision.
 #[test]
 fn owner_request_cannot_cross_controller_revision() -> TestResult {
@@ -410,6 +492,105 @@ fn account_references_protect_resource_lifecycles() -> TestResult {
         Err(Error::UnsafeTransition)
     ));
     assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// Retyping cannot strand outgoing account-owned bindings behind a non-account kind.
+#[test]
+fn account_owned_bindings_block_retyping_without_requests() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let (domain, account) = setup(&store)?;
+    let target = AssetRef::try_from(&account)?;
+    let old = store.asset(target)?;
+    let mut replacement = asset();
+    replacement.target = Some(account.clone());
+    replacement.kind = K::Device as i32;
+    replacement.revision = old.revision;
+    let before = store.usage()?;
+    assert!(matches!(
+        store.save_asset(
+            &admit(wire::record::Body::Asset(replacement)),
+            Some(old.revision),
+            "editor",
+            100
+        ),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.usage()?, before);
+    let state = account_call(
+        &store,
+        &operator(),
+        api::ExternalAccount {
+            target: Some(account),
+            ..Default::default()
+        },
+    )?;
+    assert_eq!(state.links.len(), 1);
+    assert_eq!(state.links[0].target.as_ref(), Some(&domain));
+    Ok(())
+}
+
+// Account bindings are peer relationships and require both endpoints in the working selection.
+#[test]
+fn account_binding_requires_explicit_endpoint_context() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let account = create(&store, &actor, K::ProviderAccount, "Selected account")?;
+    let domain = create(&store, &actor, K::Domain, "Outside selected account")?;
+    let link = api::AccountLink {
+        kind: api::AccountLinkKind::ManagedResource as i32,
+        target: Some(domain.clone()),
+    };
+    let edit = |remove: bool, focused: bool| -> Result<api::Reply, Error> {
+        store.workspace(
+            &actor,
+            api::Request {
+                working: Some(api::WorkingContext {
+                    expected: Some(store.usage()?.revision),
+                    focus: focused.then(|| account.clone()),
+                    roots: if focused {
+                        vec![]
+                    } else {
+                        vec![account.clone(), domain.clone()]
+                    },
+                }),
+                command: Some(Command::ExternalAccount(api::ExternalAccount {
+                    target: Some(account.clone()),
+                    expected: Some(
+                        store
+                            .asset(AssetRef::try_from(&account).map_err(|_| Error::Invalid)?)?
+                            .revision,
+                    ),
+                    add: if remove { vec![] } else { vec![link.clone()] },
+                    remove: if remove { vec![link.clone()] } else { vec![] },
+                    ..Default::default()
+                })),
+            },
+            100,
+        )
+    };
+    let before = store.usage()?;
+    assert!(matches!(edit(false, true), Err(Error::Denied)));
+    assert_eq!(store.usage()?, before);
+    edit(false, false)?;
+    let before = store.usage()?;
+    assert!(matches!(edit(true, true), Err(Error::Denied)));
+    assert_eq!(store.usage()?, before);
+    edit(true, false)?;
+    assert!(
+        account_call(
+            &store,
+            &actor,
+            api::ExternalAccount {
+                target: Some(account),
+                ..Default::default()
+            }
+        )?
+        .links
+        .is_empty()
+    );
     Ok(())
 }
 

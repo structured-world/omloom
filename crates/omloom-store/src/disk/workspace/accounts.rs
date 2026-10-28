@@ -100,8 +100,8 @@ impl Store {
             return Err(Error::Invalid);
         }
         let mut tx = self.begin()?;
-        tx.selection(context, working, writing)?
-            .contains(account, &tx)?;
+        let selection = tx.selection(context, working, writing)?;
+        selection.contains(account, &tx)?;
         let row = tx.visible_asset(context, account)?;
         if number(&row, "kind")? != wire::AssetKind::ProviderAccount as u64 {
             return Err(Error::Invalid);
@@ -194,6 +194,7 @@ impl Store {
             }
             for link in links {
                 let target = parse_target(link.target.as_ref())?;
+                selection.contains(target, &tx)?;
                 let kind = LinkKind::try_from(link.kind).map_err(|_| Error::Invalid)?;
                 if kind == LinkKind::Unspecified
                     || !edited.insert((link.kind, target))
@@ -414,6 +415,17 @@ impl Store {
                         | wire::EffectOutcome::ConfirmedNoEffect)
                 ) {
                     return Err(Error::Invalid);
+                }
+                if operation.get("owner_reported") == Some(&Value::Bool(true)) {
+                    let previous =
+                        wire::EffectOutcome::try_from(number(&operation, "outcome")? as i32)
+                            .map_err(|_| Error::Corrupt)?;
+                    // An uncertain owner assertion may be refined, but definite effects cannot be contradicted.
+                    if previous != wire::EffectOutcome::Unknown
+                        && previous as i32 != request.reported_outcome
+                    {
+                        return Err(Error::UnsafeTransition);
+                    }
                 }
                 data.insert("owner_reported".into(), Value::Bool(true));
                 data.insert("state".into(), int(OperationState::NeedsAttention as u64)?);
@@ -662,6 +674,9 @@ impl Tx<'_> {
                 .map(|(cap, _)| cap as i32)
                 .collect(),
             writable,
+            metadata_fully_readable: METADATA_FIELDS
+                .into_iter()
+                .all(|field| permitted(context, account, field, false)),
             revision,
         })
     }

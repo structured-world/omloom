@@ -315,6 +315,13 @@ impl Graph {
                         }
                         if (current == target || source_visible)
                             && context.field(current, number(row, "kind")? as i32, "name", false)
+                            && (current == target
+                                || context.field(
+                                    current,
+                                    number(row, "kind")? as i32,
+                                    "relations",
+                                    false,
+                                ))
                         {
                             result.source = Some(target_wire(current));
                             result.source_revision = Some(number(row, "revision")?);
@@ -381,7 +388,6 @@ impl Tx<'_> {
                     return Err(Error::Limit);
                 }
                 edges += rows.len();
-                let mut endpoints = BTreeSet::new();
                 let mut relations = Vec::new();
                 for row in rows {
                     let relation = inventory::relation_projection(&row)?;
@@ -395,11 +401,42 @@ impl Tx<'_> {
                     if !chunk.contains(&parent) {
                         continue;
                     }
-                    endpoints.insert(parent);
-                    endpoints.insert(child);
                     relations.push((parent, child, relation));
                 }
-                let keys = endpoints.iter().map(|t| text(asset_key(*t))).collect();
+                let children: BTreeMap<_, _> = relations
+                    .iter()
+                    .map(|(_, child, _)| (assignment_key(*child, facet), *child))
+                    .collect();
+                if children.len() > MAX_NODES {
+                    return Err(Error::Limit);
+                }
+                let keys = children.keys().map(text).collect();
+                let mut selected = BTreeMap::new();
+                for row in self.query("UNWIND $keys AS key MATCH (n:OmRow {key:key}) WHERE n.mode=$mode RETURN {key:n.key,source_relation:n.source_relation} AS p LIMIT 4097", params([
+                    ("keys", Value::Array(keys)), ("mode", Value::Int(Mode::Inherit as i64))
+                ]))? {
+                    let child = *children.get(&string(&row, "key")?).ok_or(Error::Corrupt)?;
+                    if let Some(id) = row.get("source_relation").and_then(Value::as_str)
+                        && selected.insert(child, id.to_owned()).is_some() {
+                        return Err(Error::Corrupt);
+                    }
+                }
+                // Placement is not ownership. A selected but stale binding still
+                // reaches resolution, which reports incompleteness rather than guessing.
+                relations.retain(|(_, child, relation)| {
+                    selected.get(child) == Some(&relation.relation_id)
+                });
+                if relations.is_empty() {
+                    continue;
+                }
+                let endpoints: BTreeSet<_> = relations
+                    .iter()
+                    .flat_map(|(parent, child, _)| [*parent, *child])
+                    .collect();
+                let keys = endpoints
+                    .iter()
+                    .map(|target| text(asset_key(*target)))
+                    .collect();
                 let mut kinds = BTreeMap::new();
                 for row in self.query("UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN {asset:n.asset,incarnation:n.incarnation,kind:n.kind} AS p", params([("keys", Value::Array(keys))]))? {
                     kinds.insert(super::super::super::target(&row)?, wire::AssetKind::try_from(number(&row,"kind")? as i32).map_err(|_| Error::Corrupt)?);

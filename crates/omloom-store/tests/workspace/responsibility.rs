@@ -83,7 +83,7 @@ fn responsibility_source_picker_does_not_enumerate_children() -> TestResult {
         &store,
         &actor,
         Command::Responsibility(api::Responsibility {
-            target: Some(server),
+            target: Some(server.clone()),
             action: Action::Read as i32,
             include_sources: true,
             ..Default::default()
@@ -94,6 +94,31 @@ fn responsibility_source_picker_does_not_enumerate_children() -> TestResult {
     };
     assert!(state.sources.is_empty());
     assert_eq!(store.usage()?, before);
+    // Applying the default source must use the same bounded parent lookup as the picker.
+    let parent = create(&store, &actor, K::Device, "Owning chassis")?;
+    responsibility(
+        &store,
+        &actor,
+        &parent,
+        Action::Apply,
+        vec![owner("hardware")],
+    )?;
+    connect(&store, &parent, &server, wire::RelationKind::Contains)?;
+    let state = responsibility(
+        &store,
+        &actor,
+        &server,
+        Action::Apply,
+        vec![api::ResponsibilityAssignment {
+            facet: Facet::ClaimedOwner as i32,
+            mode: Mode::Inherit as i32,
+            ..Default::default()
+        }],
+    )?;
+    assert_eq!(
+        state.effective[0].party.as_ref().ok_or("party")?.subject,
+        "hardware"
+    );
     Ok(())
 }
 
@@ -366,6 +391,42 @@ fn responsibility_redacts_hidden_source_and_contact() -> TestResult {
     );
     assert!(state.effective[0].source.is_none());
     assert!(state.effective[0].contact.is_none());
+    Ok(())
+}
+
+// Reading a parent's name must not disclose its restricted component association.
+#[test]
+fn responsibility_redacts_source_without_parent_relationship_rights() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let parent = create(&store, &actor, K::Device, "Named but restricted parent")?;
+    let child = create(&store, &actor, K::Interface, "Visible child")?;
+    connect(&store, &parent, &child, wire::RelationKind::Contains)?;
+    responsibility(
+        &store,
+        &actor,
+        &parent,
+        Action::Apply,
+        vec![owner("operators")],
+    )?;
+    let mut limited = actor;
+    limited.grants[0].scope = Scope::Targets(vec![AssetRef::try_from(&child)?]);
+    let mut parent_grant = limited.grants[0].clone();
+    parent_grant.scope = Scope::Targets(vec![AssetRef::try_from(&parent)?]);
+    parent_grant.read = Fields::Selected(vec!["name".into()]);
+    parent_grant.writable = false;
+    limited.grants.push(parent_grant);
+    let before = store.usage()?;
+    let state = responsibility(&store, &limited, &child, Action::Read, vec![])?;
+    assert!(state.assignments[0].source_relation.is_none());
+    assert_eq!(
+        state.effective[0].party.as_ref().ok_or("party")?.subject,
+        "operators"
+    );
+    assert!(state.effective[0].source.is_none());
+    assert!(state.effective[0].source_revision.is_none());
+    assert_eq!(store.usage()?, before);
     Ok(())
 }
 
@@ -819,6 +880,91 @@ fn responsibility_filter_resolves_only_its_selected_scope() -> TestResult {
         panic!("page");
     };
     assert_eq!(page.total, 2);
+    Ok(())
+}
+
+// A second hosting edge is not the guest's accepted administrative owner source.
+#[test]
+fn responsibility_global_filter_excludes_unselected_hosting_sources() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let first = create(&store, &actor, K::Device, "Administrative host")?;
+    let second = create(&store, &actor, K::Device, "Placement host")?;
+    let guest = create(&store, &actor, K::VirtualMachine, "Unrelated guest")?;
+    responsibility(&store, &actor, &first, Action::Apply, vec![owner("other")])?;
+    responsibility(
+        &store,
+        &actor,
+        &second,
+        Action::Apply,
+        vec![owner("selected")],
+    )?;
+    let mut source = connect(&store, &guest, &first, wire::RelationKind::RunsOn)?;
+    responsibility(
+        &store,
+        &actor,
+        &guest,
+        Action::Apply,
+        vec![api::ResponsibilityAssignment {
+            facet: Facet::ClaimedOwner as i32,
+            mode: Mode::Inherit as i32,
+            source_relation: Some(source.relation_id.clone()),
+            source_revision: Some(source.revision),
+            ..Default::default()
+        }],
+    )?;
+    source.revision += 1;
+    source.authority_id = omloom_contracts::ids::AuthorityId::generate().to_string();
+    store.save_relation(
+        &admit(wire::record::Body::Relation(source)),
+        Some(1),
+        "source-changed",
+        100,
+    )?;
+    connect(&store, &guest, &second, wire::RelationKind::RunsOn)?;
+    let before = store.usage()?;
+    let start = std::time::Instant::now();
+    let result = call(
+        &store,
+        &actor,
+        Command::Query(api::Query {
+            responsibility: Some(api::ResponsibilityFilter {
+                facet: Facet::ClaimedOwner as i32,
+                issuer: "company.example".into(),
+                subject: "selected".into(),
+            }),
+            ..query()
+        }),
+    );
+    eprintln!(
+        "global selected-source query: {:?}, logical bytes {}",
+        start.elapsed(),
+        before.bytes.iter().sum::<u64>()
+    );
+    let Reply::Page(page) = result? else {
+        panic!("page");
+    };
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].target.as_ref(), Some(&second));
+    assert_eq!(store.usage()?, before);
+    // The actually selected source is still stale and must not become a complete count.
+    assert!(matches!(
+        call(
+            &store,
+            &actor,
+            Command::Query(api::Query {
+                responsibility: Some(api::ResponsibilityFilter {
+                    facet: Facet::ClaimedOwner as i32,
+                    issuer: "company.example".into(),
+                    subject: "other".into(),
+                }),
+                ..query()
+            })
+        ),
+        Err(Error::Incomplete)
+    ));
+    assert_eq!(store.usage()?, before);
     Ok(())
 }
 

@@ -115,7 +115,12 @@ test('personal registrar owner requests retain exact changes without claiming pr
       await dialog.getByRole('button',{name:'Save account metadata',exact:true}).click();await expect(dialog).toBeHidden();
       await page.getByRole('button',{name:'Bind selected resource',exact:true}).click();dialog=page.getByRole('dialog');
       await dialog.getByLabel('Find resource',{exact:true}).fill(`Company domain ${width}`);await dialog.getByRole('button',{name:'Find resources',exact:true}).click();
-      await dialog.getByRole('button',{name:new RegExp(`Company domain ${width}`)}).click();await dialog.getByRole('button',{name:'Save binding',exact:true}).click();await expect(dialog).toBeHidden();
+      await dialog.getByRole('button',{name:new RegExp(`Company domain ${width}`)}).click();
+      await dialog.getByRole('button',{name:'Review binding',exact:true}).click();
+      dialog=page.getByRole('dialog',{name:'Review account binding',exact:true});
+      await expect(dialog.getByRole('region',{name:'Selected relationship context'})).toContainText(`Company domain ${width}`);
+      await expect(dialog.getByRole('region',{name:'Selected relationship context'})).toContainText(`Founder registrar ${width}`);
+      await dialog.getByRole('button',{name:'Save binding',exact:true}).click();await expect(dialog).toBeHidden();
       await page.getByRole('button',{name:'Edit account controller',exact:true}).click();dialog=page.getByRole('dialog');
       await dialog.getByLabel('Party kind',{exact:true}).selectOption(String(m.PartyKind.INDIVIDUAL));
       await dialog.getByLabel('Party namespace',{exact:true}).fill('people.example');await dialog.getByLabel('Party identity',{exact:true}).fill('founder');await dialog.getByLabel('Party label',{exact:true}).fill('Founder');
@@ -143,6 +148,33 @@ test('personal registrar owner requests retain exact changes without claiming pr
       await page.getByRole('button',{name:`Company domain ${width} · Needs independent verification`,exact:true}).click();await expect(page.getByRole('dialog').getByText(`Company-managed domain ${width}`,{exact:true})).toBeVisible();
       await page.getByRole('dialog').getByRole('button',{name:'Close dialog',exact:true}).click();
     }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
+test('partial account metadata cannot be cleared by a write-only replacement form',async({page})=>{
+  // Hidden metadata is absent from replies, so a whole-record editor must not turn it into a clear.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-account-fields-'));let server=await host(dir);
+  try {
+    const {m,rpc}=await workspaceClient(server.url);
+    const account=(await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.PROVIDER_ACCOUNT,changes:[{name:'name',value:{oneofKind:'text',text:'Partially disclosed account'}}]})})).mutation.targets[0];
+    const binding=account.assetId;
+    await rpc({oneofKind:'externalAccount',externalAccount:m.ExternalAccount.create({target:account,expected:1n,metadata:{issuer:'provider.example',subject:'selected-account',kind:m.ExternalAccountKind.ADMINISTRATION,delegation:m.AccountDelegation.OWNER_ONLY,credentialBindingId:binding}})},account);
+    await server.stop();
+    const grants=join(dir,'grants.json');
+    await writeFile(grants,JSON.stringify([{selection:{scope:'all'},read:{mode:'selected',fields:['name','issuer','subject','account_kind','delegation','login','sender','recovery_route','account.bindings','account.requests']},write:{mode:'all'},writable:true}]));
+    server=await host(dir,'operator',grants);
+    for(const width of [1440,390]) {
+      await page.setViewportSize({width,height:900});
+      await page.goto(`${server.url}/#/?view=0&asset=${account.assetId}&incarnation=${account.incarnation}`);
+      const panel=page.getByRole('region',{name:'External account',exact:true});
+      await expect(panel.getByText('provider.example',{exact:true})).toBeVisible();
+      await expect(panel.getByRole('button',{name:'Edit account metadata',exact:true})).toHaveCount(0);
+      await expect(panel).not.toContainText(binding);
+    }
+    await server.stop();server=await host(dir);
+    const full=await workspaceClient(server.url);
+    const saved=(await full.rpc({oneofKind:'externalAccount',externalAccount:full.m.ExternalAccount.create({target:account})},account)).externalAccount;
+    expect(saved.metadata.credentialBindingId).toBe(binding);
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
 });
 
