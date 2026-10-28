@@ -101,43 +101,7 @@ impl Graph {
                     }
                 }
                 if !bindings.is_empty() {
-                    let keys = bindings.keys().map(text).collect();
-                    let rows=tx.raw("UNWIND $keys AS key MATCH (r:OmRow {key:key})-[:OmRelationFrom|OmRelationTo]-(p:OmRow) WHERE p.parent='assets' RETURN {key:r.key,asset:r.asset,incarnation:r.incarnation,to_asset:r.to_asset,to_incarnation:r.to_incarnation,kind:r.kind,revision:r.revision,authority:r.authority} AS relation, {asset:p.asset,incarnation:p.incarnation,kind:p.kind} AS source LIMIT 513",params([("keys",Value::Array(keys))]).ok_or(Error::Corrupt)?)?;
-                    if rows.len() > 512 || rows.len() > MAX_EDGES - edges {
-                        return Err(Error::Limit);
-                    }
-                    edges += rows.len();
-                    for mut row in rows {
-                        let (Some(Value::Map(relation)), Some(Value::Map(source))) =
-                            (row.remove("relation"), row.remove("source"))
-                        else {
-                            return Err(Error::Corrupt);
-                        };
-                        let parent = super::super::super::target(&source)?;
-                        let relation = inventory::relation_projection(&relation)?;
-                        let parent_kind =
-                            wire::AssetKind::try_from(number(&source, "kind")? as i32)
-                                .map_err(|_| Error::Corrupt)?;
-                        for child in bindings
-                            .get(&format!("relation/{}", relation.relation_id))
-                            .ok_or(Error::Corrupt)?
-                        {
-                            let node = graph.nodes.get_mut(child).ok_or(Error::Corrupt)?;
-                            let Some(child_row) = &node.row else {
-                                continue;
-                            };
-                            let child_kind =
-                                wire::AssetKind::try_from(number(child_row, "kind")? as i32)
-                                    .map_err(|_| Error::Corrupt)?;
-                            if qualified(*child, child_kind, parent, parent_kind, &relation, true)?
-                            {
-                                node.sources.insert(
-                                    relation.relation_id.clone(),
-                                    (relation.revision, parent),
-                                );
-                            }
-                        }
-                    }
+                    graph.load_sources(tx, &bindings, &mut edges)?;
                 }
                 for (target, mask) in chunk {
                     let node = graph.nodes.get(target).ok_or(Error::Corrupt)?;
@@ -177,6 +141,73 @@ impl Graph {
             return Err(Error::Limit);
         }
         Ok(graph)
+    }
+    fn load_sources(
+        &mut self,
+        tx: &Tx<'_>,
+        bindings: &BTreeMap<String, BTreeSet<AssetRef>>,
+        edges: &mut usize,
+    ) -> Result<()> {
+        let keys = bindings.keys().map(text).collect();
+        let rows = tx.query(
+            "UNWIND $keys AS key MATCH (r:OmRow {key:key}) RETURN properties(r) AS p LIMIT 257",
+            params([("keys", Value::Array(keys))]),
+        )?;
+        if rows.len() > 256 || rows.len() > MAX_EDGES - *edges {
+            return Err(Error::Limit);
+        }
+        *edges += rows.len();
+        let mut parents = BTreeSet::new();
+        let mut relations = Vec::with_capacity(rows.len());
+        for row in rows {
+            let relation = inventory::relation_projection(&row)?;
+            let from = parse_target(relation.from.as_ref())?;
+            let to = parse_target(relation.to.as_ref())?;
+            let children = bindings
+                .get(&format!("relation/{}", relation.relation_id))
+                .ok_or(Error::Corrupt)?;
+            for child in children {
+                if *child == from {
+                    parents.insert(to);
+                } else if *child == to {
+                    parents.insert(from);
+                }
+            }
+            relations.push((relation, from, to, children));
+        }
+        let keys = parents
+            .iter()
+            .map(|target| text(asset_key(*target)))
+            .collect();
+        let mut kinds = BTreeMap::new();
+        for row in tx.query("UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN {asset:n.asset,incarnation:n.incarnation,kind:n.kind} AS p", params([("keys", Value::Array(keys))]))? {
+            kinds.insert(super::super::super::target(&row)?, wire::AssetKind::try_from(number(&row, "kind")? as i32).map_err(|_| Error::Corrupt)?);
+        }
+        for (relation, from, to, children) in relations {
+            for child in children {
+                let parent = if *child == from {
+                    to
+                } else if *child == to {
+                    from
+                } else {
+                    continue;
+                };
+                let Some(parent_kind) = kinds.get(&parent) else {
+                    continue;
+                };
+                let node = self.nodes.get_mut(child).ok_or(Error::Corrupt)?;
+                let Some(row) = &node.row else {
+                    continue;
+                };
+                let child_kind = wire::AssetKind::try_from(number(row, "kind")? as i32)
+                    .map_err(|_| Error::Corrupt)?;
+                if qualified(*child, child_kind, parent, *parent_kind, &relation, true)? {
+                    node.sources
+                        .insert(relation.relation_id.clone(), (relation.revision, parent));
+                }
+            }
+        }
+        Ok(())
     }
     fn parent(
         node: &Node,
