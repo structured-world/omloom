@@ -180,6 +180,13 @@ impl Store {
             _ => return Err(Error::Conflict),
         }
         let children = tx.children(&key)?;
+        if asset.kind != wire::AssetKind::Container as i32
+            && old.as_ref().is_some_and(|p| {
+                p.get("kind").and_then(Value::as_int) == Some(wire::AssetKind::Container as i64)
+            })
+        {
+            return Err(Error::Conflict);
+        }
         if old
             .as_ref()
             .is_some_and(|p| p.get("kind").and_then(Value::as_int) != Some(i64::from(asset.kind)))
@@ -247,11 +254,13 @@ impl Store {
             })
             .collect::<Result<_>>()?;
         validate_evidence(asset, &children, &by_key)?;
+        tx.validate_full_software_asset(target, asset)?;
         let mut intent_changed = old.as_ref().is_none_or(|p| {
             p.get("kind") != Some(&Value::Int(asset.kind.into()))
                 || p.get("adoption") != Some(&Value::Int(asset.adoption.into()))
         });
         let mut keep = std::collections::BTreeSet::new();
+        let mut runtime_identity_changed = false;
         for intended in &asset.intended {
             let field = intended.field.as_ref().ok_or(Error::Invalid)?;
             let child = format!("{key}/intent/{}", field.name);
@@ -265,6 +274,15 @@ impl Store {
                 continue;
             }
             let mut p = field_props(field)?;
+            if asset.kind == wire::AssetKind::Container as i32
+                && matches!(
+                    field.name.as_str(),
+                    "runtime_object_id" | "runtime_lifetime"
+                )
+                && !previous.is_some_and(|p| field_matches(field, p))
+            {
+                runtime_identity_changed = true;
+            }
             p.insert("layer".into(), text("intent"));
             p.insert("authority".into(), text(&intended.authority_id));
             intent_changed |= tx.put_against(&child, &key, Class::Inventory, p, previous)?;
@@ -391,6 +409,9 @@ impl Store {
             ]));
             workspace::hot_fields(asset, &mut data);
             tx.put_against(&key, "assets", Class::Inventory, data, old.as_ref())?;
+            if runtime_identity_changed {
+                tx.bind_container_runtime(target, None)?;
+            }
             tx.audit(&key, actor, "inventory.accepted", revision, now)?;
         }
         tx.commit()?;
@@ -628,6 +649,7 @@ impl Tx<'_> {
         if !compatible(from_kind, to_kind, kind) {
             return Err(Error::Invalid);
         }
+        self.check_software_relation(from, from_kind, kind, &relation.relation_id)?;
         if kind == wire::RelationKind::RunsOn
             && from_kind == wire::AssetKind::VirtualMachine
             && to_kind == wire::AssetKind::SoftwareInstallation
@@ -640,6 +662,9 @@ impl Tx<'_> {
         let old = self.get(&key)?;
         if old.as_ref().map(|p| number(p, "revision")).transpose()? != expected {
             return Err(Error::Conflict);
+        }
+        if let Some(old) = &old {
+            self.check_software_relation_replacement(old, from, from_kind, to, kind)?;
         }
         let placement = match kind {
             wire::RelationKind::InstalledIn => Some((from, to)),
@@ -672,6 +697,9 @@ impl Tx<'_> {
             return expected.ok_or(Error::Corrupt);
         }
         let revision = expected.unwrap_or(0).checked_add(1).ok_or(Error::Limit)?;
+        if kind == wire::RelationKind::RunsOn && from_kind == wire::AssetKind::Container {
+            self.bind_container_runtime(from, Some(to))?;
+        }
         data.insert("revision".into(), int(revision)?);
         let source_changed = old.as_ref().is_none_or(|p| {
             p.get("asset") != data.get("asset") || p.get("incarnation") != data.get("incarnation")
@@ -825,11 +853,16 @@ pub(super) fn compatible(
                 | (K::Service, K::Interface | K::AddressReference)
                 | (
                     K::SoftwareInstallation,
-                    K::Interface | K::AddressReference | K::Service
+                    K::Interface | K::AddressReference | K::Service | K::SoftwareInstallation
                 )
                 | (K::Device | K::VirtualMachine, K::SoftwareInstallation)
                 | (K::Service, K::SoftwareInstallation)
                 | (K::Service, K::ProviderAccount)
+                | (K::Workload, K::Container | K::Service)
+                | (
+                    K::Container,
+                    K::Service | K::Interface | K::SoftwareInstallation
+                )
         ),
         R::HasPort => matches!((from, to), (K::Device, K::Port)),
         R::Carries => matches!((from, to), (K::Port, K::Interface)),
@@ -839,6 +872,7 @@ pub(super) fn compatible(
             (from, to),
             (K::VirtualMachine, K::Device | K::SoftwareInstallation)
                 | (K::Service, K::Device | K::VirtualMachine)
+                | (K::Workload | K::Container, K::SoftwareInstallation)
         ),
         R::StoredOn => matches!((from, to), (K::VirtualMachine, K::Storage)),
         R::On => matches!(
@@ -856,6 +890,8 @@ pub(super) fn compatible(
         ),
         R::MemberOf => matches!((from, to), (K::Interface, K::Lag) | (K::Device, K::Cluster)),
         R::DependsOn => matches!((from, to), (K::Service, K::Service | K::Device)),
+        R::ReleaseOf => from == K::SoftwareRelease && to == K::SoftwareProduct,
+        R::InstalledRelease => from == K::SoftwareInstallation && to == K::SoftwareRelease,
         R::Unspecified => false,
     }
 }

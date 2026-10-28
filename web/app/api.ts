@@ -1,6 +1,7 @@
 import { GrpcWebFetchTransport } from '@protobuf-ts/grpcweb-transport';
 import { Request, Workspace, FieldType, type Reply, type WorkingContext } from '../src/generated/omloom/v1/workspace';
 import { AssetKind, NullValue, type Field, type AssetRef } from '../src/generated/omloom/v1/contracts';
+import { softwareChoiceLabel } from './software-fields';
 export * as model from '../src/generated/omloom/v1/workspace';
 export { AssetKind, RelationKind, NullValue, OperationState, EffectOutcome } from '../src/generated/omloom/v1/contracts';
 export type { Field, AssetRef, Relation } from '../src/generated/omloom/v1/contracts';
@@ -27,7 +28,7 @@ export function typedField(name: string, type: FieldType, value: string, clear =
 export function display(field: Field | undefined): string {
   if (field?.value.oneofKind === 'clear') return '(cleared)';
   if (field?.value.oneofKind === 'text' && field.value.text === '') return '(empty)';
-  return input(field);
+  return field ? softwareChoiceLabel(field.name, input(field)) : '';
 }
 export function input(field: Field | undefined): string {
   const v = field?.value;

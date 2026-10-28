@@ -41,6 +41,14 @@ enum AssetKind {
   ASSET_KIND_DOMAIN = 23;
   // Selected external administration or workload account, without credentials.
   ASSET_KIND_PROVIDER_ACCOUNT = 24;
+  // Private reusable product definition, independent of any installed instance.
+  ASSET_KIND_SOFTWARE_PRODUCT = 25;
+  // Optional reusable runtime definition; version labels have no implied ordering.
+  ASSET_KIND_SOFTWARE_RELEASE = 26;
+  // Accepted deployment intent, independent of replaceable runtime instances.
+  ASSET_KIND_WORKLOAD = 27;
+  // Concrete container lifetime; a name, image or published port is not its identity.
+  ASSET_KIND_CONTAINER = 28;
 }
 
 // Scoped provider identity is matching evidence, never authority.
@@ -207,6 +215,37 @@ enum RelationKind {
   RELATION_KIND_MANAGES = 12;
   RELATION_KIND_MEMBER_OF = 13;
   RELATION_KIND_DEPENDS_ON = 14;
+  // Reusable release to its product. This never propagates responsibility or access.
+  RELATION_KIND_RELEASE_OF = 15;
+  // Installation to its selected release. Catalog knowledge never proves installation.
+  RELATION_KIND_INSTALLED_RELEASE = 16;
+}
+
+// Concrete installation purpose, independently of product or display name.
+enum InstallationKind {
+  INSTALLATION_KIND_UNSPECIFIED = 0;
+  INSTALLATION_KIND_OPERATING_SYSTEM = 1;
+  INSTALLATION_KIND_BOOT_FIRMWARE = 2;
+  INSTALLATION_KIND_MODULE_FIRMWARE = 3;
+  INSTALLATION_KIND_APPLICATION = 4;
+  INSTALLATION_KIND_CONTAINER_RUNTIME = 5;
+}
+
+enum WorkloadKind {
+  WORKLOAD_KIND_UNSPECIFIED = 0;
+  WORKLOAD_KIND_STANDALONE = 1;
+  WORKLOAD_KIND_COMPOSE = 2;
+}
+
+// Accepted inventory lifecycle, not an assertion about current health or erasure.
+enum AssetLifecycle {
+  ASSET_LIFECYCLE_UNSPECIFIED = 0;
+  ASSET_LIFECYCLE_PLANNED = 1;
+  ASSET_LIFECYCLE_IN_USE = 2;
+  ASSET_LIFECYCLE_RETIRED = 3;
+  ASSET_LIFECYCLE_DISPOSED = 4;
+  ASSET_LIFECYCLE_RECEIVED = 5;
+  ASSET_LIFECYCLE_INSTALLED = 6;
 }
 
 message Relation {

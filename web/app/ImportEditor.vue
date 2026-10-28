@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
 import Dialog from './Dialog.vue';
+import { softwareFields } from './software-fields';
 import { call, model, key, label, display, AssetKind } from './api';
 const props = defineProps<{ definitions: model.Definition[]; working: model.WorkingContext }>();
 const emit = defineEmits<{ close: []; saved: [] }>();
@@ -17,7 +18,7 @@ onMounted(async () => { try {
   if (parents.value.length === 1) parent.value = key(parents.value[0]!.target);
 } catch (e) { error.value = String(e); } });
 const mappings = ref([{ source: 'name', field: 'name' }]);
-const destinations = computed(() => [{ id: 'name', name: 'Name' }, { id: 'description', name: 'Description' }, { id: 'serial', name: 'Serial number' }, { id: 'address', name: 'IP address' }, { id: 'prefix_length', name: 'Known prefix length' }, { id: 'meaning', name: 'Address meaning' }, { id: 'zone', name: 'Known local IPv6 zone' }, ...props.definitions.filter(d => !d.retired && d.kinds.includes(kind.value))].filter(f => choice.value?.fields.includes(f.id)));
+const destinations = computed(() => [{ id: 'name', name: 'Name' }, { id: 'description', name: 'Description' }, { id: 'serial', name: 'Serial number' }, { id: 'address', name: 'IP address' }, { id: 'prefix_length', name: 'Known prefix length' }, { id: 'meaning', name: 'Address meaning' }, { id: 'zone', name: 'Known local IPv6 zone' }, ...softwareFields(choice.value?.fields ?? []), ...props.definitions.filter(d => !d.retired && d.kinds.includes(kind.value))].filter(f => choice.value?.fields.includes(f.id)));
 async function run(apply: boolean) {
   error.value = '';
   try {

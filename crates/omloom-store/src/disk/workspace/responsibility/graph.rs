@@ -18,6 +18,16 @@ pub(super) struct Graph {
 }
 impl Graph {
     pub fn load(tx: &Tx<'_>, masks: BTreeMap<AssetRef, u8>) -> Result<Self> {
+        Self::load_projection::<true>(tx, masks)
+    }
+    pub fn load_owner_summary(tx: &Tx<'_>, masks: BTreeMap<AssetRef, u8>) -> Result<Self> {
+        debug_assert!(masks.values().all(|mask| *mask == 1));
+        Self::load_projection::<false>(tx, masks)
+    }
+    fn load_projection<const DETAILS: bool>(
+        tx: &Tx<'_>,
+        masks: BTreeMap<AssetRef, u8>,
+    ) -> Result<Self> {
         let mut graph = Self {
             nodes: BTreeMap::new(),
         };
@@ -63,8 +73,24 @@ impl Graph {
                             node.row = Some(row);
                         }
                     }
-                    let rows = tx.query("UNWIND $keys AS key MATCH (n:OmRow {parent:key}) WHERE n.facet IS NOT NULL RETURN {parent:n.parent,facet:n.facet,mode:n.mode,issuer:n.issuer,subject:n.subject,party_kind:n.party_kind,name:n.name,contact:n.contact,source_relation:n.source_relation,source_binding_revision:n.source_binding_revision} AS p LIMIT 257", params([("keys", Value::Array(keys))]))?;
-                    if rows.len() > chunk.len() * FACETS.len() {
+                    let per_root = if DETAILS { FACETS.len() } else { 1 };
+                    let limit = int((chunk.len() * per_root + 1) as u64)?;
+                    let values = if DETAILS {
+                        params([("keys", Value::Array(keys)), ("limit", limit)])
+                    } else {
+                        params([
+                            ("keys", Value::Array(keys)),
+                            ("limit", limit),
+                            ("facet", Value::Int(Facet::ClaimedOwner as i64)),
+                        ])
+                    };
+                    let query = if DETAILS {
+                        "UNWIND $keys AS key MATCH (n:OmRow {parent:key}) WHERE n.facet IS NOT NULL RETURN {parent:n.parent,facet:n.facet,mode:n.mode,issuer:n.issuer,subject:n.subject,party_kind:n.party_kind,name:n.name,contact:n.contact,source_relation:n.source_relation,source_binding_revision:n.source_binding_revision} AS p LIMIT $limit"
+                    } else {
+                        "UNWIND $keys AS key MATCH (n:OmRow {parent:key}) WHERE n.facet=$facet RETURN {parent:n.parent,facet:n.facet,mode:n.mode,issuer:n.issuer,subject:n.subject,party_kind:n.party_kind,name:n.name,source_relation:n.source_relation,source_binding_revision:n.source_binding_revision} AS p LIMIT $limit"
+                    };
+                    let rows = tx.query(query, values)?;
+                    if rows.len() > chunk.len() * per_root {
                         return Err(Error::Corrupt);
                     }
                     for row in rows {
@@ -264,18 +290,35 @@ impl Graph {
         target: AssetRef,
         facet: Facet,
     ) -> Result<api::EffectiveResponsibility> {
+        self.resolve_projection::<true>(context, target, facet)
+    }
+    pub fn resolve_summary(
+        &self,
+        context: &Context,
+        target: AssetRef,
+        facet: Facet,
+    ) -> Result<api::EffectiveResponsibility> {
+        self.resolve_projection::<false>(context, target, facet)
+    }
+    fn resolve_projection<const DETAILS: bool>(
+        &self,
+        context: &Context,
+        target: AssetRef,
+        facet: Facet,
+    ) -> Result<api::EffectiveResponsibility> {
         let row = self
             .nodes
             .get(&target)
             .and_then(|n| n.row.as_ref())
             .ok_or(Error::Missing)?;
         let field = field_name(facet)?;
-        let contact_visible = context.field(
-            target,
-            number(row, "kind")? as i32,
-            &format!("{field}.contact"),
-            false,
-        );
+        let contact_visible = DETAILS
+            && context.field(
+                target,
+                number(row, "kind")? as i32,
+                &format!("{field}.contact"),
+                false,
+            );
         let source_visible = context.field(target, number(row, "kind")? as i32, "relations", false);
         let mut result = api::EffectiveResponsibility {
             facet: facet as i32,
@@ -313,7 +356,8 @@ impl Graph {
                         if contact_visible {
                             result.contact = assignment.contact.clone();
                         }
-                        if (current == target || source_visible)
+                        if DETAILS
+                            && (current == target || source_visible)
                             && context.field(current, number(row, "kind")? as i32, "name", false)
                             && (current == target
                                 || context.field(

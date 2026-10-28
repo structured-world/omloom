@@ -954,6 +954,15 @@ export interface ItemContext {
      * @generated from protobuf field: repeated omloom.workspace.v1.SocketBind endpoints = 6
      */
     endpoints: SocketBind[];
+    /**
+     * Current claimed-owner projection for a visible workload/container on this
+     * page. Omitted when that facet is undisclosable. A missing party with UNKNOWN
+     * differs from an explicit UNASSIGNED stop. Contacts and source identities
+     * are not included; this projection is never persisted or an access grant.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.EffectiveResponsibility responsibility = 7
+     */
+    responsibility?: EffectiveResponsibility;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Read
@@ -2992,7 +3001,14 @@ export enum ResponsibilityFacet {
     /**
      * @generated from protobuf enum value: RESPONSIBILITY_FACET_ACCOUNT_CONTROLLER = 4;
      */
-    ACCOUNT_CONTROLLER = 4
+    ACCOUNT_CONTROLLER = 4,
+    /**
+     * Explicitly reviewed creator attribution, never inferred from deployment labels,
+     * directory ownership or the person recording inventory. Never inherits.
+     *
+     * @generated from protobuf enum value: RESPONSIBILITY_FACET_CREATOR = 5;
+     */
+    CREATOR = 5
 }
 /**
  * @generated from protobuf enum omloom.workspace.v1.AssignmentMode
@@ -3643,7 +3659,8 @@ class ItemContext$Type extends MessageType<ItemContext> {
             { no: 2, name: "owners", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => OwnerContext },
             { no: 3, name: "addresses", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
             { no: 5, name: "alternative_owners", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => OwnerContext },
-            { no: 6, name: "endpoints", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => SocketBind }
+            { no: 6, name: "endpoints", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => SocketBind },
+            { no: 7, name: "responsibility", kind: "message", T: () => EffectiveResponsibility }
         ]);
     }
 }

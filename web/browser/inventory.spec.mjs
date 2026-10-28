@@ -48,6 +48,120 @@ async function workspaceClient(url) {
   return { m, rpc };
 }
 
+test('optional runtime definitions and workload facts work on desktop and phone', async ({ page }) => {
+  // Real forms and disk-backed calls preserve separate catalog, installation,
+  // deployment and runtime lifetimes without inferring launch commands or owners.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-software-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 }); await page.goto(`${server.url}/#/?view=4`);
+      await expect(page.getByRole('region', { name: 'Resource details' })).toBeHidden();
+      const product = await create(page, `Private product ${width}`, 'SOFTWARE_PRODUCT');
+      for (const [suffix, version] of [['train A', 'Vendor 1.2 (LTS)'], ['train B', 'r2026 / build 7']]) {
+        await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
+        await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'software release' });
+        await dialog.getByLabel('Name', { exact: true }).fill(`${suffix} ${width}`);
+        await dialog.getByLabel('Version change', { exact: true }).selectOption('set');
+        await dialog.getByLabel('Version', { exact: true }).fill(version);
+        await expect(dialog.getByLabel('Version interpretation', { exact: true })).toHaveCount(0);
+        await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `${suffix} ${width}`, exact: true })).toBeVisible();
+        const hash = new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
+        const target = { assetId: hash.get('asset'), incarnation: hash.get('incarnation') };
+        await rpc({ oneofKind: 'relation', relation: m.Relationship.create({ relation: { from: target, to: { assetId: product.asset_id, incarnation: product.incarnation }, kind: m.RelationKind.RELEASE_OF } }) });
+      }
+      await page.reload();
+      await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('r2026 / build 7');
+      await expect(page.getByRole('region', { name: 'Release comparison' })).toHaveCount(0);
+      const workload = await create(page, `Research workload ${width}`, 'WORKLOAD');
+      await page.getByRole('button', { name: 'Edit resource', exact: true }).click();
+      const editor = page.getByRole('dialog');
+      await editor.getByLabel('Deployment kind change', { exact: true }).selectOption('set');
+      await editor.getByLabel('Deployment kind', { exact: true }).selectOption('WORKLOAD_KIND_COMPOSE');
+      await editor.getByLabel('Ordered Compose file references (one per line) change', { exact: true }).selectOption('set');
+      await editor.getByLabel('Ordered Compose file references (one per line)', { exact: true }).fill('/project/compose.yml\n/project/local.yml');
+      await editor.getByRole('button', { name: 'Save resource', exact: true }).click();
+      await expect(editor).toBeHidden();
+      await page.reload();
+      await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('/project/compose.yml');
+      await expect(page.getByRole('region', { name: 'Ownership and responsibility' }).locator('dt').filter({ hasText: /^Claimed owner$/ }).locator('+ dd')).toHaveText('unknown');
+      await expect(page.getByRole('button', { name: /start workload|stop workload/i })).toHaveCount(0);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      expect(workload.asset_id).toBeTruthy();
+      await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
+      await expect(page.getByRole('region', { name: 'Resource details' })).toBeHidden();
+      await page.getByRole('button', { name: 'Add filter', exact: true }).click();
+      const filter = page.getByRole('dialog');
+      await filter.getByLabel('Field', { exact: true }).selectOption('workload_kind');
+      await filter.getByRole('combobox', { name: 'Equals', exact: true }).selectOption({ label: 'compose' });
+      await filter.getByRole('button', { name: 'Apply filter', exact: true }).click();
+      await expect(filter).toBeHidden();
+      const inventory = page.getByRole('region', { name: 'Inventory', exact: true });
+      await expect(inventory.getByRole('button', { name: `Research workload ${width}`, exact: true })).toBeVisible();
+      await expect(inventory.getByRole('button', { name: `Private product ${width}`, exact: true })).toHaveCount(0);
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('runtime context creates workloads and their containers without flattening the inventory', async ({ page }) => {
+  // A runtime lists deployments, then each deployment lists its owned instances.
+  // Runtime identity links do not pull all instances into the enclosing list.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-runtime-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const runtime = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.SOFTWARE_INSTALLATION, changes: [{ name: 'name', value: { oneofKind: 'text', text: `Runtime ${width}` } }, { name: 'installation_kind', value: { oneofKind: 'text', text: 'INSTALLATION_KIND_CONTAINER_RUNTIME' } }] }) })).mutation.targets[0];
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${server.url}/#/?view=4&scope=${runtime.assetId}&scopeInc=${runtime.incarnation}`);
+      await expect(page.getByRole('region', { name: 'Resource details' })).toBeHidden();
+      await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+      let editor = page.getByRole('dialog');
+      await editor.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'workload' });
+      await expect(editor.getByRole('option', { name: 'device', exact: true })).toHaveCount(0);
+      await expect(editor.getByRole('option', { name: 'port', exact: true })).toHaveCount(0);
+      await editor.getByLabel('Name', { exact: true }).fill(`Deployment ${width}`);
+      await editor.getByRole('button', { name: 'Save resource', exact: true }).click(); await expect(editor).toBeHidden();
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `Deployment ${width}`, exact: true })).toBeVisible();
+      const deploymentHash = new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
+      const deployment = { assetId: deploymentHash.get('asset'), incarnation: deploymentHash.get('incarnation') };
+      const current = await rpc({ oneofKind: 'read', read: m.Read.create({ target: deployment }) });
+      await rpc({ oneofKind: 'responsibility', responsibility: m.Responsibility.create({ target: deployment, expected: current.detail.item.revision, action: m.ResponsibilityAction.APPLY,
+        changes: [{ facet: m.ResponsibilityFacet.CLAIMED_OWNER, mode: m.AssignmentMode.EXPLICIT, party: { issuer: 'fixture.company', subject: `team-${width}`, name: `Team ${width}`, kind: m.PartyKind.TEAM } }] }) });
+      await page.reload();
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `Deployment ${width}`, exact: true })).toBeVisible();
+      await page.getByRole('button', { name: '+ Create resource', exact: true }).first().click();
+      editor = page.getByRole('dialog');
+      await editor.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'container' });
+      await editor.getByLabel('Name', { exact: true }).fill(`Instance ${width}`);
+      await editor.getByLabel('Runtime-local container ID change', { exact: true }).selectOption('set');
+      await editor.getByLabel('Runtime-local container ID', { exact: true }).fill(`container-${width}`);
+      await editor.getByLabel('Runtime lifetime evidence change', { exact: true }).selectOption('set');
+      await editor.getByLabel('Runtime lifetime evidence', { exact: true }).fill(`creation-${width}`);
+      await editor.getByRole('button', { name: 'Save resource', exact: true }).click(); await expect(editor).toBeHidden();
+      await expect(page.getByRole('region', { name: 'Resource details' })).toContainText(`container-${width}`);
+      const inheritedOwner = page.getByRole('region', { name: 'Ownership and responsibility' }).locator('dt').filter({ hasText: /^Claimed owner$/ }).locator('+ dd');
+      await expect(inheritedOwner).toContainText(`Team ${width}`);
+      await expect(inheritedOwner).toContainText('inherited');
+      const hash = new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
+      await rpc({ oneofKind: 'relation', relation: m.Relationship.create({ relation: { from: { assetId: hash.get('asset'), incarnation: hash.get('incarnation') }, to: runtime, kind: m.RelationKind.RUNS_ON } }) });
+      await page.goto(`${server.url}/#/?view=4&scope=${runtime.assetId}&scopeInc=${runtime.incarnation}`);
+      await expect(page.getByRole('region', { name: 'Resource details' })).toBeHidden();
+      const inventory = page.getByRole('region', { name: 'Inventory', exact: true });
+      await expect(inventory.getByRole('button', { name: `Deployment ${width}`, exact: true })).toBeVisible();
+      await expect(inventory.getByRole('button', { name: `Instance ${width}`, exact: true })).toHaveCount(0);
+      await page.getByRole('navigation', { name: 'Resource categories' }).getByRole('button', { name: 'Workloads', exact: true }).click();
+      await inventory.getByRole('button', { name: `Show resources owned by Team ${width}`, exact: true }).click();
+      await expect(inventory.getByRole('button', { name: `Deployment ${width}`, exact: true })).toBeVisible();
+      expect(JSON.parse(new URLSearchParams(new URL(page.url()).hash.split('?')[1]).get('responsibility')).subject).toBe(`team-${width}`);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('responsibility editing, inherited components and typed import work on desktop and phone', async ({ page }) => {
   // A real component inherits its accepted source; an explicit stop survives parent edits and reload.
   const dir=await mkdtemp(join(tmpdir(),'omloom-responsibility-')); const server=await host(dir);
@@ -258,6 +372,7 @@ test('a VLAN tag requires an initial IP before a creation request is sent', asyn
       await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
       await expect(dialog).toBeHidden();
       expect(mutations).toBe(sent + 1);
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `Address draft ${width}`, exact: true })).toBeVisible();
     }
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
@@ -752,6 +867,28 @@ test('large network evidence pages cross the real transport on desktop and phone
       await expect(page.getByRole('alert')).toHaveCount(0);
     }
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('workload detail opens while the enclosing list is still loading', async ({ page }) => {
+  // A selected resource is independently readable. A slow enclosing page must
+  // not delay its detail or replace it when the older list request completes.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-detail-first-')); const server = await host(dir);
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const target = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.WORKLOAD, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Selected workload' } }] }) })).mutation.targets[0];
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      const request = m.Request.fromBinary(route.request().postDataBuffer().subarray(5));
+      if (request.command.oneofKind === 'query') await held;
+      await route.continue();
+    });
+    await page.goto(`${server.url}/#/?view=4&asset=${target.assetId}&incarnation=${target.incarnation}`);
+    await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: 'Selected workload', exact: true })).toBeVisible();
+    release();
+    await expect(page.getByRole('button', { name: '↻ Refresh', exact: true })).toBeEnabled();
+    await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: 'Selected workload', exact: true })).toBeVisible();
+  } finally { release(); await page.unrouteAll({ behavior: 'wait' }); await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
 
 test('saved mutation reports metadata refresh failure without an unhandled rejection', async ({ page }) => {
@@ -1395,7 +1532,7 @@ test('visible relationship removal keeps its endpoints during navigation on desk
       await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
         const bytes = route.request().postDataBuffer();
         const command = bytes ? m.Request.fromBinary(bytes.subarray(5)).command : undefined;
-        if (!held && command?.oneofKind === 'query' && command.query.focus?.assetId === child.assetId) { held = true; await gate; }
+        if (!held && command?.oneofKind === 'read' && command.read.target?.assetId === child.assetId) { held = true; await gate; }
         await route.continue();
       });
       await page.setViewportSize({ width, height: 900 });

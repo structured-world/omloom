@@ -21,6 +21,7 @@ td, th { padding: 11px 12px; }
 .empty { padding: 30px 20px; }
 .resource-address { font-size: 14px; font-weight: 600; color: #274e58; white-space: normal; overflow-wrap: anywhere; max-width: 420px; }
 .resource-owner { display: block; color: #657b85; white-space: normal; max-width: 420px; overflow-wrap: anywhere; }
+.responsibility-link { max-width: 100%; border: 0; padding: 2px 0; background: transparent; text-align: left; }
 td:has(.resource-owner) .resource-link { font-size: 13px; font-weight: 500; }
 .inventory .context-group { background: #eaf0f1; }
 .inventory .context-group td { padding: 10px 12px; white-space: normal; }

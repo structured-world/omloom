@@ -32,6 +32,10 @@ pub(super) fn ownership_clause(
         K::Port,
         K::Storage,
         K::ProviderAccount,
+        K::SoftwareProduct,
+        K::SoftwareRelease,
+        K::Workload,
+        K::Container,
     ];
     let mut groups = BTreeMap::<(i32, bool, i32), Vec<i32>>::new();
     for parent in kinds {
@@ -326,6 +330,10 @@ pub(super) fn kind_for_view(view: api::View) -> &'static [wire::AssetKind] {
             K::Storage,
             K::Domain,
             K::ProviderAccount,
+            K::SoftwareProduct,
+            K::SoftwareRelease,
+            K::Workload,
+            K::Container,
         ],
     }
 }
@@ -1062,7 +1070,9 @@ impl Store {
             });
         }
         let mut contexts = if query.include_context {
-            tx.item_contexts(context, &rows, &query)?
+            let mut hints = tx.item_contexts(context, &rows, &query)?;
+            tx.workload_ownership(context, &rows, &mut hints)?;
+            hints
         } else {
             Vec::new()
         };
@@ -1526,6 +1536,11 @@ impl Store {
             }
             tx.check_relationship(context, &selection, &existing)?;
             if request.remove {
+                if existing.kind == wire::RelationKind::ReleaseOf as i32
+                    && tx.release_is_installed(parse_target(existing.from.as_ref())?)?
+                {
+                    return Err(Error::Conflict);
+                }
                 let key = format!("relation/{id}");
                 // Each relation owns one edge in each direction. Delete those
                 // exact attachments before removing their metadata row.
@@ -1674,6 +1689,7 @@ impl Tx<'_> {
             }
         }
         self.require_changes(context, target, write.kind, &write.changes)?;
+        self.validate_software_state(target, kind, &write.changes)?;
         if old.is_none()
             && kind == wire::AssetKind::Device
             && write
@@ -1731,6 +1747,16 @@ impl Tx<'_> {
             }
         }
         self.put_against(&key, "assets", Class::Inventory, row, old.as_ref())?;
+        if kind == wire::AssetKind::Container
+            && write.changes.iter().any(|field| {
+                matches!(
+                    field.name.as_str(),
+                    "runtime_object_id" | "runtime_lifetime"
+                )
+            })
+        {
+            self.bind_container_runtime(target, None)?;
+        }
         self.audit(&key, &context.actor, "inventory.accepted", revision, now)?;
         Ok(target)
     }
@@ -1893,6 +1919,7 @@ pub(super) fn validate_column(name: &str, definitions: &[api::Definition]) -> Re
         "binding",
     ]
     .contains(&name)
+        || software::known_field(name)
         || definitions.iter().any(|d| d.id == name && !d.retired)
     {
         Ok(())

@@ -811,7 +811,31 @@ export enum AssetKind {
      *
      * @generated from protobuf enum value: ASSET_KIND_PROVIDER_ACCOUNT = 24;
      */
-    PROVIDER_ACCOUNT = 24
+    PROVIDER_ACCOUNT = 24,
+    /**
+     * Private reusable product definition, independent of any installed instance.
+     *
+     * @generated from protobuf enum value: ASSET_KIND_SOFTWARE_PRODUCT = 25;
+     */
+    SOFTWARE_PRODUCT = 25,
+    /**
+     * Optional reusable runtime definition; version labels have no implied ordering.
+     *
+     * @generated from protobuf enum value: ASSET_KIND_SOFTWARE_RELEASE = 26;
+     */
+    SOFTWARE_RELEASE = 26,
+    /**
+     * Accepted deployment intent, independent of replaceable runtime instances.
+     *
+     * @generated from protobuf enum value: ASSET_KIND_WORKLOAD = 27;
+     */
+    WORKLOAD = 27,
+    /**
+     * Concrete container lifetime; a name, image or published port is not its identity.
+     *
+     * @generated from protobuf enum value: ASSET_KIND_CONTAINER = 28;
+     */
+    CONTAINER = 28
 }
 /**
  * @generated from protobuf enum omloom.v1.NullValue
@@ -923,7 +947,102 @@ export enum RelationKind {
     /**
      * @generated from protobuf enum value: RELATION_KIND_DEPENDS_ON = 14;
      */
-    DEPENDS_ON = 14
+    DEPENDS_ON = 14,
+    /**
+     * Reusable release to its product. This never propagates responsibility or access.
+     *
+     * @generated from protobuf enum value: RELATION_KIND_RELEASE_OF = 15;
+     */
+    RELEASE_OF = 15,
+    /**
+     * Installation to its selected release. Catalog knowledge never proves installation.
+     *
+     * @generated from protobuf enum value: RELATION_KIND_INSTALLED_RELEASE = 16;
+     */
+    INSTALLED_RELEASE = 16
+}
+/**
+ * Concrete installation purpose, independently of product or display name.
+ *
+ * @generated from protobuf enum omloom.v1.InstallationKind
+ */
+export enum InstallationKind {
+    /**
+     * @generated from protobuf enum value: INSTALLATION_KIND_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: INSTALLATION_KIND_OPERATING_SYSTEM = 1;
+     */
+    OPERATING_SYSTEM = 1,
+    /**
+     * @generated from protobuf enum value: INSTALLATION_KIND_BOOT_FIRMWARE = 2;
+     */
+    BOOT_FIRMWARE = 2,
+    /**
+     * @generated from protobuf enum value: INSTALLATION_KIND_MODULE_FIRMWARE = 3;
+     */
+    MODULE_FIRMWARE = 3,
+    /**
+     * @generated from protobuf enum value: INSTALLATION_KIND_APPLICATION = 4;
+     */
+    APPLICATION = 4,
+    /**
+     * @generated from protobuf enum value: INSTALLATION_KIND_CONTAINER_RUNTIME = 5;
+     */
+    CONTAINER_RUNTIME = 5
+}
+/**
+ * @generated from protobuf enum omloom.v1.WorkloadKind
+ */
+export enum WorkloadKind {
+    /**
+     * @generated from protobuf enum value: WORKLOAD_KIND_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: WORKLOAD_KIND_STANDALONE = 1;
+     */
+    STANDALONE = 1,
+    /**
+     * @generated from protobuf enum value: WORKLOAD_KIND_COMPOSE = 2;
+     */
+    COMPOSE = 2
+}
+/**
+ * Accepted inventory lifecycle, not an assertion about current health or erasure.
+ *
+ * @generated from protobuf enum omloom.v1.AssetLifecycle
+ */
+export enum AssetLifecycle {
+    /**
+     * @generated from protobuf enum value: ASSET_LIFECYCLE_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: ASSET_LIFECYCLE_PLANNED = 1;
+     */
+    PLANNED = 1,
+    /**
+     * @generated from protobuf enum value: ASSET_LIFECYCLE_IN_USE = 2;
+     */
+    IN_USE = 2,
+    /**
+     * @generated from protobuf enum value: ASSET_LIFECYCLE_RETIRED = 3;
+     */
+    RETIRED = 3,
+    /**
+     * @generated from protobuf enum value: ASSET_LIFECYCLE_DISPOSED = 4;
+     */
+    DISPOSED = 4,
+    /**
+     * @generated from protobuf enum value: ASSET_LIFECYCLE_RECEIVED = 5;
+     */
+    RECEIVED = 5,
+    /**
+     * @generated from protobuf enum value: ASSET_LIFECYCLE_INSTALLED = 6;
+     */
+    INSTALLED = 6
 }
 /**
  * @generated from protobuf enum omloom.v1.Direction

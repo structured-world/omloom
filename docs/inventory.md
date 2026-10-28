@@ -407,6 +407,84 @@ on failure. Recovery checkpoints and accepted current state do not receive those
 TTLs. Physical engine qualification remains separate from logical row removal;
 see [storage guarantees](storage.md).
 
+## Software and workloads
+
+Use **Services** to record infrastructure execution contexts and adopted workloads.
+OS/firmware installations locate services and logical interfaces; workloads locate
+their current containers and responsibility. Product/release definitions are optional
+references for selected runtime metadata. Open a resource to create its permitted local
+components. A product contains release definitions. A machine keeps its physical
+identity when Windows and Linux are recorded as separate installations; services
+and logical interfaces belong to the corresponding installation. A firmware
+installation belongs to its actual device or component. Changing the booted OS
+does not remove the other installation.
+
+The ordinary field editor, reviewed CSV import, selected columns, typed filters
+and CSV export use these built-in current facts:
+
+| Record | Fields |
+| --- | --- |
+| Product | `publisher`, `raw_name`, `normalization_basis` |
+| Release | `version`, `raw_version`, `edition`, `architecture`, `artifact_digest`, `normalization_basis` |
+| Installation | `installation_kind`, `installation_scope` |
+| Workload | `workload_kind`, `compose_project`, `compose_service`, `compose_files`, `working_directory`, `repository_reference`, `source_revision`, `dockerfile_path`, `invocation_reference`, `image_digest` |
+| Container | `runtime_object_id`, `runtime_lifetime`, `image_digest` |
+
+Optional facts remain unknown when omitted; clearing is explicit. Preserve source
+labels separately from reviewed normalized labels. `normalization_basis` names
+the reviewed source and mapping revision, not an automatic matching rule.
+`compose_files` is an ordered list of at most eight path references, one per line.
+Repository and invocation references exclude credentials, query strings and
+fragments. Image/artifact digests use `sha256:` and 64 hexadecimal digits. These
+records do not store environment dumps, arbitrary command lines or repositories.
+Unknown original invocation is valid.
+
+In **Connections in broader scope**, link a release to its product using
+**release of**, and an installation to its current release using **installed
+release**. A release can have one product; an installation has one current
+release. Update the installation binding for an upgrade, preserving its identity.
+A referenced release's version, edition, architecture and artifact digest
+cannot be rewritten into another release. Reusable definitions remain separate
+from installations and do not prove that software is present or running.
+
+Version labels are opaque current facts and can be unknown. No product, release
+or version is required to record a known service/interface relationship. Version
+interpretation belongs to a qualified adapter for a concrete infrastructure
+capability. The inventory does not rank arbitrary releases, recommend updates,
+collect every installed package or assess vulnerabilities and license compliance.
+
+A workload represents a standalone or Compose deployment. Its **contains** links
+identify owned containers and services; **runs on** links select the actual runtime
+installation. Equal Compose names, image digests, IDs in different runtimes and
+published ports never merge workloads. A recorded container ID/lifetime cannot
+be rewritten into a replacement. Owner/operator use the common responsibility
+card and may inherit through owned components, independently of creator
+attribution and beneficiaries. Creator attribution is explicit and never inherits;
+the person entering inventory is not automatically the deployment's creator.
+Provider accounts may separately bind workloads and containers as consumers.
+Runtime placement and catalog links do not transfer responsibility or access.
+The Workloads category groups the current page by its permitted claimed owners.
+Owner badges filter by the exact party identity; the resulting selection can be
+saved personally or published through the ordinary view workflow. Unknown,
+explicitly unassigned and restricted ownership remain distinct. Only the visible
+page receives a bounded owner projection, without contacts or source-resource
+identities. It is calculated through the common resolver and is not another
+persisted inventory or a grant.
+
+Machines and installations also accept `purpose`, `supplier`, `model`,
+`purchase_reference`, `contract_reference`, `lifecycle`, `lifecycle_date`,
+`warranty_until`, `support_until` and `disposal_reference`. Dates use `YYYY-MM-DD`.
+Lifecycle enum values distinguish planned, received, installed, in-use, retired
+and disposed inventory; they are independent of power, health and verified data
+erasure. Workloads and containers may have their own lifecycle state. Commercial
+and source-path fields retain individual field rights. Contract references contain
+no license keys and do not establish legal compliance or schedule external work.
+
+Facts use the same transactional field authority, edit revision and audit as
+other inventory. Unchanged values do not create payload versions; reads do not
+write a comparison or access history. Adapters and execution capabilities remain
+separately qualified. The development fixture supplies no production identity.
+
 ## Verification
 
 ```sh

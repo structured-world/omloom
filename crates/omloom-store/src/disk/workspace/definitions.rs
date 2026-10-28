@@ -77,7 +77,7 @@ fn validate_definition(d: &api::Definition) -> Result<()> {
     }
     Ok(())
 }
-fn date(s: &str) -> bool {
+pub(super) fn date(s: &str) -> bool {
     if s.len() != 10
         || s.bytes().enumerate().any(|(index, byte)| {
             if index == 4 || index == 7 {
@@ -500,6 +500,9 @@ impl Tx<'_> {
     pub(super) fn validate_field(&self, kind: i32, value: &wire::Field) -> Result<()> {
         if value.name.len() > 100 {
             return Err(Error::Invalid);
+        }
+        if software::known_field(&value.name) {
+            return software::validate_field(kind, value);
         }
         match value.name.as_str() {
             "vlan_tag" => match (wire::AssetKind::try_from(kind), value.value.as_ref()) {

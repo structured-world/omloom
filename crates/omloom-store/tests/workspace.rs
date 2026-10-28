@@ -22,6 +22,8 @@ mod host_network;
 mod projections;
 #[path = "workspace/responsibility.rs"]
 mod responsibility;
+#[path = "workspace/software.rs"]
+mod software;
 #[path = "workspace/views.rs"]
 mod views;
 

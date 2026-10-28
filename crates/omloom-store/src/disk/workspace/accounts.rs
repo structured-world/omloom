@@ -221,7 +221,9 @@ impl Store {
                         Ok(wire::AssetKind::Service
                             | wire::AssetKind::VirtualMachine
                             | wire::AssetKind::Device
-                            | wire::AssetKind::SoftwareInstallation)
+                            | wire::AssetKind::SoftwareInstallation
+                            | wire::AssetKind::Workload
+                            | wire::AssetKind::Container)
                     ),
                     LinkKind::ManagedResource => {
                         endpoint_kind != wire::AssetKind::ProviderAccount as i32

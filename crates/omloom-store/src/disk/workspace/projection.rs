@@ -217,7 +217,7 @@ impl Tx<'_> {
             .map(|r| Ok((target(r)?, r.clone())))
             .collect::<Result<BTreeMap<_, _>>>()?;
         let mut parents: BTreeMap<AssetRef, BTreeSet<AssetRef>> = BTreeMap::new();
-        let mut frontier: BTreeSet<_> = rows.iter().filter(|r| matches!(number(r,"kind").ok(),Some(n) if n==wire::AssetKind::Service as u64 || n==wire::AssetKind::Interface as u64 || n==wire::AssetKind::SoftwareInstallation as u64 || n==wire::AssetKind::AddressReference as u64)).map(|r| string(r,"key")).collect::<Result<_>>()?;
+        let mut frontier: BTreeSet<_> = rows.iter().filter(|r| matches!(number(r,"kind").ok(),Some(n) if n==wire::AssetKind::Service as u64 || n==wire::AssetKind::Interface as u64 || n==wire::AssetKind::SoftwareInstallation as u64 || n==wire::AssetKind::AddressReference as u64 || n==wire::AssetKind::Workload as u64 || n==wire::AssetKind::Container as u64)).map(|r| string(r,"key")).collect::<Result<_>>()?;
         for _ in 0..6 {
             let mut next = BTreeSet::new();
             for (child, parent, _) in self.context_edges(context, &frontier, false)? {
@@ -498,6 +498,7 @@ impl Tx<'_> {
                     alternative_owners: alternatives,
                     addresses: by_owner.get(&t).into_iter().flatten().cloned().collect(),
                     endpoints: endpoints.remove(&t).unwrap_or_default(),
+                    responsibility: None,
                 })
             })
             .collect()

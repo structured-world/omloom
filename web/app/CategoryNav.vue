@@ -23,6 +23,8 @@ const categories:Record<model.View,{name:string;kinds:number[]}[]>={
   ],
   [model.View.SERVICES]:[
     {name:'Services',kinds:[K.SERVICE]},{name:'OS & software installations',kinds:[K.SOFTWARE_INSTALLATION]},
+    {name:'Products',kinds:[K.SOFTWARE_PRODUCT]},{name:'Releases',kinds:[K.SOFTWARE_RELEASE]},
+    {name:'Workloads',kinds:[K.WORKLOAD]},{name:'Containers',kinds:[K.CONTAINER]},
     {name:'Storage',kinds:[K.STORAGE]},
     {name:'Domains',kinds:[K.DOMAIN]},{name:'Provider accounts',kinds:[K.PROVIDER_ACCOUNT]},
   ],
