@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
@@ -61,9 +61,10 @@ test('host report adoption is selective and scoped on desktop and phone', async 
       await page.getByRole('button',{name:'Import host report',exact:true}).click();
       const dialog=page.getByRole('dialog');
       const field=(text)=>({name:'name',value:{oneofKind:'text',text}});
+      const hardwareKey=width===390?'constructor':'hardware';
       const report=m.HostReport.create({version:1,platform:'macos',sourceBasis:String(width).padEnd(64,'a'),bootBasis:'b'.repeat(64),observedAt:100n,findings:[
-        {key:'hardware',kind:m.AssetKind.DEVICE,fields:[field(`Collected host ${width}`)]},
-        {key:'installation',kind:m.AssetKind.SOFTWARE_INSTALLATION,parent:'hardware',fields:[field(`Collected OS ${width}`)]},
+        {key:hardwareKey,kind:m.AssetKind.DEVICE,fields:[field(`Collected host ${width}`)]},
+        {key:'installation',kind:m.AssetKind.SOFTWARE_INSTALLATION,parent:hardwareKey,fields:[field(`Collected OS ${width}`)]},
         {key:'interface/en0',kind:m.AssetKind.INTERFACE,parent:'installation',fields:[field(`Collected NIC ${width}`)],addresses:[{address:'192.0.2.7',prefixLength:24,addressStability:undefined,stability:m.AddressStability.STABLE,state:m.AddressState.PREFERRED}],addressesComplete:true},
       ],coverage:[{module:'interfaces',status:'verified',detail:'Synthetic current interface fixture'}]});
       const buffer=Buffer.from(m.Request.toBinary(m.Request.create({command:{oneofKind:'hostImport',hostImport:m.HostImport.create({report})}})));
@@ -86,9 +87,44 @@ test('host report adoption is selective and scoped on desktop and phone', async 
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
 });
 
+test('execution host reports match the current VM scope on desktop and phone', async ({ page }) => {
+  // Guest collection cannot invent a physical server or rename the accepted VM.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-host-vm-'));const server=await host(dir);
+  try {
+    const {m,rpc}=await workspaceClient(server.url);
+    for(const width of [1440,390]) {
+      await page.setViewportSize({width,height:900});await page.goto(server.url);
+      const target=await create(page,`Known VM ${width}`,'VIRTUAL_MACHINE');
+      await page.getByRole('button',{name:'Use as scope',exact:true}).click();
+      if(width===390)await page.getByRole('button',{name:'More',exact:true}).click();
+      await page.getByRole('button',{name:'Import host report',exact:true}).click();
+      const dialog=page.getByRole('dialog');
+      const field=text=>({name:'name',value:{oneofKind:'text',text}});
+      const report=m.HostReport.create({version:1,platform:'linux',sourceBasis:String(width).padEnd(64,'a'),bootBasis:'b'.repeat(64),observedAt:100n,findings:[
+        {key:'hardware',kind:m.AssetKind.UNSPECIFIED,fields:[field('Guest hostname')]},
+        {key:'installation',kind:m.AssetKind.SOFTWARE_INSTALLATION,parent:'hardware',fields:[field(`Guest OS ${width}`)]},
+      ]});
+      const buffer=Buffer.from(m.Request.toBinary(m.Request.create({command:{oneofKind:'hostImport',hostImport:m.HostImport.create({report})}})));
+      await dialog.getByLabel('Host report file').setInputFiles({name:'host.omloom',mimeType:'application/octet-stream',buffer});
+      await dialog.getByLabel('Source name',{exact:true}).fill(`VM source ${width}`);
+      await dialog.getByRole('button',{name:'Use current device or VM scope',exact:true}).click();
+      await expect(dialog.getByText(`Existing match: Known VM ${width}`,{exact:true})).toBeVisible();
+      await dialog.getByRole('checkbox').nth(0).check();await dialog.getByRole('checkbox').nth(1).check();
+      await dialog.getByRole('button',{name:'Prepare host preview',exact:true}).click();
+      await expect(dialog.getByRole('heading',{name:'Review 2 selected resources',exact:true})).toBeVisible();
+      await dialog.getByRole('button',{name:'Accept selected observations',exact:true}).click();await expect(dialog).toBeHidden();
+      await expect(page.getByRole('button',{name:`Guest OS ${width}`,exact:true})).toBeVisible();
+      const actual=await rpc({oneofKind:'read',read:m.Read.create({target:{assetId:target.asset_id,incarnation:target.incarnation}})});
+      expect(actual.detail.item.kind).toBe(m.AssetKind.VIRTUAL_MACHINE);
+      expect(actual.detail.item.fields.find(v=>v.name==='name').value.text).toBe(`Known VM ${width}`);
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('native collector file imports into the actual disk-backed UI', async ({ page }) => {
-  // Execute the real native collector on this OS, then adopt only its host and
-  // installation. Private machine facts live only in the test-owned directory.
+  // First adopt a subset, then all actually collected components and selected
+  // network sections. Private facts live only in the test-owned directory.
+  test.setTimeout(120_000);
   const dir = await mkdtemp(join(tmpdir(), 'omloom-native-'));
   const server = await host(join(dir, 'database'));
   try {
@@ -102,6 +138,7 @@ test('native collector file imports into the actual disk-backed UI', async ({ pa
     await dialog.getByLabel('Host report file').setInputFiles(filename);
     await dialog.getByLabel('Source name', { exact: true }).fill('Native acceptance source');
     await expect(dialog.getByText('interfaces: verified', { exact: true })).toBeVisible();
+    await dialog.getByLabel('New execution host type',{exact:true}).selectOption({label:'Physical device'});
     await dialog.getByRole('checkbox').nth(0).check();
     await dialog.getByRole('checkbox').nth(1).check();
     await dialog.getByRole('button', { name: 'Prepare host preview', exact: true }).click();
@@ -111,8 +148,83 @@ test('native collector file imports into the actual disk-backed UI', async ({ pa
     const { m, rpc } = await workspaceClient(server.url);
     const response = await rpc({ oneofKind: 'query', query: m.Query.create({ kinds: [m.AssetKind.DEVICE], limit: 25 }) });
     expect(response.page.total).toBe(1n);
+    const frame=m.Request.fromBinary(new Uint8Array(await readFile(filename)));
+    const report=frame.command.hostImport.report;
+    const open=page.getByRole('button',{name:'Import host report',exact:true});
+    if(!await open.isVisible())await page.getByRole('button',{name:'More',exact:true}).click();
+    await open.click();
+    await dialog.getByLabel('Host report file').setInputFiles(filename);
+    await dialog.getByLabel('Source name',{exact:true}).fill('Native acceptance source');
+    for(let index=0;index<report.findings.length;index++)await dialog.getByRole('checkbox').nth(index).check();
+    await dialog.getByLabel('Binds of selected services',{exact:true}).check();
+    await dialog.getByLabel(/Local routing table/).check();
+    await dialog.getByLabel(/Application firewall settings and rules/).check();
+    await dialog.getByRole('button',{name:'Prepare host preview',exact:true}).click();
+    await expect(dialog.getByRole('heading',{name:`Review ${report.findings.length} selected resources`,exact:true})).toBeVisible({timeout:15000});
+    await dialog.getByRole('button',{name:'Accept selected observations',exact:true}).click();
+    await expect(dialog).toBeHidden({timeout:15000});
+    for(const kind of [m.AssetKind.INTERFACE,m.AssetKind.SERVICE,m.AssetKind.WORKLOAD,m.AssetKind.CONTAINER]) {
+      const actual=await rpc({oneofKind:'query',query:m.Query.create({kinds:[kind],limit:25})});
+      expect(actual.page.total).toBe(BigInt(report.findings.filter(v=>v.kind===kind).length));
+    }
+    const name=key=>report.findings.find(v=>v.key===key).fields.find(v=>v.name==='name').value.text;
+    await page.getByRole('button',{name:name('hardware'),exact:true}).click();
+    await page.getByRole('button',{name:'Use as scope',exact:true}).click();
+    await page.getByRole('button',{name:name('installation'),exact:true}).click();
+    const osURL=page.url();
+    const network=page.getByRole('region',{name:'Local network observations'});
+    const sockets=network.filter({hasText:'Native acceptance source / sockets'});
+    if(report.binds.some(v=>v.owner))await expect(sockets.getByRole('row').nth(1)).toBeVisible();
+    const routes=network.filter({hasText:'Native acceptance source / routes'});
+    await routes.getByRole('button',{name:/^Routes \(/}).click();
+    if(report.network.routes.length)await expect(routes.getByRole('row').nth(1)).toBeVisible();
+    const firewall=network.filter({hasText:'Native acceptance source / application-fw'});
+    await firewall.getByRole('button',{name:/^Firewall \(/}).click();
+    await expect(firewall.getByRole('status')).toContainText('Effective per-port decision: unknown');
+    for(const provider of report.findings.filter(v=>v.key==='netbird'||(v.key.startsWith('docker/')&&v.parent==='installation'))) {
+      await page.goto(osURL);await page.getByRole('button',{name:'Use as scope',exact:true}).click();
+      const providerName=name(provider.key);
+      await page.getByLabel('Search inventory',{exact:true}).fill(providerName);
+      await page.getByRole('button',{name:'Search',exact:true}).click({timeout:5000});
+      await page.getByRole('region',{name:'Inventory',exact:true}).getByRole('button',{name:providerName,exact:true}).click();
+      await expect(page.getByRole('region',{name:'Resource details'}).getByRole('heading',{name:providerName,exact:true})).toBeVisible();
+      if(provider.key==='netbird') {
+        await page.getByRole('button',{name:'Use as scope',exact:true}).click();
+        const interfaces=report.findings.filter(v=>v.parent===provider.key&&v.kind===m.AssetKind.INTERFACE);
+        expect(interfaces.length).toBeGreaterThan(0);
+        await page.getByRole('region',{name:'Inventory',exact:true}).getByRole('button',{name:name(interfaces[0].key),exact:true}).click();
+        await expect(page.getByRole('region',{name:'Current interface addresses'})).toContainText(interfaces[0].addresses[0].address);
+      }
+    }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('selecting another report cannot be overwritten by a pending file read', async ({ page }) => {
+  // A slow removable/network-backed file can finish after a replacement file.
+  // Its pending bytes cannot replace the user's newer explicit selection.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-report-read-'));const server=await host(dir);
+  try {
+    const {m}=await workspaceClient(server.url);
+    const bytes=name=>Buffer.from(m.Request.toBinary(m.Request.create({command:{oneofKind:'hostImport',hostImport:m.HostImport.create({report:m.HostReport.create({version:1,platform:'macos',observedAt:100n,sourceBasis:'a'.repeat(64),bootBasis:'b'.repeat(64),findings:[{key:'hardware',kind:m.AssetKind.DEVICE,fields:[{name:'name',value:{oneofKind:'text',text:name}}]}]})})}})));
+    await page.goto(server.url);await page.getByRole('button',{name:'Import host report',exact:true}).click();
+    await page.evaluate(()=>{
+      const original=File.prototype.arrayBuffer;
+      const gate=new Promise(resolve=>{globalThis.releaseReportRead=resolve;});
+      File.prototype.arrayBuffer=function(){
+        const result=this.name==='earlier.omloom'?gate.then(()=>original.call(this)):original.call(this);
+        if(this.name==='earlier.omloom')globalThis.pendingReportRead=result;
+        return result;
+      };
+    });
+    const dialog=page.getByRole('dialog');const file=dialog.getByLabel('Host report file');
+    await file.setInputFiles({name:'earlier.omloom',mimeType:'application/octet-stream',buffer:bytes('Earlier file')});
+    await file.setInputFiles({name:'selected.omloom',mimeType:'application/octet-stream',buffer:bytes('Selected file')});
+    await expect(dialog.getByRole('checkbox',{name:'device: Selected file',exact:true})).toBeVisible();
+    await page.evaluate(()=>{globalThis.releaseReportRead();return globalThis.pendingReportRead;});
+    await expect(dialog.getByRole('checkbox',{name:'device: Selected file',exact:true})).toBeVisible();
+    await expect(dialog.getByRole('checkbox',{name:'device: Earlier file',exact:true})).toHaveCount(0);
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
 });
 
 test('optional runtime definitions and workload facts work on desktop and phone', async ({ page }) => {

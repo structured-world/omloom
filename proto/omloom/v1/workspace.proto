@@ -897,11 +897,15 @@ message HostFinding {
   // Source-scoped candidate key, at most 256 bytes. Names/IPs alone do not
   // establish continuity; process findings include the actual boot/PID basis.
   string key = 1;
-  // Known candidate kind. Unknown holders are not fabricated Device/Service nodes.
+  // Known candidate kind. UNSPECIFIED is allowed only for root key "hardware":
+  // executing on an OS does not prove a physical Device rather than a VM.
+  // Review supplies its type or explicitly matches an existing execution host.
   omloom.v1.AssetKind kind = 2;
   // Actual known parent candidate key; absence means no proven intermediary.
   optional string parent = 3;
   // Selected current facts only, without environment, commands or package lists.
+  // An unclassified execution host supplies initialization proposals only;
+  // matching an existing host preserves its accepted name and other fields.
   repeated omloom.v1.Field fields = 4;
   // Current non-temporary interface addresses, never canonical IPAM allocations.
   repeated CurrentAddress addresses = 5;
@@ -931,6 +935,10 @@ message HostSelection {
   // Operator-selected existing identity; absence permits new reviewed adoption.
   // Equal name/IP never supplies this field automatically.
   optional omloom.v1.AssetRef target = 2;
+  // User-known Device or VirtualMachine type for a new unclassified execution
+  // host. Omit for a known source kind or when matching an existing identity,
+  // whose type is derived by the server. A reviewed mapping cannot be retyped.
+  optional omloom.v1.AssetKind kind = 3;
 }
 message HostImport {
   // Native report being reviewed; absent when accepting the prepared preview.

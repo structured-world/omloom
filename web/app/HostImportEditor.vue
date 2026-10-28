@@ -1,28 +1,34 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, onBeforeUnmount } from 'vue';
 import Dialog from './Dialog.vue';
-import { call, model, label, display, key, type AssetRef } from './api';
+import { readHostReport } from './host-report';
+import { call, model, AssetKind, label, display, key, type AssetRef } from './api';
+import { softwareFields } from './software-fields';
 const props=defineProps<{working:model.WorkingContext}>();
 const emit=defineEmits<{close:[];saved:[]}>();
 const report=ref<model.HostReport>();const source=ref('');const error=ref('');
-const selected=ref<string[]>([]);const matches=ref<Record<string,AssetRef>>({});
-const matchNames=ref<Record<string,string>>({});
+const selected=ref<string[]>([]);const matches=ref(new Map<string,{target:AssetRef;name:string}>());
 const networkParts=ref<model.HostNetworkPart[]>([]);
+const hostKind=ref<AssetKind>();
+const fieldLabels=new Map(softwareFields().map(v=>[v.id,v.name]));
+const unclassified=(item:model.HostFinding)=>item.kind===AssetKind.UNSPECIFIED&&item.key==='hardware';
 const preview=ref<model.Preview>();const revision=ref<bigint>();const busy=ref(false);
 const matching=ref('');const search=ref('');const choices=ref<model.Item[]>([]);const next=ref<string>();
 let matchGeneration=0;
+let fileGeneration=0;
+onBeforeUnmount(()=>{fileGeneration++;matchGeneration++;});
 async function file(event:Event){
+  const generation=++fileGeneration;
   matchGeneration++;matching.value='';choices.value=[];next.value=undefined;revision.value=undefined;
-  error.value='';preview.value=undefined;selected.value=[];networkParts.value=[];matches.value={};matchNames.value={};report.value=undefined;
+  error.value='';preview.value=undefined;selected.value=[];networkParts.value=[];matches.value=new Map();report.value=undefined;
+  hostKind.value=undefined;
   try {
     const input=(event.target as HTMLInputElement).files?.[0];if(!input)return;
     if(input.size>262144)throw Error('The report exceeds the supported 256 KiB import limit.');
-    const request=model.Request.fromBinary(new Uint8Array(await input.arrayBuffer()));
-    if(request.command.oneofKind!=='hostImport'||!request.command.hostImport.report)throw Error('Choose a native Omloom host report.');
-    const value=request.command.hostImport.report;
-    if(value.version!==1||value.findings.length>128||value.observedAt<=0n||value.observedAt>8640000000000000n)throw Error('Unsupported report version, finding count or observation time.');
-    report.value=value;
-  }catch(e){error.value=String(e);}
+    const bytes=new Uint8Array(await input.arrayBuffer());
+    if(generation!==fileGeneration)return;
+    report.value=readHostReport(bytes);
+  }catch(e){if(generation===fileGeneration)error.value=String(e);}
 }
 async function prepare(apply:boolean){
   error.value='';busy.value=true;
@@ -31,7 +37,7 @@ async function prepare(apply:boolean){
       const response=await call({oneofKind:'prepare',prepare:model.Prepare.create()},model.WorkingContext.create({...props.working,expected:undefined}));
       if(response.oneofKind!=='actions')throw Error('Current import scope is unavailable.');revision.value=response.actions.revision;
     }
-    const response=await call({oneofKind:'hostImport',hostImport:model.HostImport.create(apply?{preview:preview.value?.id}:{report:report.value,source:source.value,selection:selected.value.map(key=>({key,target:matches.value[key]})),networkParts:networkParts.value})},model.WorkingContext.create({...props.working,expected:apply?preview.value?.revision:revision.value}));
+    const response=await call({oneofKind:'hostImport',hostImport:model.HostImport.create(apply?{preview:preview.value?.id}:{report:report.value,source:source.value,selection:selected.value.map(key=>({key,target:matches.value.get(key)?.target,kind:key==='hardware'&&!matches.value.has(key)&&report.value?.findings.some(v=>v.key===key&&unclassified(v))?hostKind.value:undefined})),networkParts:networkParts.value})},model.WorkingContext.create({...props.working,expected:apply?preview.value?.revision:revision.value}));
     if(apply){if(response.oneofKind!=='mutation')throw Error('Import did not commit.');emit('saved');}
     else {if(response.oneofKind==='mutation'){emit('saved');return;}if(response.oneofKind!=='preview')throw Error('Import preview unavailable.');preview.value=response.preview;}
   }catch(e){error.value=String(e);}finally{busy.value=false;}
@@ -41,12 +47,25 @@ async function find(candidate:string,more=false){
   matching.value=candidate;error.value='';
   try {
     const item=report.value?.findings.find(v=>v.key===candidate);if(!item)return;
-    const response=await call({oneofKind:'query',query:model.Query.create({kinds:[item.kind],search:search.value,roots:props.working.roots,focus:props.working.focus,columns:['name'],limit:25,cursor:more?next.value:undefined})});
+    const response=await call({oneofKind:'query',query:model.Query.create({kinds:unclassified(item)?[AssetKind.DEVICE,AssetKind.VIRTUAL_MACHINE]:[item.kind],search:search.value,roots:props.working.roots,focus:props.working.focus,columns:['name'],limit:25,cursor:more?next.value:undefined})});
     if(generation!==matchGeneration)return;
     if(response.oneofKind!=='page')throw Error('Matching resources are unavailable.');choices.value=response.page.items;next.value=response.page.next;
   }catch(e){if(generation===matchGeneration)error.value=String(e);}
 }
-function match(candidate:string,choice:model.Item){if(!choice.target)return;matchGeneration++;matches.value[candidate]=choice.target;matchNames.value[candidate]=display(choice.fields.find(v=>v.name==='name'));matching.value='';preview.value=undefined;}
+function match(candidate:string,choice:model.Item){if(!choice.target)return;matchGeneration++;matches.value.set(candidate,{target:choice.target,name:display(choice.fields.find(v=>v.name==='name'))});matching.value='';preview.value=undefined;}
+async function matchScope(candidate:string){
+  const generation=++matchGeneration;
+  let target=props.working.focus;
+  if(!target&&props.working.roots.length===1)target=props.working.roots[0];
+  if(!target)return;
+  error.value='';
+  try{
+    const response=await call({oneofKind:'read',read:model.Read.create({target})},props.working);
+    if(generation!==matchGeneration)return;
+    if(response.oneofKind!=='detail'||!response.detail.item||![AssetKind.DEVICE,AssetKind.VIRTUAL_MACHINE].includes(response.detail.item.kind))throw Error('Select a device or VM scope before matching the execution host.');
+    match(candidate,response.detail.item);
+  }catch(e){if(generation===matchGeneration)error.value=String(e);}
+}
 </script>
 <template><Dialog title="Import host observations" @close="emit('close')"><form @submit.prevent="prepare(false)">
 <p>Review current facts from an explicitly collected file. Nothing is adopted until you accept the preview. Select required parents with their components.</p>
@@ -59,13 +78,16 @@ function match(candidate:string,choice:model.Item){if(!choice.target)return;matc
 <p>Names, addresses and process IDs do not establish permanent identity or human ownership. Match an existing resource only after confirming it is the same incarnation.</p>
 <details v-if="report.binds.some(v=>!v.owner)"><summary>Unattributed kernel binds (not adopted)</summary><ul><li v-for="(bind,index) in report.binds.filter(v=>!v.owner)" :key="index">{{ bind.value?.protocol }} {{ bind.value?.family }} {{ bind.value?.bind }}:{{ bind.value?.port }}. Owning service unknown.</li></ul></details>
 <div v-for="item in report.findings" :key="item.key" class="preview">
-<label><input v-model="selected" type="checkbox" :value="item.key" @change="preview=undefined">{{ label(item.kind) }}: {{ display(item.fields.find(v=>v.name==='name')) }}</label>
+<label><input v-model="selected" type="checkbox" :value="item.key" @change="preview=undefined">{{ unclassified(item)?'Execution host':label(item.kind) }}: {{ display(item.fields.find(v=>v.name==='name')) }}</label>
+<template v-if="unclassified(item)&&!matches.has(item.key)"><label>New execution host type<select v-model="hostKind" aria-label="New execution host type" @change="preview=undefined"><option :value="undefined">Reuse a reviewed mapping, or choose for new adoption</option><option :value="AssetKind.DEVICE">Physical device</option><option :value="AssetKind.VIRTUAL_MACHINE">Virtual machine</option></select></label><p>The OS does not prove a physical or virtual host. Existing matches retain their type, accepted name and fields.</p></template>
+<details><summary>Proposed fields ({{ item.fields.length }})</summary><dl><div v-for="field in item.fields" :key="field.name"><dt v-if="fieldLabels.has(field.name)">{{ fieldLabels.get(field.name) }}</dt><dt v-else>Source field: {{ field.name }}</dt><dd>{{ display(field) }}</dd></div></dl></details>
 <p v-if="item.parent" class="hint">Inside {{ display(report.findings.find(v=>v.key===item.parent)?.fields.find(v=>v.name==='name')) }}</p>
 <p v-if="item.addresses.length">{{ item.addresses.map(v=>v.address).join(', ') }}</p>
 <ul v-if="report.binds.some(v=>v.owner===item.key)"><li v-for="(bind,index) in report.binds.filter(v=>v.owner===item.key)" :key="index">{{ bind.value?.protocol }} {{ bind.value?.family }} {{ bind.value?.bind }}:{{ bind.value?.port }}</li></ul>
-<p v-if="matches[item.key]">Existing match: {{ matchNames[item.key] }}</p><p v-else>New adoption or previously reviewed source mapping</p>
+<p v-if="matches.has(item.key)">Existing match: {{ matches.get(item.key)?.name }}</p><p v-else>New adoption or previously reviewed source mapping</p>
 <button type="button" @click="search=''; find(item.key)">Match existing resource</button>
-<button v-if="matches[item.key]" type="button" @click="delete matches[item.key]; delete matchNames[item.key]; preview=undefined">Clear match</button>
+<button v-if="unclassified(item)&&(working.focus||working.roots.length===1)" type="button" @click="matchScope(item.key)">Use current device or VM scope</button>
+<button v-if="matches.has(item.key)" type="button" @click="matches.delete(item.key); preview=undefined">Clear match</button>
 <section v-if="matching===item.key"><label>Find existing resource<input v-model="search" @input="find(item.key)"></label>
 <button v-for="choice in choices" :key="key(choice.target)" type="button" @click="match(item.key,choice)">{{ display(choice.fields.find(v=>v.name==='name')) }}</button>
 <button v-if="next" type="button" @click="find(item.key,true)">Next matches</button></section>

@@ -89,6 +89,11 @@ fn status(code: Code, reason: &str, message: &str) -> Status {
 }
 fn failure(error: Error) -> Status {
     let (code, reason, message) = match error {
+        Error::HostClassificationRequired => (
+            Code::InvalidArgument,
+            "HOST_CLASSIFICATION_REQUIRED",
+            "Choose physical device or virtual machine for the new execution host, or match an existing resource.",
+        ),
         Error::Invalid => (
             Code::InvalidArgument,
             "INVALID_INPUT",

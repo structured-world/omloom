@@ -2152,7 +2152,9 @@ export interface HostFinding {
      */
     key: string;
     /**
-     * Known candidate kind. Unknown holders are not fabricated Device/Service nodes.
+     * Known candidate kind. UNSPECIFIED is allowed only for root key "hardware":
+     * executing on an OS does not prove a physical Device rather than a VM.
+     * Review supplies its type or explicitly matches an existing execution host.
      *
      * @generated from protobuf field: omloom.v1.AssetKind kind = 2
      */
@@ -2165,6 +2167,8 @@ export interface HostFinding {
     parent?: string;
     /**
      * Selected current facts only, without environment, commands or package lists.
+     * An unclassified execution host supplies initialization proposals only;
+     * matching an existing host preserves its accepted name and other fields.
      *
      * @generated from protobuf field: repeated omloom.v1.Field fields = 4
      */
@@ -2246,6 +2250,14 @@ export interface HostSelection {
      * @generated from protobuf field: optional omloom.v1.AssetRef target = 2
      */
     target?: AssetRef;
+    /**
+     * User-known Device or VirtualMachine type for a new unclassified execution
+     * host. Omit for a known source kind or when matching an existing identity,
+     * whose type is derived by the server. A reviewed mapping cannot be retyped.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetKind kind = 3
+     */
+    kind?: AssetKind;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.HostImport
@@ -4468,7 +4480,8 @@ class HostSelection$Type extends MessageType<HostSelection> {
     constructor() {
         super("omloom.workspace.v1.HostSelection", [
             { no: 1, name: "key", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 2, name: "target", kind: "message", T: () => AssetRef }
+            { no: 2, name: "target", kind: "message", T: () => AssetRef },
+            { no: 3, name: "kind", kind: "enum", opt: true, T: () => ["omloom.v1.AssetKind", AssetKind, "ASSET_KIND_"] }
         ]);
     }
 }

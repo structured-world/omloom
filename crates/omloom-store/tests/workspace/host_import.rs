@@ -46,6 +46,7 @@ fn draft() -> api::HostImport {
             .map(|key| api::HostSelection {
                 key: key.into(),
                 target: None,
+                kind: None,
             })
             .collect(),
         preview: None,
@@ -219,6 +220,82 @@ fn another_os_can_match_hardware_without_reusing_its_interfaces() -> TestResult 
             .address,
         "192.0.2.7"
     );
+    Ok(())
+}
+
+// Running on an OS does not prove that its execution host is physical. Match
+// an explicitly known VM without retyping it or inventing another Device.
+#[test]
+fn an_unclassified_execution_host_can_match_an_existing_vm() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let vm = create(&store, &operator(), K::VirtualMachine, "Known VM")?;
+    let mut request = draft();
+    request.report.as_mut().expect("report").findings[0].kind = K::Unspecified as i32;
+    request.selection[0].target = Some(vm.clone());
+    let accepted = accept(&store, &preview(&store, request)?)?;
+    assert_eq!(accepted.targets[0], vm);
+    let Reply::Detail(detail) = call(
+        &store,
+        &operator(),
+        Command::Read(api::Read {
+            target: Some(vm),
+            ..Default::default()
+        }),
+    )?
+    else {
+        return Err("detail".into());
+    };
+    assert_eq!(
+        detail
+            .item
+            .as_ref()
+            .expect("VM")
+            .fields
+            .iter()
+            .find(|v| v.name == "name")
+            .expect("name"),
+        &text_field("name", "Known VM")
+    );
+    Ok(())
+}
+
+// An OS cannot classify its execution host. New adoption needs an explicit
+// physical/VM choice, and a later source mapping cannot retype that choice.
+#[test]
+fn new_execution_host_requires_a_reviewed_kind() -> TestResult {
+    for kind in [K::Device, K::VirtualMachine] {
+        let dir = tempfile::tempdir()?;
+        let store = Store::open(dir.path(), policy())?;
+        let mut request = draft();
+        request.report.as_mut().expect("report").findings[0].kind = K::Unspecified as i32;
+        let before = store.usage()?;
+        assert!(matches!(
+            preview(&store, request.clone()),
+            Err(Error::HostClassificationRequired)
+        ));
+        assert_eq!(store.usage()?, before);
+        request.selection[0].kind = Some(kind as i32);
+        let accepted = accept(&store, &preview(&store, request.clone())?)?;
+        let Reply::Detail(detail) = call(
+            &store,
+            &operator(),
+            Command::Read(api::Read {
+                target: Some(accepted.targets[0].clone()),
+                ..Default::default()
+            }),
+        )?
+        else {
+            return Err("detail".into());
+        };
+        assert_eq!(detail.item.expect("host").kind, kind as i32);
+        request.selection[0].kind = Some(if kind == K::Device {
+            K::VirtualMachine
+        } else {
+            K::Device
+        } as i32);
+        assert!(matches!(preview(&store, request), Err(Error::Conflict)));
+    }
     Ok(())
 }
 

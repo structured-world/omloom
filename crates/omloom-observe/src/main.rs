@@ -16,6 +16,8 @@ mod runtime;
 mod tests;
 
 const MAX_REPORT: usize = 256 * 1024;
+// Reserve 1152 RPC field visits for 128 matches, 128 scope roots and selectors.
+const FILE_FIELDS: usize = 2944;
 const MAX_FINDINGS: usize = 128;
 const MAX_FACTS: usize = 256;
 type Result<T> = std::result::Result<T, String>;
@@ -91,7 +93,7 @@ async fn collect() -> Result<api::HostReport> {
     };
     add(
         &mut report,
-        finding("hardware", wire::AssetKind::Device, None, &name),
+        finding("hardware", wire::AssetKind::Unspecified, None, &name),
     )?;
     let mut installation = finding(
         "installation",
@@ -108,7 +110,7 @@ async fn collect() -> Result<api::HostReport> {
         &mut report,
         "host",
         "verified",
-        "Native hardware and installation evidence; not authenticated identity",
+        "Native execution-host and installation basis; review supplies physical/VM type; not authenticated identity",
     );
     report.network = Some(api::HostNetwork {
         observed_at,
@@ -152,8 +154,15 @@ fn encode(report: api::HostReport) -> Result<Vec<u8>> {
     let bytes = request.encode_to_vec();
     // The same structural preflight used at the server bounds decoder allocation.
     let budget = omloom_contracts::MemoryBudget::new(16 * 1024 * 1024);
-    omloom_contracts::decode_workspace(&bytes, Default::default(), &budget)
-        .map_err(|e| format!("Report structure exceeds contract: {e}"))?;
+    omloom_contracts::decode_workspace(
+        &bytes,
+        omloom_contracts::Limits {
+            fields: FILE_FIELDS,
+            ..Default::default()
+        },
+        &budget,
+    )
+    .map_err(|e| format!("Report structure exceeds contract: {e}"))?;
     Ok(bytes)
 }
 fn save(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -195,8 +204,15 @@ async fn main() -> Result<()> {
             return Err("Report byte limit exceeded".into());
         }
         let budget = omloom_contracts::MemoryBudget::new(16 * 1024 * 1024);
-        let mut decoded = omloom_contracts::decode_workspace(&bytes, Default::default(), &budget)
-            .map_err(|e| format!("Invalid report frame: {e}"))?;
+        let mut decoded = omloom_contracts::decode_workspace(
+            &bytes,
+            omloom_contracts::Limits {
+                fields: FILE_FIELDS,
+                ..Default::default()
+            },
+            &budget,
+        )
+        .map_err(|e| format!("Invalid report frame: {e}"))?;
         let Some(api::request::Command::HostImport(value)) = decoded.take().command else {
             return Err("Not a host report".into());
         };

@@ -93,6 +93,34 @@ fn structured_input_has_a_stack_safety_ceiling() {
     assert!(native::json("{\"value\":\"[[[\"}").is_ok());
 }
 
+// A file that consumes the whole RPC work budget leaves no room for scope and
+// reviewed matches. Refuse it at production rather than publish an unusable file.
+#[test]
+fn report_reserves_work_for_the_review_request_envelope() {
+    let mut value = report();
+    for index in 0..128 {
+        let mut node = finding(
+            &format!("hardware/{index}"),
+            wire::AssetKind::Device,
+            None,
+            "Machine",
+        );
+        for name in [
+            "description",
+            "purpose",
+            "supplier",
+            "model",
+            "purchase_reference",
+            "contract_reference",
+            "disposal_reference",
+        ] {
+            node.fields.push(text(name, "Selected reference"));
+        }
+        value.findings.push(node);
+    }
+    assert!(encode(value).is_err());
+}
+
 // ALF paths can contain spaces; a basename must never replace the rule subject.
 #[test]
 fn application_rules_preserve_identity_and_refuse_incomplete_rows() {
@@ -190,6 +218,14 @@ fn temporary_literals_are_removed_from_routes_and_binds() {
 #[tokio::test]
 async fn native_host_collection_has_a_decodable_core() {
     let report = collect().await.expect("native collection");
+    for coverage in &report.coverage {
+        println!("native module {}: {}", coverage.module, coverage.status);
+    }
+    println!(
+        "native findings: {}, binds: {}",
+        report.findings.len(),
+        report.binds.len()
+    );
     assert_eq!(report.source_basis.len(), 64);
     assert_eq!(report.boot_basis.len(), 64);
     assert!(

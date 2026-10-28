@@ -41,7 +41,9 @@ fn validate(report: &api::HostReport) -> Result<()> {
         }
         if !matches!(
             wire::AssetKind::try_from(node.kind),
-            Ok(wire::AssetKind::Device
+            Ok(wire::AssetKind::Unspecified
+                | wire::AssetKind::Device
+                | wire::AssetKind::VirtualMachine
                 | wire::AssetKind::SoftwareInstallation
                 | wire::AssetKind::Port
                 | wire::AssetKind::Interface
@@ -49,6 +51,11 @@ fn validate(report: &api::HostReport) -> Result<()> {
                 | wire::AssetKind::Workload
                 | wire::AssetKind::Container)
         ) {
+            return Err(Error::Invalid);
+        }
+        if node.kind == wire::AssetKind::Unspecified as i32
+            && (node.key != "hardware" || node.parent.is_some() || node.runtime.is_some())
+        {
             return Err(Error::Invalid);
         }
         for parent in [&node.parent, &node.runtime].into_iter().flatten() {
@@ -130,9 +137,7 @@ impl Tx<'_> {
         let mut selected = BTreeMap::new();
         for value in &request.selection {
             if !report.findings.iter().any(|f| f.key == value.key)
-                || selected
-                    .insert(value.key.as_str(), value.target.as_ref())
-                    .is_some()
+                || selected.insert(value.key.as_str(), value).is_some()
             {
                 return Err(Error::Invalid);
             }
@@ -168,20 +173,50 @@ impl Tx<'_> {
                 }
             }
             let prior = old.as_ref().map(super::super::target).transpose()?;
-            let explicit = explicit.map(|v| parse_target(Some(v))).transpose()?;
+            let declared_kind = explicit.kind;
+            if declared_kind.is_some()
+                && (node.kind != wire::AssetKind::Unspecified as i32 || explicit.target.is_some())
+            {
+                return Err(Error::Invalid);
+            }
+            let explicit = explicit
+                .target
+                .as_ref()
+                .map(|v| parse_target(Some(v)))
+                .transpose()?;
             if explicit.is_some() && prior.is_some() && explicit != prior {
                 return Err(Error::Conflict);
             }
             let existing = explicit.or(prior);
+            let mut kind = node.kind;
             let expected = if let Some(target) = existing {
                 let row = self.visible_asset(context, target)?;
-                if number(&row, "kind")? != node.kind as u64 {
+                let actual_kind = number(&row, "kind")? as i32;
+                if kind == wire::AssetKind::Unspecified as i32 {
+                    if !matches!(
+                        wire::AssetKind::try_from(actual_kind),
+                        Ok(wire::AssetKind::Device | wire::AssetKind::VirtualMachine)
+                    ) || declared_kind.is_some_and(|v| v != actual_kind)
+                    {
+                        return Err(Error::Conflict);
+                    }
+                    kind = actual_kind;
+                } else if actual_kind != kind {
                     return Err(Error::Invalid);
                 }
                 self.selection(context, working, false)?
                     .contains(target, self)?;
                 Some(number(&row, "revision")?)
             } else {
+                if kind == wire::AssetKind::Unspecified as i32 {
+                    kind = declared_kind.ok_or(Error::HostClassificationRequired)?;
+                    if !matches!(
+                        wire::AssetKind::try_from(kind),
+                        Ok(wire::AssetKind::Device | wire::AssetKind::VirtualMachine)
+                    ) {
+                        return Err(Error::Invalid);
+                    }
+                }
                 None
             };
             let parent = node
@@ -201,7 +236,7 @@ impl Tx<'_> {
             let mut change = api::Write {
                 target: existing.map(target_wire),
                 expected,
-                kind: node.kind,
+                kind,
                 changes: node.fields.clone(),
                 parent: if existing.is_none() {
                     parent.map(target_wire)
@@ -209,7 +244,9 @@ impl Tx<'_> {
                     None
                 },
             };
-            let target = if accepted_fields {
+            let keep_fields = accepted_fields
+                || (node.kind == wire::AssetKind::Unspecified as i32 && existing.is_some());
+            let target = if keep_fields {
                 change.changes.clear();
                 existing.ok_or(Error::Corrupt)?
             } else {
@@ -290,7 +327,7 @@ impl Tx<'_> {
             rows.push(api::ImportRow {
                 row: rows.len() as u32 + 1,
                 change: Some(change),
-                diagnostic: if accepted_fields {
+                diagnostic: if keep_fields {
                     "Keep previously accepted identity and local fields"
                 } else if existing.is_some() {
                     "Update reviewed existing identity"

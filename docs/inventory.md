@@ -507,6 +507,12 @@ Names, matching addresses, process names and Compose labels do not establish
 continuity, ownership or permission. Review the proposed changes before acceptance.
 The same flow works on a phone, including selecting a report from its file picker.
 
+The OS cannot prove whether its execution host is physical or virtual. For a new
+host, explicitly choose **Physical device** or **Virtual machine**. Alternatively,
+match the current device/VM scope or another reviewed existing resource. That
+match preserves its accepted type, name and fields; hostname/model observations
+are initialization proposals, not authority to rename existing hardware or VMs.
+
 Routes, binds of selected services, and application-firewall observations each
 require separate selection. None are enabled by default. Unselected findings and
 sections are discarded before bounded preview storage. Acceptance rechecks scope,
@@ -514,6 +520,14 @@ field rights and revision, then commits the selected tree and source mappings
 atomically. Previews expire; accepted observations reuse the current-only storage
 and preserve omitted facts when a source or selection is partial. Importing an
 identical accepted file creates no inventory versions or new payloads.
+Replaying accepted proposals cannot undo subsequent local edits. Older reports
+and conflicting reports at the same source instant are refused. Each selected
+network section has its own current checkpoint, so accepting routes does not
+implicitly accept firewall data or prevent reviewing it separately.
+
+Files are limited to 256 KiB, 128 findings and 2944 protobuf field visits before
+decoding. The remaining request budget accommodates explicit matches and context;
+small files with excessive nested fields are refused before generated allocations.
 
 Native modules use selected OS interface, routing and socket sources. macOS reads
 ifconfig, registered hardware ports, Thunderbolt receptacles, lsof, netstat, ALF
