@@ -53,6 +53,9 @@ fn docker_step(step: &str, error: String) -> String {
 }
 
 fn docker_status(error: &str) -> &'static str {
+    if error == "Docker daemon identity unavailable" {
+        return "unavailable";
+    }
     let base = if let Some((base, _)) = error.rsplit_once(": Docker ") {
         base
     } else {
@@ -161,6 +164,9 @@ async fn docker_at(
     local_docker_endpoint(&report.platform, endpoint)?;
     let info=runner.read(&["--host",endpoint,"info","--format","{\"id\":{{json .ID}},\"os\":{{json .OperatingSystem}},\"type\":{{json .OSType}},\"version\":{{json .ServerVersion}}}"]).await.map_err(|e|docker_step("daemon inspection",e))?;
     let info = json(&info)?;
+    if info.get("id").and_then(Value::as_str) == Some("") {
+        return Err("Docker daemon identity unavailable".into());
+    }
     let daemon = string(&info, "id")?;
     let runtime = format!("docker/{}", digest(daemon));
     let mut installation = finding(

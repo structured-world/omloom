@@ -953,6 +953,9 @@ fn workload_page_ownership_is_bounded_redacted_and_read_only() -> TestResult {
     else {
         return Err("child".into());
     };
+    // Complete fixture workers before measuring reads of the durable inventory.
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
     let request = api::Query {
         kinds: vec![K::Workload as i32],
         include_context: true,
@@ -961,7 +964,16 @@ fn workload_page_ownership_is_bounded_redacted_and_read_only() -> TestResult {
         ..Default::default()
     };
     let before = store.usage()?;
-    let syncs = store.diagnostic_database().engine().journal_syncs();
+    // Completed syncs can belong to setup, and the snapshot clock advances on
+    // reads. The journal cursor observes actual new durable mutation entries.
+    let engine = store.diagnostic_database().engine();
+    let journal = engine.oplog_read_since(0)?.ok_or("journal required")?;
+    let next_entry = journal
+        .last()
+        .ok_or("fixture journal empty")?
+        .index
+        .checked_add(1)
+        .ok_or("journal index overflow")?;
     let Reply::Page(page) = call(&store, &operator(), Command::Query(request.clone()))? else {
         return Err("page".into());
     };
@@ -1007,7 +1019,13 @@ fn workload_page_ownership_is_bounded_redacted_and_read_only() -> TestResult {
     };
     assert!(hidden.contexts[0].responsibility.is_none());
     assert_eq!(store.usage()?, before);
-    assert_eq!(store.diagnostic_database().engine().journal_syncs(), syncs);
+    assert!(
+        engine
+            .oplog_read_since(next_entry)?
+            .ok_or("journal required")?
+            .is_empty(),
+        "read-only queries appended journal entries"
+    );
     let plans = store
         .diagnostic_database()
         .query_registry()
@@ -1026,6 +1044,20 @@ fn workload_page_ownership_is_bounded_redacted_and_read_only() -> TestResult {
             .filter(|q| q.canonical_query.contains("facet"))
             .map(|q| (&q.canonical_query, &q.last_plan))
             .collect::<Vec<_>>()
+    );
+    // A real mutation must be visible to the same observer, so an empty or
+    // disconnected diagnostic source cannot make the read-only assertion pass.
+    create(
+        &store,
+        &operator(),
+        K::Workload,
+        "Write observation control",
+    )?;
+    assert!(
+        !engine
+            .oplog_read_since(next_entry)?
+            .ok_or("journal required")?
+            .is_empty()
     );
     Ok(())
 }

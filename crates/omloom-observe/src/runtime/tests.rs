@@ -53,6 +53,29 @@ async fn changed_daemon_identity_invalidates_the_batch() {
     assert!(commands.0.is_empty());
 }
 
+// Docker info can render empty server fields when the selected daemon pipe is
+// absent. That is unavailable identity, never an adopted runtime or bad inventory.
+#[tokio::test]
+async fn absent_daemon_identity_is_reported_as_unavailable() {
+    let mut commands = Commands(
+        [(
+            "info".into(),
+            r#"{"id":"","os":"","type":"","version":""}"#.into(),
+        )]
+        .into(),
+    );
+    let mut report = api::HostReport {
+        platform: "windows".into(),
+        ..Default::default()
+    };
+    let error = docker_at(&mut commands, "npipe:////./pipe/docker_engine", &mut report)
+        .await
+        .expect_err("no daemon identity");
+    assert_eq!(docker_status(&error), "unavailable");
+    assert!(report.findings.is_empty());
+    assert!(commands.0.is_empty());
+}
+
 // Named-pipe collection uses the same selected-field parser as Unix sockets.
 // A Windows runtime/container/attachment keeps its real namespace and owned IP.
 #[tokio::test]
