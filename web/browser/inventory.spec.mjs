@@ -171,6 +171,7 @@ test('native collector file imports into the actual disk-backed UI', async ({ pa
     await page.getByRole('button',{name:name('hardware'),exact:true}).click();
     await page.getByRole('button',{name:'Use as scope',exact:true}).click();
     await page.getByRole('button',{name:name('installation'),exact:true}).click();
+    await expect(page.getByRole('region',{name:'Resource details'}).getByRole('heading',{name:name('installation'),exact:true})).toBeVisible();
     const osURL=page.url();
     const network=page.getByRole('region',{name:'Local network observations'});
     const sockets=network.filter({hasText:'Native acceptance source / sockets'});
@@ -182,14 +183,20 @@ test('native collector file imports into the actual disk-backed UI', async ({ pa
     await firewall.getByRole('button',{name:/^Firewall \(/}).click();
     await expect(firewall.getByRole('status')).toContainText('Effective per-port decision: unknown');
     for(const provider of report.findings.filter(v=>v.key==='netbird'||(v.key.startsWith('docker/')&&v.parent==='installation'))) {
-      await page.goto(osURL);await page.getByRole('button',{name:'Use as scope',exact:true}).click();
+      await page.goto(osURL);
+      await expect(page.getByRole('region',{name:'Resource details'}).getByRole('heading',{name:name('installation'),exact:true})).toBeVisible();
+      await page.getByRole('button',{name:'Use as scope',exact:true}).click();
       const providerName=name(provider.key);
       await page.getByLabel('Search inventory',{exact:true}).fill(providerName);
       await page.getByRole('button',{name:'Search',exact:true}).click({timeout:5000});
-      await page.getByRole('region',{name:'Inventory',exact:true}).getByRole('button',{name:providerName,exact:true}).click();
+      const providerRow=page.getByRole('region',{name:'Inventory',exact:true}).getByRole('button',{name:providerName,exact:true});
+      await expect(providerRow).toBeVisible();
+      await providerRow.click();
       await expect(page.getByRole('region',{name:'Resource details'}).getByRole('heading',{name:providerName,exact:true})).toBeVisible();
       if(provider.key==='netbird') {
         await page.getByRole('button',{name:'Use as scope',exact:true}).click();
+        await page.getByLabel('Search inventory',{exact:true}).fill('');
+        await page.getByRole('button',{name:'Search',exact:true}).click();
         const interfaces=report.findings.filter(v=>v.parent===provider.key&&v.kind===m.AssetKind.INTERFACE);
         expect(interfaces.length).toBeGreaterThan(0);
         await page.getByRole('region',{name:'Inventory',exact:true}).getByRole('button',{name:name(interfaces[0].key),exact:true}).click();
