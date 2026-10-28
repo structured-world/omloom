@@ -5,6 +5,7 @@ use omloom_contracts::{ids::*, workspace as api};
 use prost::Message;
 use std::collections::BTreeSet;
 
+mod accounts;
 mod addresses;
 mod assets;
 mod current_facts;
@@ -14,6 +15,7 @@ mod interface_facts;
 mod network;
 pub(super) mod network_facts;
 mod projection;
+mod responsibility;
 mod views;
 mod working;
 
@@ -329,6 +331,29 @@ impl Store {
                 value,
                 working.as_ref().ok_or(Error::Invalid)?,
             ),
+            C::Responsibility(value) => self.workspace_responsibility(
+                context,
+                value,
+                working.as_ref().ok_or(Error::Invalid)?,
+                now,
+            ),
+            C::ExternalAccount(value) => {
+                self.workspace_account(context, value, working.as_ref().ok_or(Error::Invalid)?, now)
+            }
+            C::OwnerRequest(value) => self.workspace_owner_request(
+                context,
+                value,
+                working.as_ref().ok_or(Error::Invalid)?,
+                now,
+            ),
+            C::ResponsibilityTransfer(value) => self
+                .responsibility_transfer(
+                    context,
+                    value,
+                    working.as_ref().ok_or(Error::Invalid)?,
+                    now,
+                )
+                .map(|state| reply(api::reply::Result::ResponsibilityTransfer(state))),
         }
     }
 
@@ -355,10 +380,7 @@ impl Tx<'_> {
         query: &str,
         values: HashMap<String, Value>,
     ) -> Result<Vec<BTreeMap<String, Value>>> {
-        self.store
-            .db
-            .execute_in_transaction(self.id.ok_or(Error::Corrupt)?, query, Some(values))
-            .map_err(Into::into)
+        self.execute(query, Some(values))
     }
     fn visible_asset(&self, context: &Context, target: AssetRef) -> Result<Properties> {
         let row = self.asset(target)?;

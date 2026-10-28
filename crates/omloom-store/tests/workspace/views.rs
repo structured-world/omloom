@@ -1,5 +1,51 @@
 use super::*;
 
+// An invalid ownership filter cannot be saved and later replayed as a broader view.
+#[test]
+fn saved_views_validate_responsibility_filters_without_matching_assets() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    for filter in [
+        api::ResponsibilityFilter {
+            facet: 0,
+            issuer: "company.example".into(),
+            subject: "team".into(),
+        },
+        api::ResponsibilityFilter {
+            facet: api::ResponsibilityFacet::ClaimedOwner as i32,
+            issuer: String::new(),
+            subject: "team".into(),
+        },
+        api::ResponsibilityFilter {
+            facet: api::ResponsibilityFacet::ClaimedOwner as i32,
+            issuer: "company.example".into(),
+            subject: "x".repeat(257),
+        },
+    ] {
+        let before = store.usage()?;
+        assert!(matches!(
+            call(
+                &store,
+                &operator(),
+                api::request::Command::SaveView(api::SaveView {
+                    view: Some(api::SavedView {
+                        name: "Owner view".into(),
+                        query: Some(api::Query {
+                            responsibility: Some(filter),
+                            ..query()
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+            ),
+            Err(Error::Invalid)
+        ));
+        assert_eq!(store.usage()?, before);
+    }
+    Ok(())
+}
+
 // Schema metadata must stay transport-readable after creation and revision-checked edits.
 #[test]
 fn saved_view_admission_preserves_metadata_reply_budget() -> TestResult {

@@ -2,7 +2,7 @@ import { GrpcWebFetchTransport } from '@protobuf-ts/grpcweb-transport';
 import { Request, Workspace, FieldType, type Reply, type WorkingContext } from '../src/generated/omloom/v1/workspace';
 import { AssetKind, NullValue, type Field, type AssetRef } from '../src/generated/omloom/v1/contracts';
 export * as model from '../src/generated/omloom/v1/workspace';
-export { AssetKind, RelationKind, NullValue } from '../src/generated/omloom/v1/contracts';
+export { AssetKind, RelationKind, NullValue, OperationState, EffectOutcome } from '../src/generated/omloom/v1/contracts';
 export type { Field, AssetRef, Relation } from '../src/generated/omloom/v1/contracts';
 const transport = new GrpcWebFetchTransport({ baseUrl: location.origin, format: 'binary' });
 export async function call(command: Request['command'], working?: WorkingContext): Promise<Reply['result']> {

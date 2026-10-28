@@ -24,6 +24,7 @@ const categories:Record<model.View,{name:string;kinds:number[]}[]>={
   [model.View.SERVICES]:[
     {name:'Services',kinds:[K.SERVICE]},{name:'OS & software installations',kinds:[K.SOFTWARE_INSTALLATION]},
     {name:'Storage',kinds:[K.STORAGE]},
+    {name:'Domains',kinds:[K.DOMAIN]},{name:'Provider accounts',kinds:[K.PROVIDER_ACCOUNT]},
   ],
 };
 const items=computed(()=>categories[props.view]);

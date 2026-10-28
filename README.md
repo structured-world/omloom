@@ -28,6 +28,9 @@ See [embedded storage](docs/storage.md) for the host API, durability boundaries
 and current provider limitations.
 See [the local inventory workspace](docs/inventory.md) for the explicit fixture
 host, browser workflow and its development-only boundary.
+The workspace includes [current ownership and responsibility](docs/inventory.md#ownership-and-responsibility),
+selected external-account references and durable owner-action requests. These
+records do not grant infrastructure or credential access.
 
 ## License
 

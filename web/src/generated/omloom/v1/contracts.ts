@@ -799,7 +799,19 @@ export enum AssetKind {
      *
      * @generated from protobuf enum value: ASSET_KIND_SOFTWARE_INSTALLATION = 22;
      */
-    SOFTWARE_INSTALLATION = 22
+    SOFTWARE_INSTALLATION = 22,
+    /**
+     * Selected registered domain; account control is a separately admitted binding.
+     *
+     * @generated from protobuf enum value: ASSET_KIND_DOMAIN = 23;
+     */
+    DOMAIN = 23,
+    /**
+     * Selected external administration or workload account, without credentials.
+     *
+     * @generated from protobuf enum value: ASSET_KIND_PROVIDER_ACCOUNT = 24;
+     */
+    PROVIDER_ACCOUNT = 24
 }
 /**
  * @generated from protobuf enum omloom.v1.NullValue

@@ -38,7 +38,7 @@ async function create(page, name, kind = 'DEVICE') {
 async function workspaceClient(url) {
   const { buildSync } = await import('esbuild');
   const { GrpcWebFetchTransport } = await import('@protobuf-ts/grpcweb-transport');
-  const built = buildSync({ stdin: { contents: 'export * from "./web/src/generated/omloom/v1/workspace"; export {AssetKind, RelationKind} from "./web/src/generated/omloom/v1/contracts";', resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node' });
+  const built = buildSync({ stdin: { contents: 'export * from "./web/src/generated/omloom/v1/workspace"; export {AssetKind, RelationKind, EffectOutcome, OperationState} from "./web/src/generated/omloom/v1/contracts";', resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node' });
   const m = await import('data:text/javascript;base64,' + Buffer.from(built.outputFiles[0].contents).toString('base64'));
   const transport = new GrpcWebFetchTransport({ baseUrl: url, format: 'binary' });
   async function rpc(command, focus) {
@@ -47,6 +47,156 @@ async function workspaceClient(url) {
   }
   return { m, rpc };
 }
+
+test('responsibility editing, inherited components and typed import work on desktop and phone', async ({ page }) => {
+  // A real component inherits its accepted source; an explicit stop survives parent edits and reload.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-responsibility-')); const server=await host(dir);
+  try {
+    const {m,rpc}=await workspaceClient(server.url);
+    for(const width of [1440,390]) {
+      await page.setViewportSize({width,height:900});await page.goto(server.url);
+      const created=await create(page,`Server ${width}`);
+      const parent={assetId:created.asset_id,incarnation:created.incarnation};
+      const panel=page.getByRole('region',{name:'Ownership and responsibility'});
+      await page.getByRole('button',{name:'Edit claimed owner',exact:true}).click();
+      let dialog=page.getByRole('dialog');
+      await dialog.getByLabel('Party namespace',{exact:true}).fill('company.example');
+      await dialog.getByLabel('Party identity',{exact:true}).fill('devops');
+      await dialog.getByLabel('Party label',{exact:true}).fill('DevOps');
+      await dialog.getByRole('button',{name:'Review assignment',exact:true}).click();
+      await expect(dialog.getByRole('heading',{name:'Review effective result'})).toBeVisible();
+      await dialog.getByRole('button',{name:'Apply assignment',exact:true}).click();
+      await expect(dialog).toBeHidden();await expect(panel.getByText('DevOps',{exact:true})).toBeVisible();
+      const child=(await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.INTERFACE,parent,changes:[{name:'name',value:{oneofKind:'text',text:`NIC ${width}`}}]})},parent)).mutation.targets[0];
+      await page.goto(`${server.url}/#/?view=1&asset=${child.assetId}&incarnation=${child.incarnation}`);
+      await expect(panel.getByText('DevOps',{exact:true})).toBeVisible();
+      await page.getByRole('button',{name:'Edit claimed owner',exact:true}).click();
+      dialog=page.getByRole('dialog');await dialog.getByLabel('Assignment',{exact:true}).selectOption(String(m.AssignmentMode.UNASSIGNED));
+      await dialog.getByRole('button',{name:'Review assignment',exact:true}).click();await dialog.getByRole('button',{name:'Apply assignment',exact:true}).click();await expect(dialog).toBeHidden();
+      const current=(await rpc({oneofKind:'read',read:m.Read.create({target:parent})},parent)).detail.item;
+      await rpc({oneofKind:'responsibility',responsibility:m.Responsibility.create({target:parent,expected:current.revision,action:m.ResponsibilityAction.APPLY,changes:[m.ResponsibilityAssignment.create({facet:m.ResponsibilityFacet.CLAIMED_OWNER,mode:m.AssignmentMode.EXPLICIT,party:m.PartyRef.create({issuer:'company.example',subject:'another',kind:m.PartyKind.TEAM,name:'Another team'})})]})},parent);
+      await page.reload();await expect(panel.getByText('unassigned',{exact:true})).toBeVisible();await expect(panel.getByText('Another team',{exact:true})).toHaveCount(0);
+      const state=(await rpc({oneofKind:'responsibility',responsibility:m.Responsibility.create({target:child,action:m.ResponsibilityAction.READ})},child)).responsibility;
+      const transfer=m.ResponsibilityTransfer.create({entries:[m.Responsibility.create({target:child,expected:state.item.revision,action:m.ResponsibilityAction.APPLY,changes:[m.ResponsibilityAssignment.create({facet:m.ResponsibilityFacet.CLAIMED_OWNER,mode:m.AssignmentMode.EXPLICIT,party:m.PartyRef.create({issuer:'company.example',subject:'developer-a',kind:m.PartyKind.TEAM,name:'Developer A'})})]})]});
+      await page.getByRole('button',{name:'Import responsibility',exact:true}).click();dialog=page.getByRole('dialog');
+      await dialog.getByLabel('Typed JSON import',{exact:true}).fill(JSON.stringify(m.ResponsibilityTransfer.toJson(transfer)));
+      await dialog.getByRole('button',{name:'Review import',exact:true}).click();await expect(dialog.getByText('1 resources validated. No changes have been saved.',{exact:true})).toBeVisible();
+      const bounds=await dialog.boundingBox();expect(bounds.width).toBeLessThanOrEqual(width);
+      await dialog.getByRole('button',{name:'Apply import',exact:true}).click();await expect(dialog).toBeHidden();await expect(panel.getByText('Developer A',{exact:true})).toBeVisible();
+      await page.goto(`${server.url}/#/?view=1`);
+      await page.getByRole('button',{name:'Add filter',exact:true}).click();dialog=page.getByRole('dialog');
+      await dialog.getByLabel('Filter by effective responsibility',{exact:true}).check();
+      await dialog.getByLabel('Responsibility facet',{exact:true}).selectOption(String(m.ResponsibilityFacet.CLAIMED_OWNER));
+      await dialog.getByLabel('Party namespace',{exact:true}).fill('company.example');await dialog.getByLabel('Party identity',{exact:true}).fill('developer-a');
+      await dialog.getByRole('button',{name:'Apply filter',exact:true}).click();await expect(dialog).toBeHidden();
+      await expect(page.getByRole('region',{name:'Inventory'}).getByText(`NIC ${width}`,{exact:true})).toBeVisible();
+      await page.getByRole('button',{name:'Save view',exact:true}).click();dialog=page.getByRole('dialog');await dialog.getByLabel('Name',{exact:true}).fill(`Owned NIC ${width}`);
+      await dialog.getByRole('button',{name:'Save personal view',exact:true}).click();await expect(dialog).toBeHidden();
+      await page.getByRole('button',{name:'Remove responsibility filter',exact:true}).click();
+      await page.getByRole('button',{name:`◦ Owned NIC ${width}`,exact:true}).click();
+      await expect(page.getByRole('button',{name:'Remove responsibility filter',exact:true})).toBeVisible();
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
+test('personal registrar owner requests retain exact changes without claiming provider success',async({page})=>{
+  // Metadata, bindings, approval and an owner assertion traverse the real API and durable store.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-owner-request-'));const server=await host(dir);
+  try {
+    const {m}=await workspaceClient(server.url);
+    for(const width of [1440,390]) {
+      await page.setViewportSize({width,height:900});await page.goto(server.url);
+      await create(page,`Company domain ${width}`,'DOMAIN');
+      await create(page,`Founder registrar ${width}`,'PROVIDER_ACCOUNT');
+      await page.getByRole('button',{name:'Edit account metadata',exact:true}).click();let dialog=page.getByRole('dialog');
+      await dialog.getByLabel('Provider namespace',{exact:true}).fill('registrar.example');await dialog.getByLabel('Provider account identity',{exact:true}).fill(`personal-${width}`);
+      await dialog.getByLabel('Account kind',{exact:true}).selectOption(String(m.ExternalAccountKind.ADMINISTRATION));await dialog.getByLabel('Provider delegation',{exact:true}).selectOption(String(m.AccountDelegation.OWNER_ONLY));
+      await dialog.getByRole('button',{name:'Save account metadata',exact:true}).click();await expect(dialog).toBeHidden();
+      await page.getByRole('button',{name:'Bind selected resource',exact:true}).click();dialog=page.getByRole('dialog');
+      await dialog.getByLabel('Find resource',{exact:true}).fill(`Company domain ${width}`);await dialog.getByRole('button',{name:'Find resources',exact:true}).click();
+      await dialog.getByRole('button',{name:new RegExp(`Company domain ${width}`)}).click();
+      await dialog.getByRole('button',{name:'Review binding',exact:true}).click();
+      dialog=page.getByRole('dialog',{name:'Review account binding',exact:true});
+      await expect(dialog.getByRole('region',{name:'Selected relationship context'})).toContainText(`Company domain ${width}`);
+      await expect(dialog.getByRole('region',{name:'Selected relationship context'})).toContainText(`Founder registrar ${width}`);
+      await dialog.getByRole('button',{name:'Save binding',exact:true}).click();await expect(dialog).toBeHidden();
+      await page.getByRole('button',{name:'Edit account controller',exact:true}).click();dialog=page.getByRole('dialog');
+      await dialog.getByLabel('Party kind',{exact:true}).selectOption(String(m.PartyKind.INDIVIDUAL));
+      await dialog.getByLabel('Party namespace',{exact:true}).fill('people.example');await dialog.getByLabel('Party identity',{exact:true}).fill('founder');await dialog.getByLabel('Party label',{exact:true}).fill('Founder');
+      await dialog.getByRole('button',{name:'Review assignment',exact:true}).click();await dialog.getByRole('button',{name:'Apply assignment',exact:true}).click();await expect(dialog).toBeHidden();
+      await expect(page.getByRole('region',{name:'Ownership and responsibility'}).getByText('Founder',{exact:true})).toBeVisible();
+      await page.getByRole('button',{name:'Share account view',exact:true}).click();dialog=page.getByRole('dialog');
+      await dialog.getByLabel('Name',{exact:true}).fill(`Registrar reference ${width}`);await dialog.getByLabel('operations',{exact:true}).check();
+      await dialog.getByRole('button',{name:'Preview publication',exact:true}).click();
+      await expect(dialog.getByText("Data remains restricted by each reader's rights.",{exact:false})).toBeVisible();
+      await dialog.getByRole('button',{name:'Publish reviewed definition',exact:true}).click();await expect(dialog).toBeHidden();
+      await page.getByRole('button',{name:'Close resource details',exact:true}).click();
+      await expect(page.getByRole('button',{name:`♧ Registrar reference ${width}`,exact:true})).toBeVisible();
+      await page.getByRole('button',{name:`♧ Registrar reference ${width}`,exact:true}).click();
+      await page.getByRole('button',{name:'Request owner action',exact:true}).click();dialog=page.getByRole('dialog');
+      await dialog.getByLabel('Managed resource',{exact:true}).selectOption({label:`Company domain ${width}`});
+      await dialog.getByLabel('Requested action',{exact:true}).fill('set-description');await dialog.getByLabel('Proposed value',{exact:true}).fill(`Company-managed domain ${width}`);
+      await dialog.getByLabel('Request deadline',{exact:true}).fill(new Date(Date.now()+86400000).toISOString().slice(0,16));
+      await dialog.getByRole('button',{name:'Save owner request',exact:true}).click();
+      dialog=page.getByRole('dialog',{name:'Owner action request',exact:true});await expect(dialog.getByText(`Company-managed domain ${width}`,{exact:true})).toBeVisible();
+      await dialog.getByRole('button',{name:'Approve requested change',exact:true}).click();await expect(dialog.getByText('Approved; waiting for the account owner.',{exact:true})).toBeVisible();
+      await dialog.getByLabel('Owner-reported outcome',{exact:true}).selectOption(String(m.EffectOutcome.CONFIRMED));await dialog.getByRole('button',{name:'Record owner report',exact:true}).click();
+      await expect(dialog.getByText('Owner-reported result. Independent provider verification is still required.',{exact:true})).toBeVisible();
+      expect((await dialog.boundingBox()).width).toBeLessThanOrEqual(width);
+      await dialog.getByRole('button',{name:'Close dialog',exact:true}).click();await page.reload();
+      await page.getByRole('button',{name:`Company domain ${width} · Needs independent verification`,exact:true}).click();await expect(page.getByRole('dialog').getByText(`Company-managed domain ${width}`,{exact:true})).toBeVisible();
+      await page.getByRole('dialog').getByRole('button',{name:'Close dialog',exact:true}).click();
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
+test('partial account metadata cannot be cleared by a write-only replacement form',async({page})=>{
+  // Hidden metadata is absent from replies, so a whole-record editor must not turn it into a clear.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-account-fields-'));let server=await host(dir);
+  try {
+    const {m,rpc}=await workspaceClient(server.url);
+    const account=(await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.PROVIDER_ACCOUNT,changes:[{name:'name',value:{oneofKind:'text',text:'Partially disclosed account'}}]})})).mutation.targets[0];
+    const binding=account.assetId;
+    await rpc({oneofKind:'externalAccount',externalAccount:m.ExternalAccount.create({target:account,expected:1n,metadata:{issuer:'provider.example',subject:'selected-account',kind:m.ExternalAccountKind.ADMINISTRATION,delegation:m.AccountDelegation.OWNER_ONLY,credentialBindingId:binding}})},account);
+    await server.stop();
+    const grants=join(dir,'grants.json');
+    await writeFile(grants,JSON.stringify([{selection:{scope:'all'},read:{mode:'selected',fields:['name','issuer','subject','account_kind','delegation','login','sender','recovery_route','account.bindings','account.requests']},write:{mode:'all'},writable:true}]));
+    server=await host(dir,'operator',grants);
+    for(const width of [1440,390]) {
+      await page.setViewportSize({width,height:900});
+      await page.goto(`${server.url}/#/?view=0&asset=${account.assetId}&incarnation=${account.incarnation}`);
+      const panel=page.getByRole('region',{name:'External account',exact:true});
+      await expect(panel.getByText('provider.example',{exact:true})).toBeVisible();
+      await expect(panel.getByRole('button',{name:'Edit account metadata',exact:true})).toHaveCount(0);
+      await expect(panel).not.toContainText(binding);
+    }
+    await server.stop();server=await host(dir);
+    const full=await workspaceClient(server.url);
+    const saved=(await full.rpc({oneofKind:'externalAccount',externalAccount:full.m.ExternalAccount.create({target:account})},account)).externalAccount;
+    expect(saved.metadata.credentialBindingId).toBe(binding);
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
+test('hidden responsibility contacts cannot be cleared through the replacement form', async ({ page }) => {
+  // Contact write permission is independent of disclosure; absence in a reply is not an empty value.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-contact-fields-'));let server=await host(dir);
+  try {
+    const {m,rpc}=await workspaceClient(server.url);
+    const target=(await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.DEVICE,changes:[{name:'name',value:{oneofKind:'text',text:'Restricted contact'}}]})})).mutation.targets[0];
+    await rpc({oneofKind:'responsibility',responsibility:m.Responsibility.create({target,expected:1n,action:m.ResponsibilityAction.APPLY,changes:[{facet:m.ResponsibilityFacet.CLAIMED_OWNER,mode:m.AssignmentMode.EXPLICIT,party:{issuer:'company.example',subject:'devops',kind:m.PartyKind.TEAM,name:'DevOps'},contact:'mailto:private@example.test'}]})},target);
+    await server.stop();const grants=join(dir,'grants.json');
+    await writeFile(grants,JSON.stringify([{selection:{scope:'all'},read:{mode:'selected',fields:['name','relations','claimed_owner']},write:{mode:'all'},writable:true}]));
+    server=await host(dir,'operator',grants);
+    for(const width of [1440,390]) {
+      await page.setViewportSize({width,height:900});await page.goto(`${server.url}/#/?asset=${target.assetId}&incarnation=${target.incarnation}`);
+      const panel=page.getByRole('region',{name:'Ownership and responsibility'});
+      await expect(panel.getByText('DevOps',{exact:true})).toBeVisible();
+      await expect(panel.getByRole('button',{name:'Edit claimed owner',exact:true})).toHaveCount(0);
+      await expect(panel).not.toContainText('private@example.test');
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
 
 test('leaving hypervisor through another resource kind discards its role', async ({ page }) => {
   // A hidden draft role must not make a subsequently selected ordinary installation a hypervisor.
@@ -790,6 +940,65 @@ test('mutations reset ordinary and local continuations on desktop and phone', as
       await expect(page.getByRole('alert')).toHaveCount(0);
     }
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('responsibility and account mutations discard enclosing page continuations', async ({ page }) => {
+  // These panels mutate the same revision as resource edits; returning must never reuse an old cursor.
+  test.setTimeout(90_000);
+  for (const kindName of ['DEVICE','PROVIDER_ACCOUNT']) {
+    const dir=await mkdtemp(join(tmpdir(),'omloom-panel-cursors-'));const server=await host(dir);
+    try {
+      const {m,rpc}=await workspaceClient(server.url);
+      let parent;
+      for(let i=0;i<26;i++) parent=(await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind[kindName],changes:[{name:'name',value:{oneofKind:'text',text:`Root ${String(i).padStart(2,'0')}`}}]})})).mutation.targets[0];
+      if(kindName==='DEVICE') for(let i=0;i<26;i++) await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.PORT,parent,changes:[{name:'name',value:{oneofKind:'text',text:`Port ${String(i).padStart(2,'0')}`}}]})},parent);
+      for(const width of [1440,390]) {
+        await page.setViewportSize({width,height:900});await page.goto(server.url);
+        await page.getByRole('button',{name:'Next page →',exact:true}).click();
+        await page.getByRole('button',{name:'Root 25',exact:true}).click();
+        const dialog=page.getByRole('dialog');
+        if(kindName==='DEVICE') {
+          await page.getByRole('button',{name:'Edit claimed owner',exact:true}).click();
+          await dialog.getByLabel('Party namespace',{exact:true}).fill('company.example');
+          await dialog.getByLabel('Party identity',{exact:true}).fill('devops');
+          await dialog.getByLabel('Party label',{exact:true}).fill(`DevOps ${width}`);
+          await dialog.getByRole('button',{name:'Review assignment',exact:true}).click();
+          await dialog.getByRole('button',{name:'Apply assignment',exact:true}).click();
+        } else {
+          await page.getByRole('button',{name:'Edit account metadata',exact:true}).click();
+          if(width===1440) {
+            await dialog.getByLabel('Provider namespace',{exact:true}).fill('provider.example');
+            await dialog.getByLabel('Provider account identity',{exact:true}).fill('selected');
+            await dialog.getByLabel('Account kind',{exact:true}).selectOption(String(m.ExternalAccountKind.ADMINISTRATION));
+          }
+          await dialog.getByLabel('Login label',{exact:true}).fill(`Selected ${width}`);
+          await dialog.getByRole('button',{name:'Save account metadata',exact:true}).click();
+        }
+        await expect(dialog).toBeHidden();
+        if(kindName==='DEVICE') await expect(page.getByRole('region',{name:'Ownership and responsibility'}).getByText(`DevOps ${width}`,{exact:true})).toBeVisible();
+        else await expect(page.getByRole('region',{name:'External account',exact:true}).getByText(`Selected ${width}`,{exact:true})).toBeVisible();
+        await page.getByRole('button',{name:'Close resource details',exact:true}).click();
+        await expect(page).not.toHaveURL(/cursor=/);
+        await expect(page.getByRole('alert')).toHaveCount(0);
+        await expect(page.getByRole('button',{name:'Root 00',exact:true})).toBeVisible();
+        if(kindName==='DEVICE') {
+          await page.goto(`${server.url}/#/?view=${m.View.HARDWARE}&asset=${parent.assetId}&incarnation=${parent.incarnation}`);
+          await expect(page.getByRole('button',{name:'Port 00',exact:true})).toBeVisible();
+          await page.getByRole('button',{name:width===390?'Next local resources':'Next page →',exact:true}).click();
+          await expect(page).toHaveURL(/localCursor=/);
+          await expect(page.getByRole('button',{name:'Port 25',exact:true})).toBeVisible();
+          await page.getByRole('button',{name:'Edit claimed owner',exact:true}).click();
+          await dialog.getByLabel('Party label',{exact:true}).fill(`Local ${width}`);
+          await dialog.getByRole('button',{name:'Review assignment',exact:true}).click();
+          await dialog.getByRole('button',{name:'Apply assignment',exact:true}).click();
+          await expect(dialog).toBeHidden();
+          await expect(page).not.toHaveURL(/localCursor=/);
+          await expect(page.getByRole('button',{name:'Port 00',exact:true})).toBeVisible();
+          await expect(page.getByRole('alert')).toHaveCount(0);
+        }
+      }
+    }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+  }
 });
 
 test('reordering field applicability saves without a migration on desktop and phone', async ({ page }) => {

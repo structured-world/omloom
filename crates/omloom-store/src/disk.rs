@@ -22,7 +22,7 @@ use std::{
 type Properties = BTreeMap<String, Value>;
 type Result<T> = std::result::Result<T, Error>;
 const ROOT: &str = "installation";
-const SCHEMA_VERSION: u64 = 8;
+const SCHEMA_VERSION: u64 = 9;
 const MAX_CHILDREN: usize = 2048;
 mod inventory;
 mod lifecycle;
@@ -418,6 +418,16 @@ impl Store {
             "zone",
             "binding",
             "ip_order",
+            "issuer",
+            "subject",
+            "contact",
+            "source_relation",
+            "request_account",
+            "login",
+            "sender",
+            "credential_binding_id",
+            "recovery_route",
+            "party_lookup",
         ] {
             schema.add_property(PropertyDef::new(name, PropertyType::String));
         }
@@ -451,6 +461,14 @@ impl Store {
             "prefix_length",
             "count",
             "bytes",
+            "facet",
+            "mode",
+            "party_kind",
+            "source_binding_revision",
+            "account_kind",
+            "delegation",
+            "link_kind",
+            "account_revision",
         ] {
             schema.add_property(PropertyDef::new(name, PropertyType::Int));
         }
@@ -461,6 +479,8 @@ impl Store {
             "settled",
             "searchable",
             "retired",
+            "approved",
+            "owner_reported",
         ] {
             schema.add_property(PropertyDef::new(name, PropertyType::Bool));
         }
@@ -498,7 +518,7 @@ impl Store {
             let previous_version = root.rows.first().and_then(|row| row.get("version"));
             if !matches!(
                 root.rows.first().and_then(|row| row.get("version")),
-                Some(Value::Int(2..=6))
+                Some(Value::Int(2..=8))
             ) || current.mode != schema.mode
                 || current.placement != schema.placement
                 || current.temporal != schema.temporal
@@ -511,6 +531,32 @@ impl Store {
                     .keys()
                     .filter(|key| !current.properties.contains_key(*key))
                     .any(|key| {
+                        if [
+                            "issuer",
+                            "subject",
+                            "contact",
+                            "source_relation",
+                            "facet",
+                            "mode",
+                            "party_kind",
+                            "source_binding_revision",
+                            "request_account",
+                            "login",
+                            "sender",
+                            "credential_binding_id",
+                            "recovery_route",
+                            "account_kind",
+                            "delegation",
+                            "link_kind",
+                            "account_revision",
+                            "approved",
+                            "owner_reported",
+                            "party_lookup",
+                        ]
+                        .contains(&key.as_str())
+                        {
+                            return false;
+                        }
                         if key == "count" || key == "bytes" {
                             return false;
                         }
@@ -610,7 +656,11 @@ impl Store {
             ("omloom_layer", "layer"),
             // Reverse membership lookup and shared-address expansion for visible interface hints.
             ("omloom_asset", "asset"),
+            // Reverse administrative inheritance follows exact relation endpoints.
+            ("omloom_to_asset", "to_asset"),
             ("omloom_group", "group"),
+            ("omloom_party_lookup", "party_lookup"),
+            ("omloom_request_account", "request_account"),
         ] {
             match db.execute_cypher(&format!("CREATE INDEX {name} ON :OmRow({property})")) {
                 Ok(_) => {}
@@ -685,6 +735,11 @@ impl Store {
             "MATCH (n:OmRow {parent:'assets'}) RETURN n.key AS key LIMIT 1",
             &class_probe,
             "MATCH (n:OmRow {layer:'intent'}) RETURN n.key AS key LIMIT 1",
+            "MATCH (n:OmRow {asset:'probe'}) RETURN n.key AS key LIMIT 1",
+            "MATCH (n:OmRow {to_asset:'probe'}) RETURN n.key AS key LIMIT 1",
+            "MATCH (n:OmRow {group:'probe'}) RETURN n.key AS key LIMIT 1",
+            "MATCH (n:OmRow {party_lookup:'probe'}) RETURN n.key AS key LIMIT 1",
+            "MATCH (n:OmRow {request_account:'probe'}) RETURN n.key AS key LIMIT 1",
         ] {
             store
                 .db
@@ -821,11 +876,32 @@ struct Tx<'a> {
 }
 impl Tx<'_> {
     fn query(&self, q: &str, p: Option<HashMap<String, Value>>) -> Result<Vec<Properties>> {
-        unpack(
-            self.store
-                .db
-                .execute_in_transaction(self.id.ok_or(Error::Corrupt)?, q, p)?,
-        )
+        unpack(self.execute(q, p)?)
+    }
+    fn execute(
+        &self,
+        q: &str,
+        p: Option<HashMap<String, Value>>,
+    ) -> Result<Vec<BTreeMap<String, Value>>> {
+        #[cfg(feature = "diagnostics")]
+        let started = if std::env::var_os("OMLOOM_QUERY_TIMINGS").is_some() {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
+        let rows = self
+            .store
+            .db
+            .execute_in_transaction(self.id.ok_or(Error::Corrupt)?, q, p)?;
+        #[cfg(feature = "diagnostics")]
+        if let Some(started) = started {
+            eprintln!(
+                "query timing {:?}, rows={}: {q}",
+                started.elapsed(),
+                rows.len()
+            );
+        }
+        Ok(rows)
     }
     fn get(&self, key: &str) -> Result<Option<Properties>> {
         Ok(self

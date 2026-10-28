@@ -4,8 +4,10 @@
 import { ServiceType } from "@protobuf-ts/runtime-rpc";
 import { MessageType } from "@protobuf-ts/runtime";
 import { Observation } from "./contracts";
-import { Relation } from "./contracts";
 import { RelationKind } from "./contracts";
+import { EffectOutcome } from "./contracts";
+import { Operation } from "./contracts";
+import { Relation } from "./contracts";
 import { AssetKind } from "./contracts";
 import { AssetRef } from "./contracts";
 import { Field } from "./contracts";
@@ -132,6 +134,36 @@ export interface Query {
      * @generated from protobuf field: bool level_only = 15
      */
     levelOnly: boolean;
+    /**
+     * Exact issuer-qualified effective responsibility filter, applied before totals
+     * and pagination. Only a permitted facet can contribute a matching resource.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.ResponsibilityFilter responsibility = 16
+     */
+    responsibility?: ResponsibilityFilter;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.ResponsibilityFilter
+ */
+export interface ResponsibilityFilter {
+    /**
+     * Independent owner/operator facet selected by the user; never a permission selector.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.ResponsibilityFacet facet = 1
+     */
+    facet: ResponsibilityFacet;
+    /**
+     * Source namespace of the selected party, max 256 bytes.
+     *
+     * @generated from protobuf field: string issuer = 2
+     */
+    issuer: string;
+    /**
+     * Stable party identity within issuer, max 256 bytes, not its display name.
+     *
+     * @generated from protobuf field: string subject = 3
+     */
+    subject: string;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.WorkingContext
@@ -183,6 +215,560 @@ export interface Prepare {
      * @generated from protobuf field: optional omloom.v1.AssetRef to = 3
      */
     to?: AssetRef;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PartyRef
+ */
+export interface PartyRef {
+    /**
+     * Source namespace supplied with the selected reference, max 256 UTF-8 bytes.
+     * Equal names in different namespaces never identify the same party.
+     *
+     * @generated from protobuf field: string issuer = 1
+     */
+    issuer: string;
+    /**
+     * Stable opaque identity within issuer, max 256 bytes; not a display name.
+     *
+     * @generated from protobuf field: string subject = 2
+     */
+    subject: string;
+    /**
+     * Declared business-party type; it establishes neither legal title nor SID membership.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PartyKind kind = 3
+     */
+    kind: PartyKind;
+    /**
+     * User/source-supplied label for this resource's reference, max 160 bytes.
+     * A label change preserves issuer and subject and grants no additional rights.
+     *
+     * @generated from protobuf field: string name = 4
+     */
+    name: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.ResponsibilityAssignment
+ */
+export interface ResponsibilityAssignment {
+    /**
+     * User-selected independent facet; only claimed owner and operator may inherit.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.ResponsibilityFacet facet = 1
+     */
+    facet: ResponsibilityFacet;
+    /**
+     * Explicit assignment, qualified downward inheritance or an explicit unassigned stop.
+     * Absence of a local row is interpreted by the component contract, never as the creator.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.AssignmentMode mode = 2
+     */
+    mode: AssignmentMode;
+    /**
+     * Selected source-qualified party, required only for EXPLICIT.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.PartyRef party = 3
+     */
+    party?: PartyRef;
+    /**
+     * Existing accepted relation chosen as an administrative inheritance source.
+     * Omit when the component contract determines the source unambiguously.
+     * The server derives its endpoints and rejects peer, network and dependency edges.
+     *
+     * @generated from protobuf field: optional string source_relation = 4
+     */
+    sourceRelation?: string;
+    /**
+     * Current relation revision reviewed by the user when selecting source_relation.
+     * Required with that selector on writes; never interpreted as authorization.
+     *
+     * @generated from protobuf field: optional uint64 source_revision = 5
+     */
+    sourceRevision?: bigint;
+    /**
+     * Explicit optional responsibility route, max 512 bytes, separately disclosed
+     * from the assignment. A route is not automatically an approver or a credential.
+     *
+     * @generated from protobuf field: optional string contact = 6
+     */
+    contact?: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.EffectiveResponsibility
+ */
+export interface EffectiveResponsibility {
+    /**
+     * Independent facet requested by the caller and authorized on the selected resource.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.ResponsibilityFacet facet = 1
+     */
+    facet: ResponsibilityFacet;
+    /**
+     * Server-derived current resolution; unknown and an explicit stop are distinct.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.ResponsibilityStatus status = 2
+     */
+    status: ResponsibilityStatus;
+    /**
+     * Effective value permitted on this child; its visibility does not disclose the parent.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.PartyRef party = 3
+     */
+    party?: PartyRef;
+    /**
+     * Source resource, present only with independent permission to disclose its identity.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef source = 4
+     */
+    source?: AssetRef;
+    /**
+     * Source's accepted inventory revision, present only with that source disclosure.
+     *
+     * @generated from protobuf field: optional uint64 source_revision = 5
+     */
+    sourceRevision?: bigint;
+    /**
+     * Current route, returned only with separate contact permission on the selected resource.
+     *
+     * @generated from protobuf field: optional string contact = 6
+     */
+    contact?: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.Responsibility
+ */
+export interface Responsibility {
+    /**
+     * Exact resource incarnation selected for reading or editing, never inferred from a name.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef target = 1
+     */
+    target?: AssetRef;
+    /**
+     * Reviewed resource revision. Omit for reads; required for a mutation with changes.
+     *
+     * @generated from protobuf field: optional uint64 expected = 2
+     */
+    expected?: bigint;
+    /**
+     * Explicit local changes; omitted facets retain their assignments. Empty means read.
+     * The server derives effective inheritance and never accepts client-computed ownership.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.ResponsibilityAssignment changes = 3
+     */
+    changes: ResponsibilityAssignment[];
+    /**
+     * Explicitly request a read, a non-persistent preview or an accepted mutation.
+     * Unspecified is rejected; supplying changes alone never authorizes a write.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.ResponsibilityAction action = 4
+     */
+    action: ResponsibilityAction;
+    /**
+     * Request source choices only when preparing an edit; ordinary labels need no picker data.
+     *
+     * @generated from protobuf field: bool include_sources = 5
+     */
+    includeSources: boolean;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.ResponsibilityState
+ */
+export interface ResponsibilityState {
+    /**
+     * Existing selected resource and its current edit revision; no new party inventory.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.Item item = 1
+     */
+    item?: Item;
+    /**
+     * Permitted local declarations. Missing declarations do not imply permission to set them.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.ResponsibilityAssignment assignments = 2
+     */
+    assignments: ResponsibilityAssignment[];
+    /**
+     * Current field-authorized resolution with independently restricted source references.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.EffectiveResponsibility effective = 3
+     */
+    effective: EffectiveResponsibility[];
+    /**
+     * Facets writable under the trusted host decision, not rights inferred from ownership.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.ResponsibilityFacet writable = 4
+     */
+    writable: ResponsibilityFacet[];
+    /**
+     * Current application basis for preview/import and conditional acceptance.
+     *
+     * @generated from protobuf field: uint64 revision = 5
+     */
+    revision: bigint;
+    /**
+     * Bounded actual downward source choices, independently filtered for disclosure.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.ResponsibilitySource sources = 6
+     */
+    sources: ResponsibilitySource[];
+    /**
+     * Facets whose local declaration and contact are both readable. A replacement
+     * form requires this disclosure independently of the caller's write permission.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.ResponsibilityFacet fully_readable = 7
+     */
+    fullyReadable: ResponsibilityFacet[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.ResponsibilitySource
+ */
+export interface ResponsibilitySource {
+    /**
+     * Existing accepted relation and current revision selected as the inheritance basis.
+     *
+     * @generated from protobuf field: omloom.v1.Relation relation = 1
+     */
+    relation?: Relation;
+    /**
+     * Permitted source identity/name only, not its other fields or contacts.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.Item parent = 2
+     */
+    parent?: Item;
+    /**
+     * Facets for which this source can currently be explicitly selected.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.ResponsibilityFacet facets = 3
+     */
+    facets: ResponsibilityFacet[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.ResponsibilityTransfer
+ */
+export interface ResponsibilityTransfer {
+    /**
+     * Finite selected export or reviewed import, max 100 exact resource entries.
+     * All entries use the same action and commit atomically; preview never persists.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.Responsibility entries = 1
+     */
+    entries: Responsibility[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.ResponsibilityTransferState
+ */
+export interface ResponsibilityTransferState {
+    /**
+     * Independently filtered declarations for the exact selected identities.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.ResponsibilityState entries = 1
+     */
+    entries: ResponsibilityState[];
+    /**
+     * Application revision shared by the complete bounded transfer.
+     *
+     * @generated from protobuf field: uint64 revision = 2
+     */
+    revision: bigint;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.AccountMetadata
+ */
+export interface AccountMetadata {
+    /**
+     * Provider namespace for this selected account, max 256 bytes; not a secret endpoint.
+     *
+     * @generated from protobuf field: string issuer = 1
+     */
+    issuer: string;
+    /**
+     * Provider-generated stable account identity, max 256 bytes, never a password.
+     *
+     * @generated from protobuf field: string subject = 2
+     */
+    subject: string;
+    /**
+     * Human administration and workload principals have different authority boundaries.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.ExternalAccountKind kind = 3
+     */
+    kind: ExternalAccountKind;
+    /**
+     * Reviewed provider capability. Unspecified means unknown, never owner-only or delegated.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.AccountDelegation delegation = 4
+     */
+    delegation: AccountDelegation;
+    /**
+     * Permitted selected login label, max 256 bytes; not an authentication credential.
+     *
+     * @generated from protobuf field: optional string login = 5
+     */
+    login?: string;
+    /**
+     * Known sender constraint for the selected SMTP account, max 256 bytes.
+     *
+     * @generated from protobuf field: optional string sender = 6
+     */
+    sender?: string;
+    /**
+     * Host-configured opaque credential binding UUID, never a vault path or secret.
+     *
+     * @generated from protobuf field: optional string credential_binding_id = 7
+     */
+    credentialBindingId?: string;
+    /**
+     * Known public provider recovery/transfer route, max 512 bytes; no recovery answers.
+     *
+     * @generated from protobuf field: optional string recovery_route = 8
+     */
+    recoveryRoute?: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.AccountLink
+ */
+export interface AccountLink {
+    /**
+     * Explicit relationship meaning; none of these bindings transfers ownership or grants.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.AccountLinkKind kind = 1
+     */
+    kind: AccountLinkKind;
+    /**
+     * Selected existing resource and incarnation, checked independently for disclosure/editing.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef target = 2
+     */
+    target?: AssetRef;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.ExternalAccount
+ */
+export interface ExternalAccount {
+    /**
+     * Selected account resource. Ordinary asset creation supplies its stable identity.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef target = 1
+     */
+    target?: AssetRef;
+    /**
+     * Required for edits, omitted for reads. Bound to the account's accepted revision.
+     *
+     * @generated from protobuf field: optional uint64 expected = 2
+     */
+    expected?: bigint;
+    /**
+     * Explicit current metadata replacement. Omit to preserve metadata when editing links.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.AccountMetadata metadata = 3
+     */
+    metadata?: AccountMetadata;
+    /**
+     * Explicit additions, max 32. Omitted and hidden bindings are preserved.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.AccountLink add = 4
+     */
+    add: AccountLink[];
+    /**
+     * Explicit removals, max 32, each requiring current endpoint rights.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.AccountLink remove = 5
+     */
+    remove: AccountLink[];
+    /**
+     * Server continuation for the account's bounded request list. Reads only.
+     *
+     * @generated from protobuf field: optional string requests_cursor = 6
+     */
+    requestsCursor?: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.ExternalAccountState
+ */
+export interface ExternalAccountState {
+    /**
+     * Permitted account identity/type and its current revision.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.Item item = 1
+     */
+    item?: Item;
+    /**
+     * Only independently permitted metadata fields. No credential is fetched or transmitted.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.AccountMetadata metadata = 2
+     */
+    metadata?: AccountMetadata;
+    /**
+     * Currently disclosable selected bindings; omission never proves absence elsewhere.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.AccountLink links = 3
+     */
+    links: AccountLink[];
+    /**
+     * Independent host decisions, not provider execution qualification or secret availability.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.AccountCapability authorized = 4
+     */
+    authorized: AccountCapability[];
+    /**
+     * Explicit metadata/link fields writable in this context.
+     *
+     * @generated from protobuf field: repeated string writable = 5
+     */
+    writable: string[];
+    /**
+     * Current application revision for conditional editing.
+     *
+     * @generated from protobuf field: uint64 revision = 6
+     */
+    revision: bigint;
+    /**
+     * Names/kinds for the permitted link targets, fetched together for this card.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.Item related = 7
+     */
+    related: Item[];
+    /**
+     * Bounded durable request summaries. Arguments are read only when opening a request.
+     *
+     * @generated from protobuf field: repeated omloom.v1.Operation requests = 8
+     */
+    requests: Operation[];
+    /**
+     * Revision/authority-bound continuation for further current requests.
+     *
+     * @generated from protobuf field: optional string requests_next = 9
+     */
+    requestsNext?: string;
+    /**
+     * Server-derived disclosure completeness for the whole metadata record.
+     * True only when every metadata field is readable, independently of write
+     * permission. Whole-record editors require this so an undisclosed optional
+     * value cannot silently become an explicit clear; it grants no write authority.
+     *
+     * @generated from protobuf field: bool metadata_fully_readable = 10
+     */
+    metadataFullyReadable: boolean;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.OwnerRequest
+ */
+export interface OwnerRequest {
+    /**
+     * Explicit request transition; no transition dispatches an external effect.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.OwnerRequestAction action = 1
+     */
+    action: OwnerRequestAction;
+    /**
+     * Selected account used for the change, checked independently from its resource.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef account = 2
+     */
+    account?: AssetRef;
+    /**
+     * Exact existing resource. Required for creation; subsequent calls use the saved operation.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef target = 3
+     */
+    target?: AssetRef;
+    /**
+     * Reviewed account revision, required at creation and every subsequent mutation.
+     *
+     * @generated from protobuf field: optional uint64 account_revision = 4
+     */
+    accountRevision?: bigint;
+    /**
+     * Reviewed target revision, required at creation. A stale target cannot be approved/reported.
+     *
+     * @generated from protobuf field: optional uint64 target_revision = 5
+     */
+    targetRevision?: bigint;
+    /**
+     * Explicit provider action token, max 64 ASCII bytes; no executable command.
+     *
+     * @generated from protobuf field: string change = 6
+     */
+    change: string;
+    /**
+     * Exact non-secret proposed arguments, bounded by the durable operation contract.
+     *
+     * @generated from protobuf field: repeated omloom.v1.Field arguments = 7
+     */
+    arguments: Field[];
+    /**
+     * Caller-selected idempotency key for creation, max 256 bytes.
+     *
+     * @generated from protobuf field: string retry_key = 8
+     */
+    retryKey: string;
+    /**
+     * User-selected request deadline in Unix milliseconds; expiration does not prove an effect.
+     *
+     * @generated from protobuf field: uint64 expires_at_ms = 9
+     */
+    expiresAtMs: bigint;
+    /**
+     * Existing durable operation UUID, required except at creation.
+     *
+     * @generated from protobuf field: optional string operation_id = 10
+     */
+    operationId?: string;
+    /**
+     * Reviewed operation revision, required for approval/report.
+     *
+     * @generated from protobuf field: optional uint64 expected = 11
+     */
+    expected?: bigint;
+    /**
+     * Explicit owner assertion of effect knowledge. Unknown remains unknown;
+     * confirmed is an assertion, never independent provider verification.
+     *
+     * @generated from protobuf field: omloom.v1.EffectOutcome reported_outcome = 12
+     */
+    reportedOutcome: EffectOutcome;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.OwnerRequestState
+ */
+export interface OwnerRequestState {
+    /**
+     * Existing durable operation projection; a report remains pending verification.
+     *
+     * @generated from protobuf field: omloom.v1.Operation operation = 1
+     */
+    operation?: Operation;
+    /**
+     * Exact saved non-secret change arguments, returned only with request-read permission.
+     *
+     * @generated from protobuf field: repeated omloom.v1.Field arguments = 2
+     */
+    arguments: Field[];
+    /**
+     * Saved provider action token, not a dispatched action.
+     *
+     * @generated from protobuf field: string change = 3
+     */
+    change: string;
+    /**
+     * Current approval fact, independently attributed in operation evidence.
+     *
+     * @generated from protobuf field: bool approved = 4
+     */
+    approved: boolean;
+    /**
+     * An owner supplied an assertion; this is never provider-verified success.
+     *
+     * @generated from protobuf field: bool owner_reported = 5
+     */
+    ownerReported: boolean;
+    /**
+     * False when current field rights omit proposed arguments. Such a projection
+     * cannot be approved/reported as if the complete requested change were visible.
+     *
+     * @generated from protobuf field: bool arguments_complete = 6
+     */
+    argumentsComplete: boolean;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Creation
@@ -2095,6 +2681,38 @@ export interface Request {
          */
         observeProxmox: ObserveProxmox;
     } | {
+        oneofKind: "responsibility";
+        /**
+         * Read or conditionally change resource responsibility without changing access grants.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.Responsibility responsibility = 23
+         */
+        responsibility: Responsibility;
+    } | {
+        oneofKind: "externalAccount";
+        /**
+         * Read or edit selected account metadata and independently authorized bindings.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.ExternalAccount external_account = 24
+         */
+        externalAccount: ExternalAccount;
+    } | {
+        oneofKind: "ownerRequest";
+        /**
+         * Retain an owner-action request without dispatching work or releasing credentials.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.OwnerRequest owner_request = 25
+         */
+        ownerRequest: OwnerRequest;
+    } | {
+        oneofKind: "responsibilityTransfer";
+        /**
+         * Export selected declarations or preview/accept a bounded atomic typed import.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.ResponsibilityTransfer responsibility_transfer = 26
+         */
+        responsibilityTransfer: ResponsibilityTransfer;
+    } | {
         oneofKind: undefined;
     };
 }
@@ -2195,6 +2813,38 @@ export interface Reply {
          * @generated from protobuf field: omloom.workspace.v1.ObservationPreview observation = 11
          */
         observation: ObservationPreview;
+    } | {
+        oneofKind: "responsibility";
+        /**
+         * Current permitted declarations and bounded effective responsibility resolution.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.ResponsibilityState responsibility = 12
+         */
+        responsibility: ResponsibilityState;
+    } | {
+        oneofKind: "externalAccount";
+        /**
+         * Permitted external-account metadata and independent decision axes.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.ExternalAccountState external_account = 13
+         */
+        externalAccount: ExternalAccountState;
+    } | {
+        oneofKind: "ownerRequest";
+        /**
+         * Durable owner request, approval or unverified outcome assertion.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.OwnerRequestState owner_request = 14
+         */
+        ownerRequest: OwnerRequestState;
+    } | {
+        oneofKind: "responsibilityTransfer";
+        /**
+         * Selected responsibility export or the result of one atomic reviewed import.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.ResponsibilityTransferState responsibility_transfer = 15
+         */
+        responsibilityTransfer: ResponsibilityTransferState;
     } | {
         oneofKind: undefined;
     };
@@ -2297,6 +2947,254 @@ export enum SharedUse {
     ANYCAST = 3
 }
 /**
+ * A selected business reference, never an authentication subject or access grant.
+ *
+ * @generated from protobuf enum omloom.workspace.v1.PartyKind
+ */
+export enum PartyKind {
+    /**
+     * @generated from protobuf enum value: PARTY_KIND_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: PARTY_KIND_INDIVIDUAL = 1;
+     */
+    INDIVIDUAL = 1,
+    /**
+     * @generated from protobuf enum value: PARTY_KIND_ORGANIZATION = 2;
+     */
+    ORGANIZATION = 2,
+    /**
+     * @generated from protobuf enum value: PARTY_KIND_TEAM = 3;
+     */
+    TEAM = 3
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.ResponsibilityFacet
+ */
+export enum ResponsibilityFacet {
+    /**
+     * @generated from protobuf enum value: RESPONSIBILITY_FACET_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: RESPONSIBILITY_FACET_CLAIMED_OWNER = 1;
+     */
+    CLAIMED_OWNER = 1,
+    /**
+     * @generated from protobuf enum value: RESPONSIBILITY_FACET_OPERATOR = 2;
+     */
+    OPERATOR = 2,
+    /**
+     * @generated from protobuf enum value: RESPONSIBILITY_FACET_BENEFICIARY = 3;
+     */
+    BENEFICIARY = 3,
+    /**
+     * @generated from protobuf enum value: RESPONSIBILITY_FACET_ACCOUNT_CONTROLLER = 4;
+     */
+    ACCOUNT_CONTROLLER = 4
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.AssignmentMode
+ */
+export enum AssignmentMode {
+    /**
+     * @generated from protobuf enum value: ASSIGNMENT_MODE_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: ASSIGNMENT_MODE_EXPLICIT = 1;
+     */
+    EXPLICIT = 1,
+    /**
+     * @generated from protobuf enum value: ASSIGNMENT_MODE_INHERIT = 2;
+     */
+    INHERIT = 2,
+    /**
+     * @generated from protobuf enum value: ASSIGNMENT_MODE_UNASSIGNED = 3;
+     */
+    UNASSIGNED = 3
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.ResponsibilityStatus
+ */
+export enum ResponsibilityStatus {
+    /**
+     * @generated from protobuf enum value: RESPONSIBILITY_STATUS_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: RESPONSIBILITY_STATUS_EXPLICIT = 1;
+     */
+    EXPLICIT = 1,
+    /**
+     * @generated from protobuf enum value: RESPONSIBILITY_STATUS_INHERITED = 2;
+     */
+    INHERITED = 2,
+    /**
+     * @generated from protobuf enum value: RESPONSIBILITY_STATUS_UNASSIGNED = 3;
+     */
+    UNASSIGNED = 3,
+    /**
+     * @generated from protobuf enum value: RESPONSIBILITY_STATUS_UNKNOWN = 4;
+     */
+    UNKNOWN = 4,
+    /**
+     * @generated from protobuf enum value: RESPONSIBILITY_STATUS_AMBIGUOUS = 5;
+     */
+    AMBIGUOUS = 5,
+    /**
+     * @generated from protobuf enum value: RESPONSIBILITY_STATUS_SOURCE_UNAVAILABLE = 6;
+     */
+    SOURCE_UNAVAILABLE = 6
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.ResponsibilityAction
+ */
+export enum ResponsibilityAction {
+    /**
+     * @generated from protobuf enum value: RESPONSIBILITY_ACTION_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: RESPONSIBILITY_ACTION_READ = 1;
+     */
+    READ = 1,
+    /**
+     * @generated from protobuf enum value: RESPONSIBILITY_ACTION_PREVIEW = 2;
+     */
+    PREVIEW = 2,
+    /**
+     * @generated from protobuf enum value: RESPONSIBILITY_ACTION_APPLY = 3;
+     */
+    APPLY = 3
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.ExternalAccountKind
+ */
+export enum ExternalAccountKind {
+    /**
+     * @generated from protobuf enum value: EXTERNAL_ACCOUNT_KIND_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: EXTERNAL_ACCOUNT_KIND_ADMINISTRATION = 1;
+     */
+    ADMINISTRATION = 1,
+    /**
+     * @generated from protobuf enum value: EXTERNAL_ACCOUNT_KIND_PROGRAMMATIC = 2;
+     */
+    PROGRAMMATIC = 2
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.AccountDelegation
+ */
+export enum AccountDelegation {
+    /**
+     * @generated from protobuf enum value: ACCOUNT_DELEGATION_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: ACCOUNT_DELEGATION_OWNER_ONLY = 1;
+     */
+    OWNER_ONLY = 1,
+    /**
+     * @generated from protobuf enum value: ACCOUNT_DELEGATION_SCOPED = 2;
+     */
+    SCOPED = 2
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.AccountLinkKind
+ */
+export enum AccountLinkKind {
+    /**
+     * @generated from protobuf enum value: ACCOUNT_LINK_KIND_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: ACCOUNT_LINK_KIND_MANAGED_RESOURCE = 1;
+     */
+    MANAGED_RESOURCE = 1,
+    /**
+     * @generated from protobuf enum value: ACCOUNT_LINK_KIND_SERVICE = 2;
+     */
+    SERVICE = 2,
+    /**
+     * @generated from protobuf enum value: ACCOUNT_LINK_KIND_ENDPOINT = 3;
+     */
+    ENDPOINT = 3,
+    /**
+     * @generated from protobuf enum value: ACCOUNT_LINK_KIND_CONSUMER = 4;
+     */
+    CONSUMER = 4
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.AccountCapability
+ */
+export enum AccountCapability {
+    /**
+     * @generated from protobuf enum value: ACCOUNT_CAPABILITY_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: ACCOUNT_CAPABILITY_SHARE_REFERENCE = 1;
+     */
+    SHARE_REFERENCE = 1,
+    /**
+     * @generated from protobuf enum value: ACCOUNT_CAPABILITY_WORKLOAD_USE = 2;
+     */
+    WORKLOAD_USE = 2,
+    /**
+     * @generated from protobuf enum value: ACCOUNT_CAPABILITY_REVEAL_SECRET = 3;
+     */
+    REVEAL_SECRET = 3,
+    /**
+     * @generated from protobuf enum value: ACCOUNT_CAPABILITY_ROTATE = 4;
+     */
+    ROTATE = 4,
+    /**
+     * @generated from protobuf enum value: ACCOUNT_CAPABILITY_DELEGATE = 5;
+     */
+    DELEGATE = 5,
+    /**
+     * @generated from protobuf enum value: ACCOUNT_CAPABILITY_REQUEST_CHANGE = 6;
+     */
+    REQUEST_CHANGE = 6,
+    /**
+     * @generated from protobuf enum value: ACCOUNT_CAPABILITY_APPROVE_CHANGE = 7;
+     */
+    APPROVE_CHANGE = 7,
+    /**
+     * @generated from protobuf enum value: ACCOUNT_CAPABILITY_EXECUTE_CHANGE = 8;
+     */
+    EXECUTE_CHANGE = 8
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.OwnerRequestAction
+ */
+export enum OwnerRequestAction {
+    /**
+     * @generated from protobuf enum value: OWNER_REQUEST_ACTION_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: OWNER_REQUEST_ACTION_CREATE = 1;
+     */
+    CREATE = 1,
+    /**
+     * @generated from protobuf enum value: OWNER_REQUEST_ACTION_READ = 2;
+     */
+    READ = 2,
+    /**
+     * @generated from protobuf enum value: OWNER_REQUEST_ACTION_APPROVE = 3;
+     */
+    APPROVE = 3,
+    /**
+     * @generated from protobuf enum value: OWNER_REQUEST_ACTION_REPORT = 4;
+     */
+    REPORT = 4
+}
+/**
  * @generated from protobuf enum omloom.workspace.v1.AddressStability
  */
 export enum AddressStability {
@@ -2379,7 +3277,8 @@ class Query$Type extends MessageType<Query> {
             { no: 12, name: "focus", kind: "message", T: () => AssetRef },
             { no: 13, name: "include_context", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
             { no: 14, name: "omit_host_local", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
-            { no: 15, name: "level_only", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+            { no: 15, name: "level_only", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 16, name: "responsibility", kind: "message", T: () => ResponsibilityFilter }
         ]);
     }
 }
@@ -2387,6 +3286,20 @@ class Query$Type extends MessageType<Query> {
  * @generated MessageType for protobuf message omloom.workspace.v1.Query
  */
 export const Query = new Query$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class ResponsibilityFilter$Type extends MessageType<ResponsibilityFilter> {
+    constructor() {
+        super("omloom.workspace.v1.ResponsibilityFilter", [
+            { no: 1, name: "facet", kind: "enum", T: () => ["omloom.workspace.v1.ResponsibilityFacet", ResponsibilityFacet, "RESPONSIBILITY_FACET_"] },
+            { no: 2, name: "issuer", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "subject", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.ResponsibilityFilter
+ */
+export const ResponsibilityFilter = new ResponsibilityFilter$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class WorkingContext$Type extends MessageType<WorkingContext> {
     constructor() {
@@ -2415,6 +3328,238 @@ class Prepare$Type extends MessageType<Prepare> {
  * @generated MessageType for protobuf message omloom.workspace.v1.Prepare
  */
 export const Prepare = new Prepare$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PartyRef$Type extends MessageType<PartyRef> {
+    constructor() {
+        super("omloom.workspace.v1.PartyRef", [
+            { no: 1, name: "issuer", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "subject", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "kind", kind: "enum", T: () => ["omloom.workspace.v1.PartyKind", PartyKind, "PARTY_KIND_"] },
+            { no: 4, name: "name", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PartyRef
+ */
+export const PartyRef = new PartyRef$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class ResponsibilityAssignment$Type extends MessageType<ResponsibilityAssignment> {
+    constructor() {
+        super("omloom.workspace.v1.ResponsibilityAssignment", [
+            { no: 1, name: "facet", kind: "enum", T: () => ["omloom.workspace.v1.ResponsibilityFacet", ResponsibilityFacet, "RESPONSIBILITY_FACET_"] },
+            { no: 2, name: "mode", kind: "enum", T: () => ["omloom.workspace.v1.AssignmentMode", AssignmentMode, "ASSIGNMENT_MODE_"] },
+            { no: 3, name: "party", kind: "message", T: () => PartyRef },
+            { no: 4, name: "source_relation", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 5, name: "source_revision", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 6, name: "contact", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.ResponsibilityAssignment
+ */
+export const ResponsibilityAssignment = new ResponsibilityAssignment$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class EffectiveResponsibility$Type extends MessageType<EffectiveResponsibility> {
+    constructor() {
+        super("omloom.workspace.v1.EffectiveResponsibility", [
+            { no: 1, name: "facet", kind: "enum", T: () => ["omloom.workspace.v1.ResponsibilityFacet", ResponsibilityFacet, "RESPONSIBILITY_FACET_"] },
+            { no: 2, name: "status", kind: "enum", T: () => ["omloom.workspace.v1.ResponsibilityStatus", ResponsibilityStatus, "RESPONSIBILITY_STATUS_"] },
+            { no: 3, name: "party", kind: "message", T: () => PartyRef },
+            { no: 4, name: "source", kind: "message", T: () => AssetRef },
+            { no: 5, name: "source_revision", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 6, name: "contact", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.EffectiveResponsibility
+ */
+export const EffectiveResponsibility = new EffectiveResponsibility$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class Responsibility$Type extends MessageType<Responsibility> {
+    constructor() {
+        super("omloom.workspace.v1.Responsibility", [
+            { no: 1, name: "target", kind: "message", T: () => AssetRef },
+            { no: 2, name: "expected", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 3, name: "changes", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => ResponsibilityAssignment },
+            { no: 4, name: "action", kind: "enum", T: () => ["omloom.workspace.v1.ResponsibilityAction", ResponsibilityAction, "RESPONSIBILITY_ACTION_"] },
+            { no: 5, name: "include_sources", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.Responsibility
+ */
+export const Responsibility = new Responsibility$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class ResponsibilityState$Type extends MessageType<ResponsibilityState> {
+    constructor() {
+        super("omloom.workspace.v1.ResponsibilityState", [
+            { no: 1, name: "item", kind: "message", T: () => Item },
+            { no: 2, name: "assignments", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => ResponsibilityAssignment },
+            { no: 3, name: "effective", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => EffectiveResponsibility },
+            { no: 4, name: "writable", kind: "enum", repeat: 1 /*RepeatType.PACKED*/, T: () => ["omloom.workspace.v1.ResponsibilityFacet", ResponsibilityFacet, "RESPONSIBILITY_FACET_"] },
+            { no: 5, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 6, name: "sources", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => ResponsibilitySource },
+            { no: 7, name: "fully_readable", kind: "enum", repeat: 1 /*RepeatType.PACKED*/, T: () => ["omloom.workspace.v1.ResponsibilityFacet", ResponsibilityFacet, "RESPONSIBILITY_FACET_"] }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.ResponsibilityState
+ */
+export const ResponsibilityState = new ResponsibilityState$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class ResponsibilitySource$Type extends MessageType<ResponsibilitySource> {
+    constructor() {
+        super("omloom.workspace.v1.ResponsibilitySource", [
+            { no: 1, name: "relation", kind: "message", T: () => Relation },
+            { no: 2, name: "parent", kind: "message", T: () => Item },
+            { no: 3, name: "facets", kind: "enum", repeat: 1 /*RepeatType.PACKED*/, T: () => ["omloom.workspace.v1.ResponsibilityFacet", ResponsibilityFacet, "RESPONSIBILITY_FACET_"] }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.ResponsibilitySource
+ */
+export const ResponsibilitySource = new ResponsibilitySource$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class ResponsibilityTransfer$Type extends MessageType<ResponsibilityTransfer> {
+    constructor() {
+        super("omloom.workspace.v1.ResponsibilityTransfer", [
+            { no: 1, name: "entries", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Responsibility }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.ResponsibilityTransfer
+ */
+export const ResponsibilityTransfer = new ResponsibilityTransfer$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class ResponsibilityTransferState$Type extends MessageType<ResponsibilityTransferState> {
+    constructor() {
+        super("omloom.workspace.v1.ResponsibilityTransferState", [
+            { no: 1, name: "entries", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => ResponsibilityState },
+            { no: 2, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.ResponsibilityTransferState
+ */
+export const ResponsibilityTransferState = new ResponsibilityTransferState$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class AccountMetadata$Type extends MessageType<AccountMetadata> {
+    constructor() {
+        super("omloom.workspace.v1.AccountMetadata", [
+            { no: 1, name: "issuer", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "subject", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "kind", kind: "enum", T: () => ["omloom.workspace.v1.ExternalAccountKind", ExternalAccountKind, "EXTERNAL_ACCOUNT_KIND_"] },
+            { no: 4, name: "delegation", kind: "enum", T: () => ["omloom.workspace.v1.AccountDelegation", AccountDelegation, "ACCOUNT_DELEGATION_"] },
+            { no: 5, name: "login", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 6, name: "sender", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 7, name: "credential_binding_id", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 8, name: "recovery_route", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.AccountMetadata
+ */
+export const AccountMetadata = new AccountMetadata$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class AccountLink$Type extends MessageType<AccountLink> {
+    constructor() {
+        super("omloom.workspace.v1.AccountLink", [
+            { no: 1, name: "kind", kind: "enum", T: () => ["omloom.workspace.v1.AccountLinkKind", AccountLinkKind, "ACCOUNT_LINK_KIND_"] },
+            { no: 2, name: "target", kind: "message", T: () => AssetRef }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.AccountLink
+ */
+export const AccountLink = new AccountLink$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class ExternalAccount$Type extends MessageType<ExternalAccount> {
+    constructor() {
+        super("omloom.workspace.v1.ExternalAccount", [
+            { no: 1, name: "target", kind: "message", T: () => AssetRef },
+            { no: 2, name: "expected", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 3, name: "metadata", kind: "message", T: () => AccountMetadata },
+            { no: 4, name: "add", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AccountLink },
+            { no: 5, name: "remove", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AccountLink },
+            { no: 6, name: "requests_cursor", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.ExternalAccount
+ */
+export const ExternalAccount = new ExternalAccount$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class ExternalAccountState$Type extends MessageType<ExternalAccountState> {
+    constructor() {
+        super("omloom.workspace.v1.ExternalAccountState", [
+            { no: 1, name: "item", kind: "message", T: () => Item },
+            { no: 2, name: "metadata", kind: "message", T: () => AccountMetadata },
+            { no: 3, name: "links", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AccountLink },
+            { no: 4, name: "authorized", kind: "enum", repeat: 1 /*RepeatType.PACKED*/, T: () => ["omloom.workspace.v1.AccountCapability", AccountCapability, "ACCOUNT_CAPABILITY_"] },
+            { no: 5, name: "writable", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
+            { no: 6, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 7, name: "related", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Item },
+            { no: 8, name: "requests", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Operation },
+            { no: 9, name: "requests_next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 10, name: "metadata_fully_readable", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.ExternalAccountState
+ */
+export const ExternalAccountState = new ExternalAccountState$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class OwnerRequest$Type extends MessageType<OwnerRequest> {
+    constructor() {
+        super("omloom.workspace.v1.OwnerRequest", [
+            { no: 1, name: "action", kind: "enum", T: () => ["omloom.workspace.v1.OwnerRequestAction", OwnerRequestAction, "OWNER_REQUEST_ACTION_"] },
+            { no: 2, name: "account", kind: "message", T: () => AssetRef },
+            { no: 3, name: "target", kind: "message", T: () => AssetRef },
+            { no: 4, name: "account_revision", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 5, name: "target_revision", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 6, name: "change", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 7, name: "arguments", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Field },
+            { no: 8, name: "retry_key", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 9, name: "expires_at_ms", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 10, name: "operation_id", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 11, name: "expected", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 12, name: "reported_outcome", kind: "enum", T: () => ["omloom.v1.EffectOutcome", EffectOutcome, "EFFECT_OUTCOME_"] }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.OwnerRequest
+ */
+export const OwnerRequest = new OwnerRequest$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class OwnerRequestState$Type extends MessageType<OwnerRequestState> {
+    constructor() {
+        super("omloom.workspace.v1.OwnerRequestState", [
+            { no: 1, name: "operation", kind: "message", T: () => Operation },
+            { no: 2, name: "arguments", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Field },
+            { no: 3, name: "change", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "approved", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 5, name: "owner_reported", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 6, name: "arguments_complete", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.OwnerRequestState
+ */
+export const OwnerRequestState = new OwnerRequestState$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class Creation$Type extends MessageType<Creation> {
     constructor() {
@@ -3210,7 +4355,11 @@ class Request$Type extends MessageType<Request> {
             { no: 19, name: "host_network", kind: "message", oneof: "command", T: () => HostNetwork },
             { no: 20, name: "interface_addresses", kind: "message", oneof: "command", T: () => InterfaceAddresses },
             { no: 21, name: "create", kind: "message", oneof: "command", T: () => Create },
-            { no: 22, name: "observe_proxmox", kind: "message", oneof: "command", T: () => ObserveProxmox }
+            { no: 22, name: "observe_proxmox", kind: "message", oneof: "command", T: () => ObserveProxmox },
+            { no: 23, name: "responsibility", kind: "message", oneof: "command", T: () => Responsibility },
+            { no: 24, name: "external_account", kind: "message", oneof: "command", T: () => ExternalAccount },
+            { no: 25, name: "owner_request", kind: "message", oneof: "command", T: () => OwnerRequest },
+            { no: 26, name: "responsibility_transfer", kind: "message", oneof: "command", T: () => ResponsibilityTransfer }
         ]);
     }
 }
@@ -3232,7 +4381,11 @@ class Reply$Type extends MessageType<Reply> {
             { no: 8, name: "download", kind: "message", oneof: "result", T: () => Download },
             { no: 9, name: "migration_preview", kind: "message", oneof: "result", T: () => MigrationPreview },
             { no: 10, name: "actions", kind: "message", oneof: "result", T: () => Actions },
-            { no: 11, name: "observation", kind: "message", oneof: "result", T: () => ObservationPreview }
+            { no: 11, name: "observation", kind: "message", oneof: "result", T: () => ObservationPreview },
+            { no: 12, name: "responsibility", kind: "message", oneof: "result", T: () => ResponsibilityState },
+            { no: 13, name: "external_account", kind: "message", oneof: "result", T: () => ExternalAccountState },
+            { no: 14, name: "owner_request", kind: "message", oneof: "result", T: () => OwnerRequestState },
+            { no: 15, name: "responsibility_transfer", kind: "message", oneof: "result", T: () => ResponsibilityTransferState }
         ]);
     }
 }
