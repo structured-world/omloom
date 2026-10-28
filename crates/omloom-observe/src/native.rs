@@ -198,8 +198,10 @@ pub(super) async fn collect(runner: &mut Runner, report: &mut api::HostReport) -
         "windows" => windows_interfaces(runner, report, &mut excluded).await,
         _ => return Err("Unsupported platform".into()),
     };
-    if interfaces.is_err() {
-        return Err("Interface generation classification unavailable; no report written".into());
+    if let Err(error) = &interfaces {
+        return Err(format!(
+            "Interface collection incomplete: {error}; no report written"
+        ));
     }
     result(
         report,
@@ -403,6 +405,8 @@ async fn linux_interfaces(
         .run("ip", &["-j", "-details", "address", "show"])
         .await?;
     let value = json(&output.text)?;
+    // Unaddressed bridges, veth links and tunnels can carry L2 connectivity.
+    // Keep them within the report limits rather than silently losing topology.
     for item in array(&value)? {
         let name = string(item, "ifname")?;
         if item

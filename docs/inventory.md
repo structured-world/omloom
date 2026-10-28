@@ -538,6 +538,13 @@ exist. Kernel binds without a qualified process owner remain report observations
 not newly invented services. Sequential source reads are not an atomic host snapshot.
 Application rules, route presence and wildcard binds do not prove effective access.
 
+Linux interfaces without an IP can still represent L2 bridges, veth links and
+tunnels. They are not discarded merely for lacking an address. The bounded
+collector refuses an oversized source or report explicitly, without publishing
+a truncated inventory. Interface failures include the underlying limit or
+command diagnostic. Dense hosts that exceed these limits need a narrower
+collection scope; the current one-shot command has no interface selector.
+
 Temporary IPv6 literals are excluded, including matching bind and route literals.
 Preferred/deprecated validity remains separate from generation class. Windows
 random-origin IPv6 is conservatively excluded where its public/temporary class
