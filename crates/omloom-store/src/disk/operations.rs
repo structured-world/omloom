@@ -148,93 +148,31 @@ impl Store {
     /// Persist confirmed arguments, retry checkpoint, initial work and audit in
     /// one transaction. Reusing a key with a changed plan never creates work.
     pub fn accept(&self, plan: &Plan<'_>, now: u64) -> Result<OperationId> {
-        int(now)?;
-        int(plan.expires_at_ms)?;
-        if now >= plan.expires_at_ms {
-            return Err(Error::Expired);
-        }
-        let target_fields = target_props(plan.target);
-        let hash = digest(plan, &target_fields)?;
-        let checkpoint = checkpoint(plan);
         let mut tx = self.begin()?;
-        if tx.root.get("restored") == Some(&Value::Bool(true)) {
-            return Err(Error::RecoveryRequired);
-        }
-        if let Some(saved) = tx.get(&checkpoint)? {
-            if now >= number(&saved, "expires")? {
-                return Err(Error::Expired);
-            }
-            if stored_digest(&saved)? != hash {
-                return Err(Error::Conflict);
-            }
-            return string(&saved, "operation")?
-                .parse()
-                .map_err(|_| Error::Corrupt);
-        }
-        let asset = tx.asset(plan.target)?;
-        if number(&asset, "revision")? != plan.inventory_revision
-            || number(&asset, "adoption")? != wire::Adoption::Adopted as u64
-        {
-            return Err(Error::Conflict);
-        }
-        let id = OperationId::generate();
-        let key = operation_key(id);
-        let mut operation = target_fields;
-        operation.extend(props([
-            ("operation", text(id.to_string())),
-            ("caller", text(plan.caller)),
-            ("action", text(plan.action)),
-            ("inventory_revision", int(plan.inventory_revision)?),
-            ("digest", digest_value(hash)),
-            ("state", int(OperationState::Queued as u64)?),
-            ("outcome", int(EffectOutcome::NotSent as u64)?),
-            ("revision", int(1)?),
-            ("at", int(now)?),
-        ]));
-        reserve_settlement(&mut tx, &key, &mut operation)?;
-        tx.put(&key, "operations", Class::Pending, operation)?;
-        for field in plan.arguments {
-            let p = inventory::field_props(field)?;
-            tx.put(
-                &format!("{key}/argument/{}", field.name),
-                &key,
-                Class::Pending,
-                p,
-            )?;
-        }
-        tx.put(
-            &checkpoint,
-            "checkpoints",
-            Class::Checkpoint,
-            props([
-                ("operation", text(id.to_string())),
-                ("digest", digest_value(hash)),
-                ("expires", int(plan.expires_at_ms)?),
-            ]),
-        )?;
-        // This outbox is the local durable work consumer, not future webhooks.
-        tx.put(
-            &format!("work/{id}"),
-            "work",
-            Class::Work,
-            props([("operation", text(id.to_string()))]),
-        )?;
-        tx.audit(&key, plan.caller, "operation.accepted", 1, now)?;
+        let id = tx.accept_plan(plan, now, None)?;
         tx.commit()?;
         Ok(id)
     }
 
     pub fn operation(&self, id: OperationId) -> Result<DurableOperation> {
         let tx = self.begin()?;
+        let result = tx.operation(id)?;
+        tx.commit()?;
+        Ok(result)
+    }
+}
+
+impl Tx<'_> {
+    pub(super) fn operation(&self, id: OperationId) -> Result<DurableOperation> {
         let key = operation_key(id);
-        let p = tx.get(&key)?.ok_or(Error::Missing)?;
+        let p = self.get(&key)?.ok_or(Error::Missing)?;
         let mut arguments = Vec::new();
-        for row in tx.children(&key)? {
+        for row in self.children(&key)? {
             if row.contains_key("field") {
                 arguments.push(inventory::read_field(&row)?);
             }
         }
-        let result = DurableOperation {
+        Ok(DurableOperation {
             id,
             target: target(&p)?,
             state: state(&p)?,
@@ -249,11 +187,122 @@ impl Store {
             inventory_revision: number(&p, "inventory_revision")?,
             plan_digest: stored_digest(&p)?,
             arguments,
-        };
-        tx.commit()?;
-        Ok(result)
+        })
     }
 
+    // Account-bound requests share admission/retry/recovery with operations,
+    // but have no work item and cannot be claimed by an executor.
+    pub(super) fn accept_plan(
+        &mut self,
+        plan: &Plan<'_>,
+        now: u64,
+        account: Option<(AssetRef, u64)>,
+    ) -> Result<OperationId> {
+        int(now)?;
+        int(plan.expires_at_ms)?;
+        if now >= plan.expires_at_ms {
+            return Err(Error::Expired);
+        }
+        let target_fields = target_props(plan.target);
+        let hash = digest(plan, &target_fields)?;
+        let checkpoint = checkpoint(plan);
+        if self.root.get("restored") == Some(&Value::Bool(true)) {
+            return Err(Error::RecoveryRequired);
+        }
+        if let Some(saved) = self.get(&checkpoint)? {
+            if now >= number(&saved, "expires")? {
+                return Err(Error::Expired);
+            }
+            if stored_digest(&saved)? != hash {
+                return Err(Error::Conflict);
+            }
+            let id: OperationId = string(&saved, "operation")?
+                .parse()
+                .map_err(|_| Error::Corrupt)?;
+            let operation = self.get(&operation_key(id))?.ok_or(Error::Missing)?;
+            match account {
+                Some((target, revision))
+                    if operation.get("request_account")
+                        == Some(&text(format!("{}/{}", target.asset, target.incarnation)))
+                        && operation.get("account_revision") == Some(&int(revision)?) => {}
+                None if !operation.contains_key("request_account") => {}
+                _ => return Err(Error::Conflict),
+            }
+            return Ok(id);
+        }
+        let asset = self.asset(plan.target)?;
+        if number(&asset, "revision")? != plan.inventory_revision
+            || number(&asset, "adoption")? != wire::Adoption::Adopted as u64
+        {
+            return Err(Error::Conflict);
+        }
+        let id = OperationId::generate();
+        let key = operation_key(id);
+        let mut operation = target_fields;
+        operation.extend(props([
+            ("operation", text(id.to_string())),
+            ("caller", text(plan.caller)),
+            ("action", text(plan.action)),
+            ("inventory_revision", int(plan.inventory_revision)?),
+            ("digest", digest_value(hash)),
+            (
+                "state",
+                int(if account.is_some() {
+                    OperationState::Blocked
+                } else {
+                    OperationState::Queued
+                } as u64)?,
+            ),
+            ("outcome", int(EffectOutcome::NotSent as u64)?),
+            ("revision", int(1)?),
+            ("at", int(now)?),
+        ]));
+        if let Some((account, revision)) = account {
+            operation.insert(
+                "request_account".into(),
+                text(format!("{}/{}", account.asset, account.incarnation)),
+            );
+            operation.insert("account_revision".into(), int(revision)?);
+            operation.insert("approved".into(), Value::Bool(false));
+            operation.insert("owner_reported".into(), Value::Bool(false));
+            operation.insert("expires".into(), int(plan.expires_at_ms)?);
+        }
+        reserve_settlement(self, &key, &mut operation)?;
+        self.put(&key, "operations", Class::Pending, operation)?;
+        for field in plan.arguments {
+            let p = inventory::field_props(field)?;
+            self.put(
+                &format!("{key}/argument/{}", field.name),
+                &key,
+                Class::Pending,
+                p,
+            )?;
+        }
+        self.put(
+            &checkpoint,
+            "checkpoints",
+            Class::Checkpoint,
+            props([
+                ("operation", text(id.to_string())),
+                ("digest", digest_value(hash)),
+                ("expires", int(plan.expires_at_ms)?),
+            ]),
+        )?;
+        // This outbox is the local durable work consumer, not future webhooks.
+        if account.is_none() {
+            self.put(
+                &format!("work/{id}"),
+                "work",
+                Class::Work,
+                props([("operation", text(id.to_string()))]),
+            )?;
+        }
+        self.audit(&key, plan.caller, "operation.accepted", 1, now)?;
+        Ok(id)
+    }
+}
+
+impl Store {
     /// Claiming unknown in-flight work is reconciliation only. It cannot reset
     /// effect knowledge or turn an expired lease into permission to resend.
     pub fn claim(&self, id: OperationId, worker: &str, now: u64, until: u64) -> Result<Lease> {
@@ -269,7 +318,7 @@ impl Store {
         }
         let key = operation_key(id);
         let mut operation = tx.get(&key)?.ok_or(Error::Missing)?;
-        if terminal(state(&operation)?) {
+        if terminal(state(&operation)?) || operation.contains_key("request_account") {
             return Err(Error::UnsafeTransition);
         }
         let target = target(&operation)?;

@@ -84,6 +84,17 @@ message Query {
   // count/pagination. Explicit search may request a flat scoped result instead.
   // This changes presentation only and never grants resource/field authority.
   bool level_only = 15;
+  // Exact issuer-qualified effective responsibility filter, applied before totals
+  // and pagination. Only a permitted facet can contribute a matching resource.
+  optional ResponsibilityFilter responsibility = 16;
+}
+message ResponsibilityFilter {
+  // Independent owner/operator facet selected by the user; never a permission selector.
+  ResponsibilityFacet facet = 1;
+  // Source namespace of the selected party, max 256 bytes.
+  string issuer = 2;
+  // Stable party identity within issuer, max 256 bytes, not its display name.
+  string subject = 3;
 }
 
 message WorkingContext {
@@ -106,6 +117,270 @@ message Prepare {
   optional omloom.v1.AssetRef from = 2;
   // Explicit relationship destination; neither endpoint expands the selector.
   optional omloom.v1.AssetRef to = 3;
+}
+
+// A selected business reference, never an authentication subject or access grant.
+enum PartyKind {
+  PARTY_KIND_UNSPECIFIED = 0;
+  PARTY_KIND_INDIVIDUAL = 1;
+  PARTY_KIND_ORGANIZATION = 2;
+  PARTY_KIND_TEAM = 3;
+}
+message PartyRef {
+  // Source namespace supplied with the selected reference, max 256 UTF-8 bytes.
+  // Equal names in different namespaces never identify the same party.
+  string issuer = 1;
+  // Stable opaque identity within issuer, max 256 bytes; not a display name.
+  string subject = 2;
+  // Declared business-party type; it establishes neither legal title nor SID membership.
+  PartyKind kind = 3;
+  // User/source-supplied label for this resource's reference, max 160 bytes.
+  // A label change preserves issuer and subject and grants no additional rights.
+  string name = 4;
+}
+enum ResponsibilityFacet {
+  RESPONSIBILITY_FACET_UNSPECIFIED = 0;
+  RESPONSIBILITY_FACET_CLAIMED_OWNER = 1;
+  RESPONSIBILITY_FACET_OPERATOR = 2;
+  RESPONSIBILITY_FACET_BENEFICIARY = 3;
+  RESPONSIBILITY_FACET_ACCOUNT_CONTROLLER = 4;
+}
+enum AssignmentMode {
+  ASSIGNMENT_MODE_UNSPECIFIED = 0;
+  ASSIGNMENT_MODE_EXPLICIT = 1;
+  ASSIGNMENT_MODE_INHERIT = 2;
+  ASSIGNMENT_MODE_UNASSIGNED = 3;
+}
+message ResponsibilityAssignment {
+  // User-selected independent facet; only claimed owner and operator may inherit.
+  ResponsibilityFacet facet = 1;
+  // Explicit assignment, qualified downward inheritance or an explicit unassigned stop.
+  // Absence of a local row is interpreted by the component contract, never as the creator.
+  AssignmentMode mode = 2;
+  // Selected source-qualified party, required only for EXPLICIT.
+  optional PartyRef party = 3;
+  // Existing accepted relation chosen as an administrative inheritance source.
+  // Omit when the component contract determines the source unambiguously.
+  // The server derives its endpoints and rejects peer, network and dependency edges.
+  optional string source_relation = 4;
+  // Current relation revision reviewed by the user when selecting source_relation.
+  // Required with that selector on writes; never interpreted as authorization.
+  optional uint64 source_revision = 5;
+  // Explicit optional responsibility route, max 512 bytes, separately disclosed
+  // from the assignment. A route is not automatically an approver or a credential.
+  optional string contact = 6;
+}
+enum ResponsibilityStatus {
+  RESPONSIBILITY_STATUS_UNSPECIFIED = 0;
+  RESPONSIBILITY_STATUS_EXPLICIT = 1;
+  RESPONSIBILITY_STATUS_INHERITED = 2;
+  RESPONSIBILITY_STATUS_UNASSIGNED = 3;
+  RESPONSIBILITY_STATUS_UNKNOWN = 4;
+  RESPONSIBILITY_STATUS_AMBIGUOUS = 5;
+  RESPONSIBILITY_STATUS_SOURCE_UNAVAILABLE = 6;
+}
+message EffectiveResponsibility {
+  // Independent facet requested by the caller and authorized on the selected resource.
+  ResponsibilityFacet facet = 1;
+  // Server-derived current resolution; unknown and an explicit stop are distinct.
+  ResponsibilityStatus status = 2;
+  // Effective value permitted on this child; its visibility does not disclose the parent.
+  optional PartyRef party = 3;
+  // Source resource, present only with independent permission to disclose its identity.
+  optional omloom.v1.AssetRef source = 4;
+  // Source's accepted inventory revision, present only with that source disclosure.
+  optional uint64 source_revision = 5;
+  // Current route, returned only with separate contact permission on the selected resource.
+  optional string contact = 6;
+}
+message Responsibility {
+  // Exact resource incarnation selected for reading or editing, never inferred from a name.
+  omloom.v1.AssetRef target = 1;
+  // Reviewed resource revision. Omit for reads; required for a mutation with changes.
+  optional uint64 expected = 2;
+  // Explicit local changes; omitted facets retain their assignments. Empty means read.
+  // The server derives effective inheritance and never accepts client-computed ownership.
+  repeated ResponsibilityAssignment changes = 3;
+  // Explicitly request a read, a non-persistent preview or an accepted mutation.
+  // Unspecified is rejected; supplying changes alone never authorizes a write.
+  ResponsibilityAction action = 4;
+  // Request source choices only when preparing an edit; ordinary labels need no picker data.
+  bool include_sources = 5;
+}
+enum ResponsibilityAction {
+  RESPONSIBILITY_ACTION_UNSPECIFIED = 0;
+  RESPONSIBILITY_ACTION_READ = 1;
+  RESPONSIBILITY_ACTION_PREVIEW = 2;
+  RESPONSIBILITY_ACTION_APPLY = 3;
+}
+message ResponsibilityState {
+  // Existing selected resource and its current edit revision; no new party inventory.
+  Item item = 1;
+  // Permitted local declarations. Missing declarations do not imply permission to set them.
+  repeated ResponsibilityAssignment assignments = 2;
+  // Current field-authorized resolution with independently restricted source references.
+  repeated EffectiveResponsibility effective = 3;
+  // Facets writable under the trusted host decision, not rights inferred from ownership.
+  repeated ResponsibilityFacet writable = 4;
+  // Current application basis for preview/import and conditional acceptance.
+  uint64 revision = 5;
+  // Bounded actual downward source choices, independently filtered for disclosure.
+  repeated ResponsibilitySource sources = 6;
+}
+message ResponsibilitySource {
+  // Existing accepted relation and current revision selected as the inheritance basis.
+  omloom.v1.Relation relation = 1;
+  // Permitted source identity/name only, not its other fields or contacts.
+  Item parent = 2;
+  // Facets for which this source can currently be explicitly selected.
+  repeated ResponsibilityFacet facets = 3;
+}
+message ResponsibilityTransfer {
+  // Finite selected export or reviewed import, max 100 exact resource entries.
+  // All entries use the same action and commit atomically; preview never persists.
+  repeated Responsibility entries = 1;
+}
+message ResponsibilityTransferState {
+  // Independently filtered declarations for the exact selected identities.
+  repeated ResponsibilityState entries = 1;
+  // Application revision shared by the complete bounded transfer.
+  uint64 revision = 2;
+}
+
+enum ExternalAccountKind {
+  EXTERNAL_ACCOUNT_KIND_UNSPECIFIED = 0;
+  EXTERNAL_ACCOUNT_KIND_ADMINISTRATION = 1;
+  EXTERNAL_ACCOUNT_KIND_PROGRAMMATIC = 2;
+}
+enum AccountDelegation {
+  ACCOUNT_DELEGATION_UNSPECIFIED = 0;
+  ACCOUNT_DELEGATION_OWNER_ONLY = 1;
+  ACCOUNT_DELEGATION_SCOPED = 2;
+}
+message AccountMetadata {
+  // Provider namespace for this selected account, max 256 bytes; not a secret endpoint.
+  string issuer = 1;
+  // Provider-generated stable account identity, max 256 bytes, never a password.
+  string subject = 2;
+  // Human administration and workload principals have different authority boundaries.
+  ExternalAccountKind kind = 3;
+  // Reviewed provider capability. Unspecified means unknown, never owner-only or delegated.
+  AccountDelegation delegation = 4;
+  // Permitted selected login label, max 256 bytes; not an authentication credential.
+  optional string login = 5;
+  // Known sender constraint for the selected SMTP account, max 256 bytes.
+  optional string sender = 6;
+  // Host-configured opaque credential binding UUID, never a vault path or secret.
+  optional string credential_binding_id = 7;
+  // Known public provider recovery/transfer route, max 512 bytes; no recovery answers.
+  optional string recovery_route = 8;
+}
+enum AccountLinkKind {
+  ACCOUNT_LINK_KIND_UNSPECIFIED = 0;
+  ACCOUNT_LINK_KIND_MANAGED_RESOURCE = 1;
+  ACCOUNT_LINK_KIND_SERVICE = 2;
+  ACCOUNT_LINK_KIND_ENDPOINT = 3;
+  ACCOUNT_LINK_KIND_CONSUMER = 4;
+}
+message AccountLink {
+  // Explicit relationship meaning; none of these bindings transfers ownership or grants.
+  AccountLinkKind kind = 1;
+  // Selected existing resource and incarnation, checked independently for disclosure/editing.
+  omloom.v1.AssetRef target = 2;
+}
+enum AccountCapability {
+  ACCOUNT_CAPABILITY_UNSPECIFIED = 0;
+  ACCOUNT_CAPABILITY_SHARE_REFERENCE = 1;
+  ACCOUNT_CAPABILITY_WORKLOAD_USE = 2;
+  ACCOUNT_CAPABILITY_REVEAL_SECRET = 3;
+  ACCOUNT_CAPABILITY_ROTATE = 4;
+  ACCOUNT_CAPABILITY_DELEGATE = 5;
+  ACCOUNT_CAPABILITY_REQUEST_CHANGE = 6;
+  ACCOUNT_CAPABILITY_APPROVE_CHANGE = 7;
+  ACCOUNT_CAPABILITY_EXECUTE_CHANGE = 8;
+}
+message ExternalAccount {
+  // Selected account resource. Ordinary asset creation supplies its stable identity.
+  omloom.v1.AssetRef target = 1;
+  // Required for edits, omitted for reads. Bound to the account's accepted revision.
+  optional uint64 expected = 2;
+  // Explicit current metadata replacement. Omit to preserve metadata when editing links.
+  optional AccountMetadata metadata = 3;
+  // Explicit additions, max 32. Omitted and hidden bindings are preserved.
+  repeated AccountLink add = 4;
+  // Explicit removals, max 32, each requiring current endpoint rights.
+  repeated AccountLink remove = 5;
+  // Server continuation for the account's bounded request list. Reads only.
+  optional string requests_cursor = 6;
+}
+message ExternalAccountState {
+  // Permitted account identity/type and its current revision.
+  Item item = 1;
+  // Only independently permitted metadata fields. No credential is fetched or transmitted.
+  optional AccountMetadata metadata = 2;
+  // Currently disclosable selected bindings; omission never proves absence elsewhere.
+  repeated AccountLink links = 3;
+  // Independent host decisions, not provider execution qualification or secret availability.
+  repeated AccountCapability authorized = 4;
+  // Explicit metadata/link fields writable in this context.
+  repeated string writable = 5;
+  // Current application revision for conditional editing.
+  uint64 revision = 6;
+  // Names/kinds for the permitted link targets, fetched together for this card.
+  repeated Item related = 7;
+  // Bounded durable request summaries. Arguments are read only when opening a request.
+  repeated omloom.v1.Operation requests = 8;
+  // Revision/authority-bound continuation for further current requests.
+  optional string requests_next = 9;
+}
+enum OwnerRequestAction {
+  OWNER_REQUEST_ACTION_UNSPECIFIED = 0;
+  OWNER_REQUEST_ACTION_CREATE = 1;
+  OWNER_REQUEST_ACTION_READ = 2;
+  OWNER_REQUEST_ACTION_APPROVE = 3;
+  OWNER_REQUEST_ACTION_REPORT = 4;
+}
+message OwnerRequest {
+  // Explicit request transition; no transition dispatches an external effect.
+  OwnerRequestAction action = 1;
+  // Selected account used for the change, checked independently from its resource.
+  omloom.v1.AssetRef account = 2;
+  // Exact existing resource. Required for creation; subsequent calls use the saved operation.
+  optional omloom.v1.AssetRef target = 3;
+  // Reviewed account revision, required at creation and every subsequent mutation.
+  optional uint64 account_revision = 4;
+  // Reviewed target revision, required at creation. A stale target cannot be approved/reported.
+  optional uint64 target_revision = 5;
+  // Explicit provider action token, max 64 ASCII bytes; no executable command.
+  string change = 6;
+  // Exact non-secret proposed arguments, bounded by the durable operation contract.
+  repeated omloom.v1.Field arguments = 7;
+  // Caller-selected idempotency key for creation, max 256 bytes.
+  string retry_key = 8;
+  // User-selected request deadline in Unix milliseconds; expiration does not prove an effect.
+  uint64 expires_at_ms = 9;
+  // Existing durable operation UUID, required except at creation.
+  optional string operation_id = 10;
+  // Reviewed operation revision, required for approval/report.
+  optional uint64 expected = 11;
+  // Explicit owner assertion of effect knowledge. Unknown remains unknown;
+  // confirmed is an assertion, never independent provider verification.
+  omloom.v1.EffectOutcome reported_outcome = 12;
+}
+message OwnerRequestState {
+  // Existing durable operation projection; a report remains pending verification.
+  omloom.v1.Operation operation = 1;
+  // Exact saved non-secret change arguments, returned only with request-read permission.
+  repeated omloom.v1.Field arguments = 2;
+  // Saved provider action token, not a dispatched action.
+  string change = 3;
+  // Current approval fact, independently attributed in operation evidence.
+  bool approved = 4;
+  // An owner supplied an assertion; this is never provider-verified success.
+  bool owner_reported = 5;
+  // False when current field rights omit proposed arguments. Such a projection
+  // cannot be approved/reported as if the complete requested change were visible.
+  bool arguments_complete = 6;
 }
 message Creation {
   // Server-qualified resource kind available at this exact parent/context.
@@ -791,6 +1066,14 @@ message Request {
     Create create = 21;
     // Perform a bounded read-only Proxmox probe with transient credentials.
     ObserveProxmox observe_proxmox = 22;
+    // Read or conditionally change resource responsibility without changing access grants.
+    Responsibility responsibility = 23;
+    // Read or edit selected account metadata and independently authorized bindings.
+    ExternalAccount external_account = 24;
+    // Retain an owner-action request without dispatching work or releasing credentials.
+    OwnerRequest owner_request = 25;
+    // Export selected declarations or preview/accept a bounded atomic typed import.
+    ResponsibilityTransfer responsibility_transfer = 26;
   }
 }
 message Reply {
@@ -818,5 +1101,13 @@ message Reply {
     Actions actions = 10;
     // Ephemeral provider facts for explicit review, with no inventory mutation.
     ObservationPreview observation = 11;
+    // Current permitted declarations and bounded effective responsibility resolution.
+    ResponsibilityState responsibility = 12;
+    // Permitted external-account metadata and independent decision axes.
+    ExternalAccountState external_account = 13;
+    // Durable owner request, approval or unverified outcome assertion.
+    OwnerRequestState owner_request = 14;
+    // Selected responsibility export or the result of one atomic reviewed import.
+    ResponsibilityTransferState responsibility_transfer = 15;
   }
 }

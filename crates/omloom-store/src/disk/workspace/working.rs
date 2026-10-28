@@ -155,6 +155,7 @@ pub(super) fn attachment(
         | (K::Service, K::Interface | K::AddressReference) => Some((R::Contains, false)),
         (K::Device | K::VirtualMachine, K::SoftwareInstallation) => Some((R::Contains, false)),
         (K::Service, K::SoftwareInstallation) => Some((R::Contains, false)),
+        (K::Service, K::ProviderAccount) => Some((R::Contains, false)),
         (K::Device, K::Port) => Some((R::HasPort, false)),
         (K::Port, K::Interface) => Some((R::Carries, false)),
         (K::Device, K::VirtualMachine | K::Service) | (K::VirtualMachine, K::Service) => {
@@ -291,6 +292,7 @@ impl Tx<'_> {
             authority_id: self.workspace_authority()?,
         };
         self.save_typed_relation(&relation, None, &context.actor, now)?;
+        self.initialize_responsibility(child, &relation)?;
         Ok(())
     }
 
@@ -627,6 +629,8 @@ impl Store {
                 K::L2Domain,
                 K::AddressReference,
                 K::SoftwareInstallation,
+                K::Domain,
+                K::ProviderAccount,
             ] {
                 let raw = kind as i32;
                 if let Some(parent) = &parent_item {

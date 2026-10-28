@@ -129,6 +129,23 @@ impl Store {
             || old
                 .as_ref()
                 .is_some_and(|p| string(p, "owner").ok().as_ref() != Some(&view.owner));
+        if disclosure && request.publish {
+            let query = view.query.as_ref().ok_or(Error::Invalid)?;
+            for reference in query.roots.iter().chain(query.focus.iter()) {
+                let target = parse_target(Some(reference))?;
+                let row = tx.visible_asset(context, target)?;
+                if number(&row, "kind")? == wire::AssetKind::ProviderAccount as u64
+                    && !context.field(
+                        target,
+                        wire::AssetKind::ProviderAccount as i32,
+                        "account.share",
+                        true,
+                    )
+                {
+                    return Err(Error::Denied);
+                }
+            }
+        }
         if disclosure && !request.publish {
             tx.commit()?;
             return Ok(reply(api::reply::Result::Views(api::Views {

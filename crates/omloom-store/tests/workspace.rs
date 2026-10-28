@@ -6,6 +6,8 @@ use omloom_contracts::{
 };
 use omloom_store::{Error, Store, workspace::*};
 use support::*;
+#[path = "workspace/accounts.rs"]
+mod accounts;
 #[path = "workspace/contexts.rs"]
 mod contexts;
 #[path = "workspace/definitions.rs"]
@@ -18,6 +20,8 @@ mod groups;
 mod host_network;
 #[path = "workspace/projections.rs"]
 mod projections;
+#[path = "workspace/responsibility.rs"]
+mod responsibility;
 #[path = "workspace/views.rs"]
 mod views;
 

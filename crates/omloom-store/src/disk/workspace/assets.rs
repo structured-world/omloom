@@ -31,6 +31,7 @@ pub(super) fn ownership_clause(
         K::AddressReference,
         K::Port,
         K::Storage,
+        K::ProviderAccount,
     ];
     let mut groups = BTreeMap::<(i32, bool, i32), Vec<i32>>::new();
     for parent in kinds {
@@ -319,7 +320,13 @@ pub(super) fn kind_for_view(view: api::View) -> &'static [wire::AssetKind] {
             K::AddressReference,
         ],
         api::View::Virtualization => &[K::VirtualMachine, K::SoftwareInstallation, K::Cluster],
-        api::View::Services => &[K::Service, K::SoftwareInstallation, K::Storage],
+        api::View::Services => &[
+            K::Service,
+            K::SoftwareInstallation,
+            K::Storage,
+            K::Domain,
+            K::ProviderAccount,
+        ],
     }
 }
 fn value_clause(
@@ -876,6 +883,35 @@ impl Store {
             } else {
                 clauses.push(format!("{alias}.layer='intent'"));
                 clauses.push(value_clause(value, &alias, &mut values)?);
+            }
+        }
+        if let Some(filter) = &query.responsibility {
+            let keys = if query.roots.is_empty()
+                && query.focus.is_none()
+                && query.search.trim().is_empty()
+                && query.predicates.is_empty()
+            {
+                tx.responsibility_filter(context, filter)?
+            } else {
+                let scoped = format!(
+                    "{entry}{} WITH {} WHERE {} RETURN DISTINCT properties(a) AS p LIMIT 4097",
+                    predicate_joins.join(""),
+                    bindings.join(", "),
+                    clauses.join(" AND ")
+                );
+                let rows = tx.query(&scoped, Some(values.clone()))?;
+                tx.responsibility_filter_rows(context, filter, rows)?
+            };
+            let keys = parameter(
+                &mut values,
+                Value::Array(keys.into_iter().map(text).collect()),
+            );
+            if entry == "MATCH (a:OmRow {parent:'assets'})" {
+                entry = format!(
+                    "UNWIND {keys} AS responsibility_key MATCH (a:OmRow {{key:responsibility_key}})"
+                );
+            } else {
+                clauses.push(format!("a.key IN {keys}"));
             }
         }
         clauses.retain(|clause| clause != "true");
@@ -1723,6 +1759,7 @@ impl Tx<'_> {
         }
         let key = asset_key(target);
         // Existing operation/retirement code owns uncertain effects and identity fences.
+        self.require_no_account_references(target)?;
         let pending = self.query("MATCH (n:OmRow) WHERE n.parent='operations' AND n.class=$class AND n.asset=$asset AND n.incarnation=$incarnation RETURN properties(n) AS p LIMIT 1",params([("class", int(Class::Pending as u64)?), ("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string()))]))?;
         if !pending.is_empty() {
             return Err(Error::UnsafeTransition);

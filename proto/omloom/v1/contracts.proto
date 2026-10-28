@@ -37,6 +37,10 @@ enum AssetKind {
   ASSET_KIND_ADDRESS_REFERENCE = 21;
   // Concrete installed OS/firmware context, independent of hardware and boot session.
   ASSET_KIND_SOFTWARE_INSTALLATION = 22;
+  // Selected registered domain; account control is a separately admitted binding.
+  ASSET_KIND_DOMAIN = 23;
+  // Selected external administration or workload account, without credentials.
+  ASSET_KIND_PROVIDER_ACCOUNT = 24;
 }
 
 // Scoped provider identity is matching evidence, never authority.

@@ -52,6 +52,90 @@ qualify authentication or deployment for other users.
 
 ## Work with inventory
 
+### Ownership and responsibility
+
+Open a resource's **Ownership & responsibility** card to inspect or edit its
+claimed owner, operator, beneficiary and external account controller. Parties
+are selected issuer-qualified references, not an imported directory. Equal
+labels in different namespaces never merge identities. A recorded owner is a
+claim, not legal verification, authentication or an access grant.
+
+Owner and operator support explicit assignment, inheritance and an explicit
+unassigned stop. Beneficiary and account controller are independent explicit
+facets. Newly created owned components bind to their accepted component
+relation. Inheritance retains that relation and its reviewed revision, rather
+than copying a parent's effective value to every child. A parent assignment
+change updates derived values below it until an override or stop.
+
+Physical VM hosting alone does not assign a person or team. Selecting a hosting
+relation as an administrative responsibility source requires a separate reviewed
+assignment. A changed or removed source becomes unavailable; a VM migration
+cannot silently select its new host's owner. VPN peers, gateways, shared
+storage, VLAN/VRF membership and canonical address allocations are not
+responsibility parents. A local interface address fact is distinct from the
+network resource it references.
+
+The card separates effective values from source identities and contacts. A
+permitted child value can remain visible while its source is hidden. Editing
+requires current field rights, resource revision and application basis. The
+preview writes nothing. Assignment changes neither transfer credentials nor
+create or revoke grants.
+
+The typed filter accepts a facet plus exact party namespace and identity.
+Filtering occurs before counts and pagination. Scoped or otherwise selective
+queries resolve their actual candidates first. Global discovery starts from
+the explicit-party index and follows qualified downward candidates. Unknown
+values do not match a known-party filter; an attempted unresolved source is an
+incomplete result, not a fabricated owner or a silently truncated count.
+Requests have fixed work ceilings of 64 ancestor levels, 4096 resources and
+32768 relation observations. Exceeding a ceiling returns a resource-limit error.
+
+**Export responsibility** downloads permitted local declarations as typed JSON.
+**Import responsibility** previews and atomically accepts up to 100 exact
+existing resources under the same validation and revision checks as the form.
+Hidden inheritance bindings are omitted from the download. This is a selected
+declaration transfer, not a backup or a grant export. Replies are bounded before
+acceptance; an invalid or oversized transfer cannot partially commit.
+
+### Selected domains and external accounts
+
+Domains and provider accounts are separate resource kinds in **Software &
+services**. An account records only its selected source identity,
+administration/programmatic kind, known delegation capability, permitted login
+and sender constraints, an optional opaque credential-binding UUID and a known
+recovery route. Do not enter passwords, tokens or recovery answers. Provider
+identity remains stable across rename and credential rotation.
+
+An account can bind up to 32 selected managed resources, services, endpoints and
+consumer workloads. Bindings do not copy resources or establish ownership.
+Each endpoint and its label require independent disclosure rights. Two products
+can use separate SMTP account references while mail administration and other
+consumers remain hidden. Removing a binding does not revoke external mail access
+or delete the account. Referenced resources and accounts with pending owner
+requests cannot be removed or retyped into dangling references.
+
+Metadata visibility, sharing its view, workload credential use, human reveal,
+rotation, delegation, requesting, approving and performing a change are separate
+capabilities. **Share account view** uses the existing reviewed view-publication
+flow and separately checks account sharing authority. Recipients still need
+their own inventory rights. Publishing a definition releases no secret and
+grants no provider access. The capability display describes trusted host
+decisions, not qualification of a provider or vault integration.
+
+For a personal account without delegation, the card says **Account owner action
+required**. A company approver cannot acquire that account. A request retains
+the exact managed target, non-secret proposed change, target/account revisions,
+caller and deadline through the existing durable operation model. It starts
+blocked with no external effect and no executor work item. Approval remains
+separate from performance of the action. A stale target or changed controller
+basis requires a new review.
+
+An unavailable owner leaves the request unresolved. An attributable owner report
+retains explicit effect knowledge but remains **Needs independent verification**,
+never provider-verified success. The ordinary executor cannot claim these owner
+requests. The development host does not dispatch provider effects, send mail,
+fetch credentials, impersonate the controller or qualify production identity.
+
 Create resources independently of a hierarchy or integration. Name collisions
 do not merge identities. Edit with explicit preserve, set and clear operations;
 the accepted revision prevents a stale form from replacing a newer edit.
