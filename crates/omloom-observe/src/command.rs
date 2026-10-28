@@ -65,14 +65,16 @@ impl Runner {
         // Reserve both pipe capacities before launching. Neither raw stream is logged.
         let reserved = 2 * (limit + 1);
         self.remaining -= reserved;
-        let mut out = Vec::with_capacity(limit + 1);
-        let mut err = Vec::with_capacity(limit + 1);
+        let mut out = Vec::new();
+        let mut err = Vec::new();
         let result: Result<()> = async {
             let mut child = command(executable, args)
                 .spawn()
                 .map_err(|e| format!("Command unavailable ({executable}): {}", e.kind()))?;
             let stdout = child.stdout.take().ok_or("Missing command stdout")?;
             let stderr = child.stderr.take().ok_or("Missing command stderr")?;
+            out = Vec::with_capacity(limit + 1);
+            err = Vec::with_capacity(limit + 1);
             let deadline = self.deadline.min(Instant::now() + Duration::from_secs(10));
             let work = async {
                 let (_, _, status) = tokio::try_join!(
