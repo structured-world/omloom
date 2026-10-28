@@ -121,10 +121,15 @@ async fn collect() -> Result<api::HostReport> {
     native::collect(&mut runner, &mut report).await?;
     runtime::collect(&mut runner, &mut report).await?;
     let (_, after_source, after_boot, _) = native::identity(&mut runner).await?;
+    check_identity(&source, &boot, &after_source, &after_boot)?;
+    Ok(report)
+}
+
+fn check_identity(source: &str, boot: &str, after_source: &str, after_boot: &str) -> Result<()> {
     if source != after_source || boot != after_boot {
         return Err("Installation or boot changed during collection; output not written".into());
     }
-    Ok(report)
+    Ok(())
 }
 
 fn encode(report: api::HostReport) -> Result<Vec<u8>> {

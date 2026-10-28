@@ -8,6 +8,35 @@ fn report() -> api::HostReport {
     }
 }
 
+// The final collection fence must reject either a different installation or
+// boot session before encoding/publication, including when the hostname is equal.
+#[test]
+fn collection_basis_cannot_change_before_publication() {
+    assert!(check_identity("installation-a", "boot-a", "installation-a", "boot-a").is_ok());
+    assert!(check_identity("installation-a", "boot-a", "installation-b", "boot-a").is_err());
+    assert!(check_identity("installation-a", "boot-a", "installation-a", "boot-b").is_err());
+    assert!(check_identity("installation-a", "boot-a", "installation-b", "boot-b").is_err());
+}
+
+// An existing symlink is not an import destination and cannot redirect the
+// synced report publication into an unrelated file.
+#[cfg(unix)]
+#[test]
+fn output_does_not_follow_an_existing_symlink() {
+    let dir = tempfile::tempdir().expect("test directory");
+    let retained = dir.path().join("retained");
+    std::fs::write(&retained, b"retained").expect("existing file");
+    let link = dir.path().join("report");
+    std::os::unix::fs::symlink(&retained, &link).expect("existing symlink");
+    assert!(save(&link, b"replacement").is_err());
+    assert_eq!(std::fs::read(retained).expect("original data"), b"retained");
+    assert!(
+        std::fs::symlink_metadata(link)
+            .expect("symlink")
+            .is_symlink()
+    );
+}
+
 // Generation class and validity are independent; temporary literals must never
 // enter the serialized report while deprecated stable facts stay explicit.
 #[test]
