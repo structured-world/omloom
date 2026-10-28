@@ -59,6 +59,44 @@ fn owner(subject: &str) -> api::ResponsibilityAssignment {
     }
 }
 
+// A source picker needs ancestors, never the full set of a server's components.
+#[test]
+fn responsibility_source_picker_does_not_enumerate_children() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let server = create(&store, &actor, K::Device, "Server with many components")?;
+    for index in 0..129 {
+        call(
+            &store,
+            &actor,
+            Command::Write(api::Write {
+                kind: K::Interface as i32,
+                parent: Some(server.clone()),
+                changes: vec![text_field("name", &format!("NIC {index}"))],
+                ..Default::default()
+            }),
+        )?;
+    }
+    let before = store.usage()?;
+    let Reply::Responsibility(state) = call(
+        &store,
+        &actor,
+        Command::Responsibility(api::Responsibility {
+            target: Some(server),
+            action: Action::Read as i32,
+            include_sources: true,
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("responsibility");
+    };
+    assert!(state.sources.is_empty());
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // Ambiguous attachment and cycles must be refused atomically; adjacency cannot become authority.
 #[test]
 fn responsibility_rejects_ambiguous_cycles_and_sideways_sources() -> TestResult {

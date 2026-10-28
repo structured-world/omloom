@@ -477,23 +477,57 @@ impl Tx<'_> {
                 .push(graph.resolve(context, target, facet)?);
         }
         if include_sources && context.field(target, kind, "relations", false) {
-            let rows = tx.raw("MATCH (a:OmRow {key:$key})-[:OmRelationFrom|OmRelationTo]-(r:OmRow)-[:OmRelationFrom|OmRelationTo]-(p:OmRow) WHERE p.parent='assets' AND p.key<>a.key RETURN properties(r) AS relation, properties(p) AS source LIMIT 129", params([("key", text(asset_key(target)))]).ok_or(Error::Corrupt)?)?;
+            let mut rows = tx.query("MATCH (r:OmRow {to_asset:$asset}) WHERE r.parent='relations' AND r.to_incarnation=$incarnation AND r.kind IN $kinds RETURN properties(r) AS p LIMIT 129", params([
+                ("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string())),
+                ("kinds", Value::Array([wire::RelationKind::Contains, wire::RelationKind::HasPort, wire::RelationKind::Carries].into_iter().map(|k| Value::Int(k as i64)).collect()))
+            ]))?;
+            if matches!(
+                wire::AssetKind::try_from(kind),
+                Ok(wire::AssetKind::VirtualMachine | wire::AssetKind::Service)
+            ) {
+                rows.extend(tx.query("MATCH (r:OmRow {asset:$asset}) WHERE r.parent='relations' AND r.incarnation=$incarnation AND r.kind=$kind RETURN properties(r) AS p LIMIT 129", params([
+                    ("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string())), ("kind", Value::Int(wire::RelationKind::RunsOn as i64))
+                ]))?);
+            }
             if rows.len() > 128 {
                 return Err(Error::Limit);
             }
-            for mut row in rows {
-                let (Some(Value::Map(relation)), Some(Value::Map(parent_row))) =
-                    (row.remove("relation"), row.remove("source"))
-                else {
-                    return Err(Error::Corrupt);
+            let mut candidates = Vec::with_capacity(rows.len());
+            let mut parents = BTreeSet::new();
+            for row in rows {
+                let relation = inventory::relation_projection(&row)?;
+                let parent = if relation.kind == wire::RelationKind::RunsOn as i32 {
+                    parse_target(relation.to.as_ref())?
+                } else {
+                    parse_target(relation.from.as_ref())?
                 };
-                let parent = super::super::target(&parent_row)?;
-                let pk = wire::AssetKind::try_from(number(&parent_row, "kind")? as i32)
+                parents.insert(parent);
+                candidates.push((relation, parent));
+            }
+            if candidates.is_empty() {
+                return Ok(result);
+            }
+            let keys = parents
+                .iter()
+                .map(|parent| text(asset_key(*parent)))
+                .collect();
+            let parent_rows = tx
+                .query(
+                    "UNWIND $keys AS key MATCH (p:OmRow {key:key}) RETURN properties(p) AS p",
+                    params([("keys", Value::Array(keys))]),
+                )?
+                .into_iter()
+                .map(|row| super::super::target(&row).map(|target| (target, row)))
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            for (relation, parent) in candidates {
+                let Some(parent_row) = parent_rows.get(&parent) else {
+                    continue;
+                };
+                let pk = wire::AssetKind::try_from(number(parent_row, "kind")? as i32)
                     .map_err(|_| Error::Corrupt)?;
                 let ck = wire::AssetKind::try_from(kind).map_err(|_| Error::Corrupt)?;
-                let relation = inventory::relation_projection(&relation)?;
                 if !qualified(target, ck, parent, pk, &relation, true)?
-                    || number(&parent_row, "adoption")? != wire::Adoption::Adopted as u64
+                    || number(parent_row, "adoption")? != wire::Adoption::Adopted as u64
                     || !context.field(parent, pk as i32, "name", false)
                     || !context.field(parent, pk as i32, "relations", false)
                 {
@@ -533,7 +567,7 @@ impl Tx<'_> {
                     parent: Some(api::Item {
                         target: Some(target_wire(parent)),
                         kind: pk as i32,
-                        revision: number(&parent_row, "revision")?,
+                        revision: number(parent_row, "revision")?,
                         fields,
                     }),
                     facets,

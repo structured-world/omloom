@@ -89,6 +89,8 @@ values do not match a known-party filter; an attempted unresolved source is an
 incomplete result, not a fabricated owner or a silently truncated count.
 Requests have fixed work ceilings of 64 ancestor levels, 4096 resources and
 32768 relation observations. Exceeding a ceiling returns a resource-limit error.
+The source picker reads up to 128 candidate parent bindings. A resource's
+children are not candidates and do not consume that selection limit.
 
 **Export responsibility** downloads permitted local declarations as typed JSON.
 **Import responsibility** previews and atomically accepts up to 100 exact
