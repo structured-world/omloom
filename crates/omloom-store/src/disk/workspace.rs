@@ -11,6 +11,7 @@ mod assets;
 mod current_facts;
 mod definitions;
 mod exchange;
+mod host_import;
 mod interface_facts;
 mod network;
 pub(super) mod network_facts;
@@ -294,6 +295,12 @@ impl Store {
                 .map(|items| reply(api::reply::Result::Views(api::Views { items }))),
             C::SaveView(view) => self.workspace_save_view(context, view, now),
             C::Import(import) => self.workspace_import(
+                context,
+                import,
+                working.as_ref().ok_or(Error::Invalid)?,
+                now,
+            ),
+            C::HostImport(import) => self.workspace_host_import(
                 context,
                 import,
                 working.as_ref().ok_or(Error::Invalid)?,

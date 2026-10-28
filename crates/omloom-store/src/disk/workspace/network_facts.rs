@@ -10,7 +10,7 @@ fn source_parent(target: AssetRef) -> String {
     )
 }
 
-fn validate(value: &api::HostNetwork) -> Result<()> {
+pub(super) fn validate(value: &api::HostNetwork) -> Result<()> {
     use current_facts::{MAX_BYTES, MAX_FACTS};
     if value.sockets.len() + value.routes.len() + value.rules.len() > MAX_FACTS
         || value.encoded_len() > MAX_BYTES
@@ -67,8 +67,11 @@ fn validate(value: &api::HostNetwork) -> Result<()> {
         if !matches!(r.family.as_str(), "IPv4" | "IPv6") {
             return Err(Error::Invalid);
         }
+        if r.destination.is_empty() {
+            return Err(Error::Invalid);
+        }
         for s in [&r.destination, &r.gateway, &r.flags, &r.interface] {
-            if s.is_empty() || s.len() > 128 || s.chars().any(char::is_control) {
+            if s.len() > 128 || s.chars().any(char::is_control) {
                 return Err(Error::Invalid);
             }
         }
