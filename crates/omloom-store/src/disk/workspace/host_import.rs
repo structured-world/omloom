@@ -1,6 +1,8 @@
 //! Reviewed native input reuses current inventory and observation rows. Only
 //! selected proposals survive in bounded, expiring review custody until acceptance.
 use super::*;
+#[cfg(test)]
+mod tests;
 
 fn mapping(actor: &str, source: &str, basis: &str, key: &str) -> String {
     // Source names select independent import configurations, not cosmetic
@@ -30,7 +32,7 @@ fn validate(report: &api::HostReport) -> Result<()> {
             return Err(Error::Invalid);
         }
     }
-    let mut keys = BTreeSet::new();
+    let mut keys = BTreeMap::new();
     for node in &report.findings {
         if node.key.is_empty()
             || node.key.len() > 256
@@ -60,12 +62,22 @@ fn validate(report: &api::HostReport) -> Result<()> {
         {
             return Err(Error::Invalid);
         }
+        // These targets are authorized as installations during import. Bind
+        // their types before any target resolution or mutation can use them.
+        if node.key == "installation" && node.kind != wire::AssetKind::SoftwareInstallation as i32 {
+            return Err(Error::Invalid);
+        }
         for parent in [&node.parent, &node.runtime].into_iter().flatten() {
-            if !keys.contains(parent) {
+            if !keys.contains_key(parent) {
                 return Err(Error::Invalid);
             }
         }
-        if !keys.insert(node.key.clone()) {
+        if let Some(runtime) = &node.runtime
+            && keys.get(runtime) != Some(&(wire::AssetKind::SoftwareInstallation as i32))
+        {
+            return Err(Error::Invalid);
+        }
+        if keys.insert(node.key.clone(), node.kind).is_some() {
             return Err(Error::Invalid);
         }
         if !node.addresses.is_empty() && node.kind != wire::AssetKind::Interface as i32 {
@@ -89,7 +101,7 @@ fn validate(report: &api::HostReport) -> Result<()> {
         }
     }
     for bind in &report.binds {
-        if (!bind.owner.is_empty() && !keys.contains(&bind.owner))
+        if (!bind.owner.is_empty() && !keys.contains_key(&bind.owner))
             || bind.value.as_ref().is_none_or(|v| v.service.is_some())
         {
             return Err(Error::Invalid);

@@ -318,6 +318,97 @@ fn host_preview_requires_write_authority() -> TestResult {
     Ok(())
 }
 
+// A file cannot relabel a Device as the reserved OS installation to borrow
+// SoftwareInstallation-only network permission. Refusal leaves no preview.
+#[test]
+fn network_import_rejects_a_forged_installation_kind() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut request = draft();
+    let report = request.report.as_mut().expect("report");
+    report.findings = vec![api::HostFinding {
+        key: "installation".into(),
+        kind: K::Device as i32,
+        fields: vec![text_field("name", "Forged installation")],
+        ..Default::default()
+    }];
+    report.network = Some(api::HostNetwork {
+        socket_coverage: "not collected".into(),
+        route_coverage: "verified".into(),
+        application_coverage: "not collected".into(),
+        packet_filter_coverage: "not collected".into(),
+        ..Default::default()
+    });
+    request.selection = vec![api::HostSelection {
+        key: "installation".into(),
+        ..Default::default()
+    }];
+    request.network_parts = vec![api::HostNetworkPart::Routes as i32];
+    let mut actor = operator();
+    actor.grants[0].write = Fields::Selected(vec!["name".into()]);
+    actor.grants.push(Grant {
+        scope: Scope::Kinds(vec![K::SoftwareInstallation]),
+        read: Fields::All,
+        write: Fields::Selected(vec!["network_evidence".into()]),
+        writable: true,
+    });
+    let before = store.usage()?;
+    let result = call(&store, &actor, Command::HostImport(request));
+    assert!(
+        matches!(result, Err(Error::Invalid)),
+        "forged installation type must be rejected"
+    );
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// Runtime references must name installations, not a Service on which the actor
+// has no relation write grant. Report keys cannot override kind-scoped grants.
+#[test]
+fn runtime_import_rejects_a_service_as_the_runtime() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut request = draft();
+    request.report.as_mut().expect("report").findings = vec![
+        api::HostFinding {
+            key: "runtime".into(),
+            kind: K::Service as i32,
+            fields: vec![text_field("name", "Forged runtime")],
+            ..Default::default()
+        },
+        api::HostFinding {
+            key: "workload".into(),
+            kind: K::Workload as i32,
+            fields: vec![text_field("name", "Selected workload")],
+            runtime: Some("runtime".into()),
+            ..Default::default()
+        },
+    ];
+    request.selection = ["runtime", "workload"]
+        .into_iter()
+        .map(|key| api::HostSelection {
+            key: key.into(),
+            ..Default::default()
+        })
+        .collect();
+    let mut actor = operator();
+    actor.grants[0].write = Fields::Selected(vec!["name".into()]);
+    actor.grants.push(Grant {
+        scope: Scope::Kinds(vec![K::SoftwareInstallation, K::Workload]),
+        read: Fields::All,
+        write: Fields::Selected(vec!["relations".into()]),
+        writable: true,
+    });
+    let before = store.usage()?;
+    let result = call(&store, &actor, Command::HostImport(request));
+    assert!(
+        matches!(result, Err(Error::Invalid)),
+        "service cannot be an installation runtime"
+    );
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // Reading a report does not opt the installation into route or policy storage.
 // Explicit route selection accepts on-link rows without inventing a next hop.
 #[test]
