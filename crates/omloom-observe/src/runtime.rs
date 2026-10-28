@@ -1,6 +1,65 @@
 use super::{Result, add, api, coverage, digest, finding, text, wire};
 use super::{command::Runner, native::json};
 use serde_json::Value;
+#[cfg(test)]
+mod tests;
+
+fn local_docker_endpoint(platform: &str, endpoint: &str) -> Result<()> {
+    let path = endpoint.strip_prefix("unix:///").or_else(|| {
+        (platform == "windows")
+            .then(|| endpoint.strip_prefix("npipe:////./pipe/"))
+            .flatten()
+    });
+    if path.is_none_or(|v| v.is_empty() || v.chars().any(char::is_control)) {
+        return Err("Selected Docker context is not a local daemon".into());
+    }
+    Ok(())
+}
+
+fn docker_environment(name: &str) -> Result<Option<String>> {
+    let Some(value) = std::env::var_os(name) else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let value = value
+        .into_string()
+        .map_err(|_| "Docker connection setting is not UTF-8")?;
+    if value.len() > 512 || value.chars().any(char::is_control) {
+        return Err("Docker connection setting exceeds contract".into());
+    }
+    Ok(Some(value))
+}
+
+enum DockerSelection {
+    Context(String),
+    Host(String),
+    Current,
+}
+fn docker_selection(read: impl Fn(&str) -> Result<Option<String>>) -> Result<DockerSelection> {
+    if let Some(value) = read("DOCKER_CONTEXT")? {
+        return Ok(DockerSelection::Context(value));
+    }
+    Ok(match read("DOCKER_HOST")? {
+        Some(value) => DockerSelection::Host(value),
+        None => DockerSelection::Current,
+    })
+}
+
+fn docker_step(step: &str, error: String) -> String {
+    // Keep the generic permission/unavailable classification prefix intact.
+    format!("{error}: Docker {step}")
+}
+
+fn docker_status(error: &str) -> &'static str {
+    let base = if let Some((base, _)) = error.rsplit_once(": Docker ") {
+        base
+    } else {
+        error
+    };
+    super::native::failure_status(base)
+}
 
 fn string<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
     let result = value
@@ -11,6 +70,14 @@ fn string<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
         return Err("Runtime field exceeds contract".into());
     }
     Ok(result)
+}
+trait DockerCommands {
+    async fn read(&mut self, args: &[&str]) -> Result<String>;
+}
+impl DockerCommands for Runner {
+    async fn read(&mut self, args: &[&str]) -> Result<String> {
+        self.run("docker", args).await.map(|output| output.text)
+    }
 }
 pub(super) async fn collect(runner: &mut Runner, report: &mut api::HostReport) -> Result<()> {
     let before = report.findings.len();
@@ -23,12 +90,7 @@ pub(super) async fn collect(runner: &mut Runner, report: &mut api::HostReport) -
         ),
         Err(error) => {
             report.findings.truncate(before);
-            coverage(
-                report,
-                "docker",
-                super::native::failure_status(&error),
-                &error,
-            );
+            coverage(report, "docker", docker_status(&error), &error);
         }
     }
     match netbird(runner, report).await {
@@ -48,26 +110,56 @@ pub(super) async fn collect(runner: &mut Runner, report: &mut api::HostReport) -
     Ok(())
 }
 async fn docker(runner: &mut Runner, report: &mut api::HostReport) -> Result<()> {
-    let endpoint = runner
-        .run(
-            "docker",
-            &[
-                "context",
-                "inspect",
-                "--format",
-                "{{json .Endpoints.docker.Host}} ",
-            ],
-        )
-        .await?
-        .text;
-    let endpoint: Value = json(endpoint.trim())?;
-    let endpoint = endpoint.as_str().ok_or("Docker endpoint unavailable")?;
-    if !(endpoint.starts_with("unix://")
-        || (report.platform == "windows" && endpoint.starts_with("npipe://")))
-    {
-        return Err("Selected Docker context is not a local daemon".into());
-    }
-    let info=runner.run("docker", &["info","--format","{\"id\":{{json .ID}},\"os\":{{json .OperatingSystem}},\"type\":{{json .OSType}},\"version\":{{json .ServerVersion}}}"]).await?.text;
+    let selection = docker_selection(docker_environment)?;
+    // Docker documents context > host > configured current context. Resolve
+    // once, then pin every daemon read to the checked endpoint.
+    let endpoint = if let DockerSelection::Host(host) = selection {
+        host
+    } else {
+        let context = match selection {
+            DockerSelection::Context(value) => value,
+            DockerSelection::Current => runner
+                .run("docker", &["context", "show"])
+                .await
+                .map_err(|e| docker_step("context selection", e))?
+                .text
+                .trim()
+                .to_owned(),
+            DockerSelection::Host(_) => unreachable!("host handled above"),
+        };
+        if context.is_empty() || context.len() > 256 || context.chars().any(char::is_control) {
+            return Err("Docker context name exceeds contract".into());
+        }
+        let output = runner
+            .run(
+                "docker",
+                &[
+                    "context",
+                    "inspect",
+                    &context,
+                    "--format",
+                    "{{json .Endpoints.docker.Host}}",
+                ],
+            )
+            .await
+            .map_err(|e| docker_step("context inspection", e))?
+            .text;
+        let value = json(output.trim())?;
+        value
+            .as_str()
+            .ok_or("Docker endpoint unavailable")?
+            .to_owned()
+    };
+    docker_at(runner, &endpoint, report).await
+}
+
+async fn docker_at(
+    runner: &mut impl DockerCommands,
+    endpoint: &str,
+    report: &mut api::HostReport,
+) -> Result<()> {
+    local_docker_endpoint(&report.platform, endpoint)?;
+    let info=runner.read(&["--host",endpoint,"info","--format","{\"id\":{{json .ID}},\"os\":{{json .OperatingSystem}},\"type\":{{json .OSType}},\"version\":{{json .ServerVersion}}}"]).await.map_err(|e|docker_step("daemon inspection",e))?;
     let info = json(&info)?;
     let daemon = string(&info, "id")?;
     let runtime = format!("docker/{}", digest(daemon));
@@ -87,9 +179,9 @@ async fn docker(runner: &mut Runner, report: &mut api::HostReport) -> Result<()>
     ));
     add(report, installation)?;
     let ids = runner
-        .run("docker", &["ps", "-q", "--no-trunc"])
-        .await?
-        .text;
+        .read(&["--host", endpoint, "ps", "-q", "--no-trunc"])
+        .await
+        .map_err(|e| docker_step("container listing", e))?;
     if ids.lines().count() > 32 {
         return Err("Selected Docker instance count limit exceeded".into());
     }
@@ -97,7 +189,7 @@ async fn docker(runner: &mut Runner, report: &mut api::HostReport) -> Result<()>
         if id.len() != 64 || !id.bytes().all(|v| v.is_ascii_hexdigit()) {
             return Err("Invalid Docker container identity".into());
         }
-        let result=runner.run("docker", &["inspect",id,"--format","{\"id\":{{json .Id}},\"name\":{{json .Name}},\"created\":{{json .Created}},\"image\":{{json .Image}},\"project\":{{json (index .Config.Labels \"com.docker.compose.project\")}},\"service\":{{json (index .Config.Labels \"com.docker.compose.service\")}},\"working_directory\":{{json (index .Config.Labels \"com.docker.compose.project.working_dir\")}},\"networks\":{{json .NetworkSettings.Networks}}}"]).await?.text;
+        let result=runner.read(&["--host",endpoint,"inspect",id,"--format","{\"id\":{{json .Id}},\"name\":{{json .Name}},\"created\":{{json .Created}},\"image\":{{json .Image}},\"project\":{{json (index .Config.Labels \"com.docker.compose.project\")}},\"service\":{{json (index .Config.Labels \"com.docker.compose.service\")}},\"working_directory\":{{json (index .Config.Labels \"com.docker.compose.project.working_dir\")}},\"networks\":{{json .NetworkSettings.Networks}}}"]).await.map_err(|e|docker_step("container inspection",e))?;
         let value = json(&result)?;
         if string(&value, "id")? != id {
             return Err("Container changed during inspection".into());
@@ -216,6 +308,14 @@ async fn docker(runner: &mut Runner, report: &mut api::HostReport) -> Result<()>
             interface.addresses_complete = true;
             add(report, interface)?;
         }
+    }
+    let after = runner
+        .read(&["--host", endpoint, "info", "--format", "{{json .ID}}"])
+        .await
+        .map_err(|e| docker_step("daemon identity recheck", e))?;
+    let after = json(after.trim())?;
+    if after.as_str() != Some(daemon) {
+        return Err("Docker daemon changed during inspection".into());
     }
     Ok(())
 }

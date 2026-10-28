@@ -548,6 +548,11 @@ MAC as device identity.
 Optional local Docker and NetBird modules do not scan arbitrary software packages.
 Docker candidates distinguish runtime, workload, container lifetime and endpoint
 attachments. Docker Desktop guest addresses are not macOS host interfaces.
+The selected context or environment endpoint is resolved once using Docker's
+context precedence. All daemon reads pin that checked local Unix socket or
+Windows named pipe; remote endpoints are refused. Daemon identity is rechecked
+before accepting the batch. Module diagnostics name the failing stage without
+retaining raw stderr or connection settings.
 EXPOSE, a published port or a Compose label cannot prove a listener, reachability,
 human owner or recoverable launch invocation. NetBird attribution uses local daemon
 IP evidence and a unique observed interface match; it retains no peers or keys.

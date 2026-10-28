@@ -220,6 +220,9 @@ async fn native_host_collection_has_a_decodable_core() {
     let report = collect().await.expect("native collection");
     for coverage in &report.coverage {
         println!("native module {}: {}", coverage.module, coverage.status);
+        if coverage.module == "docker" && coverage.status != "verified" {
+            println!("native Docker diagnostic: {}", coverage.detail);
+        }
     }
     println!(
         "native findings: {}, binds: {}",

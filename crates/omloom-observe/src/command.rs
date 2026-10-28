@@ -18,6 +18,30 @@ pub(super) struct Output {
     pub text: String,
     pub warnings: bool,
 }
+fn command(executable: &str, args: &[&str]) -> Command {
+    let mut command = Command::new(executable);
+    command
+        .args(args)
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if executable == "docker" && args.first() == Some(&"--host") {
+        // Docker CLI connection precedence must not override the endpoint
+        // already checked by native collection (Docker CLI reference, Options).
+        for name in [
+            "DOCKER_CONTEXT",
+            "DOCKER_HOST",
+            "DOCKER_TLS",
+            "DOCKER_TLS_VERIFY",
+            "DOCKER_CERT_PATH",
+        ] {
+            command.env_remove(name);
+        }
+    }
+    command
+}
 impl Runner {
     pub fn new() -> Self {
         Self {
@@ -43,13 +67,7 @@ impl Runner {
         self.remaining -= reserved;
         let out = Vec::with_capacity(limit + 1);
         let err = Vec::with_capacity(limit + 1);
-        let mut child = Command::new(executable)
-            .args(args)
-            .env("LC_ALL", "C")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
+        let mut child = command(executable, args)
             .spawn()
             .map_err(|e| format!("Command unavailable ({executable}): {}", e.kind()))?;
         let stdout = child.stdout.take().ok_or("Missing command stdout")?;

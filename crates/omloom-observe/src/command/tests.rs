@@ -1,5 +1,30 @@
 use super::*;
 
+// DOCKER_CONTEXT overrides DOCKER_HOST and conflicts with --host. A verified
+// local endpoint cannot inherit a second connection selector or implicit TLS.
+#[test]
+fn pinned_docker_command_removes_inherited_connection_overrides() {
+    let command = command("docker", &["--host", "unix:///test.sock", "info"]);
+    let environment: std::collections::BTreeMap<_, _> = command.as_std().get_envs().collect();
+    for key in [
+        "DOCKER_CONTEXT",
+        "DOCKER_HOST",
+        "DOCKER_TLS",
+        "DOCKER_TLS_VERIFY",
+        "DOCKER_CERT_PATH",
+    ] {
+        assert_eq!(
+            environment.get(std::ffi::OsStr::new(key)),
+            Some(&None),
+            "{key}"
+        );
+    }
+    assert_eq!(
+        command.as_std().get_args().collect::<Vec<_>>(),
+        ["--host", "unix:///test.sock", "info"]
+    );
+}
+
 // A malicious source must be stopped after the first excess byte, without
 // growing a buffer past the preallocated ceiling.
 #[tokio::test]
