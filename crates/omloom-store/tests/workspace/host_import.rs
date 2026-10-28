@@ -152,6 +152,8 @@ fn each_selected_parent_prefix_can_be_previewed() -> TestResult {
         let mut request = draft();
         request.selection.truncate(count);
         let result = preview(&store, request);
+        // This fixture contains synthetic inventory only, without provider
+        // accounts or credentials; failure diagnostics retain the typed result.
         assert!(result.is_ok(), "selected parent prefix {count}: {result:?}");
     }
     Ok(())
