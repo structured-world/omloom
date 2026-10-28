@@ -65,61 +65,80 @@ impl Runner {
         // Reserve both pipe capacities before launching. Neither raw stream is logged.
         let reserved = 2 * (limit + 1);
         self.remaining -= reserved;
-        let out = Vec::with_capacity(limit + 1);
-        let err = Vec::with_capacity(limit + 1);
-        let mut child = command(executable, args)
-            .spawn()
-            .map_err(|e| format!("Command unavailable ({executable}): {}", e.kind()))?;
-        let stdout = child.stdout.take().ok_or("Missing command stdout")?;
-        let stderr = child.stderr.take().ok_or("Missing command stderr")?;
-        let deadline = self.deadline.min(Instant::now() + Duration::from_secs(10));
-        let work = async {
-            let (out, err, status) =
-                tokio::try_join!(read(stdout, out, limit), read(stderr, err, limit), async {
-                    child
-                        .wait()
-                        .await
-                        .map_err(|_| "Command wait failed".to_owned())
-                })?;
-            self.remaining += reserved - out.len() - err.len();
-            if !status.success() {
-                let denied = err.windows(6).any(|v| v == b"denied")
-                    || err.windows(13).any(|v| v == b"not permitted");
-                return Err(if denied {
-                    "Permission denied"
-                } else {
-                    "Command failed"
+        let mut out = Vec::with_capacity(limit + 1);
+        let mut err = Vec::with_capacity(limit + 1);
+        let result: Result<()> = async {
+            let mut child = command(executable, args)
+                .spawn()
+                .map_err(|e| format!("Command unavailable ({executable}): {}", e.kind()))?;
+            let stdout = child.stdout.take().ok_or("Missing command stdout")?;
+            let stderr = child.stderr.take().ok_or("Missing command stderr")?;
+            let deadline = self.deadline.min(Instant::now() + Duration::from_secs(10));
+            let work = async {
+                let (_, _, status) = tokio::try_join!(
+                    read(stdout, &mut out, limit),
+                    read(stderr, &mut err, limit),
+                    async {
+                        child
+                            .wait()
+                            .await
+                            .map_err(|_| "Command wait failed".to_owned())
+                    }
+                )?;
+                if !status.success() {
+                    let denied = err.windows(6).any(|v| v == b"denied")
+                        || err.windows(13).any(|v| v == b"not permitted");
+                    return Err(if denied {
+                        "Permission denied"
+                    } else {
+                        "Command failed"
+                    }
+                    .into());
                 }
-                .into());
-            }
-            Ok(Output {
-                text: String::from_utf8(out).map_err(|_| "Command output is not UTF-8")?,
-                warnings: !err.is_empty(),
-            })
-        };
-        match timeout_at(deadline, work).await {
-            Ok(result) => result,
-            Err(_) => {
+                Ok(())
+            };
+            let result = match timeout_at(deadline, work).await {
+                Ok(result) => result,
+                Err(_) => Err("Command deadline exceeded".into()),
+            };
+            if result.is_err() && child.id().is_some() {
                 child
                     .start_kill()
-                    .map_err(|_| "Cannot terminate timed-out command")?;
+                    .map_err(|_| "Cannot terminate failed command")?;
                 tokio::time::timeout(Duration::from_secs(1), child.wait())
                     .await
-                    .map_err(|_| "Timed-out command termination not confirmed")?
-                    .map_err(|_| "Timed-out command wait failed")?;
-                Err("Command deadline exceeded".into())
+                    .map_err(|_| "Failed command termination not confirmed")?
+                    .map_err(|_| "Failed command wait failed")?;
             }
+            result
         }
+        .await;
+        // The buffers survive cancellation and errors, so only bytes actually
+        // read consume the cumulative budget, including rejected output.
+        self.remaining += reserved - out.len() - err.len();
+        result?;
+        Ok(Output {
+            text: String::from_utf8(out).map_err(|_| "Command output is not UTF-8")?,
+            warnings: !err.is_empty(),
+        })
     }
 }
-async fn read(reader: impl AsyncRead + Unpin, mut bytes: Vec<u8>, limit: usize) -> Result<Vec<u8>> {
-    reader
-        .take((limit + 1) as u64)
-        .read_to_end(&mut bytes)
-        .await
-        .map_err(|_| "Command pipe read failed")?;
-    if bytes.len() > limit {
-        return Err("Command output byte limit exceeded".into());
+async fn read(reader: impl AsyncRead + Unpin, bytes: &mut Vec<u8>, limit: usize) -> Result<()> {
+    debug_assert!(bytes.capacity() > limit);
+    let mut reader = reader.take((limit + 1) as u64);
+    loop {
+        if bytes.len() > limit {
+            return Err("Command output byte limit exceeded".into());
+        }
+        // Never poll a full Vec: even the EOF probe must stay within the
+        // reserved capacity. Every completed read survives future cancellation.
+        if reader
+            .read_buf(bytes)
+            .await
+            .map_err(|_| "Command pipe read failed")?
+            == 0
+        {
+            return Ok(());
+        }
     }
-    Ok(bytes)
 }
