@@ -4,6 +4,7 @@ import Dialog from './Dialog.vue';
 import PlacementPicker from './PlacementSearch.vue';
 import InitialAddresses from './InitialAddresses.vue';
 import ObserveHypervisor from './ObserveHypervisor.vue';
+import { softwareFields, softwareChoiceLabel } from './software-fields';
 import { call, typedField, input, label, key, model, AssetKind, type AssetRef } from './api';
 
 const props = defineProps<{ item?: model.Item; definitions: model.Definition[]; initialKind?: AssetKind; initialHypervisor?: boolean; working: model.WorkingContext; view: model.View }>();
@@ -66,7 +67,7 @@ const fields = computed<EditorField[]>(() => {
   ];
   const custom = props.definitions.filter(d => !d.retired && kind.value !== undefined && d.kinds.includes(kind.value))
     .map(d => ({ id: d.id, name: d.name, type: d.type, choices: d.choices, advanced: false }));
-  return [...builtins, ...custom].filter(f => allowed.includes(f.id));
+  return [...builtins, ...softwareFields(allowed), ...custom].filter(f => allowed.includes(f.id));
 });
 watch(fields, available => {
   for (const f of available) {
@@ -149,11 +150,13 @@ async function save() {
 <template v-else>
 <p v-if="known" class="hint">Record what you know. Network, VRF and mask may remain unknown. This does not reserve an address.</p>
 <p v-else class="hint">This action changes accepted inventory in the selected context.</p>
+<p v-if="kind === AssetKind.CONTAINER" class="hint">Container IDs belong to an actual runtime. Link that runtime in a broader scope; a replacement gets a new container identity.</p>
+<p v-if="kind === AssetKind.WORKLOAD" class="hint">Keep selected launch references if known. Compose labels identify grouping, not a verified owner or the original launch command.</p>
 <p v-if="item" class="context-chip">Editing {{ input(item.fields.find(f => f.name === 'name')) || item.target?.assetId.slice(-8) }}</p>
 <p v-else-if="parents.length === 1" class="context-chip">{{ kind === AssetKind.VIRTUAL_MACHINE && parents[0]!.kind === AssetKind.SOFTWARE_INSTALLATION ? 'Hypervisor: ' : hypervisor && parents[0]!.kind === AssetKind.DEVICE ? 'Server: ' : 'Inside ' }}{{ parentLabel(parents[0]!) }}</p>
 <label v-else-if="parents.length" for="creation-parent">Create inside</label>
 <select v-if="!item && parents.length > 1" id="creation-parent" v-model="selectedParent" required><option value="" disabled>Choose the actual parent</option><option v-for="p in parents" :key="key(p.target)" :value="key(p.target)">{{ parentLabel(p) }} · {{ label(p.kind) }}</option></select>
-<p v-if="!item && choice?.parent" class="hint">Owned components inherit claimed owner and operator from this component binding. Physical hosting alone does not assign responsibility. Review or override the assignment in the new resource's responsibility card.</p>
+<p v-if="!item && choice?.parent" class="hint">Review ownership in the new resource's responsibility card. Owned-component links can supply inheritance; catalog and runtime placement do not assign a workload's owner.</p>
 <label for="resource-kind">Resource kind</label>
 <select id="resource-kind" v-model="resourceType" :disabled="!!item || busy" required>
 <option v-if="item" :value="item.kind">{{ label(item.kind) }}</option>
@@ -174,8 +177,8 @@ async function save() {
 <select v-if="f.id !== 'virtualization_role' && (item || !['name','address','description'].includes(f.id))" v-model="modes[f.id]" :aria-label="f.name+' change'"><option value="preserve">{{ item ? 'Preserve' : 'Leave unknown' }}</option><option value="set">Set</option><option v-if="!['name','address','meaning'].includes(f.id)" value="clear">Clear explicitly</option></select>
 <select v-if="f.id === 'virtualization_role'" :id="'value-'+f.id" v-model="roleInput" class="role-selector"><option v-if="item" value="preserve">Keep current value</option><option value="unknown">{{ kind === AssetKind.DEVICE ? 'Clear retired device role' : 'Unknown' }}</option><template v-if="kind === AssetKind.SOFTWARE_INSTALLATION"><option v-for="c in virtualizationChoices" :key="c.value" :value="c.value">{{ c.label }}</option></template></select>
 <select v-else-if="f.type === model.FieldType.BOOLEAN" :id="'value-'+f.id" v-model="values[f.id]" :disabled="modes[f.id] !== 'set'" :required="modes[f.id] === 'set'"><option disabled value="">Choose true or false</option><option value="true">True</option><option value="false">False</option></select>
-<select v-else-if="f.choices.length" :id="'value-'+f.id" v-model="values[f.id]" :disabled="modes[f.id] !== 'set'" :required="modes[f.id] === 'set'"><option disabled value="">Choose a value</option><option v-for="value in f.choices" :key="value" :value="value">{{ f.id === 'meaning' ? value.replace('ADDRESS_MEANING_', '').toLowerCase() : f.id === 'virtualization_role' ? virtualizationChoices.find(c => c.value === value)?.label : value }}</option></select>
-<textarea v-else-if="f.id === 'description'" :id="'value-'+f.id" v-model="values[f.id]" rows="2" maxlength="2048" :disabled="modes[f.id] === 'clear'" @input="modes[f.id] = !item && values[f.id] === '' ? 'preserve' : 'set'"></textarea>
+<select v-else-if="f.choices.length" :id="'value-'+f.id" v-model="values[f.id]" :disabled="modes[f.id] !== 'set'" :required="modes[f.id] === 'set'"><option disabled value="">Choose a value</option><option v-for="value in f.choices" :key="value" :value="value">{{ f.id === 'meaning' ? value.replace('ADDRESS_MEANING_', '').toLowerCase() : f.id === 'virtualization_role' ? virtualizationChoices.find(c => c.value === value)?.label : softwareChoiceLabel(f.id, value) }}</option></select>
+<textarea v-else-if="f.id === 'description' || f.id === 'compose_files'" :id="'value-'+f.id" v-model="values[f.id]" rows="2" maxlength="2048" :disabled="modes[f.id] === 'clear'" @input="modes[f.id] = !item && values[f.id] === '' ? 'preserve' : 'set'"></textarea>
 <!-- Integer text goes directly to BigInt; number inputs round valid int64 values. -->
 <input v-else :id="'value-'+f.id" v-model="values[f.id]" :type="f.type === model.FieldType.DATE ? 'date' : 'text'" :inputmode="f.type === model.FieldType.INTEGER ? 'numeric' : undefined" :disabled="modes[f.id] !== 'set'" :required="modes[f.id] === 'set' && ['name','address'].includes(f.id)" :maxlength="f.id === 'name' ? 160 : f.id === 'address' ? 64 : 2048" @input="modes[f.id] = 'set'">
 <p v-if="f.id === 'virtualization_role'" class="hint">{{ kind === AssetKind.DEVICE ? 'This retired field can only be cleared. Set virtualization roles on OS installations.' : 'Requires installed and enabled Hyper-V (Windows) or virtualization components (Linux). Leave unknown when unverified.' }}</p>

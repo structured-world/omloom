@@ -31,6 +31,8 @@ host, browser workflow and its development-only boundary.
 The workspace includes [current ownership and responsibility](docs/inventory.md#ownership-and-responsibility),
 selected external-account references and durable owner-action requests. These
 records do not grant infrastructure or credential access.
+It also supports [software installations and workloads](docs/inventory.md#software-and-workloads)
+as current inventory, independently of discovery or execution adapters.
 
 ## License
 

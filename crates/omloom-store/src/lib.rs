@@ -4,6 +4,9 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![deny(unsafe_code, clippy::unwrap_used)]
 
+#[cfg(feature = "std")]
+extern crate alloc;
+
 /// Independently bounded data classes. Recovery checkpoints never expire with detail.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]

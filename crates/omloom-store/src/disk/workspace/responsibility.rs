@@ -3,12 +3,59 @@ use api::{AssignmentMode as Mode, ResponsibilityFacet as Facet, ResponsibilitySt
 mod graph;
 
 const MAX_ANCESTORS: usize = 64;
-const FACETS: [Facet; 4] = [
+const FACETS: [Facet; 5] = [
     Facet::ClaimedOwner,
     Facet::Operator,
     Facet::Beneficiary,
     Facet::AccountController,
+    Facet::Creator,
 ];
+
+impl Tx<'_> {
+    pub(super) fn workload_ownership(
+        &self,
+        context: &Context,
+        rows: &[Properties],
+        hints: &mut [api::ItemContext],
+    ) -> Result<()> {
+        if rows.len() != hints.len() || rows.len() > MAX_PAGE {
+            return Err(Error::Limit);
+        }
+        let mut masks = BTreeMap::new();
+        for (row, hint) in rows.iter().zip(hints.iter()) {
+            let kind = number(row, "kind")? as i32;
+            if !matches!(
+                wire::AssetKind::try_from(kind),
+                Ok(wire::AssetKind::Workload | wire::AssetKind::Container)
+            ) {
+                continue;
+            }
+            let target = parse_target(hint.target.as_ref())?;
+            if context.field(target, kind, "claimed_owner", false) {
+                masks.insert(target, 1);
+            }
+        }
+        if masks.is_empty() {
+            return Ok(());
+        }
+        let graph = graph::Graph::load_owner_summary(self, masks)?;
+        for (row, hint) in rows.iter().zip(hints.iter_mut()) {
+            let kind = number(row, "kind")? as i32;
+            if !matches!(
+                wire::AssetKind::try_from(kind),
+                Ok(wire::AssetKind::Workload | wire::AssetKind::Container)
+            ) {
+                continue;
+            }
+            let target = parse_target(hint.target.as_ref())?;
+            if context.field(target, kind, "claimed_owner", false) {
+                hint.responsibility =
+                    Some(graph.resolve_summary(context, target, Facet::ClaimedOwner)?);
+            }
+        }
+        Ok(())
+    }
+}
 
 fn qualified(
     child: AssetRef,
@@ -37,7 +84,7 @@ fn qualified(
             ) | (K::Interface, K::Interface | K::AddressReference)
                 | (
                     K::SoftwareInstallation,
-                    K::Interface | K::Service | K::AddressReference
+                    K::Interface | K::Service | K::AddressReference | K::SoftwareInstallation
                 )
                 | (
                     K::Service,
@@ -45,6 +92,11 @@ fn qualified(
                         | K::SoftwareInstallation
                         | K::ProviderAccount
                         | K::AddressReference
+                )
+                | (K::Workload, K::Container | K::Service)
+                | (
+                    K::Container,
+                    K::Service | K::Interface | K::SoftwareInstallation
                 )
         ),
         R::HasPort if from == parent && to == child => {
@@ -68,6 +120,7 @@ fn field_name(facet: Facet) -> Result<&'static str> {
         Facet::Operator => Ok("operator"),
         Facet::Beneficiary => Ok("beneficiary"),
         Facet::AccountController => Ok("account_controller"),
+        Facet::Creator => Ok("creator"),
         Facet::Unspecified => Err(Error::Invalid),
     }
 }

@@ -232,6 +232,7 @@ impl Store {
                     diagnostic = "address facts (IP family, mask and local zone; resolve canonical mappings separately)".into();
                     tx.preview_address(&change)?;
                 }
+                tx.validate_software_state(write_target, typed_kind, &change.changes)?;
                 Ok((external, change))
             })();
             match parsed {

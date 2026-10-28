@@ -144,6 +144,9 @@ enum ResponsibilityFacet {
   RESPONSIBILITY_FACET_OPERATOR = 2;
   RESPONSIBILITY_FACET_BENEFICIARY = 3;
   RESPONSIBILITY_FACET_ACCOUNT_CONTROLLER = 4;
+  // Explicitly reviewed creator attribution, never inferred from deployment labels,
+  // directory ownership or the person recording inventory. Never inherits.
+  RESPONSIBILITY_FACET_CREATOR = 5;
 }
 enum AssignmentMode {
   ASSIGNMENT_MODE_UNSPECIFIED = 0;
@@ -456,6 +459,11 @@ message ItemContext {
   repeated OwnerContext alternative_owners = 5;
   // Actual permitted service binds for this page, independent of configured interface addresses.
   repeated SocketBind endpoints = 6;
+  // Current claimed-owner projection for a visible workload/container on this
+  // page. Omitted when that facet is undisclosable. A missing party with UNKNOWN
+  // differs from an explicit UNASSIGNED stop. Contacts and source identities
+  // are not included; this projection is never persisted or an access grant.
+  optional EffectiveResponsibility responsibility = 7;
 }
 message Read {
   // User-selected local target; the server rechecks current scope/incarnation.

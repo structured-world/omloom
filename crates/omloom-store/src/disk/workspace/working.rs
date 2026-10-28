@@ -45,6 +45,12 @@ fn writable_fields(
         .map(|s| s.to_string())
         .collect();
     fields.extend(
+        software::fields(kind)
+            .iter()
+            .filter(|name| context.field(target, kind as i32, name, true))
+            .map(|name| name.to_string()),
+    );
+    fields.extend(
         definitions
             .iter()
             .filter(|d| {
@@ -151,7 +157,10 @@ pub(super) fn attachment(
         (K::Device, K::Device | K::Interface | K::AddressReference)
         | (K::VirtualMachine, K::Interface | K::AddressReference)
         | (K::Interface, K::Interface | K::AddressReference)
-        | (K::SoftwareInstallation, K::Interface | K::AddressReference | K::Service)
+        | (
+            K::SoftwareInstallation,
+            K::Interface | K::AddressReference | K::Service | K::SoftwareInstallation,
+        )
         | (K::Service, K::Interface | K::AddressReference) => Some((R::Contains, false)),
         (K::Device | K::VirtualMachine, K::SoftwareInstallation) => Some((R::Contains, false)),
         (K::Service, K::SoftwareInstallation) => Some((R::Contains, false)),
@@ -162,6 +171,12 @@ pub(super) fn attachment(
             Some((R::RunsOn, true))
         }
         (K::SoftwareInstallation, K::VirtualMachine) => Some((R::RunsOn, true)),
+        (K::SoftwareInstallation, K::Workload) => Some((R::RunsOn, true)),
+        (K::Workload, K::Container | K::Service) => Some((R::Contains, false)),
+        (K::Container, K::Service | K::Interface | K::SoftwareInstallation) => {
+            Some((R::Contains, false))
+        }
+        (K::SoftwareProduct, K::SoftwareRelease) => Some((R::ReleaseOf, true)),
         (K::Device, K::Storage) => Some((R::On, true)),
         _ => None,
     }
@@ -631,6 +646,10 @@ impl Store {
                 K::SoftwareInstallation,
                 K::Domain,
                 K::ProviderAccount,
+                K::SoftwareProduct,
+                K::SoftwareRelease,
+                K::Workload,
+                K::Container,
             ] {
                 let raw = kind as i32;
                 if let Some(parent) = &parent_item {
@@ -719,6 +738,8 @@ impl Store {
                     R::Manages,
                     R::MemberOf,
                     R::DependsOn,
+                    R::ReleaseOf,
+                    R::InstalledRelease,
                 ] {
                     if !super::super::inventory::compatible(from_kind, to_kind, kind) {
                         continue;

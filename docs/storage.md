@@ -10,7 +10,7 @@ synthetic contexts for test-owned data. These qualify application projection
 without claiming identity-provider enforcement.
 
 The backend pins CoordiNode Git revision
-`d7dae1f28097f6cb58bcdf58042949d68405dba9` and a consumer lockfile. This source
+`1862962a3da20e5e57d7ab5126e69bd5817d7c61` and a consumer lockfile. This source
 revision includes nullable Boolean, correlated lookup and edge-orientation
 corrections required by inventory queries. It is not a published embedded release. Its
 filesystem capability requires the `std` feature. Policy types also compile
@@ -30,7 +30,7 @@ without rewriting the value or incrementing the accepted intent revision.
 Explicit clears remain claims. Different sources never overwrite each other.
 Repeated identical input and retrieval do not create application history.
 
-Resource responsibility adds at most four current assignment rows per asset.
+Resource responsibility adds at most five current assignment rows per asset.
 Only explicit assignments have an issuer/subject lookup digest, used by the
 owner-filter consumer; the full reference is checked before a match. Inherited
 assignments retain the accepted relation identity and revision, not a duplicate
@@ -108,8 +108,8 @@ envelope, but are **application accounting**, not total filesystem allocation.
 Pinned detail and unresolved work count against their budgets. Admission fails
 atomically when it cannot fit; it does not evict safety state.
 
-This unreleased storage format uses schema version 9. Supported versions 2
-through 8 upgrade in bounded restartable batches, including asset name/sort
+This unreleased storage format uses schema version 10. Supported versions 2
+through 9 upgrade in bounded restartable batches, including asset name/sort
 projections from accepted intent, normalized IP
 ordering and source-scoped current observation facts with separate freshness
 and accounting. No inventory history is added. The upgrade keeps restore fences
@@ -117,6 +117,11 @@ and admission accounting. Earlier experimental layouts are refused with
 `SchemaVersion`, never silently overwritten. See the
 [observation contract](inventory.md#current-network-observations) for migration
 of previously unavailable per-fact dates.
+Version 10 also identifies the software/workload kinds and immutable runtime
+namespace/uniqueness records. A container owns at most one namespace fence and
+one fully qualified instance claim. Explicit inventory removal reclaims both;
+unlinking a runtime cannot relabel the container's lifetime. These records are
+current identity safety state, not a container history stream.
 
 The host's durable worker calls bounded cleanup with a resumable cursor. Pin
 changes conflict with cleanup through database CAS. Cleanup reports logical

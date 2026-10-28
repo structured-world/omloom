@@ -4,6 +4,7 @@ import CategoryNav from './CategoryNav.vue';
 import CurrentAddresses from './CurrentAddresses.vue';
 import ResponsibilityPanel from './ResponsibilityPanel.vue';
 import AccountPanel from './AccountPanel.vue';
+import { softwareFields } from './software-fields';
 import { ref, computed, watch, onMounted, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import type { LocationQuery } from 'vue-router';
@@ -14,7 +15,7 @@ import BulkEditor from './BulkEditor.vue';
 import RelationEditor from './RelationEditor.vue';
 import AddressBinding from './AddressBinding.vue';
 import SelectionEditor from './SelectionEditor.vue';
-import { call, model, label, display, key, kinds, AssetKind as K, RelationKind, text, type AssetRef } from './api';
+import { call, model, label, display, key, kinds, enumLabel, AssetKind as K, RelationKind, text, type AssetRef } from './api';
 const router = useRouter(); const route = useRoute();
 const identity = ref<model.Identity>(); const definitions = ref<model.Definition[]>([]); const views = ref<model.SavedView[]>([]);
 const page = ref(model.Page.create()); const detail = ref<model.Detail>(); const loading = ref(false); const error = ref(''); const notice = ref('');
@@ -26,7 +27,7 @@ const editor = ref<'' | 'asset' | 'schema' | 'import' | 'view' | 'network' | 'bu
 const initialKind = computed(() => query.value.kinds.length===1 ? query.value.kinds[0] as K : ({ [model.View.OVERVIEW]: K.DEVICE, [model.View.NETWORK]: K.ADDRESS_REFERENCE, [model.View.HARDWARE]: K.DEVICE, [model.View.VIRTUALIZATION]: K.VIRTUAL_MACHINE, [model.View.SERVICES]: K.SERVICE })[query.value.view]);
 const kindOptions = kinds.map(k => ({ id: String(k), name: label(k) }));
 const columnOptions = computed(() => {
-  const options = [{ id: 'name', name: 'Name' }, { id: 'description', name: 'Description' }, { id: 'serial', name: 'Serial number' }, ...definitions.value.filter(d => !d.retired)];
+  const options = [{ id: 'name', name: 'Name' }, { id: 'description', name: 'Description' }, { id: 'serial', name: 'Serial number' }, ...softwareFields(), ...definitions.value.filter(d => !d.retired)];
   for (const id of query.value.columns) if (!options.some(o => o.id === id)) options.push({ id, name: `${id} (unavailable)` });
   return options;
 });
@@ -81,7 +82,23 @@ const initialEmpty = computed(()=>query.value.view===model.View.OVERVIEW && !que
 const columnLabels = computed(() => query.value.columns.map(id => ({ id, name: definitions.value.find(d => d.id === id)?.name ?? id.replaceAll('_', ' ') })));
 const selectedItems = computed(() => page.value.items.filter(i => selected.value.includes(key(i.target))));
 const rowContexts = computed(() => new Map(page.value.contexts.map(c => [key(c.target), c])));
-const grouping = computed(() => !query.value.focus);
+const responsibilityGrouping = computed(() => query.value.kinds.length === 1 && query.value.kinds[0] === K.WORKLOAD);
+const grouping = computed(() => responsibilityGrouping.value || !query.value.focus);
+function workloadOwner(item: model.Item) { return rowContexts.value.get(key(item.target))?.responsibility; }
+function ownerCaption(item: model.Item): string {
+  const context = rowContexts.value.get(key(item.target));
+  if (!context) return 'Owner not loaded';
+  const owner = context.responsibility;
+  if (!owner) return 'Ownership restricted';
+  if (owner.party) return `${enumLabel(model.PartyKind, owner.party.kind)}: ${owner.party.name}`;
+  if (owner.status === model.ResponsibilityStatus.UNKNOWN) return 'Owner not established';
+  return `Owner: ${enumLabel(model.ResponsibilityStatus, owner.status).replaceAll('_', ' ')}`;
+}
+async function filterOwner(item: model.Item) {
+  const party = workloadOwner(item)?.party;
+  if (!party) return;
+  await filters(query.value.predicates, model.ResponsibilityFilter.create({ facet: model.ResponsibilityFacet.CLAIMED_OWNER, issuer: party.issuer, subject: party.subject }));
+}
 function contextPath(item: model.Item) {
   const context=rowContexts.value.get(key(item.target));
   if (context?.alternativeOwners.length) return `Shared: ${context.alternativeOwners.map(o=>o.name || label(o.kind)).join(' · ')}`;
@@ -91,9 +108,12 @@ const rowGroups = computed(() => {
   const groups = new Map<string, { title: string; owner?: AssetRef; items: model.Item[] }>();
   for (const item of page.value.items) {
     const context = rowContexts.value.get(key(item.target));
-    const title = grouping.value ? contextPath(item) : '';
-    const owner = context?.owners.at(-1)?.target;
-    const groupKey = grouping.value ? [...context?.owners ?? [],...context?.alternativeOwners ?? []].map(o => key(o.target)).join('/') || 'roots' : 'local';
+    const byResponsibility = responsibilityGrouping.value && item.kind === K.WORKLOAD;
+    const title = byResponsibility ? ownerCaption(item) : grouping.value ? contextPath(item) : '';
+    const owner = byResponsibility ? undefined : context?.owners.at(-1)?.target;
+    const party = context?.responsibility?.party;
+    const groupKey = byResponsibility ? party ? `party:${JSON.stringify([party.issuer, party.subject])}` : ownerCaption(item)
+      : grouping.value ? [...context?.owners ?? [],...context?.alternativeOwners ?? []].map(o => key(o.target)).join('/') || 'roots' : 'local';
     let group = groups.get(groupKey);
     if (!group) { group = { title, owner, items: [] }; groups.set(groupKey, group); }
     group.items.push(item);
@@ -116,18 +136,21 @@ async function load() {
   preparedActions.value = model.Actions.create();
   const signature = JSON.stringify(model.Query.toJson(query.value));
   if (signature !== loadedQuery) { selected.value = []; search.value = query.value.search; loadedQuery = signature; }
+  const target = route.query.asset && route.query.incarnation ? { assetId: String(route.query.asset), incarnation: String(route.query.incarnation) } : undefined;
+  const detailLoad = target ? read(target).then(next => {
+    if (turn === generation) { detail.value = next; networkCursor.value = undefined; }
+  }).catch(e => { if (turn === generation) { detail.value = undefined; error.value = String(e); } }) : Promise.resolve();
   try {
     const result = await call({ oneofKind: 'query', query: query.value });
     if (turn !== generation) return;
     if (result.oneofKind !== 'page') throw Error('Unexpected inventory response');
     page.value = result.page;
+    if (!target) { detail.value = undefined; networkCursor.value = undefined; }
     const prepared = await call({ oneofKind: 'prepare', prepare: model.Prepare.create({ view: query.value.view }) }, working.value).catch(e=>{ if(turn===generation) error.value=String(e); return undefined; });
     if (turn !== generation) return;
     if (prepared?.oneofKind === 'actions') preparedActions.value = prepared.actions;
     selected.value = selected.value.filter(id => result.page.items.some(item => key(item.target) === id));
-    const next = route.query.asset && route.query.incarnation ? await read({ assetId: String(route.query.asset), incarnation: String(route.query.incarnation) }).catch(e=>{if(turn===generation)error.value=String(e);return undefined;}) : undefined;
-    if (turn === generation) { detail.value = next; networkCursor.value = undefined; }
-  } catch (e) { if (turn === generation) { page.value = model.Page.create(); detail.value = undefined; error.value = String(e); } } finally { if (turn === generation) loading.value = false; }
+  } catch (e) { if (turn === generation) { page.value = model.Page.create(); if (!target) detail.value = undefined; error.value = String(e); } } finally { await detailLoad; if (turn === generation) loading.value = false; }
 }
 async function metadata() {
   const [i, d, v] = await Promise.all([call({ oneofKind: 'identity', identity: {} }), call({ oneofKind: 'definitions', definitions: {} }), call({ oneofKind: 'views', views: {} })]);
@@ -294,7 +317,13 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <div v-if="query.predicates.length||query.responsibility" class="selection"><span v-for="(p, index) in query.predicates" :key="index" class="chip">{{ definitions.find(d => d.id === p.field)?.name ?? p.field }} = {{ display(p.value) }}<button :aria-label="`Remove filter ${index + 1}`" @click="filters(query.predicates.filter((_, i) => i !== index),query.responsibility)">×</button></span><span v-if="query.responsibility" class="chip">{{model.ResponsibilityFacet[query.responsibility.facet]?.toLowerCase().replaceAll('_',' ')}}: {{query.responsibility.issuer}} / {{query.responsibility.subject}}<button aria-label="Remove responsibility filter" @click="filters(query.predicates)">×</button></span></div>
 <div v-if="selected.length" class="selection">{{ selected.length }} selected on this page<button @click="selectedScope">Use selected as scope</button><button v-if="identity?.writable" @click="editor = 'bulk'">Review bulk change</button><button @click="selected = []">Clear selection</button></div>
 <div v-if="page.items.length" class="phone-list-tools"><label class="check"><input type="checkbox" aria-label="Select phone page" :checked="selected.length === page.items.length" @change="selected = ($event.target as HTMLInputElement).checked ? page.items.map(i => key(i.target)) : []">Select page</label><label>Sort<select aria-label="Sort resources" :value="`${query.sort}:${query.descending ? 'desc' : 'asc'}`" @change="change({ sort: ($event.target as HTMLSelectElement).value.split(':')[0], desc: ($event.target as HTMLSelectElement).value.endsWith(':desc') ? '1' : undefined })"><option value="name:asc">Name A–Z</option><option value="name:desc">Name Z–A</option><option value="kind:asc">Resource kind</option></select></label></div>
-<div class="table-scroll"><table :class="{ 'has-name': query.columns.includes('name') }"><thead><tr><th class="select-col"><input aria-label="Select visible page" type="checkbox" :checked="!!page.items.length && selected.length === page.items.length" @change="selected = ($event.target as HTMLInputElement).checked ? page.items.map(i => key(i.target)) : []"></th><th><button @click="change({ sort: 'kind', desc: query.sort === 'kind' && !query.descending ? '1' : undefined })">Resource kind <span v-if="query.sort === 'kind'">{{ query.descending ? '↓' : '↑' }}</span></button></th><th v-for="c in columnLabels" :key="c.id"><button v-if="c.id === 'name'" @click="change({ sort: 'name', desc: query.sort === 'name' && !query.descending ? '1' : undefined })">{{ c.name }} <span v-if="query.sort === 'name'">{{ query.descending ? '↓' : '↑' }}</span></button><span v-else>{{ c.name }}</span></th><th>Identity</th></tr></thead><tbody><template v-for="(group, groupIndex) in rowGroups" :key="groupIndex"><tr v-if="grouping && group.title" class="context-group"><td :colspan="columnLabels.length + 3"><button v-if="group.owner" :aria-label="`Open owner ${group.title}`" @click="open(group.owner)">{{ group.title }}</button><strong v-else>{{ group.title }}</strong><small>Resources on this page</small></td></tr><tr v-for="i in group.items" :key="key(i.target)" :class="{ focused: key(i.target) === key(detail?.item?.target) }"><td><input v-model="selected" type="checkbox" :value="key(i.target)" :aria-label="`Select ${display(i.fields.find(f => f.name === 'name'))}`"></td><td><span class="kind-tag">{{ label(i.kind) }}</span></td><td v-for="c in columnLabels" :key="c.id" :data-label="c.name" :class="{ 'empty-field': c.id !== 'name' && !display(i.fields.find(f => f.name === c.id)) }"><div v-if="c.id === 'name' && rowAddresses(i)" class="resource-address">{{ rowAddresses(i) }}</div><small v-if="c.id === 'name' && [K.SERVICE, K.INTERFACE].includes(i.kind)" class="resource-owner">{{ contextPath(i) || 'Owner not known' }}</small><button v-if="c.id === 'name'" class="resource-link" @click="open(i.target)">{{ display(i.fields.find(f => f.name === c.id)) || 'Unnamed resource' }}</button><span v-else>{{ display(i.fields.find(f => f.name === c.id)) || '·' }}</span></td><td><button class="identity-link" @click="open(i.target)">{{ i.target?.assetId.slice(-8) }} ↗</button></td></tr></template></tbody></table></div>
+<div class="table-scroll"><table :class="{ 'has-name': query.columns.includes('name') }"><thead><tr><th class="select-col"><input aria-label="Select visible page" type="checkbox" :checked="!!page.items.length && selected.length === page.items.length" @change="selected = ($event.target as HTMLInputElement).checked ? page.items.map(i => key(i.target)) : []"></th><th><button @click="change({ sort: 'kind', desc: query.sort === 'kind' && !query.descending ? '1' : undefined })">Resource kind <span v-if="query.sort === 'kind'">{{ query.descending ? '↓' : '↑' }}</span></button></th><th v-for="c in columnLabels" :key="c.id"><button v-if="c.id === 'name'" @click="change({ sort: 'name', desc: query.sort === 'name' && !query.descending ? '1' : undefined })">{{ c.name }} <span v-if="query.sort === 'name'">{{ query.descending ? '↓' : '↑' }}</span></button><span v-else>{{ c.name }}</span></th><th>Identity</th></tr></thead><tbody><template v-for="(group, groupIndex) in rowGroups" :key="groupIndex"><tr v-if="grouping && group.title" class="context-group"><td :colspan="columnLabels.length + 3"><button v-if="group.owner" :aria-label="`Open owner ${group.title}`" @click="open(group.owner)">{{ group.title }}</button><strong v-else>{{ group.title }}</strong><small>Resources on this page</small></td></tr><tr v-for="i in group.items" :key="key(i.target)" :class="{ focused: key(i.target) === key(detail?.item?.target) }"><td><input v-model="selected" type="checkbox" :value="key(i.target)" :aria-label="`Select ${display(i.fields.find(f => f.name === 'name'))}`"></td><td><span class="kind-tag">{{ label(i.kind) }}</span></td><td v-for="c in columnLabels" :key="c.id" :data-label="c.name" :class="{ 'empty-field': c.id !== 'name' && !display(i.fields.find(f => f.name === c.id)) }">
+<div v-if="c.id === 'name' && rowAddresses(i)" class="resource-address">{{ rowAddresses(i) }}</div>
+<small v-if="c.id === 'name' && [K.SERVICE, K.INTERFACE].includes(i.kind)" class="resource-owner">{{ contextPath(i) || 'Owner not known' }}</small>
+<small v-if="c.id === 'name' && [K.WORKLOAD, K.CONTAINER].includes(i.kind)" class="resource-owner">{{ contextPath(i) || 'Execution context not available' }}</small>
+<template v-if="c.id === 'name' && [K.WORKLOAD, K.CONTAINER].includes(i.kind)"><button v-if="workloadOwner(i)?.party" class="resource-owner responsibility-link" :aria-label="`Show resources owned by ${workloadOwner(i)?.party?.name}`" @click="filterOwner(i)">Claimed owner: {{ ownerCaption(i) }}</button><small v-else class="resource-owner">{{ ownerCaption(i) }}</small></template>
+<button v-if="c.id === 'name'" class="resource-link" @click="open(i.target)">{{ display(i.fields.find(f => f.name === c.id)) || 'Unnamed resource' }}</button><span v-else>{{ display(i.fields.find(f => f.name === c.id)) || '·' }}</span>
+</td><td><button class="identity-link" @click="open(i.target)">{{ i.target?.assetId.slice(-8) }} ↗</button></td></tr></template></tbody></table></div>
 <div v-if="!page.items.length && !loading && !error" class="empty"><span aria-hidden="true">▦</span><h2>{{ initialEmpty ? 'Start with the infrastructure you know' : query.levelOnly ? 'No resources at this level in this view' : 'No resources match this selection' }}</h2><p>{{ initialEmpty ? 'Create a resource or preview a CSV import. Each object keeps its own stable identity.' : query.levelOnly ? 'Choose another view or open an enclosing resource to inspect its contents. Nested resources are shown inside their owners.' : 'Try another term or change the scope. Search only includes fields you may read.' }}</p><button v-if="identity?.writable" class="primary" @click="create">Create resource</button></div>
 <footer class="pagination"><span>Current accepted state · revision {{ page.revision.toString() }}</span><div><button v-if="query.cursor" @click="change({ cursor: undefined })">First page</button><button :disabled="!page.next" @click="change({ cursor: page.next })">Next page →</button></div></footer></section>
 <section v-if="detail?.item" class="detail" aria-label="Resource details"><button class="back-to-list" @click="closeDetail">{{ parameters('trail').length ? 'Back to parent' : 'Back to inventory' }}</button><header><div><p class="eyebrow">{{ label(detail.item.kind) }}</p><h2 ref="detailHeading" tabindex="-1">{{ detailName || 'Resource details' }}</h2></div><div class="actions"><button @click="change({ scope: detail.item.target?.assetId, scopeInc: detail.item.target?.incarnation, asset: undefined, incarnation: undefined, trail: undefined })">Use as scope</button><button v-if="identity?.writable" @click="edit">Edit resource</button><button aria-label="Close resource details" @click="closeDetail">×</button></div></header><dl><template v-for="f in detail.item.fields" :key="f.name"><dt>{{ definitions.find(d => d.id === f.name)?.name ?? f.name.replaceAll('_',' ') }}</dt><dd>{{ display(f) }}</dd></template><dt>Stable identity</dt><dd class="mono">{{ detail.item.target?.assetId }}</dd><dt>Incarnation</dt><dd class="mono">{{ detail.item.target?.incarnation }}</dd><dt>Accepted revision</dt><dd>{{ detail.item.revision.toString() }}</dd></dl>
