@@ -504,11 +504,10 @@ fn overlapping_departments_and_smtp_consumers_keep_independent_authority() -> Te
             return Err(Error::Corrupt);
         };
         assert_eq!(page.total, page.items.len() as u64);
-        Ok(page
-            .items
+        page.items
             .into_iter()
             .map(|item| item.target.ok_or(Error::Corrupt))
-            .collect::<Result<Vec<_>, _>>()?)
+            .collect::<Result<Vec<_>, _>>()
     };
     let devices_a = devices(&a)?;
     let devices_b = devices(&b)?;

@@ -364,6 +364,9 @@ impl Store {
             return Err(Error::Invalid);
         }
         let view = api::View::try_from(query.view).map_err(|_| Error::Invalid)?;
+        if let Some(filter) = &query.responsibility {
+            super::responsibility::validate_filter(filter)?;
+        }
         let view_kinds = kind_for_view(view);
         let basis = self.usage()?.revision;
         if query.columns.is_empty() {

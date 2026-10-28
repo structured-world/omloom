@@ -63,7 +63,7 @@ impl Graph {
                             node.row = Some(row);
                         }
                     }
-                    let rows = tx.query("UNWIND $keys AS key MATCH (n:OmRow {parent:key}) WHERE n.facet IS NOT NULL RETURN {parent:n.parent,facet:n.facet,mode:n.mode,issuer:n.issuer,subject:n.subject,party_kind:n.party_kind,name:n.name,contact:n.contact,source_relation:n.source_relation,source_binding_revision:n.source_binding_revision} AS p LIMIT 257", params([("keys", Value::Array(keys.clone()))]))?;
+                    let rows = tx.query("UNWIND $keys AS key MATCH (n:OmRow {parent:key}) WHERE n.facet IS NOT NULL RETURN {parent:n.parent,facet:n.facet,mode:n.mode,issuer:n.issuer,subject:n.subject,party_kind:n.party_kind,name:n.name,contact:n.contact,source_relation:n.source_relation,source_binding_revision:n.source_binding_revision} AS p LIMIT 257", params([("keys", Value::Array(keys))]))?;
                     if rows.len() > chunk.len() * FACETS.len() {
                         return Err(Error::Corrupt);
                     }

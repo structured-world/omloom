@@ -207,6 +207,36 @@ fn responsibility_rejects_hidden_administrative_source() -> TestResult {
     Ok(())
 }
 
+// Malformed ownership syntax is rejected before resolving any requested resource scope.
+#[test]
+fn responsibility_filter_validation_precedes_scope_lookup() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let missing = wire::AssetRef {
+        asset_id: omloom_contracts::ids::AssetId::generate().to_string(),
+        incarnation: omloom_contracts::ids::IncarnationId::generate().to_string(),
+    };
+    let before = store.usage()?;
+    assert!(matches!(
+        call(
+            &store,
+            &operator(),
+            Command::Query(api::Query {
+                roots: vec![missing],
+                responsibility: Some(api::ResponsibilityFilter {
+                    facet: Facet::ClaimedOwner as i32,
+                    issuer: String::new(),
+                    subject: "team".into()
+                }),
+                ..query()
+            })
+        ),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // Current assignments survive restart, stop inheritance explicitly and never grant access.
 #[test]
 fn responsibility_is_current_downward_and_independent_of_access() -> TestResult {
@@ -754,6 +784,37 @@ fn responsibility_filter_resolves_only_its_selected_scope() -> TestResult {
     Ok(())
 }
 
+fn physical_bytes(
+    root: &std::path::Path,
+) -> Result<(u64, Option<u64>), Box<dyn std::error::Error>> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut apparent = 0;
+    #[cfg(unix)]
+    let mut allocated = 0;
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(directory)? {
+            let entry = entry?;
+            let metadata = entry.metadata()?;
+            if metadata.is_dir() {
+                pending.push(entry.path());
+            } else {
+                assert!(metadata.is_file(), "fixture contains only regular files");
+                apparent += metadata.len();
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    allocated += metadata.blocks() * 512;
+                }
+            }
+        }
+    }
+    #[cfg(unix)]
+    let allocated = Some(allocated);
+    #[cfg(not(unix))]
+    let allocated = None;
+    Ok((apparent, allocated))
+}
+
 // Qualify a real 100-server estate: current reads write nothing and a parent edit never rewrites descendants.
 #[test]
 fn responsibility_reads_and_parent_changes_are_bounded() -> TestResult {
@@ -804,6 +865,11 @@ fn responsibility_reads_and_parent_changes_are_bounded() -> TestResult {
         taps.push(tap);
     }
     let before = store.usage()?;
+    let physical_before = physical_bytes(dir.path())?;
+    assert!(
+        physical_before.0 > 0,
+        "qualification needs actual disk files"
+    );
     let syncs = store.diagnostic_database().engine().journal_syncs();
     let filtered = api::Query {
         limit: 25,
@@ -865,6 +931,10 @@ fn responsibility_reads_and_parent_changes_are_bounded() -> TestResult {
         );
     }
     assert_eq!(after_syncs, syncs);
+    let physical_after_reads = physical_bytes(dir.path())?;
+    eprintln!(
+        "database files including indexes/journal (apparent, allocated): before={physical_before:?}; after reads={physical_after_reads:?}"
+    );
     samples.sort_unstable();
     eprintln!(
         "responsibility qualification: 100 servers + 400 interfaces, owner filter+context p50={:?} p95={:?} p99={:?}; logical bytes={}; read partition writes=0, journal syncs=0",
@@ -903,6 +973,10 @@ fn responsibility_reads_and_parent_changes_are_bounded() -> TestResult {
     );
     eprintln!(
         "one parent change: partition key writes={written}; inventory row growth=0; inherited values change without descendant copies"
+    );
+    eprintln!(
+        "database files after parent change (apparent, allocated): {:?}",
+        physical_bytes(dir.path())?
     );
     let Reply::Page(changed) = call(
         &store,
