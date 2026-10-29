@@ -2331,6 +2331,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "omloom-observe"
+version = "0.1.0"
+dependencies = [
+ "omloom-contracts",
+ "prost",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "omloom-store"
 version = "0.1.0"
 dependencies = [

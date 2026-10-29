@@ -1,0 +1,567 @@
+use super::*;
+use api::{reply::Result as Reply, request::Command};
+
+fn draft() -> api::HostImport {
+    api::HostImport {
+        source: "Native fixture".into(),
+        report: Some(Box::new(api::HostReport {
+            version: 1,
+            platform: "macos".into(),
+            source_basis: "a".repeat(64),
+            boot_basis: "b".repeat(64),
+            observed_at: 100,
+            findings: vec![
+                api::HostFinding {
+                    key: "hardware".into(),
+                    kind: K::Device as i32,
+                    fields: vec![text_field("name", "Native host")],
+                    ..Default::default()
+                },
+                api::HostFinding {
+                    key: "installation".into(),
+                    kind: K::SoftwareInstallation as i32,
+                    parent: Some("hardware".into()),
+                    fields: vec![text_field("name", "Native OS")],
+                    ..Default::default()
+                },
+                api::HostFinding {
+                    key: "interface/en0".into(),
+                    kind: K::Interface as i32,
+                    parent: Some("installation".into()),
+                    fields: vec![text_field("name", "en0")],
+                    addresses: vec![api::CurrentAddress {
+                        address: "192.0.2.7".into(),
+                        prefix_length: Some(24),
+                        stability: api::AddressStability::Stable as i32,
+                        state: api::AddressState::Preferred as i32,
+                    }],
+                    addresses_complete: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        })),
+        selection: ["hardware", "installation", "interface/en0"]
+            .into_iter()
+            .map(|key| api::HostSelection {
+                key: key.into(),
+                target: None,
+                kind: None,
+            })
+            .collect(),
+        preview: None,
+        network_parts: Vec::new(),
+    }
+}
+fn preview(store: &Store, request: api::HostImport) -> Result<api::Preview, Error> {
+    let Reply::Preview(value) = call(store, &operator(), Command::HostImport(request))? else {
+        return Err(Error::Corrupt);
+    };
+    Ok(value)
+}
+fn accept(store: &Store, preview: &api::Preview) -> Result<api::Mutation, Error> {
+    let Reply::Mutation(value) = call(
+        store,
+        &operator(),
+        Command::HostImport(api::HostImport {
+            preview: preview.id.clone(),
+            ..Default::default()
+        }),
+    )?
+    else {
+        return Err(Error::Corrupt);
+    };
+    Ok(value)
+}
+// Preview cannot adopt inventory. Acceptance commits the whole selected tree;
+// a repeated exact report after reopen must create no writes or duplicate assets.
+#[test]
+fn reviewed_host_import_is_atomic_and_replay_is_a_noop() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let proposed = preview(&store, draft())?;
+    let Reply::Page(page) = call(
+        &store,
+        &operator(),
+        Command::Query(api::Query {
+            limit: 25,
+            ..Default::default()
+        }),
+    )?
+    else {
+        return Err("page".into());
+    };
+    assert_eq!(page.total, 0);
+    let accepted = accept(&store, &proposed)?;
+    assert_eq!(accepted.targets.len(), 3);
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    let before = store.usage()?;
+    let Reply::Mutation(result) = call(&store, &operator(), Command::HostImport(draft()))? else {
+        return Err("no-op".into());
+    };
+    assert!(result.targets.is_empty());
+    assert_eq!(before, store.usage()?);
+    Ok(())
+}
+// Unselected parent identity is not replaced with a fabricated OS/device.
+#[test]
+fn selection_cannot_invent_a_missing_parent() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let before = store.usage()?;
+    let mut request = draft();
+    request.selection.remove(0);
+    assert!(matches!(preview(&store, request), Err(Error::Invalid)));
+    assert_eq!(before, store.usage()?);
+    Ok(())
+}
+// Temporary addresses are refused at the store boundary even if a modified
+// collector bypasses its own serialization filter.
+#[test]
+fn temporary_address_in_a_host_report_never_reaches_inventory() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let before = store.usage()?;
+    let mut request = draft();
+    request.report.as_mut().unwrap().findings[2].addresses[0].stability =
+        api::AddressStability::Temporary as i32;
+    assert!(matches!(preview(&store, request), Err(Error::Invalid)));
+    assert_eq!(before, store.usage()?);
+    Ok(())
+}
+// Concurrent inventory edits invalidate the reviewed revision rather than
+// accepting an old report against a different ancestry or field authority.
+#[test]
+fn host_preview_rechecks_the_commit_revision() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let proposed = preview(&store, draft())?;
+    create(&store, &operator(), K::Device, "Concurrent host")?;
+    assert!(matches!(accept(&store, &proposed), Err(Error::Conflict)));
+    Ok(())
+}
+
+// Every complete parent prefix is independently reviewable; validating a
+// nested report cannot require committing its parents before the preview.
+#[test]
+fn each_selected_parent_prefix_can_be_previewed() -> TestResult {
+    for count in 1..=3 {
+        let dir = tempfile::tempdir()?;
+        let store = Store::open(dir.path(), policy())?;
+        let mut request = draft();
+        request.selection.truncate(count);
+        let result = preview(&store, request);
+        // This fixture contains synthetic inventory only, without provider
+        // accounts or credentials; failure diagnostics retain the typed result.
+        assert!(result.is_ok(), "selected parent prefix {count}: {result:?}");
+    }
+    Ok(())
+}
+
+// Equal address bytes in separate source scopes do not identify one device or
+// create address assets. Both accepted interface incarnations remain distinct.
+#[test]
+fn equal_ip_on_different_hosts_does_not_merge_inventory() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let first = accept(&store, &preview(&store, draft())?)?;
+    let mut other = draft();
+    other.report.as_mut().expect("report").source_basis = "c".repeat(64);
+    let second = accept(&store, &preview(&store, other)?)?;
+    assert_ne!(first.targets[2], second.targets[2]);
+    let Reply::Page(page) = call(
+        &store,
+        &operator(),
+        Command::Query(api::Query {
+            kinds: vec![K::IpAddress as i32],
+            limit: 25,
+            ..Default::default()
+        }),
+    )?
+    else {
+        return Err("page".into());
+    };
+    assert_eq!(page.total, 0);
+    Ok(())
+}
+
+// Dual boot shares explicitly matched hardware, never the OS interface or
+// service namespace. Observing another installation cannot erase the first.
+#[test]
+fn another_os_can_match_hardware_without_reusing_its_interfaces() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let first = accept(&store, &preview(&store, draft())?)?;
+    let mut second = draft();
+    let report = second.report.as_mut().expect("report");
+    report.platform = "windows".into();
+    report.source_basis = "d".repeat(64);
+    report.boot_basis = "e".repeat(64);
+    second.selection[0].target = Some(first.targets[0].clone());
+    let second = accept(&store, &preview(&store, second)?)?;
+    assert_eq!(first.targets[0], second.targets[0]);
+    assert_ne!(first.targets[1], second.targets[1]);
+    assert_ne!(first.targets[2], second.targets[2]);
+    let Reply::Detail(detail) = call(
+        &store,
+        &operator(),
+        Command::Read(api::Read {
+            target: Some(first.targets[2].clone()),
+            ..Default::default()
+        }),
+    )?
+    else {
+        return Err("detail".into());
+    };
+    assert_eq!(
+        detail.current_addresses[0].observations[0]
+            .value
+            .as_ref()
+            .expect("current address")
+            .address,
+        "192.0.2.7"
+    );
+    Ok(())
+}
+
+// Running on an OS does not prove that its execution host is physical. Match
+// an explicitly known VM without retyping it or inventing another Device.
+#[test]
+fn an_unclassified_execution_host_can_match_an_existing_vm() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let vm = create(&store, &operator(), K::VirtualMachine, "Known VM")?;
+    let mut request = draft();
+    request.report.as_mut().expect("report").findings[0].kind = K::Unspecified as i32;
+    request.selection[0].target = Some(vm.clone());
+    let accepted = accept(&store, &preview(&store, request)?)?;
+    assert_eq!(accepted.targets[0], vm);
+    let Reply::Detail(detail) = call(
+        &store,
+        &operator(),
+        Command::Read(api::Read {
+            target: Some(vm),
+            ..Default::default()
+        }),
+    )?
+    else {
+        return Err("detail".into());
+    };
+    assert_eq!(
+        detail
+            .item
+            .as_ref()
+            .expect("VM")
+            .fields
+            .iter()
+            .find(|v| v.name == "name")
+            .expect("name"),
+        &text_field("name", "Known VM")
+    );
+    Ok(())
+}
+
+// An OS cannot classify its execution host. New adoption needs an explicit
+// physical/VM choice, and a later source mapping cannot retype that choice.
+#[test]
+fn new_execution_host_requires_a_reviewed_kind() -> TestResult {
+    for kind in [K::Device, K::VirtualMachine] {
+        let dir = tempfile::tempdir()?;
+        let store = Store::open(dir.path(), policy())?;
+        let mut request = draft();
+        request.report.as_mut().expect("report").findings[0].kind = K::Unspecified as i32;
+        let before = store.usage()?;
+        assert!(matches!(
+            preview(&store, request.clone()),
+            Err(Error::HostClassificationRequired)
+        ));
+        assert_eq!(store.usage()?, before);
+        request.selection[0].kind = Some(kind as i32);
+        let accepted = accept(&store, &preview(&store, request.clone())?)?;
+        let Reply::Detail(detail) = call(
+            &store,
+            &operator(),
+            Command::Read(api::Read {
+                target: Some(accepted.targets[0].clone()),
+                ..Default::default()
+            }),
+        )?
+        else {
+            return Err("detail".into());
+        };
+        assert_eq!(detail.item.expect("host").kind, kind as i32);
+        request.selection[0].kind = Some(if kind == K::Device {
+            K::VirtualMachine
+        } else {
+            K::Device
+        } as i32);
+        assert!(matches!(preview(&store, request), Err(Error::Conflict)));
+    }
+    Ok(())
+}
+
+// A read-only actor cannot use report review as a write privilege, and refusal
+// cannot leave a partial tree, preview payload or mapping behind.
+#[test]
+fn host_preview_requires_write_authority() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut actor = operator();
+    actor.grants[0].writable = false;
+    let before = store.usage()?;
+    assert!(matches!(
+        call(&store, &actor, Command::HostImport(draft())),
+        Err(Error::Denied)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// A file cannot relabel a Device as the reserved OS installation to borrow
+// SoftwareInstallation-only network permission. Refusal leaves no preview.
+#[test]
+fn network_import_rejects_a_forged_installation_kind() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut request = draft();
+    let report = request.report.as_mut().expect("report");
+    report.findings = vec![api::HostFinding {
+        key: "installation".into(),
+        kind: K::Device as i32,
+        fields: vec![text_field("name", "Forged installation")],
+        ..Default::default()
+    }];
+    report.network = Some(api::HostNetwork {
+        socket_coverage: "not collected".into(),
+        route_coverage: "verified".into(),
+        application_coverage: "not collected".into(),
+        packet_filter_coverage: "not collected".into(),
+        ..Default::default()
+    });
+    request.selection = vec![api::HostSelection {
+        key: "installation".into(),
+        ..Default::default()
+    }];
+    request.network_parts = vec![api::HostNetworkPart::Routes as i32];
+    let mut actor = operator();
+    actor.grants[0].write = Fields::Selected(vec!["name".into()]);
+    actor.grants.push(Grant {
+        scope: Scope::Kinds(vec![K::SoftwareInstallation]),
+        read: Fields::All,
+        write: Fields::Selected(vec!["network_evidence".into()]),
+        writable: true,
+    });
+    let before = store.usage()?;
+    let result = call(&store, &actor, Command::HostImport(request));
+    assert!(
+        matches!(result, Err(Error::Invalid)),
+        "forged installation type must be rejected"
+    );
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// Runtime references must name installations, not a Service on which the actor
+// has no relation write grant. Report keys cannot override kind-scoped grants.
+#[test]
+fn runtime_import_rejects_a_service_as_the_runtime() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut request = draft();
+    request.report.as_mut().expect("report").findings = vec![
+        api::HostFinding {
+            key: "runtime".into(),
+            kind: K::Service as i32,
+            fields: vec![text_field("name", "Forged runtime")],
+            ..Default::default()
+        },
+        api::HostFinding {
+            key: "workload".into(),
+            kind: K::Workload as i32,
+            fields: vec![text_field("name", "Selected workload")],
+            runtime: Some("runtime".into()),
+            ..Default::default()
+        },
+    ];
+    request.selection = ["runtime", "workload"]
+        .into_iter()
+        .map(|key| api::HostSelection {
+            key: key.into(),
+            ..Default::default()
+        })
+        .collect();
+    let mut actor = operator();
+    actor.grants[0].write = Fields::Selected(vec!["name".into()]);
+    actor.grants.push(Grant {
+        scope: Scope::Kinds(vec![K::SoftwareInstallation, K::Workload]),
+        read: Fields::All,
+        write: Fields::Selected(vec!["relations".into()]),
+        writable: true,
+    });
+    let before = store.usage()?;
+    let result = call(&store, &actor, Command::HostImport(request));
+    assert!(
+        matches!(result, Err(Error::Invalid)),
+        "service cannot be an installation runtime"
+    );
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// Reading a report does not opt the installation into route or policy storage.
+// Explicit route selection accepts on-link rows without inventing a next hop.
+#[test]
+fn report_network_sections_require_explicit_selection() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut request = draft();
+    request.report.as_mut().expect("report").network = Some(api::HostNetwork {
+        observed_at: 100,
+        basis: "b".repeat(64),
+        source: "native".into(),
+        socket_coverage: "not collected".into(),
+        route_coverage: "verified".into(),
+        application_coverage: "not collected".into(),
+        packet_filter_coverage: "blocked".into(),
+        routes: vec![api::LocalRoute {
+            destination: "192.0.2.0/24".into(),
+            interface: "en0".into(),
+            family: "IPv4".into(),
+            ..Default::default()
+        }],
+        routes_complete: true,
+        ..Default::default()
+    });
+    let first = accept(&store, &preview(&store, request.clone())?)?;
+    let Reply::Detail(detail) = call(
+        &store,
+        &operator(),
+        Command::Read(api::Read {
+            target: Some(first.targets[1].clone()),
+            ..Default::default()
+        }),
+    )?
+    else {
+        return Err("detail".into());
+    };
+    assert!(detail.host_network.is_empty());
+    request
+        .network_parts
+        .push(api::HostNetworkPart::Routes as i32);
+    accept(&store, &preview(&store, request)?)?;
+    let Reply::Detail(detail) = call(
+        &store,
+        &operator(),
+        Command::Read(api::Read {
+            target: Some(first.targets[1].clone()),
+            ..Default::default()
+        }),
+    )?
+    else {
+        return Err("detail".into());
+    };
+    assert_eq!(detail.host_network[0].observations.len(), 1);
+    let Some(api::network_observation::Value::Route(route)) =
+        &detail.host_network[0].observations[0].value
+    else {
+        return Err("route".into());
+    };
+    assert!(route.gateway.is_empty());
+    assert_eq!(route.interface, "en0");
+    let mut policy_request = draft();
+    policy_request.report.as_mut().expect("report").network = Some(api::HostNetwork {
+        observed_at: 100,
+        basis: "b".repeat(64),
+        source: "native".into(),
+        socket_coverage: "not collected".into(),
+        route_coverage: "verified".into(),
+        application_coverage: "verified".into(),
+        packet_filter_coverage: "blocked".into(),
+        firewall_enabled: Some(true),
+        ..Default::default()
+    });
+    policy_request
+        .network_parts
+        .push(api::HostNetworkPart::ApplicationFirewall as i32);
+    // Selecting another section of the same instant is not a contradictory
+    // observation and cannot require collecting a new report just to import it.
+    accept(&store, &preview(&store, policy_request)?)?;
+    Ok(())
+}
+
+// Explicit removal retires source continuity too. A later reviewed adoption
+// creates a new incarnation instead of following a dangling map to a removed one.
+#[test]
+fn removing_an_imported_resource_retires_its_source_mapping() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut request = draft();
+    request.selection.truncate(1);
+    let first = accept(&store, &preview(&store, request.clone())?)?;
+    call(
+        &store,
+        &operator(),
+        Command::Bulk(api::Bulk {
+            targets: first.targets.clone(),
+            expected: store.usage()?.revision,
+            remove: true,
+            changes: Vec::new(),
+        }),
+    )?;
+    let second = accept(&store, &preview(&store, request)?)?;
+    assert_ne!(first.targets, second.targets);
+    Ok(())
+}
+
+// Generic accepted fields need the same source fence as address/route facts.
+// Selecting only hardware must not bypass stale or mixed-boot rejection.
+#[test]
+fn host_mapping_rejects_older_and_conflicting_same_instant_reports() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut current = draft();
+    current.selection.truncate(1);
+    current.report.as_mut().expect("report").observed_at = 200;
+    accept(&store, &preview(&store, current.clone())?)?;
+    let before = store.usage()?;
+    let mut stale = current.clone();
+    stale.report.as_mut().expect("report").observed_at = 100;
+    stale.report.as_mut().expect("report").findings[0].fields[0] = text_field("name", "Stale name");
+    assert!(matches!(preview(&store, stale), Err(Error::Conflict)));
+    let mut mixed = current;
+    mixed.report.as_mut().expect("report").boot_basis = "f".repeat(64);
+    assert!(matches!(preview(&store, mixed), Err(Error::Conflict)));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// An already accepted proposal is not a standing override of later local intent.
+// Replaying that file after a local edit must remain a no-op, not restore its name.
+#[test]
+fn identical_report_replay_does_not_undo_later_local_edits() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut request = draft();
+    request.selection.truncate(1);
+    let accepted = accept(&store, &preview(&store, request.clone())?)?;
+    let target = accepted.targets[0].clone();
+    call(
+        &store,
+        &operator(),
+        Command::Write(api::Write {
+            target: Some(target),
+            expected: Some(1),
+            kind: K::Device as i32,
+            changes: vec![text_field("name", "Local accepted name")],
+            ..Default::default()
+        }),
+    )?;
+    let before = store.usage()?;
+    assert!(matches!(
+        call(&store, &operator(), Command::HostImport(request))?,
+        Reply::Mutation(_)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}

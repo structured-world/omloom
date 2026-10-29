@@ -485,6 +485,94 @@ other inventory. Unchanged values do not create payload versions; reads do not
 write a comparison or access history. Adapters and execution capabilities remain
 separately qualified. The development fixture supplies no production identity.
 
+## Native host reports
+
+Build and run the one-shot collector on the machine being observed:
+
+```sh
+cargo build --locked -p omloom-observe
+cargo run --locked -p omloom-observe -- --output host.omloom
+cargo run --locked -p omloom-observe -- --check host.omloom
+```
+
+The output path must be new. Publication uses a synced temporary file and an
+atomic no-replace operation; an interrupted collection cannot publish a partial
+frame. Reports contain private host facts. Keep them outside version control.
+The check command prints coverage and counts, without inventory names or IPs.
+
+In the workspace, choose **Import host report**, supply a source name and select
+the resources to adopt. Select required parents together with their components.
+Match an existing resource only after checking its identity and incarnation.
+Names, matching addresses, process names and Compose labels do not establish
+continuity, ownership or permission. Review the proposed changes before acceptance.
+The same flow works on a phone, including selecting a report from its file picker.
+
+The source name selects an import configuration within your actor's namespace.
+Reuse it exactly for repeat imports. A changed name selects an independent
+source, rather than renaming a display label, and can propose new identities.
+Equal report source evidence does not merge separate configurations; match
+existing resources explicitly when that is intended.
+
+The OS cannot prove whether its execution host is physical or virtual. For a new
+host, explicitly choose **Physical device** or **Virtual machine**. Alternatively,
+match the current device/VM scope or another reviewed existing resource. That
+match preserves its accepted type, name and fields; hostname/model observations
+are initialization proposals, not authority to rename existing hardware or VMs.
+
+Routes, binds of selected services, and application-firewall observations each
+require separate selection. None are enabled by default. Unselected findings and
+sections are discarded before bounded preview storage. Acceptance rechecks scope,
+field rights and revision, then commits the selected tree and source mappings
+atomically. Previews expire; accepted observations reuse the current-only storage
+and preserve omitted facts when a source or selection is partial. Importing an
+identical accepted file creates no inventory versions or new payloads.
+Replaying accepted proposals cannot undo subsequent local edits. Older reports
+and conflicting reports at the same source instant are refused. Each selected
+network section has its own current checkpoint, so accepting routes does not
+implicitly accept firewall data or prevent reviewing it separately.
+
+Files are limited to 256 KiB, 128 findings and 2944 protobuf field visits before
+decoding. The remaining request budget accommodates explicit matches and context;
+small files with excessive nested fields are refused before generated allocations.
+
+Native modules use selected OS interface, routing and socket sources. macOS reads
+ifconfig, registered hardware ports, Thunderbolt receptacles, lsof, netstat, ALF
+and PF coverage. Linux uses iproute2, ss and nftables coverage. Windows uses native
+network CIM/PowerShell sources and ActiveStore profiles. Missing privileges and
+tools remain explicit. An empty kernel command does not prove that no listeners
+exist. Kernel binds without a qualified process owner remain report observations,
+not newly invented services. Sequential source reads are not an atomic host snapshot.
+Application rules, route presence and wildcard binds do not prove effective access.
+
+Linux interfaces without an IP can still represent L2 bridges, veth links and
+tunnels. They are not discarded merely for lacking an address. The bounded
+collector refuses an oversized source or report explicitly, without publishing
+a truncated inventory. Interface failures include the underlying limit or
+command diagnostic. Dense hosts that exceed these limits need a narrower
+collection scope; the current one-shot command has no interface selector.
+
+Temporary IPv6 literals are excluded, including matching bind and route literals.
+Preferred/deprecated validity remains separate from generation class. Windows
+random-origin IPv6 is conservatively excluded where its public/temporary class
+cannot be established; that address result remains partial. Loopback and link-local
+addresses are not ordinary interface inventory. The collector never stores a Wi-Fi
+MAC as device identity.
+
+Optional local Docker and NetBird modules do not scan arbitrary software packages.
+Docker candidates distinguish runtime, workload, container lifetime and endpoint
+attachments. Docker Desktop guest addresses are not macOS host interfaces.
+The selected context or environment endpoint is resolved once using Docker's
+context precedence. All daemon reads pin that checked local Unix socket or
+Windows named pipe; remote endpoints are refused. Daemon identity is rechecked
+before accepting the batch. Module diagnostics name the failing stage without
+retaining raw stderr or connection settings.
+EXPOSE, a published port or a Compose label cannot prove a listener, reachability,
+human owner or recoverable launch invocation. NetBird attribution uses local daemon
+IP evidence and a unique observed interface match; it retains no peers or keys.
+Reports contain no environment, full commands, credentials or installed-package
+inventory. There is no implicit elevation, remote Docker connection, SSH delivery
+or resident installation.
+
 ## Verification
 
 ```sh

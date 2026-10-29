@@ -1353,18 +1353,21 @@ export interface LocalRoute {
     destination: string;
     /**
      * Source-reported next hop, interface reference or link-layer address.
+     * Empty when the source reports no next hop, for example an on-link route.
      *
      * @generated from protobuf field: string gateway = 2
      */
     gateway: string;
     /**
-     * Source-local kernel flags, not a portable routing policy.
+     * Source-local kernel flags/qualifiers, not a portable routing policy.
+     * Empty when none were reported.
      *
      * @generated from protobuf field: string flags = 3
      */
     flags: string;
     /**
-     * Interface name in the observed OS installation.
+     * Interface name/index in the observed OS installation. Empty when absent,
+     * for example a Linux blackhole route. Never infer an interface from an IP.
      *
      * @generated from protobuf field: string interface = 4
      */
@@ -2075,6 +2078,226 @@ export interface Import {
     parent?: AssetRef;
 }
 /**
+ * One-shot source evidence. Keys identify findings within this source, not
+ * accepted inventory, people or authority. Unknown intermediaries stay absent.
+ *
+ * @generated from protobuf message omloom.workspace.v1.HostReport
+ */
+export interface HostReport {
+    /**
+     * Collector format version. Readers reject unsupported mandatory semantics.
+     *
+     * @generated from protobuf field: uint32 version = 1
+     */
+    version: number;
+    /**
+     * Actual native platform: macos, linux or windows.
+     *
+     * @generated from protobuf field: string platform = 2
+     */
+    platform: string;
+    /**
+     * Source installation evidence, not authenticated machine identity or a grant.
+     *
+     * @generated from protobuf field: string source_basis = 3
+     */
+    sourceBasis: string;
+    /**
+     * Actual boot/session evidence, checked again before committing the output file.
+     *
+     * @generated from protobuf field: string boot_basis = 4
+     */
+    bootBasis: string;
+    /**
+     * Source collection instant, Unix milliseconds, never receiver-generated freshness.
+     *
+     * @generated from protobuf field: uint64 observed_at = 5
+     */
+    observedAt: bigint;
+    /**
+     * Selected candidate components, in parent-before-child order, at most 128.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.HostFinding findings = 6
+     */
+    findings: HostFinding[];
+    /**
+     * Each attempted module's actual coverage. Missing modules are not complete.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.CollectionCoverage coverage = 7
+     */
+    coverage: CollectionCoverage[];
+    /**
+     * Local host routes and readable policy; installation and service IDs are
+     * assigned only after explicit review. Socket owners use binds below.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.HostNetwork network = 8
+     */
+    network?: HostNetwork;
+    /**
+     * Observed service binds with source-local owner references, never Port assets.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.HostBind binds = 9
+     */
+    binds: HostBind[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.HostFinding
+ */
+export interface HostFinding {
+    /**
+     * Source-scoped candidate key, at most 256 bytes. Names/IPs alone do not
+     * establish continuity; process findings include the actual boot/PID basis.
+     *
+     * @generated from protobuf field: string key = 1
+     */
+    key: string;
+    /**
+     * Known candidate kind. UNSPECIFIED is allowed only for root key "hardware":
+     * executing on an OS does not prove a physical Device rather than a VM.
+     * Review supplies its type or explicitly matches an existing execution host.
+     *
+     * @generated from protobuf field: omloom.v1.AssetKind kind = 2
+     */
+    kind: AssetKind;
+    /**
+     * Actual known parent candidate key; absence means no proven intermediary.
+     *
+     * @generated from protobuf field: optional string parent = 3
+     */
+    parent?: string;
+    /**
+     * Selected current facts only, without environment, commands or package lists.
+     * An unclassified execution host supplies initialization proposals only;
+     * matching an existing host preserves its accepted name and other fields.
+     *
+     * @generated from protobuf field: repeated omloom.v1.Field fields = 4
+     */
+    fields: Field[];
+    /**
+     * Current non-temporary interface addresses, never canonical IPAM allocations.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.CurrentAddress addresses = 5
+     */
+    addresses: CurrentAddress[];
+    /**
+     * Whether this source/interface address selection completed successfully.
+     *
+     * @generated from protobuf field: bool addresses_complete = 6
+     */
+    addressesComplete: boolean;
+    /**
+     * Known container runtime candidate, independent of deployment ownership.
+     *
+     * @generated from protobuf field: optional string runtime = 7
+     */
+    runtime?: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.HostBind
+ */
+export interface HostBind {
+    /**
+     * Source-local service candidate owning this observed bind. Empty means the
+     * kernel bind was seen without a qualified owner; it cannot adopt a service.
+     *
+     * @generated from protobuf field: string owner = 1
+     */
+    owner: string;
+    /**
+     * Kernel bind evidence; accepted service identity is intentionally absent.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.SocketBind value = 2
+     */
+    value?: SocketBind;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.CollectionCoverage
+ */
+export interface CollectionCoverage {
+    /**
+     * Collector-owned module name, never a permission or provider capability grant.
+     *
+     * @generated from protobuf field: string module = 1
+     */
+    module: string;
+    /**
+     * Actual result: verified, partial, failed, blocked or unavailable.
+     *
+     * @generated from protobuf field: string status = 2
+     */
+    status: string;
+    /**
+     * Bounded non-secret explanation of collection scope or missing evidence.
+     *
+     * @generated from protobuf field: string detail = 3
+     */
+    detail: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.HostSelection
+ */
+export interface HostSelection {
+    /**
+     * Explicitly selected source-local candidate key.
+     *
+     * @generated from protobuf field: string key = 1
+     */
+    key: string;
+    /**
+     * Operator-selected existing identity; absence permits new reviewed adoption.
+     * Equal name/IP never supplies this field automatically.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef target = 2
+     */
+    target?: AssetRef;
+    /**
+     * User-known Device or VirtualMachine type for a new unclassified execution
+     * host. Omit for a known source kind or when matching an existing identity,
+     * whose type is derived by the server. A reviewed mapping cannot be retyped.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetKind kind = 3
+     */
+    kind?: AssetKind;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.HostImport
+ */
+export interface HostImport {
+    /**
+     * Native report being reviewed; absent when accepting the prepared preview.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.HostReport report = 1
+     */
+    report?: HostReport;
+    /**
+     * Explicit source configuration name within the caller's import namespace,
+     * at most 80 UTF-8 bytes. Network sections have independent named projections.
+     *
+     * @generated from protobuf field: string source = 2
+     */
+    source: string;
+    /**
+     * Selected candidates and explicit existing matches. Unselected findings
+     * are not persisted. Required unknown parents must be resolved by the user.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.HostSelection selection = 3
+     */
+    selection: HostSelection[];
+    /**
+     * Exact server-generated preview being accepted; no report is resent on apply.
+     *
+     * @generated from protobuf field: optional string preview = 4
+     */
+    preview?: string;
+    /**
+     * Explicitly selected network sections of the selected installation. Empty
+     * means none; unselected routes/rules/binds never enter preview custody.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.HostNetworkPart network_parts = 5
+     */
+    networkParts: HostNetworkPart[];
+}
+/**
  * @generated from protobuf message omloom.workspace.v1.Address
  */
 export interface Address {
@@ -2722,6 +2945,14 @@ export interface Request {
          */
         responsibilityTransfer: ResponsibilityTransfer;
     } | {
+        oneofKind: "hostImport";
+        /**
+         * Review and atomically accept selected native host observations.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.HostImport host_import = 27
+         */
+        hostImport: HostImport;
+    } | {
         oneofKind: undefined;
     };
 }
@@ -3243,6 +3474,27 @@ export enum AddressState {
      * @generated from protobuf enum value: ADDRESS_STATE_DEPRECATED = 2;
      */
     DEPRECATED = 2
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.HostNetworkPart
+ */
+export enum HostNetworkPart {
+    /**
+     * @generated from protobuf enum value: HOST_NETWORK_PART_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: HOST_NETWORK_PART_SOCKETS = 1;
+     */
+    SOCKETS = 1,
+    /**
+     * @generated from protobuf enum value: HOST_NETWORK_PART_ROUTES = 2;
+     */
+    ROUTES = 2,
+    /**
+     * @generated from protobuf enum value: HOST_NETWORK_PART_APPLICATION_FIREWALL = 3;
+     */
+    APPLICATION_FIREWALL = 3
 }
 /**
  * @generated from protobuf enum omloom.workspace.v1.AddressMeaning
@@ -4159,6 +4411,101 @@ class Import$Type extends MessageType<Import> {
  */
 export const Import = new Import$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class HostReport$Type extends MessageType<HostReport> {
+    constructor() {
+        super("omloom.workspace.v1.HostReport", [
+            { no: 1, name: "version", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 2, name: "platform", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "source_basis", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "boot_basis", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 5, name: "observed_at", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 6, name: "findings", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostFinding },
+            { no: 7, name: "coverage", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => CollectionCoverage },
+            { no: 8, name: "network", kind: "message", T: () => HostNetwork },
+            { no: 9, name: "binds", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostBind }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostReport
+ */
+export const HostReport = new HostReport$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class HostFinding$Type extends MessageType<HostFinding> {
+    constructor() {
+        super("omloom.workspace.v1.HostFinding", [
+            { no: 1, name: "key", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "kind", kind: "enum", T: () => ["omloom.v1.AssetKind", AssetKind, "ASSET_KIND_"] },
+            { no: 3, name: "parent", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "fields", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Field },
+            { no: 5, name: "addresses", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => CurrentAddress },
+            { no: 6, name: "addresses_complete", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 7, name: "runtime", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostFinding
+ */
+export const HostFinding = new HostFinding$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class HostBind$Type extends MessageType<HostBind> {
+    constructor() {
+        super("omloom.workspace.v1.HostBind", [
+            { no: 1, name: "owner", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "value", kind: "message", T: () => SocketBind }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostBind
+ */
+export const HostBind = new HostBind$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class CollectionCoverage$Type extends MessageType<CollectionCoverage> {
+    constructor() {
+        super("omloom.workspace.v1.CollectionCoverage", [
+            { no: 1, name: "module", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "status", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "detail", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.CollectionCoverage
+ */
+export const CollectionCoverage = new CollectionCoverage$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class HostSelection$Type extends MessageType<HostSelection> {
+    constructor() {
+        super("omloom.workspace.v1.HostSelection", [
+            { no: 1, name: "key", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "target", kind: "message", T: () => AssetRef },
+            { no: 3, name: "kind", kind: "enum", opt: true, T: () => ["omloom.v1.AssetKind", AssetKind, "ASSET_KIND_"] }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostSelection
+ */
+export const HostSelection = new HostSelection$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class HostImport$Type extends MessageType<HostImport> {
+    constructor() {
+        super("omloom.workspace.v1.HostImport", [
+            { no: 1, name: "report", kind: "message", T: () => HostReport },
+            { no: 2, name: "source", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "selection", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostSelection },
+            { no: 4, name: "preview", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 5, name: "network_parts", kind: "enum", repeat: 1 /*RepeatType.PACKED*/, T: () => ["omloom.workspace.v1.HostNetworkPart", HostNetworkPart, "HOST_NETWORK_PART_"] }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostImport
+ */
+export const HostImport = new HostImport$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class Address$Type extends MessageType<Address> {
     constructor() {
         super("omloom.workspace.v1.Address", [
@@ -4376,7 +4723,8 @@ class Request$Type extends MessageType<Request> {
             { no: 23, name: "responsibility", kind: "message", oneof: "command", T: () => Responsibility },
             { no: 24, name: "external_account", kind: "message", oneof: "command", T: () => ExternalAccount },
             { no: 25, name: "owner_request", kind: "message", oneof: "command", T: () => OwnerRequest },
-            { no: 26, name: "responsibility_transfer", kind: "message", oneof: "command", T: () => ResponsibilityTransfer }
+            { no: 26, name: "responsibility_transfer", kind: "message", oneof: "command", T: () => ResponsibilityTransfer },
+            { no: 27, name: "host_import", kind: "message", oneof: "command", T: () => HostImport }
         ]);
     }
 }

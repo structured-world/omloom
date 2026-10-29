@@ -612,10 +612,13 @@ message LocalRoute {
   // Source-reported numeric destination; source abbreviations remain explicit.
   string destination = 1;
   // Source-reported next hop, interface reference or link-layer address.
+  // Empty when the source reports no next hop, for example an on-link route.
   string gateway = 2;
-  // Source-local kernel flags, not a portable routing policy.
+  // Source-local kernel flags/qualifiers, not a portable routing policy.
+  // Empty when none were reported.
   string flags = 3;
-  // Interface name in the observed OS installation.
+  // Interface name/index in the observed OS installation. Empty when absent,
+  // for example a Linux blackhole route. Never infer an interface from an IP.
   string interface = 4;
   // Source address family, IPv4 or IPv6.
   string family = 5;
@@ -867,6 +870,98 @@ message Import {
   optional omloom.v1.AssetRef parent = 6;
 }
 
+// One-shot source evidence. Keys identify findings within this source, not
+// accepted inventory, people or authority. Unknown intermediaries stay absent.
+message HostReport {
+  // Collector format version. Readers reject unsupported mandatory semantics.
+  uint32 version = 1;
+  // Actual native platform: macos, linux or windows.
+  string platform = 2;
+  // Source installation evidence, not authenticated machine identity or a grant.
+  string source_basis = 3;
+  // Actual boot/session evidence, checked again before committing the output file.
+  string boot_basis = 4;
+  // Source collection instant, Unix milliseconds, never receiver-generated freshness.
+  uint64 observed_at = 5;
+  // Selected candidate components, in parent-before-child order, at most 128.
+  repeated HostFinding findings = 6;
+  // Each attempted module's actual coverage. Missing modules are not complete.
+  repeated CollectionCoverage coverage = 7;
+  // Local host routes and readable policy; installation and service IDs are
+  // assigned only after explicit review. Socket owners use binds below.
+  HostNetwork network = 8;
+  // Observed service binds with source-local owner references, never Port assets.
+  repeated HostBind binds = 9;
+}
+message HostFinding {
+  // Source-scoped candidate key, at most 256 bytes. Names/IPs alone do not
+  // establish continuity; process findings include the actual boot/PID basis.
+  string key = 1;
+  // Known candidate kind. UNSPECIFIED is allowed only for root key "hardware":
+  // executing on an OS does not prove a physical Device rather than a VM.
+  // Review supplies its type or explicitly matches an existing execution host.
+  omloom.v1.AssetKind kind = 2;
+  // Actual known parent candidate key; absence means no proven intermediary.
+  optional string parent = 3;
+  // Selected current facts only, without environment, commands or package lists.
+  // An unclassified execution host supplies initialization proposals only;
+  // matching an existing host preserves its accepted name and other fields.
+  repeated omloom.v1.Field fields = 4;
+  // Current non-temporary interface addresses, never canonical IPAM allocations.
+  repeated CurrentAddress addresses = 5;
+  // Whether this source/interface address selection completed successfully.
+  bool addresses_complete = 6;
+  // Known container runtime candidate, independent of deployment ownership.
+  optional string runtime = 7;
+}
+message HostBind {
+  // Source-local service candidate owning this observed bind. Empty means the
+  // kernel bind was seen without a qualified owner; it cannot adopt a service.
+  string owner = 1;
+  // Kernel bind evidence; accepted service identity is intentionally absent.
+  SocketBind value = 2;
+}
+message CollectionCoverage {
+  // Collector-owned module name, never a permission or provider capability grant.
+  string module = 1;
+  // Actual result: verified, partial, failed, blocked or unavailable.
+  string status = 2;
+  // Bounded non-secret explanation of collection scope or missing evidence.
+  string detail = 3;
+}
+message HostSelection {
+  // Explicitly selected source-local candidate key.
+  string key = 1;
+  // Operator-selected existing identity; absence permits new reviewed adoption.
+  // Equal name/IP never supplies this field automatically.
+  optional omloom.v1.AssetRef target = 2;
+  // User-known Device or VirtualMachine type for a new unclassified execution
+  // host. Omit for a known source kind or when matching an existing identity,
+  // whose type is derived by the server. A reviewed mapping cannot be retyped.
+  optional omloom.v1.AssetKind kind = 3;
+}
+message HostImport {
+  // Native report being reviewed; absent when accepting the prepared preview.
+  HostReport report = 1;
+  // Explicit source configuration name within the caller's import namespace,
+  // at most 80 UTF-8 bytes. Network sections have independent named projections.
+  string source = 2;
+  // Selected candidates and explicit existing matches. Unselected findings
+  // are not persisted. Required unknown parents must be resolved by the user.
+  repeated HostSelection selection = 3;
+  // Exact server-generated preview being accepted; no report is resent on apply.
+  optional string preview = 4;
+  // Explicitly selected network sections of the selected installation. Empty
+  // means none; unselected routes/rules/binds never enter preview custody.
+  repeated HostNetworkPart network_parts = 5;
+}
+enum HostNetworkPart {
+  HOST_NETWORK_PART_UNSPECIFIED = 0;
+  HOST_NETWORK_PART_SOCKETS = 1;
+  HOST_NETWORK_PART_ROUTES = 2;
+  HOST_NETWORK_PART_APPLICATION_FIREWALL = 3;
+}
+
 enum AddressMeaning {
   ADDRESS_MEANING_UNSPECIFIED = 0;
   ADDRESS_MEANING_CONFIGURED = 1;
@@ -1090,6 +1185,8 @@ message Request {
     OwnerRequest owner_request = 25;
     // Export selected declarations or preview/accept a bounded atomic typed import.
     ResponsibilityTransfer responsibility_transfer = 26;
+    // Review and atomically accept selected native host observations.
+    HostImport host_import = 27;
   }
 }
 message Reply {

@@ -1,15 +1,16 @@
 import { Record } from './generated/omloom/v1/contracts.js';
 import { ScalarType, RepeatType, type IMessageType } from '@protobuf-ts/runtime';
 
-/** Same hard wire profile as the Rust admission boundary. This decodes wire
- * records only; server domain validation/authorization is never a browser claim.
+/** Shared hard wire profile for records and native report envelopes. Server
+ * domain validation/authorization is never a browser claim.
  * Generated JSON helpers are not untrusted admission entry points. */
-export function decodeWire(bytes: Uint8Array): Record {
-  if (bytes.byteLength > 1_048_576) throw new Error('Limit');
+export function preflightMessage(bytes: Uint8Array, root: IMessageType<object>, byteLimit = 1_048_576, fieldLimit = 4096): void {
+  if (bytes.byteLength > Math.min(byteLimit, 1_048_576)) throw new Error('Limit');
+  const maxFields = Math.min(fieldLimit, 4096);
   let fields = 0;
   let charge = bytes.byteLength * 2 + 4096;
   function chargeField(): void {
-    if (++fields > 4096) throw new Error('Limit');
+    if (++fields > maxFields) throw new Error('Limit');
     charge += 2048;
     if (charge > 16 * 1_048_576) throw new Error('Limit');
   }
@@ -71,7 +72,11 @@ export function decodeWire(bytes: Uint8Array): Record {
       } else throw new Error('Wire');
     }
   }
-  message(0, bytes.byteLength, Record, 1);
+  message(0, bytes.byteLength, root, 1);
+}
+
+export function decodeWire(bytes: Uint8Array): Record {
+  preflightMessage(bytes, Record);
   try { return Record.fromBinary(bytes, { readUnknownField: 'throw' }); }
   catch { throw new Error('Wire'); }
 }

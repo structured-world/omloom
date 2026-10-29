@@ -16,6 +16,8 @@ mod definitions;
 mod exchange;
 #[path = "workspace/groups.rs"]
 mod groups;
+#[path = "workspace/host_import.rs"]
+mod host_import;
 #[path = "workspace/host_network.rs"]
 mod host_network;
 #[path = "workspace/projections.rs"]

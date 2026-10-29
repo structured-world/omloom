@@ -41,6 +41,7 @@ pub enum Error {
     Restore(Box<coordinode_embed::backup::restore::RestoreError>),
     Database(Box<DatabaseError>),
     Invalid,
+    HostClassificationRequired,
     Conflict,
     Missing,
     Limit,
