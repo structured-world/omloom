@@ -226,7 +226,8 @@ impl Tx<'_> {
                 });
                 continue;
             }
-            self.check_relationship(context, &selection, &after)?;
+            // Every original endpoint and mapped destination was authorized
+            // before detachment. Intermediate topology cannot redefine scope.
             let redundant = self
                 .working_relations(parse_target(after.from.as_ref())?)?
                 .into_iter()

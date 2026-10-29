@@ -133,6 +133,57 @@ fn undo_restores_deleted_relation_adjacency() -> TestResult {
     Ok(())
 }
 
+// Membership is evaluated on an intact graph, including a child being moved.
+#[test]
+fn scoped_correction_keeps_original_child_membership() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let retained = create(&store, &operator(), K::Device, "Retained")?;
+    let duplicate = create(&store, &operator(), K::Device, "Duplicate")?;
+    let os = child(&store, &duplicate, K::SoftwareInstallation, "OS")?;
+    let mut working = api::WorkingContext {
+        roots: vec![retained.clone(), duplicate.clone()],
+        expected: Some(store.usage()?.revision),
+        ..Default::default()
+    };
+    let Some(Reply::IdentityCorrection(preview)) = store
+        .workspace(
+            &operator(),
+            api::Request {
+                working: Some(working.clone()),
+                command: Some(Command::CorrectIdentity(api::IdentityCorrection {
+                    decision: api::IdentityDecision::DistinctInstallations as i32,
+                    mappings: vec![mapping(&duplicate, &retained)],
+                    ..Default::default()
+                })),
+            },
+            100,
+        )?
+        .result
+    else {
+        return Err("preview".into());
+    };
+    working.expected = Some(preview.revision);
+    store.workspace(
+        &operator(),
+        api::Request {
+            working: Some(working),
+            command: Some(Command::CorrectIdentity(api::IdentityCorrection {
+                preview: Some(preview.id),
+                ..Default::default()
+            })),
+        },
+        100,
+    )?;
+    assert!(
+        read(&store, &os)?
+            .relations
+            .iter()
+            .any(|r| r.from.as_ref() == Some(&retained))
+    );
+    Ok(())
+}
+
 // One chassis can keep both OS installations, their services and their own
 // interface addresses. Explicit reversal restores only the correction delta.
 #[test]
