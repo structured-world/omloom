@@ -1,7 +1,7 @@
 name: Dependabot auto-merge
 
 on:
-  pull_request:
+  pull_request_target:
     branches: [main]
     types: [opened, reopened, synchronize]
 
@@ -11,6 +11,7 @@ jobs:
   enable:
     name: Dependabot auto-merge admission
     if: >-
+      github.repository == 'structured-world/omloom' &&
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
