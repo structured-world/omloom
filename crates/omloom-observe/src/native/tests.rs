@@ -1,5 +1,33 @@
 use super::*;
 
+// Exercise the native OS source on each qualified host, without assuming that
+// an unreadable or unset hardware UUID exists or inventing one from an address.
+#[tokio::test]
+async fn native_identity_observation_keeps_layers_separate() -> Result<()> {
+    let value = identity(&mut Runner::new()).await?;
+    let namespace = match std::env::consts::OS {
+        "macos" => "macos/apfs-volume",
+        "linux" => "linux/machine-id",
+        "windows" => "windows/machine-guid",
+        _ => return Err("Unsupported native identity platform".into()),
+    };
+    assert!(!value.source.is_empty());
+    assert!(!value.boot.is_empty());
+    assert_eq!(value.installation.namespace, namespace);
+    assert_eq!(
+        value.installation.kind,
+        api::HostIdentityKind::InstallationId as i32
+    );
+    assert_eq!(value.installation.digest.len(), 64);
+    if let Some(hardware) = value.hardware {
+        assert_eq!(hardware.kind, api::HostIdentityKind::HardwareUuid as i32);
+        assert_eq!(hardware.quality, api::HostIdentityQuality::Reported as i32);
+        assert_eq!(hardware.digest.len(), 64);
+        assert_ne!(hardware.namespace, value.installation.namespace);
+    }
+    Ok(())
+}
+
 // Identical normalized claims compare across boots without storing the raw UUID.
 // A MAC, IP or hostname is never substituted for missing hardware evidence.
 #[test]
