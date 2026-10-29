@@ -709,9 +709,10 @@ impl Tx<'_> {
             ("kind", Value::Int(relation.kind.into())),
             ("authority", text(&relation.authority_id)),
         ]));
-        if old
-            .as_ref()
-            .is_some_and(|prior| data.iter().all(|(k, v)| prior.get(k) == Some(v)))
+        if !detached
+            && old
+                .as_ref()
+                .is_some_and(|prior| data.iter().all(|(k, v)| prior.get(k) == Some(v)))
         {
             return expected.ok_or(Error::Corrupt);
         }

@@ -101,6 +101,38 @@ fn read(store: &Store, target: &wire::AssetRef) -> Result<api::Detail, Error> {
     Ok(*value)
 }
 
+// Reversal must restore adjacency as well as the row of a redundant relation.
+#[test]
+fn undo_restores_deleted_relation_adjacency() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let retained = create(&store, &operator(), K::Device, "Retained")?;
+    let duplicate = create(&store, &operator(), K::Device, "Duplicate")?;
+    let retained_os = child(&store, &retained, K::SoftwareInstallation, "Retained OS")?;
+    let os = child(&store, &duplicate, K::SoftwareInstallation, "OS")?;
+    let plan = prepare(
+        &store,
+        vec![mapping(&duplicate, &retained), mapping(&os, &retained_os)],
+        api::IdentityDecision::DuplicateInstallation,
+    )?;
+    let applied = apply(&store, &plan.id)?;
+    call(
+        &store,
+        &operator(),
+        Command::CorrectIdentity(api::IdentityCorrection {
+            undo: Some(applied.id),
+            ..Default::default()
+        }),
+    )?;
+    assert!(
+        read(&store, &os)?
+            .relations
+            .iter()
+            .any(|r| r.from.as_ref() == Some(&duplicate))
+    );
+    Ok(())
+}
+
 // One chassis can keep both OS installations, their services and their own
 // interface addresses. Explicit reversal restores only the correction delta.
 #[test]
