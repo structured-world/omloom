@@ -22,10 +22,14 @@ impl Tx<'_> {
         working: &api::WorkingContext,
     ) -> Result<Properties> {
         let row = self.visible_asset(context, target)?;
+        let kind = number(&row, "kind")? as i32;
+        if !context.field(target, kind, "relations", false) {
+            return Err(Error::Denied);
+        }
         self.selection(context, working, false)?
             .contains(target, self)?;
         for field in ["identity_correction", "relations", "remove"] {
-            if !context.field(target, number(&row, "kind")? as i32, field, true) {
+            if !context.field(target, kind, field, true) {
                 return Err(Error::Denied);
             }
         }
@@ -184,10 +188,6 @@ impl Tx<'_> {
                 return Err(Error::Conflict);
             }
         }
-        for mapping in &request.mappings {
-            let (from, _) = pair(mapping)?;
-            self.correction_fields(context, mapping, kinds[&from], working, now)?;
-        }
         let selection = self.selection(context, working, false)?;
         let authority = string(
             &self.get("workspace/authority")?.ok_or(Error::Missing)?,
@@ -197,10 +197,20 @@ impl Tx<'_> {
         // Remove old attachments before validating the final graph, so an
         // intermediate exclusive-parent conflict cannot choose the result.
         for before in relations.values() {
-            self.check_relationship(context, &selection, before)?;
+            let (from, to) = self.check_relationship(context, &selection, before)?;
+            for endpoint in [from, to] {
+                let kind = number(&self.asset(endpoint)?, "kind")? as i32;
+                if !context.field(endpoint, kind, "relations", false) {
+                    return Err(Error::Denied);
+                }
+            }
             if before.authority_id != authority {
                 return Err(Error::Conflict);
             }
+        }
+        for mapping in &request.mappings {
+            let (from, _) = pair(mapping)?;
+            self.correction_fields(context, mapping, kinds[&from], working, now)?;
         }
         for before in relations.values() {
             self.unlink_correction_relation(&before.relation_id)?;

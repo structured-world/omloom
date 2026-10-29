@@ -1,5 +1,56 @@
 use super::*;
 
+// Blind write permission cannot disclose either a mapped root's or its child's relations.
+#[test]
+fn correction_requires_relation_read_on_all_endpoints() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let retained = create(&store, &operator(), K::Device, "Retained")?;
+    let duplicate = create(&store, &operator(), K::Device, "Duplicate")?;
+    let os = child(&store, &duplicate, K::SoftwareInstallation, "OS")?;
+    for permitted in [
+        Vec::new(),
+        vec![retained.clone(), duplicate.clone()],
+        vec![duplicate.clone(), os.clone()],
+    ] {
+        let mut actor = operator();
+        actor.grants[0].read = Fields::Selected(vec!["name".into(), "identity_evidence".into()]);
+        actor.grants.push(Grant {
+            scope: Scope::Targets(
+                permitted
+                    .iter()
+                    .map(AssetRef::try_from)
+                    .collect::<Result<_, _>>()?,
+            ),
+            read: Fields::Selected(vec!["relations".into()]),
+            write: Fields::Selected(Vec::new()),
+            writable: false,
+        });
+        let before = store.usage()?;
+        let result = store.workspace(
+            &actor,
+            api::Request {
+                working: Some(api::WorkingContext {
+                    expected: Some(before.revision),
+                    ..Default::default()
+                }),
+                command: Some(Command::CorrectIdentity(api::IdentityCorrection {
+                    decision: api::IdentityDecision::DistinctInstallations as i32,
+                    mappings: vec![mapping(&duplicate, &retained)],
+                    ..Default::default()
+                })),
+            },
+            100,
+        );
+        assert!(
+            matches!(result, Err(Error::Denied)),
+            "unreadable impact must not escape: {result:?}"
+        );
+        assert_eq!(store.usage()?, before);
+    }
+    Ok(())
+}
+
 fn native_pair(store: &Store) -> Result<(Vec<wire::AssetRef>, Vec<wire::AssetRef>), Error> {
     let mut first = super::super::host_import::draft();
     let a = super::super::host_import::accept(
