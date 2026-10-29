@@ -28,7 +28,7 @@ async fn native_identity_observation_keeps_layers_separate() -> Result<()> {
     Ok(())
 }
 
-// Identical normalized claims compare across boots without storing the raw UUID.
+// Normalized claims compare across boots, while distinct hardware UUIDs stay distinct.
 // A MAC, IP or hostname is never substituted for missing hardware evidence.
 #[test]
 fn hardware_claims_are_scoped_normalized_and_explicitly_untrusted() {
@@ -37,6 +37,9 @@ fn hardware_claims_are_scoped_normalized_and_explicitly_untrusted() {
     let second = hardware_claim("smbios/system-uuid", "8d60c19a-489a-40c9-b381-d97e5d568df8")
         .expect("source UUID");
     assert_eq!(first, second);
+    let other = hardware_claim("smbios/system-uuid", "11111111-2222-4333-8444-555555555555")
+        .expect("distinct source UUID");
+    assert_ne!(first.digest, other.digest);
     assert_eq!(first.quality, api::HostIdentityQuality::Reported as i32);
     assert_eq!(first.digest.len(), 64);
     assert!(!first.digest.contains("8d60c19a"));
