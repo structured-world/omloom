@@ -2,7 +2,7 @@ use super::*;
 use api::{reply::Result as Reply, request::Command};
 use wire::RelationKind as R;
 
-fn hypervisor(store: &Store, name: &str) -> Result<wire::AssetRef, Error> {
+pub(super) fn hypervisor(store: &Store, name: &str) -> Result<wire::AssetRef, Error> {
     let Reply::Mutation(result) = call(
         store,
         &operator(),
@@ -147,7 +147,7 @@ fn read(store: &Store, target: &wire::AssetRef) -> Result<api::Detail, Error> {
     Ok(*value)
 }
 
-fn responsibility(
+pub(super) fn responsibility(
     store: &Store,
     target: &wire::AssetRef,
     changes: Vec<api::ResponsibilityAssignment>,

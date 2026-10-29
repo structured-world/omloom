@@ -301,6 +301,9 @@ impl Tx<'_> {
                 if row.get("source_relation") != Some(&text(&before.relation_id)) {
                     continue;
                 }
+                if number(&row, "source_binding_revision")? != before.revision {
+                    continue;
+                }
                 let facet = number(&row, "facet")?;
                 let field = match api::ResponsibilityFacet::try_from(facet as i32) {
                     Ok(api::ResponsibilityFacet::ClaimedOwner) => "claimed_owner",

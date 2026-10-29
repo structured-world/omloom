@@ -1,5 +1,105 @@
 use super::*;
 
+// Correcting a migrated host cannot reactivate inheritance tied to the old placement.
+#[test]
+fn correction_and_undo_keep_stale_placement_inheritance_unavailable() -> TestResult {
+    use super::super::vm_placement::{hypervisor, responsibility};
+    use api::{AssignmentMode as M, ResponsibilityFacet as F, ResponsibilityStatus as S};
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let guest = create(&store, &operator(), K::VirtualMachine, "Guest")?;
+    let first = hypervisor(&store, "Original host")?;
+    let duplicate = hypervisor(&store, "Migrated host")?;
+    let retained = hypervisor(&store, "Retained host")?;
+    responsibility(
+        &store,
+        &retained,
+        vec![api::ResponsibilityAssignment {
+            facet: F::ClaimedOwner as i32,
+            mode: M::Explicit as i32,
+            party: Some(api::PartyRef {
+                issuer: "company.example".into(),
+                subject: "operations".into(),
+                name: "New team".into(),
+                kind: api::PartyKind::Team as i32,
+            }),
+            ..Default::default()
+        }],
+    )?;
+    call(
+        &store,
+        &operator(),
+        Command::Relation(api::Relationship {
+            relation: Some(wire::Relation {
+                from: Some(guest.clone()),
+                to: Some(first),
+                kind: wire::RelationKind::RunsOn as i32,
+                ..Default::default()
+            }),
+            remove: false,
+        }),
+    )?;
+    let mut placement = read(&store, &guest)?
+        .relations
+        .into_iter()
+        .find(|r| r.kind == wire::RelationKind::RunsOn as i32)
+        .ok_or("placement")?;
+    responsibility(
+        &store,
+        &guest,
+        vec![api::ResponsibilityAssignment {
+            facet: F::ClaimedOwner as i32,
+            mode: M::Inherit as i32,
+            source_relation: Some(placement.relation_id.clone()),
+            source_revision: Some(placement.revision),
+            ..Default::default()
+        }],
+    )?;
+    placement.to = Some(duplicate.clone());
+    call(
+        &store,
+        &operator(),
+        Command::Relation(api::Relationship {
+            relation: Some(placement),
+            remove: false,
+        }),
+    )?;
+    let unavailable = |store: &Store| -> TestResult {
+        let state = responsibility(store, &guest, Vec::new())?;
+        let owner = state
+            .effective
+            .iter()
+            .find(|v| v.facet == F::ClaimedOwner as i32)
+            .ok_or("owner")?;
+        assert_eq!(owner.status, S::SourceUnavailable as i32);
+        assert!(owner.party.is_none());
+        Ok(())
+    };
+    unavailable(&store)?;
+    let mut choice = mapping(&duplicate, &retained);
+    choice.fields.push(api::IdentityFieldChoice {
+        name: "virtualization_role".into(),
+        use_duplicate: false,
+    });
+    let preview = prepare(
+        &store,
+        vec![choice],
+        api::IdentityDecision::DuplicateInstallation,
+    )?;
+    let applied = apply(&store, &preview.id)?;
+    unavailable(&store)?;
+    call(
+        &store,
+        &operator(),
+        Command::CorrectIdentity(api::IdentityCorrection {
+            undo: Some(applied.id),
+            ..Default::default()
+        }),
+    )?;
+    unavailable(&store)?;
+    Ok(())
+}
+
 // Blind write permission cannot disclose either a mapped root's or its child's relations.
 #[test]
 fn correction_requires_relation_read_on_all_endpoints() -> TestResult {
