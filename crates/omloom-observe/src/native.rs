@@ -1,6 +1,8 @@
 use super::command::Runner;
 use super::{MAX_FACTS, Result, add, api, coverage, finding, local, wire};
 use serde_json::Value;
+#[cfg(test)]
+mod tests;
 
 pub(super) fn json(input: &str) -> Result<Value> {
     // Preflight limits both structural fan-out and stack use before serde builds
@@ -113,9 +115,46 @@ async fn ps(runner: &mut Runner, script: &str) -> Result<String> {
         .await
         .map(|v| v.text)
 }
-pub(super) async fn identity(
-    runner: &mut Runner,
-) -> Result<(&'static str, String, String, String)> {
+pub(super) struct Identity {
+    pub platform: &'static str,
+    pub source: String,
+    pub boot: String,
+    pub name: String,
+    pub hardware: Option<api::HostIdentityClaim>,
+    pub installation: api::HostIdentityClaim,
+}
+
+fn identity_claim(
+    kind: api::HostIdentityKind,
+    namespace: &str,
+    raw: &str,
+) -> Result<api::HostIdentityClaim> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw.len() > 128 || raw.chars().any(char::is_control) {
+        return Err("Invalid native identity claim".into());
+    }
+    Ok(api::HostIdentityClaim {
+        kind: kind as i32,
+        namespace: namespace.into(),
+        digest: super::digest(&raw.to_ascii_lowercase()),
+        quality: api::HostIdentityQuality::Reported as i32,
+    })
+}
+
+fn hardware_claim(namespace: &str, raw: &str) -> Option<api::HostIdentityClaim> {
+    let uuid = uuid::Uuid::parse_str(raw.trim()).ok()?;
+    if uuid.is_nil() || uuid == uuid::Uuid::max() {
+        return None;
+    }
+    identity_claim(
+        api::HostIdentityKind::HardwareUuid,
+        namespace,
+        &uuid.to_string(),
+    )
+    .ok()
+}
+
+pub(super) async fn identity(runner: &mut Runner) -> Result<Identity> {
     match std::env::consts::OS {
         "macos" => {
             let device = runner
@@ -141,12 +180,18 @@ pub(super) async fn identity(
                 .run("/usr/sbin/sysctl", &["-n", "hw.model"])
                 .await?
                 .text;
-            Ok((
-                "macos",
-                format!("{hardware}/{installation}"),
-                boot.trim().into(),
-                model.trim().into(),
-            ))
+            Ok(Identity {
+                platform: "macos",
+                source: format!("{hardware}/{installation}"),
+                boot: boot.trim().into(),
+                name: model.trim().into(),
+                hardware: hardware_claim("apple/platform-uuid", hardware),
+                installation: identity_claim(
+                    api::HostIdentityKind::InstallationId,
+                    "macos/apfs-volume",
+                    installation,
+                )?,
+            })
         }
         "linux" => {
             let source = runner.run("cat", &["/etc/machine-id"]).await?.text;
@@ -155,22 +200,43 @@ pub(super) async fn identity(
                 .await?
                 .text;
             let name = runner.run("uname", &["-n"]).await?.text;
-            Ok((
-                "linux",
-                source.trim().into(),
-                boot.trim().into(),
-                name.trim().into(),
-            ))
+            // DMI may be unreadable without root. Missing hardware evidence
+            // does not prevent collecting the installation's current facts.
+            let hardware = match runner.run("cat", &["/sys/class/dmi/id/product_uuid"]).await {
+                Ok(value) => hardware_claim("smbios/system-uuid", &value.text),
+                Err(_) => None,
+            };
+            Ok(Identity {
+                platform: "linux",
+                source: source.trim().into(),
+                boot: boot.trim().into(),
+                name: name.trim().into(),
+                hardware,
+                installation: identity_claim(
+                    api::HostIdentityKind::InstallationId,
+                    "linux/machine-id",
+                    &source,
+                )?,
+            })
         }
         "windows" => {
-            let result = ps(runner, "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $os=Get-CimInstance Win32_OperatingSystem; $cs=Get-CimInstance Win32_ComputerSystemProduct; @{source=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography').MachineGuid; boot=$os.LastBootUpTime.ToUniversalTime().ToString('o'); name=$cs.Name} | ConvertTo-Json -Compress").await?;
+            let result = ps(runner, "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $os=Get-CimInstance Win32_OperatingSystem; $cs=Get-CimInstance Win32_ComputerSystemProduct; @{source=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography').MachineGuid; boot=$os.LastBootUpTime.ToUniversalTime().ToString('o'); name=$cs.Name; hardware=$cs.UUID} | ConvertTo-Json -Compress").await?;
             let value = json(&result)?;
-            Ok((
-                "windows",
-                string(&value, "source")?.into(),
-                string(&value, "boot")?.into(),
-                string(&value, "name")?.into(),
-            ))
+            Ok(Identity {
+                platform: "windows",
+                source: string(&value, "source")?.into(),
+                boot: string(&value, "boot")?.into(),
+                name: string(&value, "name")?.into(),
+                hardware: value
+                    .get("hardware")
+                    .and_then(Value::as_str)
+                    .and_then(|v| hardware_claim("smbios/system-uuid", v)),
+                installation: identity_claim(
+                    api::HostIdentityKind::InstallationId,
+                    "windows/machine-guid",
+                    string(&value, "source")?,
+                )?,
+            })
         }
         _ => Err("Native platform is not supported".into()),
     }

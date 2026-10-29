@@ -53,6 +53,123 @@ fn draft() -> api::HostImport {
         network_parts: Vec::new(),
     }
 }
+
+fn identity_claim(
+    kind: api::HostIdentityKind,
+    namespace: &str,
+    digest: char,
+) -> api::HostIdentityClaim {
+    api::HostIdentityClaim {
+        kind: kind as i32,
+        namespace: namespace.into(),
+        digest: digest.to_string().repeat(64),
+        quality: api::HostIdentityQuality::Reported as i32,
+    }
+}
+
+// Identity equality is layer-specific evidence, not a host/OS merge. Missing
+// later claims retain their exact old collection window rather than freshening.
+#[test]
+fn host_identity_evidence_is_current_scoped_and_not_freshened_by_omission() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut request = draft();
+    let report = request.report.as_mut().unwrap();
+    report.findings[0].identity.push(identity_claim(
+        api::HostIdentityKind::HardwareUuid,
+        "apple/platform-uuid",
+        'a',
+    ));
+    report.findings[1].identity.push(identity_claim(
+        api::HostIdentityKind::InstallationId,
+        "macos/apfs-volume",
+        'a',
+    ));
+    let accepted = accept(&store, &preview(&store, request.clone())?)?;
+    let host = accepted.targets[0].clone();
+    let installation = accepted.targets[1].clone();
+    let read = |target: wire::AssetRef| -> Result<api::Detail, Error> {
+        let Reply::Detail(value) = call(
+            &store,
+            &operator(),
+            Command::Read(api::Read {
+                target: Some(target),
+                ..Default::default()
+            }),
+        )?
+        else {
+            return Err(Error::Corrupt);
+        };
+        Ok(*value)
+    };
+    let first = read(host.clone())?;
+    let os = read(installation)?;
+    assert_eq!(first.identity.len(), 1);
+    assert_eq!(os.identity.len(), 1);
+    assert_ne!(
+        first.identity[0].claim.as_ref().unwrap().kind,
+        os.identity[0].claim.as_ref().unwrap().kind
+    );
+    assert_eq!(first.identity[0].observed_at, 100);
+    let before = store.usage()?;
+    assert!(matches!(
+        call(&store, &operator(), Command::HostImport(request.clone()))?,
+        Reply::Mutation(_)
+    ));
+    assert_eq!(
+        before,
+        store.usage()?,
+        "identical claim input writes nothing"
+    );
+    request.report.as_mut().unwrap().observed_at = 200;
+    request.report.as_mut().unwrap().findings[0]
+        .identity
+        .clear();
+    accept(&store, &preview(&store, request)?)?;
+    let current = read(host)?;
+    assert_eq!(
+        first.identity, current.identity,
+        "omission does not reattest identity"
+    );
+    let before = store.usage()?;
+    read(accepted.targets[0].clone())?;
+    assert_eq!(
+        before,
+        store.usage()?,
+        "reading claims creates no history or touches"
+    );
+    Ok(())
+}
+
+// A source cannot change a claim at the same instant or place installation
+// evidence on a hardware identity, even through a forged native report.
+#[test]
+fn host_identity_rejects_layer_forgery_and_same_instant_equivocation() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut request = draft();
+    request.report.as_mut().unwrap().findings[0]
+        .identity
+        .push(identity_claim(
+            api::HostIdentityKind::InstallationId,
+            "linux/machine-id",
+            'a',
+        ));
+    let before = store.usage()?;
+    assert!(matches!(
+        preview(&store, request.clone()),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(before, store.usage()?);
+    request.report.as_mut().unwrap().findings[0].identity[0].kind =
+        api::HostIdentityKind::HardwareUuid as i32;
+    accept(&store, &preview(&store, request.clone())?)?;
+    request.report.as_mut().unwrap().findings[0].identity[0].digest = "b".repeat(64);
+    let before = store.usage()?;
+    assert!(matches!(preview(&store, request), Err(Error::Conflict)));
+    assert_eq!(before, store.usage()?);
+    Ok(())
+}
 fn preview(store: &Store, request: api::HostImport) -> Result<api::Preview, Error> {
     let Reply::Preview(value) = call(store, &operator(), Command::HostImport(request))? else {
         return Err(Error::Corrupt);

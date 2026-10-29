@@ -76,7 +76,15 @@ fn add(report: &mut api::HostReport, value: api::HostFinding) -> Result<()> {
 
 async fn collect() -> Result<api::HostReport> {
     let mut runner = command::Runner::new();
-    let (platform, source, boot, name) = native::identity(&mut runner).await?;
+    let identity = native::identity(&mut runner).await?;
+    let native::Identity {
+        platform,
+        source,
+        boot,
+        name,
+        hardware,
+        installation: installation_claim,
+    } = identity;
     let observed_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| "Clock predates Unix epoch")?
@@ -91,10 +99,9 @@ async fn collect() -> Result<api::HostReport> {
         observed_at,
         ..Default::default()
     };
-    add(
-        &mut report,
-        finding("hardware", wire::AssetKind::Unspecified, None, &name),
-    )?;
+    let mut host = finding("hardware", wire::AssetKind::Unspecified, None, &name);
+    host.identity.extend(hardware);
+    add(&mut report, host)?;
     let mut installation = finding(
         "installation",
         wire::AssetKind::SoftwareInstallation,
@@ -105,6 +112,7 @@ async fn collect() -> Result<api::HostReport> {
         "installation_kind",
         wire::InstallationKind::OperatingSystem.as_str_name(),
     ));
+    installation.identity.push(installation_claim);
     add(&mut report, installation)?;
     coverage(
         &mut report,
@@ -120,8 +128,11 @@ async fn collect() -> Result<api::HostReport> {
     });
     native::collect(&mut runner, &mut report).await?;
     runtime::collect(&mut runner, &mut report).await?;
-    let (_, after_source, after_boot, _) = native::identity(&mut runner).await?;
-    check_identity(&source, &boot, &after_source, &after_boot)?;
+    let after = native::identity(&mut runner).await?;
+    check_identity(&source, &boot, &after.source, &after.boot)?;
+    if report.findings.first().and_then(|v| v.identity.first()) != after.hardware.as_ref() {
+        return Err("Hardware evidence changed during collection; output not written".into());
+    }
     Ok(report)
 }
 

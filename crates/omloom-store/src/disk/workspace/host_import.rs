@@ -34,6 +34,7 @@ fn validate(report: &api::HostReport) -> Result<()> {
     }
     let mut keys = BTreeMap::new();
     for node in &report.findings {
+        super::host_identity::validate(node)?;
         if node.key.is_empty()
             || node.key.len() > 256
             || node.key.chars().any(char::is_control)
@@ -323,6 +324,18 @@ impl Tx<'_> {
                     complete: node.addresses_complete,
                 })?;
             }
+            self.accept_host_identity(
+                context,
+                target,
+                kind,
+                super::host_identity::Source {
+                    mapping: &key,
+                    name: &request.source,
+                    observed: report.observed_at,
+                    boot: &report.boot_basis,
+                },
+                &node.identity,
+            )?;
             let mut data = target_props(target);
             data.insert("source".into(), text(&request.source));
             // One current checkpoint fences stale replay and same-instant

@@ -11,6 +11,7 @@ mod assets;
 mod current_facts;
 mod definitions;
 mod exchange;
+mod host_identity;
 mod host_import;
 mod interface_facts;
 mod network;

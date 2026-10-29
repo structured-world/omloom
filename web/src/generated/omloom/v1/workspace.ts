@@ -1068,6 +1068,13 @@ export interface Detail {
      * @generated from protobuf field: optional string network_next = 12
      */
     networkNext?: string;
+    /**
+     * Current selected layer-specific identity claims, filtered by identity_evidence
+     * field rights. Equality does not establish authenticated identity or access.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.HostIdentityObservation identity = 13
+     */
+    identity: HostIdentityObservation[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.AddressObservation
@@ -2191,6 +2198,74 @@ export interface HostFinding {
      * @generated from protobuf field: optional string runtime = 7
      */
     runtime?: string;
+    /**
+     * Selected layer-specific source claims, at most four. Missing evidence stays
+     * unknown. Claims support reviewed comparison, never authentication or grants.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.HostIdentityClaim identity = 8
+     */
+    identity: HostIdentityClaim[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.HostIdentityClaim
+ */
+export interface HostIdentityClaim {
+    /**
+     * Collector-selected subject layer and identifier meaning.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.HostIdentityKind kind = 1
+     */
+    kind: HostIdentityKind;
+    /**
+     * Actual identifier namespace, at most 80 UTF-8 bytes. Equal digests in
+     * different namespaces are not matching evidence.
+     *
+     * @generated from protobuf field: string namespace = 2
+     */
+    namespace: string;
+    /**
+     * Collector SHA-256 of the normalized identifier, 64 lowercase hex digits.
+     * This minimizes retained raw identifiers but is not a confidentiality claim.
+     *
+     * @generated from protobuf field: string digest = 3
+     */
+    digest: string;
+    /**
+     * Actual source limitation. Unspecified quality is invalid, not trusted.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.HostIdentityQuality quality = 4
+     */
+    quality: HostIdentityQuality;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.HostIdentityObservation
+ */
+export interface HostIdentityObservation {
+    /**
+     * Original source claim, including namespace and known limitations.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.HostIdentityClaim claim = 1
+     */
+    claim?: HostIdentityClaim;
+    /**
+     * Reviewed import configuration name, not the actor or a trusted issuer.
+     *
+     * @generated from protobuf field: string source = 2
+     */
+    source: string;
+    /**
+     * Actual claim collection instant, Unix milliseconds. A report omitting this
+     * claim cannot freshen it by merely updating the source checkpoint.
+     *
+     * @generated from protobuf field: uint64 observed_at = 3
+     */
+    observedAt: bigint;
+    /**
+     * Boot/session basis of that collection. It is evidence, not an OS asset ID.
+     *
+     * @generated from protobuf field: string boot_basis = 4
+     */
+    bootBasis: string;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.HostBind
@@ -3476,6 +3551,58 @@ export enum AddressState {
     DEPRECATED = 2
 }
 /**
+ * What a source identifier describes. Boot sessions stay in HostReport.boot_basis
+ * and never become permanent host or OS identities.
+ *
+ * @generated from protobuf enum omloom.workspace.v1.HostIdentityKind
+ */
+export enum HostIdentityKind {
+    /**
+     * @generated from protobuf enum value: HOST_IDENTITY_KIND_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: HOST_IDENTITY_KIND_HARDWARE_UUID = 1;
+     */
+    HARDWARE_UUID = 1,
+    /**
+     * @generated from protobuf enum value: HOST_IDENTITY_KIND_INSTALLATION_ID = 2;
+     */
+    INSTALLATION_ID = 2,
+    /**
+     * @generated from protobuf enum value: HOST_IDENTITY_KIND_INTERFACE_ID = 3;
+     */
+    INTERFACE_ID = 3,
+    /**
+     * @generated from protobuf enum value: HOST_IDENTITY_KIND_FACTORY_MAC = 4;
+     */
+    FACTORY_MAC = 4
+}
+/**
+ * Evidence limitations are independent of equality. Even a reported hardware
+ * UUID can be cloned or forged and cannot authorize a connection or correction.
+ *
+ * @generated from protobuf enum omloom.workspace.v1.HostIdentityQuality
+ */
+export enum HostIdentityQuality {
+    /**
+     * @generated from protobuf enum value: HOST_IDENTITY_QUALITY_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: HOST_IDENTITY_QUALITY_REPORTED = 1;
+     */
+    REPORTED = 1,
+    /**
+     * @generated from protobuf enum value: HOST_IDENTITY_QUALITY_MOVABLE = 2;
+     */
+    MOVABLE = 2,
+    /**
+     * @generated from protobuf enum value: HOST_IDENTITY_QUALITY_UNRELIABLE = 3;
+     */
+    UNRELIABLE = 3
+}
+/**
  * @generated from protobuf enum omloom.workspace.v1.HostNetworkPart
  */
 export enum HostNetworkPart {
@@ -3949,7 +4076,8 @@ class Detail$Type extends MessageType<Detail> {
             { no: 9, name: "host_network", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostNetworkView },
             { no: 10, name: "current_addresses", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => InterfaceAddressView },
             { no: 11, name: "relations_next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
-            { no: 12, name: "network_next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 12, name: "network_next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 13, name: "identity", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostIdentityObservation }
         ]);
     }
 }
@@ -4440,7 +4568,8 @@ class HostFinding$Type extends MessageType<HostFinding> {
             { no: 4, name: "fields", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Field },
             { no: 5, name: "addresses", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => CurrentAddress },
             { no: 6, name: "addresses_complete", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
-            { no: 7, name: "runtime", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 7, name: "runtime", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 8, name: "identity", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostIdentityClaim }
         ]);
     }
 }
@@ -4448,6 +4577,36 @@ class HostFinding$Type extends MessageType<HostFinding> {
  * @generated MessageType for protobuf message omloom.workspace.v1.HostFinding
  */
 export const HostFinding = new HostFinding$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class HostIdentityClaim$Type extends MessageType<HostIdentityClaim> {
+    constructor() {
+        super("omloom.workspace.v1.HostIdentityClaim", [
+            { no: 1, name: "kind", kind: "enum", T: () => ["omloom.workspace.v1.HostIdentityKind", HostIdentityKind, "HOST_IDENTITY_KIND_"] },
+            { no: 2, name: "namespace", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "digest", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "quality", kind: "enum", T: () => ["omloom.workspace.v1.HostIdentityQuality", HostIdentityQuality, "HOST_IDENTITY_QUALITY_"] }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostIdentityClaim
+ */
+export const HostIdentityClaim = new HostIdentityClaim$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class HostIdentityObservation$Type extends MessageType<HostIdentityObservation> {
+    constructor() {
+        super("omloom.workspace.v1.HostIdentityObservation", [
+            { no: 1, name: "claim", kind: "message", T: () => HostIdentityClaim },
+            { no: 2, name: "source", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "observed_at", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 4, name: "boot_basis", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostIdentityObservation
+ */
+export const HostIdentityObservation = new HostIdentityObservation$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class HostBind$Type extends MessageType<HostBind> {
     constructor() {

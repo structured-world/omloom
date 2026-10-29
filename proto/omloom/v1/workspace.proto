@@ -503,6 +503,9 @@ message Detail {
   // responses contain only host_network and this cursor. Counts and filters
   // apply to the supplied page; coverage retains its source-collection meaning.
   optional string network_next = 12;
+  // Current selected layer-specific identity claims, filtered by identity_evidence
+  // field rights. Equality does not establish authenticated identity or access.
+  repeated HostIdentityObservation identity = 13;
 }
 
 message AddressObservation {
@@ -913,6 +916,49 @@ message HostFinding {
   bool addresses_complete = 6;
   // Known container runtime candidate, independent of deployment ownership.
   optional string runtime = 7;
+  // Selected layer-specific source claims, at most four. Missing evidence stays
+  // unknown. Claims support reviewed comparison, never authentication or grants.
+  repeated HostIdentityClaim identity = 8;
+}
+// What a source identifier describes. Boot sessions stay in HostReport.boot_basis
+// and never become permanent host or OS identities.
+enum HostIdentityKind {
+  HOST_IDENTITY_KIND_UNSPECIFIED = 0;
+  HOST_IDENTITY_KIND_HARDWARE_UUID = 1;
+  HOST_IDENTITY_KIND_INSTALLATION_ID = 2;
+  HOST_IDENTITY_KIND_INTERFACE_ID = 3;
+  HOST_IDENTITY_KIND_FACTORY_MAC = 4;
+}
+// Evidence limitations are independent of equality. Even a reported hardware
+// UUID can be cloned or forged and cannot authorize a connection or correction.
+enum HostIdentityQuality {
+  HOST_IDENTITY_QUALITY_UNSPECIFIED = 0;
+  HOST_IDENTITY_QUALITY_REPORTED = 1;
+  HOST_IDENTITY_QUALITY_MOVABLE = 2;
+  HOST_IDENTITY_QUALITY_UNRELIABLE = 3;
+}
+message HostIdentityClaim {
+  // Collector-selected subject layer and identifier meaning.
+  HostIdentityKind kind = 1;
+  // Actual identifier namespace, at most 80 UTF-8 bytes. Equal digests in
+  // different namespaces are not matching evidence.
+  string namespace = 2;
+  // Collector SHA-256 of the normalized identifier, 64 lowercase hex digits.
+  // This minimizes retained raw identifiers but is not a confidentiality claim.
+  string digest = 3;
+  // Actual source limitation. Unspecified quality is invalid, not trusted.
+  HostIdentityQuality quality = 4;
+}
+message HostIdentityObservation {
+  // Original source claim, including namespace and known limitations.
+  HostIdentityClaim claim = 1;
+  // Reviewed import configuration name, not the actor or a trusted issuer.
+  string source = 2;
+  // Actual claim collection instant, Unix milliseconds. A report omitting this
+  // claim cannot freshen it by merely updating the source checkpoint.
+  uint64 observed_at = 3;
+  // Boot/session basis of that collection. It is evidence, not an OS asset ID.
+  string boot_basis = 4;
 }
 message HostBind {
   // Source-local service candidate owning this observed bind. Empty means the

@@ -3,6 +3,7 @@ import HostNetwork from './HostNetwork.vue';
 import HostImportEditor from './HostImportEditor.vue';
 import CategoryNav from './CategoryNav.vue';
 import CurrentAddresses from './CurrentAddresses.vue';
+import HostIdentityEvidence from './HostIdentityEvidence.vue';
 import ResponsibilityPanel from './ResponsibilityPanel.vue';
 import AccountPanel from './AccountPanel.vue';
 import { softwareFields } from './software-fields';
@@ -332,6 +333,7 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <section v-if="[K.IP_ADDRESS, K.PREFIX, K.VLAN, K.ADDRESS_GROUP].includes(detail.item.kind)"><div class="section-title"><h3>Address allocation</h3><button v-if="identity?.writable" @click="editing = detail.item; editor = 'network'">Review network settings</button><button v-if="identity?.writable && [K.IP_ADDRESS, K.ADDRESS_GROUP].includes(detail.item.kind)" @click="editor = 'member'">Assign participant</button></div><p v-if="detail.group">Shared group: <button @click="open(detail.group.target)">{{ display(detail.group.fields.find(f => f.name === 'name')) }} · {{ detail.group.target?.assetId.slice(-8) }}</button></p><p v-if="!detail.participantsComplete" class="hint">Participant coverage is restricted. Missing participants do not prove the allocation is free.</p><ul><li v-for="p in detail.participants" :key="key(p.interface)"><button @click="open(p.interface)">Interface {{ p.interface?.assetId.slice(-8) }}</button><span v-if="p.priority !== undefined"> · Intended priority {{ p.priority }}</span><button v-if="identity?.writable" @click="removeParticipant(p)">Remove participant</button></li></ul></section>
 <button v-if="detail.item.kind === K.ADDRESS_REFERENCE && identity?.writable" @click="editor = 'binding'">Resolve address in broader scope</button>
 <CurrentAddresses v-for="value in detail.currentAddresses" :key="value.coverage?.source" :value="value" />
+<HostIdentityEvidence :observations="detail.identity" />
 <ResponsibilityPanel v-if="detail.item&&!loading" :key="key(detail.item.target)+'/'+detail.item.revision" :item="detail.item" :working="working" @changed="saved()" @open="open" />
 <AccountPanel v-if="detail.item?.kind===K.PROVIDER_ACCOUNT&&!loading" :key="key(detail.item.target)+'/'+detail.item.revision" :item="detail.item" :working="working" @changed="saved()" @open="open" @share="editor='view'" />
 <p v-if="detail.networkNext || networkCursor" class="hint">Showing one bounded evidence page. Observation counts and filters apply to this page.</p>

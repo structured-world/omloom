@@ -1286,6 +1286,11 @@ impl Store {
             current_addresses,
             relations_next,
             network_next: None,
+            identity: if read.relations_cursor.is_none() {
+                tx.host_identity(context, target, asset.kind)?
+            } else {
+                Vec::new()
+            },
         };
         if read.relations_cursor.is_none() {
             tx.read_network_page(context, target, asset.kind, working, None, &mut detail)?;
