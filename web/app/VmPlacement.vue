@@ -26,13 +26,14 @@ async function prepare(destination?: AssetRef) {
   review.value = response.vmPlacementReview;
 }
 async function candidates(cursor?: string) {
+  const requestedSearch = search.value;
   const response = await call({ oneofKind: 'query', query: model.Query.create({
     view: model.View.VIRTUALIZATION, roots: bounds.value, kinds: [AssetKind.SOFTWARE_INSTALLATION],
-    columns: ['name'], search: search.value, cursor, limit: 20, includeContext: true,
+    columns: ['name'], search: requestedSearch, cursor, limit: 20, includeContext: true,
     predicates: [{ field: 'virtualization_role', value: text('virtualization_role', `VIRTUALIZATION_ROLE_${model.VirtualizationRole[model.VirtualizationRole.HYPERVISOR]}`) }],
   }) });
   if (response.oneofKind !== 'page') throw Error('Hypervisor selection is unavailable');
-  items.value = response.page.items; next.value = response.page.next; contexts.value = response.page.contexts;
+  items.value = response.page.items; next.value = search.value === requestedSearch ? response.page.next : undefined; contexts.value = response.page.contexts;
 }
 async function load() {
   busy.value = true; error.value = '';
@@ -76,7 +77,7 @@ onMounted(load);
 <strong>{{ name(review.vm) }}</strong><template v-if="step === 'choose'"><p>Current host: {{ name(review.currentHost) }}</p><small>{{ hostContext(review.currentHost,review.contexts) }}</small></template>
 <small v-if="step === 'choose'">Drag this VM onto a destination, or use its Choose button.</small></article>
 <template v-if="step === 'choose'">
-<form class="actions" @submit.prevent="find()"><label>Find hypervisor<input v-model="search" maxlength="200" type="search"></label><button :disabled="busy">Search</button></form>
+<form class="actions" @submit.prevent="find()"><label>Find hypervisor<input v-model="search" maxlength="200" type="search" @input="next = undefined"></label><button :disabled="busy">Search</button></form>
 <p>Only enabled hypervisors in the selected enclosing context are offered.</p>
 <div class="placement-destinations" aria-label="Destination hypervisors"><article v-for="item in items" :key="key(item.target)" :aria-label="`Destination ${name(item)}`" class="placement-destination" @dragover.prevent @drop.prevent="drop($event,item)">
 <strong>{{ name(item) }}</strong><small>{{ hostContext(item,contexts) }}</small><small class="mono">{{ item.target?.assetId }}</small><small v-if="key(item.target) === key(review.currentHost?.target)">Current host</small>

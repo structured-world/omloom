@@ -145,6 +145,52 @@ test('VM placement uses desktop drag and phone selection without changing guest 
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
 });
 
+test('hypervisor pagination resets for edited searches on desktop and phone', async ({page})=>{
+  // A cursor belongs to the submitted query, not a later edit of its search field.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-placement-search-'));const server=await host(dir);
+  let release;
+  try {
+    const {m,rpc}=await workspaceClient(server.url);
+    const guest=(await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.VIRTUAL_MACHINE,changes:[{name:'name',value:{oneofKind:'text',text:'Pagination guest'}}]})})).mutation.targets[0];
+    for(let index=0;index<21;index++) await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.SOFTWARE_INSTALLATION,changes:[{name:'name',value:{oneofKind:'text',text:`Paginated host ${String(index).padStart(2,'0')}`}},{name:'virtualization_role',value:{oneofKind:'text',text:'VIRTUALIZATION_ROLE_HYPERVISOR'}}]})});
+    for(const width of [1440,390]) {
+      await page.setViewportSize({width,height:900});await page.goto(`${server.url}/#/?view=3&asset=${guest.assetId}&incarnation=${guest.incarnation}`);
+      await page.getByRole('button',{name:'Change hypervisor after migration',exact:true}).click();
+      const dialog=page.getByRole('dialog',{name:'Record VM placement',exact:true});
+      const next=dialog.getByRole('button',{name:'Next hypervisors',exact:true});
+      const search=dialog.getByRole('searchbox',{name:'Find hypervisor',exact:true});
+      await expect(next).toBeVisible();
+      await search.fill('Paginated host 20');
+      await expect(next).toBeHidden();
+      await dialog.getByRole('button',{name:'Search',exact:true}).click();
+      await expect(dialog.getByRole('article',{name:'Destination Paginated host 20',exact:true})).toBeVisible();
+      await expect(dialog.getByRole('article').filter({has:page.getByRole('button',{name:/^Choose Paginated host/})})).toHaveCount(1);
+      await expect(dialog.getByRole('alert')).toHaveCount(0);
+      await search.fill('Paginated');await dialog.getByRole('button',{name:'Search',exact:true}).click();
+      await expect(next).toBeVisible();await next.click();
+      await expect(dialog.getByRole('article',{name:'Destination Paginated host 20',exact:true})).toBeVisible();
+      await expect(next).toBeHidden();await expect(dialog.getByRole('alert')).toHaveCount(0);
+      // Delay, then forward a real request; an old response cannot resurrect its cursor.
+      let held=false;
+      const resumed=new Promise(resolve=>{release=resolve;});
+      await page.route('**/omloom.workspace.v1.Workspace/Call',async route=>{
+        const bytes=route.request().postDataBuffer();
+        const command=bytes?m.Request.fromBinary(bytes.subarray(5)).command:undefined;
+        if(!held&&command?.oneofKind==='query'){held=true;await resumed;}
+        await route.continue();
+      });
+      await dialog.getByRole('button',{name:'Search',exact:true}).click();
+      await expect.poll(()=>held).toBe(true);
+      try {await search.fill('Paginated host 20');} finally {release();}
+      await expect(dialog.getByRole('status')).toHaveCount(0);
+      await expect(next).toBeHidden();
+      await page.unrouteAll({behavior:'wait'});
+      await dialog.getByRole('button',{name:'Close dialog',exact:true}).click();
+      await expect(dialog).toBeHidden();
+    }
+  } finally {release?.();await page.unrouteAll({behavior:'wait'});await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('accepted correction and exact retry survive an abrupt host exit', async ({page})=>{
   // Process crash after acknowledgement, not a claim about device power loss.
   const dir=await mkdtemp(join(tmpdir(),'omloom-correction-crash-'));let server=await host(dir);
