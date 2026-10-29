@@ -588,6 +588,37 @@ Reports contain no environment, full commands, credentials or installed-package
 inventory. There is no implicit elevation, remote Docker connection, SSH delivery
 or resident installation.
 
+## Reviewed identity correction
+
+Select two devices, VMs, OS installations or interfaces and choose **Compare
+identity**. Matching reported identifiers support review but do not prove identity
+or authorize a connection. Candidate lookup is also available before adopting
+report findings, within the current permitted selection. Missing evidence,
+cloned UUIDs, movable interfaces and reused addresses never trigger an automatic
+merge or an access grant.
+
+Choose whether the records are separate, one chassis with distinct OS installs,
+or duplicates of the same installation. Choose the retained identity and every
+field resolution. Add only the OS/interface mappings actually established as
+duplicates. Separate boots retain their own services, interfaces and current
+addresses. Each physical attachment needs individual confirmation, followed by
+ordinary containment, exclusivity and cycle validation.
+
+Native sources keep independent bindings even when their display labels match.
+Manual or unresolved legacy namespace collisions require a reviewed rename.
+Neither source relocation nor an address change rewrites literal service binds,
+routes, firewall policy or VLAN/VRF membership. No grants, secrets, account control
+or operation targets transfer. Explicit responsibility and external-effect
+conflicts must be resolved first.
+
+The bounded preview changes no inventory. Accepting it checks the same working
+context, current authority and installation revision, then commits atomically.
+Its receipt supports an exact retry and a finite reversal window. Reversal
+requires current rights and no subsequent accepted mutation; otherwise prepare a
+fresh correction. Old references resolve read-only to the canonical incarnation
+only when both original and canonical rights permit it. They never become write
+or execution aliases.
+
 ## Verification
 
 ```sh

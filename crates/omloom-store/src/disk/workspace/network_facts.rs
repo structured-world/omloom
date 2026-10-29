@@ -88,7 +88,7 @@ pub(super) fn validate(value: &api::HostNetwork) -> Result<()> {
     Ok(())
 }
 
-fn sections(value: &api::HostNetwork) -> Result<[BTreeMap<String, Properties>; 4]> {
+pub(super) fn sections(value: &api::HostNetwork) -> Result<[BTreeMap<String, Properties>; 4]> {
     let mut sections: [BTreeMap<String, Properties>; 4] = Default::default();
     for s in &value.sockets {
         let identity = format!(
@@ -176,9 +176,51 @@ pub(super) fn socket_layer(service: AssetRef) -> String {
         service.incarnation
     )
 }
+
+pub(super) fn source_digest(
+    coverage: &api::HostNetwork,
+    sections: &[BTreeMap<String, Properties>; 4],
+) -> Result<Vec<u8>> {
+    let mut hash = Sha256::new();
+    hash.update(b"omloom/network-evidence/1");
+    for section in sections {
+        hash.update((section.len() as u32).to_le_bytes());
+        for (id, data) in section {
+            hash.update((id.len() as u32).to_le_bytes());
+            hash.update(id.as_bytes());
+            let payload = binary(data, "payload")?;
+            hash.update((payload.len() as u32).to_le_bytes());
+            hash.update(payload);
+        }
+    }
+    hash.update(coverage.encode_to_vec());
+    Ok(hash.finalize().to_vec())
+}
+pub(super) fn coverage(value: &api::HostNetwork) -> api::HostNetwork {
+    api::HostNetwork {
+        installation: value.installation.clone(),
+        source: value.source.clone(),
+        observed_at: value.observed_at,
+        basis: value.basis.clone(),
+        socket_coverage: value.socket_coverage.clone(),
+        route_coverage: value.route_coverage.clone(),
+        application_coverage: value.application_coverage.clone(),
+        packet_filter_coverage: value.packet_filter_coverage.clone(),
+        firewall_enabled: value.firewall_enabled,
+        block_all: value.block_all,
+        allow_builtin_signed: value.allow_builtin_signed,
+        allow_downloaded_signed: value.allow_downloaded_signed,
+        sockets_complete: value.sockets_complete,
+        routes_complete: value.routes_complete,
+        rules_complete: value.rules_complete,
+        ..Default::default()
+    }
+}
 const PARTS: [&str; 4] = ["sockets", "routes", "rules", "policies"];
 
 struct NetworkSource {
+    id: String,
+    binding_unresolved: bool,
     coverage: Option<api::HostNetwork>,
     observations: Vec<api::NetworkObservation>,
     // None marks a known label already moved into the output page.
@@ -239,6 +281,8 @@ impl Tx<'_> {
             .iter_mut()
             .map(|source| {
                 let view = api::HostNetworkView {
+                    source_id: source.id.clone(),
+                    binding_unresolved: source.binding_unresolved,
                     coverage: source.coverage.take(),
                     ..Default::default()
                 };
@@ -354,47 +398,39 @@ impl Tx<'_> {
         Ok(labels)
     }
     pub(super) fn accept_network(&mut self, value: &api::HostNetwork) -> Result<()> {
+        self.accept_network_owned(value, None)
+    }
+    pub(super) fn accept_native_network(
+        &mut self,
+        value: &api::HostNetwork,
+        binding: &str,
+        base: &str,
+    ) -> Result<()> {
+        self.native_source(
+            parse_target(value.installation.as_ref())?,
+            &value.source,
+            binding,
+            base,
+            source_layout::Family::Network,
+        )?;
+        self.accept_network_owned(value, Some(binding))
+    }
+    fn accept_network_owned(
+        &mut self,
+        value: &api::HostNetwork,
+        binding: Option<&str>,
+    ) -> Result<()> {
         let target = parse_target(value.installation.as_ref())?;
         let parent = source_parent(target);
-        let key = current_facts::source_key(&parent, &value.source);
+        let key = source_layout::Family::Network.key(target, &value.source, binding);
         let sources = self.fact_rows(&parent, current_facts::MAX_SOURCES)?;
         let old = self.get(&key)?;
         if old.is_none() && sources.len() >= current_facts::MAX_SOURCES {
             return Err(Error::Limit);
         }
         let sections = sections(value)?;
-        let mut hash = Sha256::new();
-        hash.update(b"omloom/network-evidence/1");
-        let mut coverage = api::HostNetwork {
-            installation: value.installation.clone(),
-            source: value.source.clone(),
-            observed_at: value.observed_at,
-            basis: value.basis.clone(),
-            socket_coverage: value.socket_coverage.clone(),
-            route_coverage: value.route_coverage.clone(),
-            application_coverage: value.application_coverage.clone(),
-            packet_filter_coverage: value.packet_filter_coverage.clone(),
-            firewall_enabled: value.firewall_enabled,
-            block_all: value.block_all,
-            allow_builtin_signed: value.allow_builtin_signed,
-            allow_downloaded_signed: value.allow_downloaded_signed,
-            sockets_complete: value.sockets_complete,
-            routes_complete: value.routes_complete,
-            rules_complete: value.rules_complete,
-            ..Default::default()
-        };
-        for section in &sections {
-            hash.update((section.len() as u32).to_le_bytes());
-            for (id, props) in section {
-                hash.update((id.len() as u32).to_le_bytes());
-                hash.update(id.as_bytes());
-                let payload = binary(props, "payload")?;
-                hash.update((payload.len() as u32).to_le_bytes());
-                hash.update(payload);
-            }
-        }
-        hash.update(coverage.encode_to_vec());
-        let digest = hash.finalize().to_vec();
+        let mut coverage = coverage(value);
+        let digest = source_digest(&coverage, &sections)?;
         if let Some(old) = &old {
             let observed = number(old, "observed")?;
             if observed > value.observed_at
@@ -446,20 +482,18 @@ impl Tx<'_> {
         if count > current_facts::MAX_FACTS || bytes > current_facts::MAX_BYTES {
             return Err(Error::Limit);
         }
-        self.put_projection(
-            &key,
-            &parent,
-            Class::Inventory,
-            props([
-                ("layer", text("network-source")),
-                ("source", text(&value.source)),
-                ("observed", int(value.observed_at)?),
-                ("count", int(own_count as u64)?),
-                ("bytes", int(own_bytes as u64)?),
-                ("digest", Value::Binary(digest)),
-            ]),
-            old.as_ref(),
-        )?;
+        let mut metadata = props([
+            ("layer", text("network-source")),
+            ("source", text(&value.source)),
+            ("observed", int(value.observed_at)?),
+            ("count", int(own_count as u64)?),
+            ("bytes", int(own_bytes as u64)?),
+            ("digest", Value::Binary(digest)),
+        ]);
+        if let Some(binding) = binding {
+            metadata.insert("binding".into(), text(binding));
+        }
+        self.put_projection(&key, &parent, Class::Inventory, metadata, old.as_ref())?;
         Ok(())
     }
 
@@ -580,6 +614,9 @@ impl Tx<'_> {
                 coverage.packet_filter_coverage.clear();
             }
             result.push(NetworkSource {
+                id: key,
+                binding_unresolved: source.get("source_revision")
+                    == Some(&text("unresolved-native-binding")),
                 coverage: Some(coverage),
                 observations,
                 services,

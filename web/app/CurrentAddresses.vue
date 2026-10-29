@@ -6,6 +6,7 @@ const state=(value:model.AddressState)=>enumLabel(model.AddressState, value);
 </script>
 <template><section v-if="value.coverage" aria-label="Current interface addresses">
   <h3>Current interface addresses</h3>
+  <p v-if="value.bindingUnresolved" class="hint">Legacy source attribution is unresolved. These facts keep their original dates and are not assigned to a new collector.</p>
   <p class="hint">{{ value.coverage.source }}. Latest collection: {{ new Date(Number(value.coverage.observedAt)).toLocaleString() }}. {{ value.coverage.complete ? 'Complete selected source scope.' : 'Partial refresh; omitted facts preserve their earlier dates.' }}</p>
   <ul><template v-for="fact in value.observations" :key="fact.value?.address"><li v-if="fact.value">
     <span class="mono">{{ fact.value.address }}{{ fact.value.prefixLength === undefined ? '' : '/'+fact.value.prefixLength }}</span>

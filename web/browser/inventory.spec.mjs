@@ -17,7 +17,7 @@ async function host(directory, fixture = 'operator', grants) {
     child.stderr.on('data', chunk => { output += chunk; });
     child.once('exit', code => { clearTimeout(timer); reject(Error(`Host exited ${code}: ${output}`)); });
   });
-  return { url, async stop() { if (child.exitCode !== null || child.signalCode !== null) return; const exit = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGINT'); await exit; } };
+  return { url, async crash() { const exit=new Promise(resolve=>child.once('exit',resolve));child.kill('SIGKILL');await exit; }, async stop() { if (child.exitCode !== null || child.signalCode !== null) return; const exit = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGINT'); await exit; } };
 }
 async function create(page, name, kind = 'DEVICE') {
   // These fixtures create independent roots. Child creation has its own scoped journey.
@@ -83,6 +83,110 @@ test('host report adoption is selective and scoped on desktop and phone', async 
       await page.getByRole('button',{name:'Use as scope',exact:true}).click();
       await expect(page.getByRole('button',{name:`Collected OS ${width}`,exact:true})).toBeVisible();
       expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
+test('accepted correction and exact retry survive an abrupt host exit', async ({page})=>{
+  // Process crash after acknowledgement, not a claim about device power loss.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-correction-crash-'));let server=await host(dir);
+  try {
+    let {m,rpc}=await workspaceClient(server.url);const targets=[];
+    for(const name of ['Crash retained','Crash duplicate']){const saved=await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.DEVICE,changes:[{name:'name',value:{oneofKind:'text',text:name}}]})});targets.push(saved.mutation.targets[0]);}
+    const prepared=await rpc({oneofKind:'correctIdentity',correctIdentity:m.IdentityCorrection.create({decision:m.IdentityDecision.DISTINCT_INSTALLATIONS,mappings:[{duplicate:targets[1],retained:targets[0],fields:[{name:'name',useDuplicate:false}]}]})});
+    const accepted=await rpc({oneofKind:'correctIdentity',correctIdentity:m.IdentityCorrection.create({preview:prepared.identityCorrection.id})});
+    await server.crash();server=await host(dir);({m,rpc}=await workspaceClient(server.url));
+    const retry=await rpc({oneofKind:'correctIdentity',correctIdentity:m.IdentityCorrection.create({preview:prepared.identityCorrection.id})});expect(retry.identityCorrected).toEqual(accepted.identityCorrected);
+    const alias=await rpc({oneofKind:'resolveIdentity',resolveIdentity:m.ResolveIdentity.create({original:targets[1]})});expect(alias.resolvedIdentity.canonical.target).toEqual(targets[0]);
+    await rpc({oneofKind:'correctIdentity',correctIdentity:m.IdentityCorrection.create({undo:accepted.identityCorrected.id})});
+    await page.goto(server.url);await expect(page.getByRole('button',{name:'Crash duplicate',exact:true})).toBeVisible();await expect(page.getByRole('button',{name:'Crash retained',exact:true})).toBeVisible();
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
+test('reviewed identity correction keeps both boots and reverses on desktop and phone', async ({ page }) => {
+  // Real disk/API/UI: a hardware correction keeps separate installations and
+  // their interfaces. Back preserves the reviewed draft; reversal restores it.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-correction-'));const server=await host(dir);
+  try {
+    const {m,rpc}=await workspaceClient(server.url);
+    for(const width of [1440,390]) {
+      const prefix=`Correction ${width}`;const targets=[];
+      for(const side of ['left','right']) {
+        const report=m.HostReport.create({version:1,platform:'linux',sourceBasis:`${width}${side==='left'?'1':'2'}`.padEnd(64,'a'),bootBasis:'b'.repeat(64),observedAt:100n,findings:[
+          {key:'hardware',kind:m.AssetKind.DEVICE,fields:[{name:'name',value:{oneofKind:'text',text:`${prefix} ${side}`}}],identity:[{kind:m.HostIdentityKind.HARDWARE_UUID,namespace:'smbios/system-uuid',digest:'a'.repeat(64),quality:m.HostIdentityQuality.REPORTED}]},
+          {key:'installation',parent:'hardware',kind:m.AssetKind.SOFTWARE_INSTALLATION,fields:[{name:'name',value:{oneofKind:'text',text:`Boot ${side}`}}]},
+          {key:'interface/en0',parent:'installation',kind:m.AssetKind.INTERFACE,fields:[{name:'name',value:{oneofKind:'text',text:'en0'}}],addresses:[{address:side==='left'?'192.0.2.10':'192.0.2.11',stability:m.AddressStability.STABLE,state:m.AddressState.PREFERRED}],addressesComplete:true}
+        ]});
+        const prepared=await rpc({oneofKind:'hostImport',hostImport:m.HostImport.create({source:`Boot ${side} ${width}`,report,selection:report.findings.map(v=>({key:v.key}))})});
+        const accepted=await rpc({oneofKind:'hostImport',hostImport:m.HostImport.create({preview:prepared.preview.id})});targets.push(accepted.mutation.targets);
+      }
+      await page.setViewportSize({width,height:900});await page.goto(`${server.url}/#/?view=2&asset=${targets[0][0].assetId}&incarnation=${targets[0][0].incarnation}`);
+      await page.getByRole('button',{name:'Find possible duplicates in enclosing selection',exact:true}).click();
+      await page.getByRole('region',{name:'Identity candidates',exact:true}).locator('li').filter({hasText:`${prefix} right`}).getByRole('button',{name:'Compare with candidate',exact:true}).click();const dialog=page.getByRole('dialog');
+      await dialog.getByRole('button',{name:'Plan identity correction',exact:true}).click();
+      await dialog.getByRole('radio',{name:'Same hardware, different OS installations',exact:true}).check();
+      await dialog.getByRole('button',{name:'Continue',exact:true}).click();
+      await dialog.getByRole('combobox',{name:'Retained identity',exact:true}).selectOption('left',{timeout:5000});
+      await dialog.getByRole('button',{name:'Keep all retained field values',exact:true}).click();
+      await dialog.getByRole('button',{name:'Prepare correction preview',exact:true}).click();
+      await expect(dialog.getByRole('heading',{name:'Review identity correction',exact:true})).toBeVisible();
+      await dialog.getByRole('button',{name:'Back',exact:true}).click();
+      await expect(dialog.getByRole('combobox',{name:'Retained identity',exact:true})).toHaveValue('left');
+      await dialog.getByRole('button',{name:'Prepare correction preview',exact:true}).click();
+      await dialog.getByRole('button',{name:'Accept identity correction',exact:true}).click();
+      await expect(dialog.getByRole('heading',{name:'Correction applied',exact:true})).toBeVisible();
+      const query=await rpc({oneofKind:'query',query:m.Query.create({view:m.View.HARDWARE,search:prefix,limit:25})});expect(query.page.total).toBe(1n);
+      for(const [index,side] of ['left','right'].entries()) {
+        const detail=await rpc({oneofKind:'read',read:m.Read.create({target:targets[index][1]})});
+        expect(detail.detail.relations.some(v=>v.kind===m.RelationKind.CONTAINS&&v.from?.assetId===targets[0][0].assetId&&v.to?.assetId===targets[index][1].assetId)).toBe(true);
+        const iface=await rpc({oneofKind:'read',read:m.Read.create({target:targets[index][2]})});expect(iface.detail.currentAddresses[0].observations[0].value.address).toBe(side==='left'?'192.0.2.10':'192.0.2.11');
+      }
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+      await dialog.getByRole('button',{name:'Reverse this correction',exact:true}).click();
+      await expect(dialog.getByRole('heading',{name:'Correction reversed',exact:true})).toBeVisible();
+      await page.screenshot({path:`test-results/identity-correction-${width}.png`,fullPage:true});
+      await dialog.getByRole('button',{name:'Close',exact:true}).click();
+      const restored=await rpc({oneofKind:'query',query:m.Query.create({view:m.View.HARDWARE,search:prefix,limit:25})});expect(restored.page.total).toBe(2n);
+    }
+  } finally {await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
+test('duplicate installation review maps only selected layers on desktop and phone',async({page})=>{
+  // Each selected layer has its own field decision. Equal native labels keep
+  // separate source bindings, and reversal restores both source namespaces.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-layer-correction-'));const server=await host(dir);
+  try {
+    const {m,rpc}=await workspaceClient(server.url);
+    for(const width of [1440,390]) {
+      const prefix=`Layer ${width}`;const targets=[];
+      for(const side of ['left','right']) {
+        const field=text=>({name:'name',value:{oneofKind:'text',text}});
+        const report=m.HostReport.create({version:1,platform:'linux',sourceBasis:`${width}${side==='left'?'1':'2'}`.padEnd(64,'a'),bootBasis:'b'.repeat(64),observedAt:100n,findings:[
+          {key:'hardware',kind:m.AssetKind.DEVICE,fields:[field(`${prefix} ${side}`)]},
+          {key:'installation',parent:'hardware',kind:m.AssetKind.SOFTWARE_INSTALLATION,fields:[field(`${prefix} OS ${side}`)]},
+          {key:'interface/en0',parent:'installation',kind:m.AssetKind.INTERFACE,fields:[field(`${prefix} NIC ${side}`)],addresses:[{address:side==='left'?'192.0.2.10':'192.0.2.11',stability:m.AddressStability.STABLE,state:m.AddressState.PREFERRED}],addressesComplete:true}
+        ]});
+        const prepared=await rpc({oneofKind:'hostImport',hostImport:m.HostImport.create({source:`Shared native label ${width}`,report,selection:report.findings.map(v=>({key:v.key}))})});
+        const accepted=await rpc({oneofKind:'hostImport',hostImport:m.HostImport.create({preview:prepared.preview.id})});targets.push(accepted.mutation.targets);
+      }
+      await page.setViewportSize({width,height:900});await page.goto(`${server.url}/#/?view=2&search=${encodeURIComponent(prefix)}`);
+      for(const side of ['left','right'])await page.getByRole('checkbox',{name:`Select ${prefix} ${side}`,exact:true}).check();
+      await page.getByRole('button',{name:'Compare identity',exact:true}).click();const dialog=page.getByRole('dialog');
+      await dialog.getByRole('button',{name:'Plan identity correction',exact:true}).click();await dialog.getByRole('radio',{name:'Duplicate records of the same hardware and installation',exact:true}).check();await dialog.getByRole('button',{name:'Continue',exact:true}).click();
+      await dialog.getByRole('combobox',{name:'Retained identity',exact:true}).selectOption('left');await dialog.getByRole('button',{name:'Keep all retained field values',exact:true}).click();
+      await dialog.getByText('Add an installation or interface mapping',{exact:true}).click();
+      for(const [index,kind,name] of [[2,m.AssetKind.SOFTWARE_INSTALLATION,'OS'],[3,m.AssetKind.INTERFACE,'NIC']]) {
+        await dialog.getByRole('combobox',{name:'Layer',exact:true}).selectOption(String(kind));await dialog.getByRole('button',{name:'Find layer resources',exact:true}).click();
+        for(const [side,action] of [['right','Use as duplicate'],['left','Use as retained']])await dialog.locator('li').filter({hasText:`${prefix} ${name} ${side}`}).getByRole('button',{name:action,exact:true}).click();
+        await dialog.getByRole('button',{name:'Add layer mapping',exact:true}).click();
+        await dialog.getByRole('region',{name:`Layer mapping ${index}`,exact:true}).getByRole('button',{name:'Keep all retained field values',exact:true}).click();
+      }
+      await dialog.getByRole('button',{name:'Prepare correction preview',exact:true}).click();await expect(dialog.getByRole('heading',{name:'Review identity correction',exact:true})).toBeVisible();await dialog.getByRole('button',{name:'Accept identity correction',exact:true}).click();await expect(dialog.getByRole('heading',{name:'Correction applied',exact:true})).toBeVisible();
+      const current=await rpc({oneofKind:'read',read:m.Read.create({target:targets[0][2]})});expect(current.detail.currentAddresses).toHaveLength(2);expect(new Set(current.detail.currentAddresses.map(v=>v.sourceId)).size).toBe(2);
+      expect(current.detail.currentAddresses.flatMap(v=>v.observations.map(v=>v.value.address)).sort()).toEqual(['192.0.2.10','192.0.2.11']);
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+      await dialog.getByRole('button',{name:'Reverse this correction',exact:true}).click();await expect(dialog.getByRole('heading',{name:'Correction reversed',exact:true})).toBeVisible();await dialog.getByRole('button',{name:'Close',exact:true}).click();
+      for(const target of targets){const restored=await rpc({oneofKind:'read',read:m.Read.create({target:target[2]})});expect(restored.detail.currentAddresses).toHaveLength(1);}
     }
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
 });

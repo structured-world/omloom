@@ -188,6 +188,12 @@ impl Tx<'_> {
                 }
             }
             let prior = old.as_ref().map(super::super::target).transpose()?;
+            let projection_source = old
+                .as_ref()
+                .and_then(|row| row.get("namespace"))
+                .and_then(Value::as_str)
+                .unwrap_or(&request.source)
+                .to_owned();
             let declared_kind = explicit.kind;
             if declared_kind.is_some()
                 && (node.kind != wire::AssetKind::Unspecified as i32 || explicit.target.is_some())
@@ -317,20 +323,17 @@ impl Tx<'_> {
                 if !context.field(target, node.kind, "current_addresses", true) {
                     return Err(Error::Denied);
                 }
-                addresses = self.address_delta(
+                addresses = self.accept_native_addresses(
                     context,
-                    target,
-                    &request.source,
-                    &node.addresses,
-                    node.addresses_complete,
+                    &api::InterfaceAddresses {
+                        interface: Some(target_wire(target)),
+                        source: projection_source.clone(),
+                        observed_at: report.observed_at,
+                        addresses: node.addresses.clone(),
+                        complete: node.addresses_complete,
+                    },
+                    &key,
                 )?;
-                self.accept_addresses(&api::InterfaceAddresses {
-                    interface: Some(target_wire(target)),
-                    source: request.source.clone(),
-                    observed_at: report.observed_at,
-                    addresses: node.addresses.clone(),
-                    complete: node.addresses_complete,
-                })?;
             }
             self.accept_host_identity(
                 context,
@@ -338,7 +341,7 @@ impl Tx<'_> {
                 kind,
                 super::host_identity::Source {
                     mapping: &key,
-                    name: &request.source,
+                    name: &projection_source,
                     observed: report.observed_at,
                     boot: &report.boot_basis,
                 },
@@ -346,6 +349,9 @@ impl Tx<'_> {
             )?;
             let mut data = target_props(target);
             data.insert("source".into(), text(&request.source));
+            if projection_source != request.source {
+                data.insert("namespace".into(), text(&projection_source));
+            }
             // One current checkpoint fences stale replay and same-instant
             // equivocation; it does not retain another report or field history.
             data.insert("observed".into(), int(report.observed_at)?);
@@ -376,6 +382,18 @@ impl Tx<'_> {
         if let Some(installation) = resolved.get("installation")
             && let Some(source) = &report.network
         {
+            let metadata = self
+                .get(&mapping(
+                    &context.actor,
+                    &request.source,
+                    &report.source_basis,
+                    "installation",
+                ))?
+                .ok_or(Error::Corrupt)?;
+            let projection_source = metadata
+                .get("namespace")
+                .and_then(Value::as_str)
+                .unwrap_or(&request.source);
             let mut network = source.clone();
             network.installation = Some(target_wire(*installation));
             network.observed_at = report.observed_at;
@@ -425,7 +443,7 @@ impl Tx<'_> {
                     api::HostNetworkPart::ApplicationFirewall => "application-fw",
                     _ => return Err(Error::Invalid),
                 };
-                selected.source = format!("{} / {suffix}", request.source);
+                selected.source = format!("{projection_source} / {suffix}");
                 if part != api::HostNetworkPart::Sockets {
                     selected.sockets.clear();
                     selected.sockets_complete = false;
@@ -449,7 +467,13 @@ impl Tx<'_> {
                         "Not selected for this projection source".into();
                 }
                 network_facts::validate(&selected)?;
-                self.accept_network(&selected)?;
+                let base = mapping(
+                    &context.actor,
+                    &request.source,
+                    &report.source_basis,
+                    "installation",
+                );
+                self.accept_native_network(&selected, &format!("{base}/{suffix}"), &base)?;
             }
         }
         Ok(rows)

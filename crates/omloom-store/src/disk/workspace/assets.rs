@@ -1780,7 +1780,7 @@ impl Tx<'_> {
             }
         }
     }
-    fn workspace_remove(
+    pub(super) fn workspace_remove(
         &mut self,
         context: &Context,
         target: AssetRef,
@@ -1793,10 +1793,7 @@ impl Tx<'_> {
         let key = asset_key(target);
         // Existing operation/retirement code owns uncertain effects and identity fences.
         self.require_no_account_references(target)?;
-        let pending = self.query("MATCH (n:OmRow) WHERE n.parent='operations' AND n.class=$class AND n.asset=$asset AND n.incarnation=$incarnation RETURN properties(n) AS p LIMIT 1",params([("class", int(Class::Pending as u64)?), ("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string()))]))?;
-        if !pending.is_empty() {
-            return Err(Error::UnsafeTransition);
-        }
+        self.require_no_pending_operations(target)?;
         let linked = self.query("MATCH (n:OmRow) WHERE n.parent='relations' AND (n.asset=$asset OR n.to_asset=$asset) RETURN properties(n) AS p LIMIT 1",params([("asset", text(target.asset.to_string()))]))?;
         if !linked.is_empty() {
             return Err(Error::Conflict);

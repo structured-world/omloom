@@ -8,10 +8,11 @@ use std::collections::BTreeSet;
 mod accounts;
 mod addresses;
 mod assets;
+mod correction;
 mod current_facts;
 mod definitions;
 mod exchange;
-mod host_identity;
+pub(super) mod host_identity;
 mod host_import;
 mod interface_facts;
 mod network;
@@ -19,6 +20,7 @@ pub(super) mod network_facts;
 mod projection;
 mod responsibility;
 mod software;
+mod source_layout;
 mod views;
 mod working;
 
@@ -308,6 +310,22 @@ impl Store {
                 now,
             ),
             C::CompareHostIdentity(value) => self.workspace_compare_host_identity(
+                context,
+                value,
+                working.as_ref().ok_or(Error::Invalid)?,
+            ),
+            C::CorrectIdentity(value) => self.workspace_correct_identity(
+                context,
+                value,
+                working.as_ref().ok_or(Error::Invalid)?,
+                now,
+            ),
+            C::FindIdentityCandidates(value) => self.workspace_identity_candidates(
+                context,
+                value,
+                working.as_ref().ok_or(Error::Invalid)?,
+            ),
+            C::ResolveIdentity(value) => self.workspace_resolve_identity(
                 context,
                 value,
                 working.as_ref().ok_or(Error::Invalid)?,

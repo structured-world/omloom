@@ -1,7 +1,7 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
-fn draft() -> api::HostImport {
+pub(super) fn draft() -> api::HostImport {
     api::HostImport {
         source: "Native fixture".into(),
         report: Some(Box::new(api::HostReport {
@@ -189,6 +189,7 @@ fn host_identity_comparison_is_read_only_and_checks_both_subjects() -> TestResul
     let pair = api::CompareHostIdentity {
         left: Some(accepted.targets[0].clone()),
         right: Some(accepted.targets[1].clone()),
+        include_relations: false,
     };
     let before = store.usage()?;
     let Reply::HostIdentityComparison(value) = call(
@@ -401,13 +402,13 @@ fn host_address_preview_is_a_source_local_delta_without_identity_changes() -> Te
     assert_eq!(detail(&store, service)?.host_network, listener);
     Ok(())
 }
-fn preview(store: &Store, request: api::HostImport) -> Result<api::Preview, Error> {
+pub(super) fn preview(store: &Store, request: api::HostImport) -> Result<api::Preview, Error> {
     let Reply::Preview(value) = call(store, &operator(), Command::HostImport(request))? else {
         return Err(Error::Corrupt);
     };
     Ok(value)
 }
-fn accept(store: &Store, preview: &api::Preview) -> Result<api::Mutation, Error> {
+pub(super) fn accept(store: &Store, preview: &api::Preview) -> Result<api::Mutation, Error> {
     let Reply::Mutation(value) = call(
         store,
         &operator(),

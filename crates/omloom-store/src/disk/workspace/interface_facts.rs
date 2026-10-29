@@ -42,18 +42,34 @@ pub(super) fn validate_address(value: &api::CurrentAddress) -> Result<()> {
 }
 
 impl Tx<'_> {
-    pub(super) fn address_delta(
+    pub(super) fn native_address_delta(
+        &self,
+        context: &Context,
+        value: &api::InterfaceAddresses,
+        binding: &str,
+    ) -> Result<Option<api::AddressDelta>> {
+        self.address_delta_owned(
+            context,
+            parse_target(value.interface.as_ref())?,
+            &value.source,
+            &value.addresses,
+            value.complete,
+            Some(binding),
+        )
+    }
+    fn address_delta_owned(
         &self,
         context: &Context,
         target: AssetRef,
         source: &str,
         incoming: &[api::CurrentAddress],
         complete: bool,
+        binding: Option<&str>,
     ) -> Result<Option<api::AddressDelta>> {
         if !context.field(target, wire::AssetKind::Interface as i32, FIELD, false) {
             return Ok(None);
         }
-        let key = source_key(target, source);
+        let key = source_layout::Family::Addresses.key(target, source, binding);
         let mut prior = BTreeMap::new();
         for row in self.fact_rows(&format!("{key}/values"), LIMIT)? {
             let value = api::CurrentAddress::decode(binary(&row, "payload")?)
@@ -82,9 +98,33 @@ impl Tx<'_> {
     }
 
     pub(super) fn accept_addresses(&mut self, value: &api::InterfaceAddresses) -> Result<()> {
+        self.accept_addresses_owned(value, None)
+    }
+    pub(super) fn accept_native_addresses(
+        &mut self,
+        context: &Context,
+        value: &api::InterfaceAddresses,
+        binding: &str,
+    ) -> Result<Option<api::AddressDelta>> {
+        self.native_source(
+            parse_target(value.interface.as_ref())?,
+            &value.source,
+            binding,
+            binding,
+            source_layout::Family::Addresses,
+        )?;
+        let delta = self.native_address_delta(context, value, binding)?;
+        self.accept_addresses_owned(value, Some(binding))?;
+        Ok(delta)
+    }
+    fn accept_addresses_owned(
+        &mut self,
+        value: &api::InterfaceAddresses,
+        binding: Option<&str>,
+    ) -> Result<()> {
         let target = parse_target(value.interface.as_ref())?;
         let parent = source_parent(target);
-        let key = source_key(target, &value.source);
+        let key = source_layout::Family::Addresses.key(target, &value.source, binding);
         let sources = self.fact_rows(&parent, current_facts::MAX_SOURCES)?;
         let old = self.get(&key)?;
         if old.is_none() && sources.len() >= current_facts::MAX_SOURCES {
@@ -141,20 +181,18 @@ impl Tx<'_> {
         if other + count as u64 > LIMIT as u64 {
             return Err(Error::Limit);
         }
-        self.put_projection(
-            &key,
-            &parent,
-            Class::Inventory,
-            props([
-                ("layer", text("address-source")),
-                ("source", text(&value.source)),
-                ("observed", int(value.observed_at)?),
-                ("vflag", Value::Bool(value.complete)),
-                ("count", int(count as u64)?),
-                ("digest", Value::Binary(digest)),
-            ]),
-            old.as_ref(),
-        )?;
+        let mut metadata = props([
+            ("layer", text("address-source")),
+            ("source", text(&value.source)),
+            ("observed", int(value.observed_at)?),
+            ("vflag", Value::Bool(value.complete)),
+            ("count", int(count as u64)?),
+            ("digest", Value::Binary(digest)),
+        ]);
+        if let Some(binding) = binding {
+            metadata.insert("binding".into(), text(binding));
+        }
+        self.put_projection(&key, &parent, Class::Inventory, metadata, old.as_ref())?;
         Ok(())
     }
 
@@ -193,6 +231,9 @@ impl Tx<'_> {
                     .cmp(&b.value.as_ref().map(|a| &a.address))
             });
             result.push(api::InterfaceAddressView {
+                source_id: string(&meta, "key")?,
+                binding_unresolved: meta.get("source_revision")
+                    == Some(&text("unresolved-native-binding")),
                 coverage: Some(api::InterfaceAddresses {
                     interface: Some(target_wire(target)),
                     source: string(&meta, "source")?,

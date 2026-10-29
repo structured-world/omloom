@@ -10,6 +10,8 @@ use support::*;
 mod accounts;
 #[path = "workspace/contexts.rs"]
 mod contexts;
+#[path = "workspace/correction.rs"]
+mod correction;
 #[path = "workspace/definitions.rs"]
 mod definitions;
 #[path = "workspace/exchange.rs"]

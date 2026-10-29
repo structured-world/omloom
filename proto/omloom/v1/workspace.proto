@@ -520,6 +520,10 @@ message InterfaceAddressView {
   InterfaceAddresses coverage = 1;
   // Current facts with independent dates, including facts omitted from a partial refresh.
   repeated AddressObservation observations = 2;
+  // Opaque local source reference, independent of a possibly duplicated display label.
+  string source_id = 3;
+  // True when legacy facts could not be attributed to one reviewed native binding.
+  bool binding_unresolved = 4;
 }
 message NetworkObservation {
   // Exact source observation time, Unix milliseconds, independent of the latest scan checkpoint.
@@ -545,6 +549,10 @@ message HostNetworkView {
   repeated NetworkObservation observations = 2;
   // Authorized current labels for services referenced by these facts, independent of relation pagination.
   repeated OwnerContext services = 3;
+  // Opaque local source reference, independent of its display label.
+  string source_id = 4;
+  // True when migrated current facts have unresolved native source provenance.
+  bool binding_unresolved = 5;
 }
 message FirewallSetting {
   // Reported application policy selector; never an effective per-port verdict.
@@ -966,6 +974,8 @@ message CompareHostIdentity {
   // Second explicitly selected accepted resource incarnation in the same
   // authorized working context. Comparison itself changes no identity.
   omloom.v1.AssetRef right = 2;
+  // Explicit expansion of bounded affected relation metadata for correction planning.
+  bool include_relations = 3;
 }
 message HostIdentitySubject {
   // Current accepted fields that the caller may read, without descendants,
@@ -973,6 +983,10 @@ message HostIdentitySubject {
   Item item = 1;
   // Current permitted source claims with their original evidence windows.
   repeated HostIdentityObservation identity = 2;
+  // Permitted current source labels; no source payloads or hidden counts.
+  repeated string sources = 3;
+  // Selected relation metadata, only when explicitly requested and both ends visible.
+  repeated omloom.v1.Relation relations = 4;
 }
 message HostIdentityComparison {
   // Server-selected consistent application revision for both subjects.
@@ -981,6 +995,99 @@ message HostIdentityComparison {
   HostIdentitySubject left = 2;
   // Authorized second resource and selected identity evidence.
   HostIdentitySubject right = 3;
+}
+message FindIdentityCandidates {
+  // Selected current subject whose permitted claims supply exact indexed probes.
+  omloom.v1.AssetRef target = 1;
+  // Source claims supplied for explicit pre-adoption lookup, at most four.
+  // Mutually exclusive with target; matching never adopts or authenticates a host.
+  repeated HostIdentityClaim claims = 2;
+  // User-reviewed subject layer for claims-only lookup; absent when target is set.
+  omloom.v1.AssetKind kind = 3;
+}
+message IdentityCandidates {
+  // Bounded visible same-layer subjects; a match is evidence, never a merge.
+  repeated Item items = 1;
+}
+message ResolveIdentity {
+  // Original retired local reference. Resolution is read-only, never an effect target.
+  omloom.v1.AssetRef original = 1;
+}
+message ResolvedIdentity {
+  // Original reference retained for provenance in the UI.
+  omloom.v1.AssetRef original = 1;
+  // Current canonical resource with current rights applied independently.
+  Item canonical = 2;
+}
+enum IdentityDecision {
+  IDENTITY_DECISION_UNSPECIFIED = 0;
+  IDENTITY_DECISION_KEEP_SEPARATE = 1;
+  IDENTITY_DECISION_DISTINCT_INSTALLATIONS = 2;
+  IDENTITY_DECISION_DUPLICATE_INSTALLATION = 3;
+}
+message IdentityFieldChoice {
+  // Exact accepted field being resolved on the selected duplicate.
+  string name = 1;
+  // Explicit choice to use the duplicate's value instead of the retained value.
+  bool use_duplicate = 2;
+}
+message IdentitySourceChoice {
+  // Existing label group on this duplicate, shown by the server. A rename
+  // applies to all bindings with this label, without combining their data.
+  string before = 1;
+  // Reviewed display label after relocation; native binding identity is unchanged.
+  string after = 2;
+}
+message IdentityMapping {
+  // Explicitly selected duplicate incarnation to retire, never inferred from IP.
+  omloom.v1.AssetRef duplicate = 1;
+  // Existing canonical incarnation to retain at the same subject layer.
+  omloom.v1.AssetRef retained = 2;
+  // Explicit decisions for every field on the retiring identity, at most 32.
+  repeated IdentityFieldChoice fields = 3;
+  // Optional label changes, at most eight. Unbound source name collisions are refused;
+  // native sources retain independent bindings even when labels are identical.
+  repeated IdentitySourceChoice sources = 4;
+  // Individually confirmed physical attachment relation UUIDs, at most 128.
+  repeated string attachments = 5;
+}
+message IdentityCorrection {
+  // Operator conclusion; equality of identifiers never supplies this decision.
+  IdentityDecision decision = 1;
+  // Selected layer mappings, at most eight; never an instruction to merge descendants.
+  repeated IdentityMapping mappings = 2;
+  // Exact bounded preview to accept; mappings/decision must be absent on apply.
+  optional string preview = 3;
+  // Exact accepted correction to reverse within its window, after fresh checks.
+  optional string undo = 4;
+}
+message IdentityImpact {
+  // Existing relation before the proposed correction.
+  omloom.v1.Relation before = 1;
+  // Proposed relation; absent means an explicitly redundant/self attachment is removed.
+  optional omloom.v1.Relation after = 2;
+}
+message IdentityCorrectionView {
+  // Server-owned review identifier; no mutation has yet been accepted.
+  string id = 1;
+  // Installation revision fencing the complete reviewed change.
+  uint64 revision = 2;
+  // Selected explicit mappings, preserving the operator's field/source decisions.
+  repeated IdentityMapping mappings = 3;
+  // Bounded affected relations only, without loading descendant payloads.
+  repeated IdentityImpact relations = 4;
+  // Server-declared expiry of this preview in Unix milliseconds.
+  uint64 expires_at = 5;
+}
+message IdentityCorrectionApplied {
+  // Actual application revision after this correction or its explicit inverse.
+  uint64 revision = 1;
+  // Server-owned correction identifier for the bounded inverse window.
+  string id = 2;
+  // Expiry of the inverse window in Unix milliseconds; zero after reversal.
+  uint64 undo_until = 3;
+  // Canonical identities affected by the accepted operator decision.
+  repeated omloom.v1.AssetRef retained = 4;
 }
 message HostBind {
   // Source-local service candidate owning this observed bind. Empty means the
@@ -1278,6 +1385,12 @@ message Request {
     HostImport host_import = 27;
     // Compare two selected identities without adopting, merging or writing.
     CompareHostIdentity compare_host_identity = 28;
+    // Preview/apply/reverse an explicit bounded identity correction.
+    IdentityCorrection correct_identity = 29;
+    // Find bounded identity candidates within current permissions and working context.
+    FindIdentityCandidates find_identity_candidates = 30;
+    // Resolve a retired reference without transferring its old grants.
+    ResolveIdentity resolve_identity = 31;
   }
 }
 message Reply {
@@ -1315,5 +1428,13 @@ message Reply {
     ResponsibilityTransferState responsibility_transfer = 15;
     // Consistent bounded comparison, not a correction or authority grant.
     HostIdentityComparison host_identity_comparison = 16;
+    // Derived correction effects under current field and relation rights.
+    IdentityCorrectionView identity_correction = 17;
+    // Accepted correction receipt, not a grant or an external effect receipt.
+    IdentityCorrectionApplied identity_corrected = 18;
+    // Current authorized candidates; no hidden totals or candidate persistence.
+    IdentityCandidates identity_candidates = 19;
+    // Explicit reference provenance and the independently authorized current target.
+    ResolvedIdentity resolved_identity = 20;
   }
 }

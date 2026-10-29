@@ -630,6 +630,25 @@ impl Tx<'_> {
         actor: &str,
         now: u64,
     ) -> Result<u64> {
+        self.save_relation_inner(relation, expected, actor, now, false)
+    }
+    pub(super) fn save_rebound_relation(
+        &mut self,
+        relation: &wire::Relation,
+        expected: u64,
+        actor: &str,
+        now: u64,
+    ) -> Result<u64> {
+        self.save_relation_inner(relation, Some(expected), actor, now, true)
+    }
+    fn save_relation_inner(
+        &mut self,
+        relation: &wire::Relation,
+        expected: Option<u64>,
+        actor: &str,
+        now: u64,
+        detached: bool,
+    ) -> Result<u64> {
         let from = AssetRef::try_from(relation.from.as_ref().ok_or(Error::Invalid)?)
             .map_err(|_| Error::Invalid)?;
         let to = AssetRef::try_from(relation.to.as_ref().ok_or(Error::Invalid)?)
@@ -701,13 +720,16 @@ impl Tx<'_> {
             self.bind_container_runtime(from, Some(to))?;
         }
         data.insert("revision".into(), int(revision)?);
-        let source_changed = old.as_ref().is_none_or(|p| {
-            p.get("asset") != data.get("asset") || p.get("incarnation") != data.get("incarnation")
-        });
-        let target_changed = old.as_ref().is_none_or(|p| {
-            p.get("to_asset") != data.get("to_asset")
-                || p.get("to_incarnation") != data.get("to_incarnation")
-        });
+        let source_changed = detached
+            || old.as_ref().is_none_or(|p| {
+                p.get("asset") != data.get("asset")
+                    || p.get("incarnation") != data.get("incarnation")
+            });
+        let target_changed = detached
+            || old.as_ref().is_none_or(|p| {
+                p.get("to_asset") != data.get("to_asset")
+                    || p.get("to_incarnation") != data.get("to_incarnation")
+            });
         self.put_against(&key, "relations", Class::Inventory, data, old.as_ref())?;
         if source_changed {
             if old.is_some() {

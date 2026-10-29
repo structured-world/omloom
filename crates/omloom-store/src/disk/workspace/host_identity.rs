@@ -4,6 +4,32 @@ use super::*;
 
 const MAX_CLAIMS: usize = 4;
 const FIELD: &str = "identity_evidence";
+fn lookup(claim: &api::HostIdentityClaim) -> String {
+    format!("{}/{}/{}", claim.kind, claim.namespace, claim.digest)
+}
+pub(in crate::disk) fn upgrade(store: &Store) -> Result<()> {
+    let mut after = String::new();
+    loop {
+        let mut tx = store.begin()?;
+        let rows=tx.query("MATCH (n:OmRow {class:0}) WHERE n.key>$after AND n.parent ENDS WITH '/identity-evidence' RETURN properties(n) AS p ORDER BY n.key LIMIT 128",params([("after",text(&after))]))?;
+        if rows.is_empty() {
+            tx.commit()?;
+            return Ok(());
+        }
+        for old in rows {
+            let key = string(&old, "key")?;
+            let parent = string(&old, "parent")?;
+            let claim = api::HostIdentityClaim::decode(binary(&old, "payload")?)
+                .map_err(|_| Error::Corrupt)?;
+            let mut data = old.clone();
+            operations::strip_envelope(&mut data);
+            data.insert("claim".into(), text(lookup(&claim)));
+            tx.put_projection(&key, &parent, Class::Inventory, data, Some(&old))?;
+            after = key;
+        }
+        tx.commit()?;
+    }
+}
 
 pub(super) fn parent(target: AssetRef) -> String {
     format!(
@@ -111,6 +137,7 @@ impl Tx<'_> {
                 ("observed", int(source.observed)?),
                 ("vtext", text(source.boot)),
                 ("payload", Value::Binary(payload)),
+                ("claim", text(lookup(claim))),
             ]));
             self.put_projection(&key, &parent, Class::Inventory, data, old.as_ref())?;
         }
@@ -180,11 +207,162 @@ impl Tx<'_> {
                 fields,
             }),
             identity: self.host_identity(context, target, kind)?,
+            sources: Vec::new(),
+            relations: Vec::new(),
         })
     }
 }
 
 impl Store {
+    pub(super) fn workspace_resolve_identity(
+        &self,
+        context: &Context,
+        request: api::ResolveIdentity,
+        working: &api::WorkingContext,
+    ) -> Result<api::Reply> {
+        let original = parse_target(request.original.as_ref())?;
+        let mut current = original;
+        let tx = self.begin()?;
+        let mut seen = BTreeSet::new();
+        for _ in 0..8 {
+            if !seen.insert(current) {
+                return Err(Error::Corrupt);
+            }
+            if let Some(row) = tx.get(&asset_key(current))? {
+                if super::super::target(&row)? != current {
+                    return Err(Error::Conflict);
+                }
+                let mut selector = working.clone();
+                for root in &mut selector.roots {
+                    if root == &target_wire(original) {
+                        *root = target_wire(current);
+                    }
+                }
+                if selector.focus.as_ref() == Some(&target_wire(original)) {
+                    selector.focus = Some(target_wire(current));
+                }
+                tx.selection(context, &selector, false)?
+                    .contains(current, &tx)?;
+                let item = tx.identity_subject(context, current)?.item;
+                if original != current
+                    && !context.readable(original, item.as_ref().ok_or(Error::Corrupt)?.kind)
+                {
+                    return Err(Error::Denied);
+                }
+                tx.commit()?;
+                return Ok(reply(api::reply::Result::ResolvedIdentity(
+                    api::ResolvedIdentity {
+                        original: Some(target_wire(original)),
+                        canonical: item,
+                    },
+                )));
+            }
+            let fence = tx
+                .get(&format!("removed/{}", current.asset))?
+                .ok_or(Error::Missing)?;
+            if !fence.contains_key("to_asset") {
+                return Err(Error::Missing);
+            }
+            if super::super::target(&fence)? != current {
+                return Err(Error::Conflict);
+            }
+            current = AssetRef {
+                asset: string(&fence, "to_asset")?
+                    .parse()
+                    .map_err(|_| Error::Corrupt)?,
+                incarnation: string(&fence, "to_incarnation")?
+                    .parse()
+                    .map_err(|_| Error::Corrupt)?,
+            };
+        }
+        Err(Error::Limit)
+    }
+    pub(super) fn workspace_identity_candidates(
+        &self,
+        context: &Context,
+        request: api::FindIdentityCandidates,
+        working: &api::WorkingContext,
+    ) -> Result<api::Reply> {
+        let tx = self.begin()?;
+        let selection = tx.selection(context, working, false)?;
+        let (target, kind, claims) = if let Some(reference) = &request.target {
+            if !request.claims.is_empty() || request.kind != 0 {
+                return Err(Error::Invalid);
+            }
+            let target = parse_target(Some(reference))?;
+            selection.contains(target, &tx)?;
+            let row = tx.visible_asset(context, target)?;
+            let kind = number(&row, "kind")? as i32;
+            (
+                Some(target),
+                kind,
+                tx.host_identity(context, target, kind)?
+                    .into_iter()
+                    .filter_map(|v| v.claim)
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            if request.claims.is_empty()
+                || !matches!(
+                    wire::AssetKind::try_from(request.kind),
+                    Ok(wire::AssetKind::Device
+                        | wire::AssetKind::VirtualMachine
+                        | wire::AssetKind::SoftwareInstallation
+                        | wire::AssetKind::Interface)
+                )
+            {
+                return Err(Error::Invalid);
+            }
+            validate(&api::HostFinding {
+                kind: request.kind,
+                identity: request.claims.clone(),
+                ..Default::default()
+            })?;
+            (None, request.kind, request.claims)
+        };
+        let mut values = HashMap::from([
+            (
+                "claims".into(),
+                Value::Array(claims.iter().map(|v| text(lookup(v))).collect()),
+            ),
+            (
+                "excluded".into(),
+                Value::Array(target.into_iter().map(|v| text(asset_key(v))).collect()),
+            ),
+            ("kind".into(), Value::Int(kind as i64)),
+            (
+                "adopted".into(),
+                Value::Int(wire::Adoption::Adopted as i32 as i64),
+            ),
+        ]);
+        let visible = assets::visible_clause_for(context, Some(FIELD), &mut values, "a");
+        let readable = assets::visible_clause_for(context, None, &mut values, "a");
+        let rows=tx.query(&format!("UNWIND $claims AS claim MATCH (n:OmRow {{claim:claim}}) MATCH (a:OmRow {{key:'asset/'+n.asset}}) WHERE NOT a.key IN $excluded AND a.kind=$kind AND a.incarnation=n.incarnation AND n.parent=a.key+'/'+a.incarnation+'/identity-evidence' AND a.adoption=$adopted AND {visible} AND {readable} RETURN DISTINCT properties(a) AS p LIMIT 129"),Some(values))?;
+        if rows.len() > 128 {
+            return Err(Error::Limit);
+        }
+        let mut items = Vec::new();
+        for row in rows {
+            let candidate = super::super::target(&row)?;
+            match selection.contains(candidate, &tx) {
+                Ok(()) => {}
+                Err(Error::Denied) => continue,
+                Err(error) => return Err(error),
+            }
+            let item = tx
+                .identity_subject(context, candidate)?
+                .item
+                .ok_or(Error::Corrupt)?;
+            if items.len() == 25 {
+                return Err(Error::Limit);
+            }
+            items.push(item);
+        }
+        tx.commit()?;
+        Ok(reply(api::reply::Result::IdentityCandidates(
+            api::IdentityCandidates { items },
+        )))
+    }
     pub(super) fn workspace_compare_host_identity(
         &self,
         context: &Context,
@@ -201,11 +379,82 @@ impl Store {
         let selection = tx.selection(context, working, false)?;
         selection.contains(left, &tx)?;
         selection.contains(right, &tx)?;
-        let comparison = api::HostIdentityComparison {
+        let mut comparison = api::HostIdentityComparison {
             revision,
             left: Some(tx.identity_subject(context, left)?),
             right: Some(tx.identity_subject(context, right)?),
         };
+        if value.include_relations {
+            for subject in [&mut comparison.left, &mut comparison.right]
+                .into_iter()
+                .flatten()
+            {
+                let item = subject.item.as_ref().ok_or(Error::Corrupt)?;
+                let target = parse_target(item.target.as_ref())?;
+                let mut sources = BTreeSet::new();
+                if context.field(target, item.kind, "identity_evidence", false) {
+                    for row in tx.fact_rows(&format!("{}/host-mappings", asset_key(target)), 128)? {
+                        sources.insert(
+                            row.get("namespace")
+                                .and_then(Value::as_str)
+                                .unwrap_or(&string(&row, "source")?)
+                                .to_owned(),
+                        );
+                    }
+                }
+                for (family, field) in [
+                    ("address-sources", "current_addresses"),
+                    ("network-sources", "network_evidence"),
+                ] {
+                    if context.field(target, item.kind, field, false) {
+                        for row in tx.fact_rows(
+                            &format!("{}/{}/{family}", asset_key(target), target.incarnation),
+                            8,
+                        )? {
+                            sources.insert(string(&row, "source")?);
+                        }
+                    }
+                }
+                subject.sources = sources
+                    .iter()
+                    .filter(|source| {
+                        !sources
+                            .iter()
+                            .any(|base| source.starts_with(&format!("{base} / ")))
+                    })
+                    .cloned()
+                    .collect();
+                if context.field(target, item.kind, "relations", false) {
+                    for relation in tx.working_relations(target)? {
+                        let from = parse_target(relation.from.as_ref())?;
+                        let to = parse_target(relation.to.as_ref())?;
+                        let a = tx.asset(from)?;
+                        let b = tx.asset(to)?;
+                        if !context.field(from, number(&a, "kind")? as i32, "relations", false)
+                            || !context.field(to, number(&b, "kind")? as i32, "relations", false)
+                            || !context.readable(from, number(&a, "kind")? as i32)
+                            || !context.readable(to, number(&b, "kind")? as i32)
+                        {
+                            continue;
+                        }
+                        let mut in_scope = true;
+                        for endpoint in [from, to] {
+                            match selection.contains(endpoint, &tx) {
+                                Ok(()) => {}
+                                Err(Error::Denied) => {
+                                    in_scope = false;
+                                    break;
+                                }
+                                Err(error) => return Err(error),
+                            }
+                        }
+                        if in_scope {
+                            subject.relations.push(relation);
+                        }
+                    }
+                }
+            }
+        }
         tx.commit()?;
         if self.usage()?.revision != revision {
             return Err(Error::Expired);

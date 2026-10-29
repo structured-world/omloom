@@ -67,6 +67,17 @@ async function matchScope(candidate:string){
     match(candidate,response.detail.item);
   }catch(e){if(generation===matchGeneration)error.value=String(e);}
 }
+async function identityMatches(item:model.HostFinding){
+  const generation=++matchGeneration;matching.value=item.key;choices.value=[];next.value=undefined;error.value='';
+  try {
+    const kind=unclassified(item)?hostKind.value:item.kind;
+    if(!kind)throw Error('Choose the hardware subject type before comparing its claims.');
+    const response=await call({oneofKind:'findIdentityCandidates',findIdentityCandidates:model.FindIdentityCandidates.create({claims:item.identity,kind})},props.working);
+    if(generation!==matchGeneration)return;
+    if(response.oneofKind!=='identityCandidates')throw Error('Identity candidates are unavailable.');choices.value=response.identityCandidates.items;
+    if(!choices.value.length)error.value='No comparable candidates in this selection. Missing evidence does not establish a new identity.';
+  }catch(e){if(generation===matchGeneration)error.value=String(e);}
+}
 </script>
 <template><Dialog title="Import host observations" @close="emit('close')"><form @submit.prevent="prepare(false)">
 <p>Review current facts from an explicitly collected file. Nothing is adopted until you accept the preview. Select required parents with their components.</p>
@@ -88,6 +99,8 @@ async function matchScope(candidate:string){
 <ul v-if="report.binds.some(v=>v.owner===item.key)"><li v-for="(bind,index) in report.binds.filter(v=>v.owner===item.key)" :key="index">{{ bind.value?.protocol }} {{ bind.value?.family }} {{ bind.value?.bind }}:{{ bind.value?.port }}</li></ul>
 <p v-if="matches.has(item.key)">Existing match: {{ matches.get(item.key)?.name }}</p><p v-else>New adoption or previously reviewed source mapping</p>
 <button type="button" @click="search=''; find(item.key)">Match existing resource</button>
+<button v-if="item.identity.length" type="button" @click="identityMatches(item)">Find candidates by reported identifiers</button>
+<p v-if="matching===item.key&&item.identity.length">Candidates share this subject layer and at least one reported identifier. Cloned or movable identifiers are not proof. Choose a match only after review.</p>
 <button v-if="unclassified(item)&&(working.focus||working.roots.length===1)" type="button" @click="matchScope(item.key)">Use current device or VM scope</button>
 <button v-if="matches.has(item.key)" type="button" @click="matches.delete(item.key); preview=undefined">Clear match</button>
 <section v-if="matching===item.key"><label>Find existing resource<input v-model="search" @input="find(item.key)"></label>
