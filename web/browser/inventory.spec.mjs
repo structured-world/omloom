@@ -239,7 +239,19 @@ test('duplicate installation review maps only selected layers on desktop and pho
         await dialog.getByRole('button',{name:'Add layer mapping',exact:true}).click();
         await dialog.getByRole('region',{name:`Layer mapping ${index}`,exact:true}).getByRole('button',{name:'Keep all retained field values',exact:true}).click();
       }
-      await dialog.getByRole('button',{name:'Prepare correction preview',exact:true}).click();await expect(dialog.getByRole('heading',{name:'Review identity correction',exact:true})).toBeVisible();await dialog.getByRole('button',{name:'Accept identity correction',exact:true}).click();await expect(dialog.getByRole('heading',{name:'Correction applied',exact:true})).toBeVisible();
+      // Final approval must show the actual field values and source decisions at every layer.
+      await dialog.getByRole('region',{name:'Layer mapping 1',exact:true}).getByRole('textbox').first().fill(`Renamed hardware ${width}`);
+      await dialog.getByRole('button',{name:'Prepare correction preview',exact:true}).click();
+      await expect(dialog.getByRole('heading',{name:'Review identity correction',exact:true})).toBeVisible();
+      for(const [index,suffix] of [[1,''],[2,' OS'],[3,' NIC']]) {
+        const summary=dialog.getByRole('region',{name:`Final layer review ${index}`,exact:true});
+        await expect(summary.getByText(`name: keep retained value: ${prefix}${suffix} left`,{exact:true})).toBeVisible();
+        await expect(summary.getByText('Confirmed physical attachments: 0',{exact:true})).toBeVisible();
+      }
+      await expect(dialog.getByText(`Source label Shared native label ${width} becomes Renamed hardware ${width}`,{exact:true})).toBeVisible();
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+      await page.screenshot({path:`test-results/identity-final-review-${width}.png`,fullPage:true});
+      await dialog.getByRole('button',{name:'Accept identity correction',exact:true}).click();await expect(dialog.getByRole('heading',{name:'Correction applied',exact:true})).toBeVisible();
       const current=await rpc({oneofKind:'read',read:m.Read.create({target:targets[0][2]})});expect(current.detail.currentAddresses).toHaveLength(2);expect(new Set(current.detail.currentAddresses.map(v=>v.sourceId)).size).toBe(2);
       expect(current.detail.currentAddresses.flatMap(v=>v.observations.map(v=>v.value.address)).sort()).toEqual(['192.0.2.10','192.0.2.11']);
       expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
