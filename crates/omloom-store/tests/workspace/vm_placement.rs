@@ -542,9 +542,10 @@ fn concurrent_moves_accept_only_one_reviewed_destination() -> TestResult {
         let workers: Vec<_> = [&a, &b]
             .into_iter()
             .map(|review| {
-                scope.spawn(|| {
+                let (store, barrier) = (&store, &barrier);
+                scope.spawn(move || {
                     barrier.wait();
-                    record(&store, &operator(), review)
+                    record(store, &operator(), review)
                 })
             })
             .collect();
