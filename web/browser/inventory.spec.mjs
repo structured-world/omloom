@@ -87,6 +87,47 @@ test('host report adoption is selective and scoped on desktop and phone', async 
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
 });
 
+test('identity comparison keeps two selected machines distinct on desktop and phone', async ({ page }) => {
+  // Equal unauthenticated hardware claims support a pair review. Opening and
+  // leaving that review must not merge identities, widen scope or write state.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-identity-pair-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const prefix = `Identity pair ${width}`;
+      for (const side of ['left', 'right']) {
+        const report = m.HostReport.create({ version: 1, platform: 'linux', sourceBasis: `${width}${side === 'left' ? '1' : '2'}`.padEnd(64, 'a'), bootBasis: 'b'.repeat(64), observedAt: 100n,
+          findings: [{ key: 'hardware', kind: m.AssetKind.DEVICE, fields: [{ name: 'name', value: { oneofKind: 'text', text: `${prefix} ${side}` } }],
+            identity: [{ kind: m.HostIdentityKind.HARDWARE_UUID, namespace: 'smbios/system-uuid', digest: 'a'.repeat(64), quality: m.HostIdentityQuality.REPORTED }] }] });
+        const prepared = await rpc({ oneofKind: 'hostImport', hostImport: m.HostImport.create({ source: `${width} ${side}`, report, selection: [{ key: 'hardware' }] }) });
+        expect(prepared.oneofKind).toBe('preview');
+        await rpc({ oneofKind: 'hostImport', hostImport: m.HostImport.create({ preview: prepared.preview.id }) });
+      }
+      const query = { oneofKind: 'query', query: m.Query.create({ search: prefix, limit: 25 }) };
+      const before = await rpc(query);
+      expect(before.page.total).toBe(2n);
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${server.url}/#/?view=2&search=${encodeURIComponent(prefix)}`);
+      await page.getByRole('checkbox', { name: `Select ${prefix} left`, exact: true }).check();
+      await page.getByRole('checkbox', { name: `Select ${prefix} right`, exact: true }).check();
+      await page.getByRole('button', { name: 'Compare identity', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await expect(dialog.getByRole('heading', { name: `${prefix} left`, exact: true })).toBeVisible();
+      await expect(dialog.getByRole('heading', { name: `${prefix} right`, exact: true })).toBeVisible();
+      await expect(dialog.getByText('Some identifiers match within the same layer and namespace.', { exact: false })).toBeVisible();
+      await expect(dialog.getByText('smbios/system-uuid · reported', { exact: true })).toHaveCount(2);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await dialog.getByRole('button', { name: 'Back', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByRole('checkbox', { name: `Select ${prefix} left`, exact: true })).toBeChecked();
+      const after = await rpc(query);
+      expect(after.page.total).toBe(2n);
+      expect(after.page.revision).toBe(before.page.revision);
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('execution host reports match the current VM scope on desktop and phone', async ({ page }) => {
   // Guest collection cannot invent a physical server or rename the accepted VM.
   const dir=await mkdtemp(join(tmpdir(),'omloom-host-vm-'));const server=await host(dir);

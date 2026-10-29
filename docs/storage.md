@@ -108,8 +108,8 @@ envelope, but are **application accounting**, not total filesystem allocation.
 Pinned detail and unresolved work count against their budgets. Admission fails
 atomically when it cannot fit; it does not evict safety state.
 
-This unreleased storage format uses schema version 10. Supported versions 2
-through 9 upgrade in bounded restartable batches, including asset name/sort
+This unreleased storage format uses schema version 11. Supported versions 2
+through 10 upgrade in bounded restartable batches, including asset name/sort
 projections from accepted intent, normalized IP
 ordering and source-scoped current observation facts with separate freshness
 and accounting. No inventory history is added. The upgrade keeps restore fences
@@ -122,6 +122,12 @@ namespace/uniqueness records. A container owns at most one namespace fence and
 one fully qualified instance claim. Explicit inventory removal reclaims both;
 unlinking a runtime cannot relabel the container's lifetime. These records are
 current identity safety state, not a container history stream.
+Version 11 adds current source-scoped host identity evidence. Each selected
+subject has at most 32 claims across sources. Claims retain their observation
+and boot basis, are protected by the `identity_evidence` field right, and are
+removed with their subject. A missing claim does not refresh older evidence.
+These claims support explicit comparison, never automatic identity or access
+decisions. Pair comparison reads only two selected subjects and writes nothing.
 
 The host's durable worker calls bounded cleanup with a resumable cursor. Pin
 changes conflict with cleanup through database CAS. Cleanup reports logical

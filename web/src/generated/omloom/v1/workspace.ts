@@ -2268,6 +2268,65 @@ export interface HostIdentityObservation {
     bootBasis: string;
 }
 /**
+ * @generated from protobuf message omloom.workspace.v1.CompareHostIdentity
+ */
+export interface CompareHostIdentity {
+    /**
+     * First explicitly selected accepted resource incarnation, never a name/IP.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef left = 1
+     */
+    left?: AssetRef;
+    /**
+     * Second explicitly selected accepted resource incarnation in the same
+     * authorized working context. Comparison itself changes no identity.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef right = 2
+     */
+    right?: AssetRef;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.HostIdentitySubject
+ */
+export interface HostIdentitySubject {
+    /**
+     * Current accepted fields that the caller may read, without descendants,
+     * routes, firewall configuration or implied rights to those resources.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.Item item = 1
+     */
+    item?: Item;
+    /**
+     * Current permitted source claims with their original evidence windows.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.HostIdentityObservation identity = 2
+     */
+    identity: HostIdentityObservation[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.HostIdentityComparison
+ */
+export interface HostIdentityComparison {
+    /**
+     * Server-selected consistent application revision for both subjects.
+     *
+     * @generated from protobuf field: uint64 revision = 1
+     */
+    revision: bigint;
+    /**
+     * Authorized first resource and selected identity evidence.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.HostIdentitySubject left = 2
+     */
+    left?: HostIdentitySubject;
+    /**
+     * Authorized second resource and selected identity evidence.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.HostIdentitySubject right = 3
+     */
+    right?: HostIdentitySubject;
+}
+/**
  * @generated from protobuf message omloom.workspace.v1.HostBind
  */
 export interface HostBind {
@@ -3028,6 +3087,14 @@ export interface Request {
          */
         hostImport: HostImport;
     } | {
+        oneofKind: "compareHostIdentity";
+        /**
+         * Compare two selected identities without adopting, merging or writing.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.CompareHostIdentity compare_host_identity = 28
+         */
+        compareHostIdentity: CompareHostIdentity;
+    } | {
         oneofKind: undefined;
     };
 }
@@ -3160,6 +3227,14 @@ export interface Reply {
          * @generated from protobuf field: omloom.workspace.v1.ResponsibilityTransferState responsibility_transfer = 15
          */
         responsibilityTransfer: ResponsibilityTransferState;
+    } | {
+        oneofKind: "hostIdentityComparison";
+        /**
+         * Consistent bounded comparison, not a correction or authority grant.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.HostIdentityComparison host_identity_comparison = 16
+         */
+        hostIdentityComparison: HostIdentityComparison;
     } | {
         oneofKind: undefined;
     };
@@ -4608,6 +4683,46 @@ class HostIdentityObservation$Type extends MessageType<HostIdentityObservation> 
  */
 export const HostIdentityObservation = new HostIdentityObservation$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class CompareHostIdentity$Type extends MessageType<CompareHostIdentity> {
+    constructor() {
+        super("omloom.workspace.v1.CompareHostIdentity", [
+            { no: 1, name: "left", kind: "message", T: () => AssetRef },
+            { no: 2, name: "right", kind: "message", T: () => AssetRef }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.CompareHostIdentity
+ */
+export const CompareHostIdentity = new CompareHostIdentity$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class HostIdentitySubject$Type extends MessageType<HostIdentitySubject> {
+    constructor() {
+        super("omloom.workspace.v1.HostIdentitySubject", [
+            { no: 1, name: "item", kind: "message", T: () => Item },
+            { no: 2, name: "identity", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostIdentityObservation }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostIdentitySubject
+ */
+export const HostIdentitySubject = new HostIdentitySubject$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class HostIdentityComparison$Type extends MessageType<HostIdentityComparison> {
+    constructor() {
+        super("omloom.workspace.v1.HostIdentityComparison", [
+            { no: 1, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 2, name: "left", kind: "message", T: () => HostIdentitySubject },
+            { no: 3, name: "right", kind: "message", T: () => HostIdentitySubject }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostIdentityComparison
+ */
+export const HostIdentityComparison = new HostIdentityComparison$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class HostBind$Type extends MessageType<HostBind> {
     constructor() {
         super("omloom.workspace.v1.HostBind", [
@@ -4883,7 +4998,8 @@ class Request$Type extends MessageType<Request> {
             { no: 24, name: "external_account", kind: "message", oneof: "command", T: () => ExternalAccount },
             { no: 25, name: "owner_request", kind: "message", oneof: "command", T: () => OwnerRequest },
             { no: 26, name: "responsibility_transfer", kind: "message", oneof: "command", T: () => ResponsibilityTransfer },
-            { no: 27, name: "host_import", kind: "message", oneof: "command", T: () => HostImport }
+            { no: 27, name: "host_import", kind: "message", oneof: "command", T: () => HostImport },
+            { no: 28, name: "compare_host_identity", kind: "message", oneof: "command", T: () => CompareHostIdentity }
         ]);
     }
 }
@@ -4909,7 +5025,8 @@ class Reply$Type extends MessageType<Reply> {
             { no: 12, name: "responsibility", kind: "message", oneof: "result", T: () => ResponsibilityState },
             { no: 13, name: "external_account", kind: "message", oneof: "result", T: () => ExternalAccountState },
             { no: 14, name: "owner_request", kind: "message", oneof: "result", T: () => OwnerRequestState },
-            { no: 15, name: "responsibility_transfer", kind: "message", oneof: "result", T: () => ResponsibilityTransferState }
+            { no: 15, name: "responsibility_transfer", kind: "message", oneof: "result", T: () => ResponsibilityTransferState },
+            { no: 16, name: "host_identity_comparison", kind: "message", oneof: "result", T: () => HostIdentityComparison }
         ]);
     }
 }

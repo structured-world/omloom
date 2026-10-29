@@ -170,6 +170,83 @@ fn host_identity_rejects_layer_forgery_and_same_instant_equivocation() -> TestRe
     assert_eq!(before, store.usage()?);
     Ok(())
 }
+
+// Pair comparison reads only the two selected current subjects, applies each
+// field's actual rights and cannot freshen evidence or change inventory.
+#[test]
+fn host_identity_comparison_is_read_only_and_checks_both_subjects() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut request = draft();
+    request.report.as_mut().unwrap().findings[0]
+        .identity
+        .push(identity_claim(
+            api::HostIdentityKind::HardwareUuid,
+            "apple/platform-uuid",
+            'a',
+        ));
+    let accepted = accept(&store, &preview(&store, request)?)?;
+    let pair = api::CompareHostIdentity {
+        left: Some(accepted.targets[0].clone()),
+        right: Some(accepted.targets[1].clone()),
+    };
+    let before = store.usage()?;
+    let Reply::HostIdentityComparison(value) = call(
+        &store,
+        &operator(),
+        Command::CompareHostIdentity(pair.clone()),
+    )?
+    else {
+        return Err("comparison".into());
+    };
+    assert_eq!(value.left.as_ref().unwrap().identity.len(), 1);
+    assert!(value.right.as_ref().unwrap().identity.is_empty());
+    assert_eq!(value.revision, before.revision);
+    assert_eq!(before, store.usage()?);
+    let mut restricted = operator();
+    restricted.grants[0].read = Fields::Selected(vec!["name".into()]);
+    let Reply::HostIdentityComparison(value) = call(
+        &store,
+        &restricted,
+        Command::CompareHostIdentity(pair.clone()),
+    )?
+    else {
+        return Err("restricted comparison".into());
+    };
+    assert!(
+        value.left.unwrap().identity.is_empty(),
+        "hidden claims are not disclosed on a readable host"
+    );
+    restricted.grants[0].scope = Scope::Targets(vec![AssetRef::try_from(&accepted.targets[0])?]);
+    assert!(matches!(
+        call(
+            &store,
+            &restricted,
+            Command::CompareHostIdentity(pair.clone())
+        ),
+        Err(Error::Denied)
+    ));
+    assert_eq!(before, store.usage()?);
+    let unrelated = create(&store, &operator(), K::Device, "Outside selected scope")?;
+    let before = store.usage()?;
+    let result = store.workspace(
+        &operator(),
+        api::Request {
+            working: Some(api::WorkingContext {
+                roots: vec![unrelated],
+                ..Default::default()
+            }),
+            command: Some(Command::CompareHostIdentity(pair)),
+        },
+        100,
+    );
+    assert!(
+        matches!(result, Err(Error::Denied)),
+        "a broader actor grant cannot silently widen the working context"
+    );
+    assert_eq!(before, store.usage()?);
+    Ok(())
+}
 fn preview(store: &Store, request: api::HostImport) -> Result<api::Preview, Error> {
     let Reply::Preview(value) = call(store, &operator(), Command::HostImport(request))? else {
         return Err(Error::Corrupt);

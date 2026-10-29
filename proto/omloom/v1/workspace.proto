@@ -960,6 +960,28 @@ message HostIdentityObservation {
   // Boot/session basis of that collection. It is evidence, not an OS asset ID.
   string boot_basis = 4;
 }
+message CompareHostIdentity {
+  // First explicitly selected accepted resource incarnation, never a name/IP.
+  omloom.v1.AssetRef left = 1;
+  // Second explicitly selected accepted resource incarnation in the same
+  // authorized working context. Comparison itself changes no identity.
+  omloom.v1.AssetRef right = 2;
+}
+message HostIdentitySubject {
+  // Current accepted fields that the caller may read, without descendants,
+  // routes, firewall configuration or implied rights to those resources.
+  Item item = 1;
+  // Current permitted source claims with their original evidence windows.
+  repeated HostIdentityObservation identity = 2;
+}
+message HostIdentityComparison {
+  // Server-selected consistent application revision for both subjects.
+  uint64 revision = 1;
+  // Authorized first resource and selected identity evidence.
+  HostIdentitySubject left = 2;
+  // Authorized second resource and selected identity evidence.
+  HostIdentitySubject right = 3;
+}
 message HostBind {
   // Source-local service candidate owning this observed bind. Empty means the
   // kernel bind was seen without a qualified owner; it cannot adopt a service.
@@ -1233,6 +1255,8 @@ message Request {
     ResponsibilityTransfer responsibility_transfer = 26;
     // Review and atomically accept selected native host observations.
     HostImport host_import = 27;
+    // Compare two selected identities without adopting, merging or writing.
+    CompareHostIdentity compare_host_identity = 28;
   }
 }
 message Reply {
@@ -1268,5 +1292,7 @@ message Reply {
     OwnerRequestState owner_request = 14;
     // Selected responsibility export or the result of one atomic reviewed import.
     ResponsibilityTransferState responsibility_transfer = 15;
+    // Consistent bounded comparison, not a correction or authority grant.
+    HostIdentityComparison host_identity_comparison = 16;
   }
 }

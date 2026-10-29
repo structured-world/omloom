@@ -22,7 +22,7 @@ use std::{
 type Properties = BTreeMap<String, Value>;
 type Result<T> = std::result::Result<T, Error>;
 const ROOT: &str = "installation";
-const SCHEMA_VERSION: u64 = 10;
+const SCHEMA_VERSION: u64 = 11;
 const MAX_CHILDREN: usize = 2048;
 mod inventory;
 mod lifecycle;

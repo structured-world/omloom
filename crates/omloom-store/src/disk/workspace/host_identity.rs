@@ -106,17 +106,10 @@ impl Tx<'_> {
             }
             let mut data = target_props(target);
             data.extend(props([
-                (
-                    "identity_lookup",
-                    text(format!(
-                        "{}/{}/{}",
-                        claim.kind, claim.namespace, claim.digest
-                    )),
-                ),
                 ("source", text(source.name)),
-                ("mapping", text(source.mapping)),
+                ("binding", text(source.mapping)),
                 ("observed", int(source.observed)?),
-                ("boot", text(source.boot)),
+                ("vtext", text(source.boot)),
                 ("payload", Value::Binary(payload)),
             ]));
             self.put_projection(&key, &parent, Class::Inventory, data, old.as_ref())?;
@@ -143,9 +136,82 @@ impl Tx<'_> {
                     ),
                     source: string(&row, "source")?,
                     observed_at: number(&row, "observed")?,
-                    boot_basis: string(&row, "boot")?,
+                    boot_basis: string(&row, "vtext")?,
                 })
             })
             .collect()
+    }
+
+    fn identity_subject(
+        &self,
+        context: &Context,
+        target: AssetRef,
+    ) -> Result<api::HostIdentitySubject> {
+        let row = self.visible_asset(context, target)?;
+        let kind = number(&row, "kind")? as i32;
+        if !matches!(
+            wire::AssetKind::try_from(kind),
+            Ok(wire::AssetKind::Device
+                | wire::AssetKind::VirtualMachine
+                | wire::AssetKind::SoftwareInstallation
+                | wire::AssetKind::Interface)
+        ) {
+            return Err(Error::Invalid);
+        }
+        let rows = self.query(
+            "MATCH (n:OmRow {parent:$parent}) WHERE n.layer='intent' RETURN properties(n) AS p LIMIT 33",
+            params([("parent", text(asset_key(target)))]),
+        )?;
+        if rows.len() > MAX_FIELDS {
+            return Err(Error::Limit);
+        }
+        let mut fields = Vec::with_capacity(rows.len());
+        for row in rows {
+            let name = string(&row, "field")?;
+            if context.field(target, kind, &name, false) {
+                fields.push(inventory::read_field(&row)?);
+            }
+        }
+        Ok(api::HostIdentitySubject {
+            item: Some(api::Item {
+                target: Some(target_wire(target)),
+                kind,
+                revision: number(&row, "revision")?,
+                fields,
+            }),
+            identity: self.host_identity(context, target, kind)?,
+        })
+    }
+}
+
+impl Store {
+    pub(super) fn workspace_compare_host_identity(
+        &self,
+        context: &Context,
+        value: api::CompareHostIdentity,
+        working: &api::WorkingContext,
+    ) -> Result<api::Reply> {
+        let left = parse_target(value.left.as_ref())?;
+        let right = parse_target(value.right.as_ref())?;
+        if left == right {
+            return Err(Error::Invalid);
+        }
+        let tx = self.begin()?;
+        let revision = number(&tx.root, "revision")?;
+        let selection = tx.selection(context, working, false)?;
+        selection.contains(left, &tx)?;
+        selection.contains(right, &tx)?;
+        let comparison = api::HostIdentityComparison {
+            revision,
+            left: Some(tx.identity_subject(context, left)?),
+            right: Some(tx.identity_subject(context, right)?),
+        };
+        tx.commit()?;
+        if self.usage()?.revision != revision {
+            return Err(Error::Expired);
+        }
+        Ok(reply(api::reply::Result::HostIdentityComparison(
+            comparison,
+        )))
     }
 }

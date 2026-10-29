@@ -307,6 +307,11 @@ impl Store {
                 working.as_ref().ok_or(Error::Invalid)?,
                 now,
             ),
+            C::CompareHostIdentity(value) => self.workspace_compare_host_identity(
+                context,
+                value,
+                working.as_ref().ok_or(Error::Invalid)?,
+            ),
             C::Export(export) => self.workspace_export(context, export),
             C::Network(network) => self.workspace_network(
                 context,
