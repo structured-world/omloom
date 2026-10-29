@@ -290,6 +290,35 @@ test('identity comparison keeps two selected machines distinct on desktop and ph
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
 
+test('retired scoped links open the retained identity on desktop and phone', async ({ page }) => {
+  // Alias navigation replaces only its exact retired root, retaining other scope and query choices.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-scoped-alias-'));const server=await host(dir);
+  try {
+    const {m,rpc}=await workspaceClient(server.url);
+    for(const width of [1440,390]) {
+      const targets=[];
+      for(const name of [`Retained ${width}`,`Retired ${width}`,`Unrelated ${width}`]) {
+        const result=await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.DEVICE,changes:[{name:'name',value:{oneofKind:'text',text:name}}]})});
+        targets.push(result.mutation.targets[0]);
+      }
+      const [retained,retired,other]=targets;
+      const preview=await rpc({oneofKind:'correctIdentity',correctIdentity:m.IdentityCorrection.create({decision:m.IdentityDecision.DISTINCT_INSTALLATIONS,mappings:[{duplicate:retired,retained,fields:[{name:'name',useDuplicate:false}]}]})});
+      await rpc({oneofKind:'correctIdentity',correctIdentity:m.IdentityCorrection.create({preview:preview.identityCorrection.id})});
+      const query=new URLSearchParams({view:'2',asset:retired.assetId,incarnation:retired.incarnation,columns:'name,description'});
+      for(const target of [retired,other]) {query.append('scope',target.assetId);query.append('scopeInc',target.incarnation);}
+      await page.setViewportSize({width,height:900});await page.goto(`${server.url}/#/?${query}`);
+      await page.getByRole('button',{name:'Locate retained identity',exact:true}).click();
+      await page.getByRole('button',{name:'Open retained resource',exact:true}).click();
+      await expect(page.getByRole('region',{name:'Resource details'}).getByRole('heading',{name:`Retained ${width}`,exact:true})).toBeVisible();
+      const route=new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
+      expect(route.getAll('scope')).toEqual([retained.assetId,other.assetId]);
+      expect(route.getAll('scopeInc')).toEqual([retained.incarnation,other.incarnation]);
+      expect(route.get('columns')).toBe('name,description');
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    }
+  } finally {await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('host address replacement is reviewed without adopting another identity on desktop and phone', async ({ page }) => {
   // The import review shows only a selected source's changes. Accepting the
   // new address reuses all three existing identities instead of creating hosts.
