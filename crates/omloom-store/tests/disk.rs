@@ -747,7 +747,10 @@ fn relation_moves_preserve_parallel_edges() -> TestResult {
     assert_eq!(store.relations(target(&service), 10)?.len(), 2);
     assert_eq!(store.relations(target(&first), 10)?, vec![parallel]);
     assert_eq!(store.relations(target(&second), 10)?, vec![relation]);
-    assert!(matches!(store.relations(target(&service), 1), Err(Error::Limit)));
+    assert!(matches!(
+        store.relations(target(&service), 1),
+        Err(Error::Limit)
+    ));
     drop(store);
     let store = Store::open(dir.path(), policy())?;
     assert_eq!(store.relations(target(&service), 10)?.len(), 2);

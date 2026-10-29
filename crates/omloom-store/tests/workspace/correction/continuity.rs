@@ -151,6 +151,32 @@ fn candidate_limit_counts_only_current_scope() -> TestResult {
     assert_eq!(value.items.len(), 1);
     assert_eq!(value.items[0].target.as_ref(), Some(&targets[0]));
     assert_eq!(store.usage()?, before, "candidate reads must not write");
+    // No readable claims require neither candidate expansion nor persisted state.
+    let mut limited = operator();
+    limited.grants[0].read = Fields::Selected(vec!["name".into(), "relations".into()]);
+    let Some(Reply::IdentityCandidates(empty)) = store
+        .workspace(
+            &limited,
+            api::Request {
+                working: Some(api::WorkingContext {
+                    roots: vec![targets[0].clone()],
+                    ..Default::default()
+                }),
+                command: Some(Command::FindIdentityCandidates(
+                    api::FindIdentityCandidates {
+                        target: Some(targets[0].clone()),
+                        ..Default::default()
+                    },
+                )),
+            },
+            100,
+        )?
+        .result
+    else {
+        return Err("empty candidates".into());
+    };
+    assert!(empty.items.is_empty());
+    assert_eq!(store.usage()?, before);
     Ok(())
 }
 

@@ -320,6 +320,12 @@ impl Store {
             })?;
             (None, request.kind, request.claims)
         };
+        if claims.is_empty() {
+            tx.commit()?;
+            return Ok(reply(api::reply::Result::IdentityCandidates(
+                api::IdentityCandidates { items: Vec::new() },
+            )));
+        }
         let mut values = HashMap::from([
             (
                 "claims".into(),
