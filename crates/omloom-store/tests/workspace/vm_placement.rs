@@ -97,6 +97,63 @@ fn record(
         100,
     )
 }
+
+// An unplaced VM uses the reviewed create-relation path, with the same root CAS.
+#[test]
+fn first_placement_is_reviewed_read_only_and_revision_checked() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let guest = create(&store, &operator(), K::VirtualMachine, "Unplaced guest")?;
+    let host = hypervisor(&store, "Destination")?;
+    let before = store.usage()?;
+    let review = prepare(&store, &operator(), &guest, Some(&host))?;
+    assert!(review.current.is_none());
+    assert!(review.current_host.is_none());
+    assert_eq!(
+        review
+            .destination
+            .as_ref()
+            .and_then(|item| item.target.as_ref()),
+        Some(&host)
+    );
+    assert_eq!(store.usage()?, before);
+    let submit = |view: &api::VmPlacementReview| {
+        store.workspace(
+            &operator(),
+            api::Request {
+                working: Some(api::WorkingContext {
+                    roots: vec![guest.clone(), host.clone()],
+                    expected: Some(view.revision),
+                    ..Default::default()
+                }),
+                command: Some(Command::Relation(api::Relationship {
+                    relation: Some(wire::Relation {
+                        from: Some(guest.clone()),
+                        to: Some(host.clone()),
+                        kind: R::RunsOn as i32,
+                        ..Default::default()
+                    }),
+                    remove: false,
+                })),
+            },
+            100,
+        )
+    };
+    create(&store, &operator(), K::Device, "Concurrent change")?;
+    assert!(matches!(submit(&review), Err(Error::Conflict)));
+    assert!(read(&store, &guest)?.relations.is_empty());
+    let fresh = prepare(&store, &operator(), &guest, Some(&host))?;
+    submit(&fresh)?;
+    let current = placement(&store, &guest)?;
+    assert_eq!(current.from.as_ref(), Some(&guest));
+    assert_eq!(current.to.as_ref(), Some(&host));
+    assert_eq!(current.revision, 1);
+    assert_eq!(
+        prepare(&store, &operator(), &guest, None)?.current,
+        Some(current)
+    );
+    Ok(())
+}
 fn child(store: &Store, parent: &wire::AssetRef, kind: K) -> Result<wire::AssetRef, Error> {
     let Reply::Mutation(value) = call(
         store,
