@@ -5,6 +5,7 @@ import CategoryNav from './CategoryNav.vue';
 import CurrentAddresses from './CurrentAddresses.vue';
 import HostIdentityEvidence from './HostIdentityEvidence.vue';
 import HostIdentityCompare from './HostIdentityCompare.vue';
+import VmPlacement from './VmPlacement.vue';
 import ResponsibilityPanel from './ResponsibilityPanel.vue';
 import AccountPanel from './AccountPanel.vue';
 import { softwareFields } from './software-fields';
@@ -43,6 +44,11 @@ const detailHeading = ref<HTMLElement>();
 const moreActions = ref(false);
 const selected = ref<string[]>([]); const search = ref('');
 const identityPair = ref<{left:AssetRef;right:AssetRef;working:model.WorkingContext}>();
+const placementVm = ref<AssetRef>();
+async function placementSaved(vm: AssetRef, host: AssetRef) {
+  placementVm.value = undefined;
+  await router.push({path:'/',query:{view:String(model.View.VIRTUALIZATION),scope:[host.assetId],scopeInc:[host.incarnation],asset:vm.assetId,incarnation:vm.incarnation}});
+}
 const identityCandidates=ref<model.Item[]>();const findingCandidates=ref(false);
 const resolvedAlias=ref<model.ResolvedIdentity>();
 const comparable = computed(() => {
@@ -360,6 +366,7 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <button v-if="detail.item.kind === K.ADDRESS_REFERENCE && identity?.writable" @click="editor = 'binding'">Resolve address in broader scope</button>
 <CurrentAddresses v-for="value in detail.currentAddresses" :key="value.sourceId" :value="value" />
 <section v-if="[K.DEVICE,K.VIRTUAL_MACHINE,K.SOFTWARE_INSTALLATION,K.INTERFACE].includes(detail.item.kind)" aria-label="Identity candidates"><button :disabled="findingCandidates" @click="findIdentityCandidates">Find possible duplicates in enclosing selection</button><p v-if="findingCandidates" role="status">Checking indexed source claims…</p><template v-if="identityCandidates"><p v-if="!identityCandidates.length">No comparable candidates are available in this selection. Missing evidence does not prove that there are no duplicates.</p><ul><li v-for="candidate in identityCandidates" :key="key(candidate.target)">{{ label(candidate.kind) }} · {{ display(candidate.fields.find(v=>v.name==='name')) }} <button @click="compareCandidate(candidate)">Compare with candidate</button></li></ul></template></section>
+<button v-if="detail.item.kind === K.VIRTUAL_MACHINE && identity?.writable && detail.item.target" @click="placementVm=detail.item.target">Change hypervisor after migration</button>
 <HostIdentityEvidence :observations="detail.identity" />
 <ResponsibilityPanel v-if="detail.item&&!loading" :key="key(detail.item.target)+'/'+detail.item.revision" :item="detail.item" :working="working" @changed="saved()" @open="open" />
 <AccountPanel v-if="detail.item?.kind===K.PROVIDER_ACCOUNT&&!loading" :key="key(detail.item.target)+'/'+detail.item.revision" :item="detail.item" :working="working" @changed="saved()" @open="open" @share="editor='view'" />
@@ -375,6 +382,7 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <ImportEditor v-if="editor === 'import'" :definitions="definitions" :working="working" @close="editor = ''" @saved="saved" />
 <HostImportEditor v-if="editor === 'host-import'" :working="working" @close="editor = ''" @saved="saved" />
 <HostIdentityCompare v-if="identityPair" :left="identityPair.left" :right="identityPair.right" :working="identityPair.working" @close="identityPair=undefined" @changed="load()" />
+<VmPlacement v-if="placementVm" :target="placementVm" :working="enclosing" @close="placementVm=undefined" @saved="placementSaved" />
 <ViewEditor v-if="editor === 'view' && identity" :query="query" :identity="identity" :existing="activeView" @close="editor = ''" @saved="saved" />
 <NetworkEditor v-if="editor === 'network'" :item="editing" :group="editing ? detail?.group : undefined" :definitions="definitions" :working="editing ? enclosing : working" :allocations="actions.allocations" :view="query.view" @close="editor = ''" @saved="saved" @refresh="load" />
 <MemberEditor v-if="editor === 'member' && detail" :detail="detail" :working="enclosing" :removal="participantRemoval" @close="editor = ''; participantRemoval = undefined" @saved="participantRemoval = undefined; saved()" />

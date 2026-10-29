@@ -30,6 +30,8 @@ mod responsibility;
 mod software;
 #[path = "workspace/views.rs"]
 mod views;
+#[path = "workspace/vm_placement.rs"]
+mod vm_placement;
 
 fn operator() -> Context {
     Context {

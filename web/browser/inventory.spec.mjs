@@ -87,6 +87,64 @@ test('host report adoption is selective and scoped on desktop and phone', async 
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
 });
 
+test('VM placement uses desktop drag and phone selection without changing guest identity or IP', async ({page})=>{
+  // Real host/store/UI: record an external migration, then independently update
+  // current guest addresses. No hypervisor call or migration result is mocked.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-vm-placement-'));const server=await host(dir);
+  try {
+    const {m,rpc}=await workspaceClient(server.url);
+    async function resource(kind,name,parent,extra=[]){const result=await rpc({oneofKind:'write',write:m.Write.create({kind,parent,changes:[{name:'name',value:{oneofKind:'text',text:name}},...extra]})});return result.mutation.targets[0];}
+    const role={name:'virtualization_role',value:{oneofKind:'text',text:'VIRTUALIZATION_ROLE_HYPERVISOR'}};
+    const chassisA=await resource(m.AssetKind.DEVICE,'Compute chassis A');
+    const chassisB=await resource(m.AssetKind.DEVICE,'Compute chassis B');
+    const a=await resource(m.AssetKind.SOFTWARE_INSTALLATION,'Migration host A',chassisA,[role]);
+    const b=await resource(m.AssetKind.SOFTWARE_INSTALLATION,'Migration host B',chassisB,[role]);
+    const vm=await resource(m.AssetKind.VIRTUAL_MACHINE,'Retained guest');
+    const os=await resource(m.AssetKind.SOFTWARE_INSTALLATION,'Retained guest OS',vm);
+    const nic=await resource(m.AssetKind.INTERFACE,'Guest eth0',os);
+    const service=await resource(m.AssetKind.SERVICE,'Guest listener',os);
+    await rpc({oneofKind:'relation',relation:m.Relationship.create({relation:{from:vm,to:a,kind:m.RelationKind.RUNS_ON}})});
+    async function address(value,time){await rpc({oneofKind:'interfaceAddresses',interfaceAddresses:m.InterfaceAddresses.create({interface:nic,source:'Guest report',observedAt:BigInt(time),complete:true,addresses:[{address:value,stability:m.AddressStability.STABLE,state:m.AddressState.PREFERRED}]})});}
+    await address('192.0.2.40',50);
+    const originalChildren=[];
+    for(const target of [os,nic,service]) originalChildren.push((await rpc({oneofKind:'read',read:m.Read.create({target})})).detail.item);
+    let expectedIp='192.0.2.40';
+    for(const [width,from,to,name] of [[1440,a,b,'Migration host B'],[390,b,a,'Migration host A']]) {
+      await page.setViewportSize({width,height:900});
+      await page.goto(`${server.url}/#/?view=3&kind=${m.AssetKind.DEVICE}&scope=${from.assetId}&scopeInc=${from.incarnation}&asset=${vm.assetId}&incarnation=${vm.incarnation}`);
+      await page.getByRole('button',{name:'Change hypervisor after migration',exact:true}).click();
+      const dialog=page.getByRole('dialog',{name:'Record VM placement'});
+      await expect(dialog.getByText('Current host:',{exact:false})).toBeVisible();
+      // Widening the selected context is explicit, rather than a hidden search fallback.
+      await dialog.getByRole('button',{name:'Choose from all permitted infrastructure',exact:true}).click();
+      const destination=dialog.getByRole('article',{name:`Destination ${name}`,exact:true});
+      await expect(destination).toBeVisible();
+      await expect(destination).toContainText(width===1440?'Compute chassis B':'Compute chassis A');
+      const before=(await rpc({oneofKind:'query',query:m.Query.create({limit:1})})).page.revision;
+      if(width===1440) await dialog.getByRole('article',{name:'VM to relocate',exact:true}).dragTo(destination);
+      else await destination.getByRole('button',{name:`Choose ${name}`,exact:true}).click();
+      await expect(dialog.getByRole('button',{name:'Record and view VM',exact:true})).toBeVisible();
+      await dialog.getByRole('button',{name:'Back to destinations',exact:true}).click();
+      await destination.getByRole('button',{name:`Choose ${name}`,exact:true}).click();
+      expect((await rpc({oneofKind:'query',query:m.Query.create({limit:1})})).page.revision).toBe(before);
+      expect(await dialog.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+      await page.screenshot({path:`test-results/vm-placement-${width}.png`,fullPage:true});
+      await dialog.getByRole('button',{name:'Record and view VM',exact:true}).click();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByRole('heading',{name:'Retained guest',exact:true})).toBeVisible();
+      const current=(await rpc({oneofKind:'prepareVmPlacement',prepareVmPlacement:m.PrepareVmPlacement.create({vm})})).vmPlacementReview;
+      expect(current.vm.target).toEqual(vm);expect(current.currentHost.target).toEqual(to);
+      const addresses=(await rpc({oneofKind:'read',read:m.Read.create({target:nic})})).detail.currentAddresses;
+      expect(addresses).toHaveLength(1);expect(addresses[0].observations[0].value.address).toBe(expectedIp);
+      for(const [index,target] of [os,nic,service].entries()) expect((await rpc({oneofKind:'read',read:m.Read.create({target})})).detail.item).toEqual(originalChildren[index]);
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+      await page.getByRole('button',{name:'Close resource details',exact:true}).click();
+      await expect(page.getByRole('button',{name:'Retained guest',exact:true})).toBeVisible();
+      if(width===1440){await address('192.0.2.41',60);expectedIp='192.0.2.41';}
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('accepted correction and exact retry survive an abrupt host exit', async ({page})=>{
   // Process crash after acknowledgement, not a claim about device power loss.
   const dir=await mkdtemp(join(tmpdir(),'omloom-correction-crash-'));let server=await host(dir);

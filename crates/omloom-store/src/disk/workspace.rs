@@ -22,6 +22,7 @@ mod responsibility;
 mod software;
 mod source_layout;
 mod views;
+mod vm_placement;
 mod working;
 
 pub const MAX_PAGE: usize = 100;
@@ -326,6 +327,11 @@ impl Store {
                 working.as_ref().ok_or(Error::Invalid)?,
             ),
             C::ResolveIdentity(value) => self.workspace_resolve_identity(
+                context,
+                value,
+                working.as_ref().ok_or(Error::Invalid)?,
+            ),
+            C::PrepareVmPlacement(value) => self.workspace_prepare_vm_placement(
                 context,
                 value,
                 working.as_ref().ok_or(Error::Invalid)?,

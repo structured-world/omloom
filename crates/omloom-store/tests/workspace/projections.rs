@@ -758,6 +758,87 @@ fn level_browse_returns_containers_then_direct_children() -> TestResult {
     Ok(())
 }
 
+// Root filtering must keep an authorized child of hidden parents, but exclude
+// it when either typed direction has a visible parent, including mixed cases.
+#[test]
+fn level_browse_preserves_hidden_and_mixed_parent_semantics() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let visible_os = create(&store, &actor, K::SoftwareInstallation, "Visible OS")?;
+    let hidden_os = create(&store, &actor, K::SoftwareInstallation, "Hidden OS")?;
+    let visible_vm = create(&store, &actor, K::VirtualMachine, "Visible VM")?;
+    let hidden_vm = create(&store, &actor, K::VirtualMachine, "Hidden VM")?;
+    let forward_owned = child(&store, &actor, &visible_os, K::Service, "Forward owned")?;
+    let reverse_owned = child(&store, &actor, &hidden_os, K::Service, "Reverse owned")?;
+    let hidden_owned = child(&store, &actor, &hidden_os, K::Service, "Hidden owners only")?;
+    let orphan = create(&store, &actor, K::Service, "Unplaced service")?;
+    for (service, host) in [
+        (&forward_owned, &hidden_vm),
+        (&reverse_owned, &visible_vm),
+        (&hidden_owned, &hidden_vm),
+    ] {
+        call(
+            &store,
+            &actor,
+            Command::Relation(api::Relationship {
+                relation: Some(wire::Relation {
+                    from: Some(service.clone()),
+                    to: Some(host.clone()),
+                    kind: wire::RelationKind::RunsOn as i32,
+                    ..Default::default()
+                }),
+                remove: false,
+            }),
+        )?;
+    }
+    let targets = [
+        &visible_os,
+        &visible_vm,
+        &forward_owned,
+        &reverse_owned,
+        &hidden_owned,
+        &orphan,
+    ];
+    let mut restricted = actor.clone();
+    restricted.grants[0].scope = Scope::Targets(
+        targets
+            .into_iter()
+            .map(AssetRef::try_from)
+            .collect::<Result<_, _>>()?,
+    );
+    let usage = store.usage()?;
+    let Reply::Page(page) = call(
+        &store,
+        &restricted,
+        Command::Query(api::Query {
+            level_only: true,
+            ..query()
+        }),
+    )?
+    else {
+        return Err("page".into());
+    };
+    let actual: std::collections::BTreeSet<_> = page
+        .items
+        .iter()
+        .map(|i| {
+            i.target
+                .as_ref()
+                .map(|t| t.asset_id.as_str())
+                .ok_or("target")
+        })
+        .collect::<Result<_, _>>()?;
+    let expected: std::collections::BTreeSet<_> =
+        [&visible_os, &visible_vm, &hidden_owned, &orphan]
+            .map(|t| t.asset_id.as_str())
+            .into();
+    assert_eq!(actual, expected);
+    assert_eq!(page.total, 4);
+    assert_eq!(store.usage()?, usage);
+    Ok(())
+}
+
 // A small estate must not re-expand the estate for every candidate's parent probe.
 // The wall-clock ceiling is a required regression gate; indexed plans alone do not bound latency.
 #[test]

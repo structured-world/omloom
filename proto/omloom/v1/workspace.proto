@@ -108,6 +108,35 @@ message WorkingContext {
   // or focus; omit for retrieval. The server rechecks membership at commit.
   optional uint64 expected = 3;
 }
+// Read-only review of a placement already changed outside Omloom. This request
+// never executes a hypervisor migration or changes the guest's addresses.
+message PrepareVmPlacement {
+  // User-selected existing VM incarnation, never identified by its current IP.
+  omloom.v1.AssetRef vm = 1;
+  // Optional proposed enabled hypervisor installation. Omit to read the actual
+  // current placement before choosing a destination in the enclosing context.
+  optional omloom.v1.AssetRef destination = 2;
+}
+message VmPlacementReview {
+  // Current application basis, echoed as WorkingContext.expected on acceptance.
+  uint64 revision = 1;
+  // Exact permitted VM identity/name and accepted inventory revision.
+  Item vm = 2;
+  // Actual current placement and its conditional edit revision. Absent only
+  // when no placement exists; a hidden endpoint makes the review unavailable.
+  optional omloom.v1.Relation current = 3;
+  // Independently permitted actual old host, including a legacy device host.
+  optional Item current_host = 4;
+  // Independently permitted proposed enabled hypervisor installation.
+  optional Item destination = 5;
+  // Permitted currently resolved facets whose explicit old placement binding
+  // becomes unavailable after a move. Contacts and source references are omitted;
+  // no owner is copied to the destination.
+  repeated EffectiveResponsibility invalidated_inheritance = 6;
+  // Bounded permitted hardware-owner paths and local interface addresses for
+  // the actual old and proposed hosts, consistent with this review's revision.
+  repeated ItemContext contexts = 7;
+}
 message Prepare {
   // User-selected presentation used to suggest applicable creation actions;
   // the server derives actual parent, kind and field permissions independently.
@@ -1391,6 +1420,8 @@ message Request {
     FindIdentityCandidates find_identity_candidates = 30;
     // Resolve a retired reference without transferring its old grants.
     ResolveIdentity resolve_identity = 31;
+    // Review current/proposed VM placement without invoking an external effect.
+    PrepareVmPlacement prepare_vm_placement = 32;
   }
 }
 message Reply {
@@ -1436,5 +1467,7 @@ message Reply {
     IdentityCandidates identity_candidates = 19;
     // Explicit reference provenance and the independently authorized current target.
     ResolvedIdentity resolved_identity = 20;
+    // Current authorized placement and the independently reviewed destination.
+    VmPlacementReview vm_placement_review = 21;
   }
 }

@@ -619,6 +619,34 @@ fresh correction. Old references resolve read-only to the canonical incarnation
 only when both original and canonical rights permit it. They never become write
 or execution aliases.
 
+## Record a VM's new hypervisor
+
+After migrating a VM outside Omloom, open its details and choose **Change
+hypervisor after migration**. Drag the VM card onto an enabled destination on
+desktop, or use **Choose** on a phone or keyboard. Destination cards show
+permitted hardware paths, addresses and exact identities. Searching and paging
+stay within the selected enclosing context; choosing all permitted infrastructure
+is an explicit action.
+
+Review the actual old and new host, then **Record and view VM**. This records
+inventory placement only: it does not invoke a hypervisor migration. The same
+VM, OS installations, interfaces, services and source mappings remain in place.
+Current IPs can stay unchanged or be updated by a separate guest observation.
+Service binds, routes, network/storage membership and grants are not inferred
+from the destination.
+
+One VM has one accepted current hosting placement. Recording a move conditionally
+updates that relation, rather than adding another host. A hidden old host, an
+obsolete review, an ineligible destination, a cycle or unresolved guest effects
+prevent acceptance. Ambiguous existing multi-host records require explicit
+resolution through **Connections in broader scope**; upgrading never guesses
+which host to retain.
+
+Direct ownership stays unchanged. The review identifies permitted inherited
+facets bound to the old placement; those become source-unavailable after its
+revision changes. Review their administrative source separately in the existing
+responsibility editor. The new host never silently becomes the owner.
+
 ## Verification
 
 ```sh

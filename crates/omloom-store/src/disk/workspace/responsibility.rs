@@ -485,6 +485,44 @@ impl Tx<'_> {
         }
         Ok(kind)
     }
+    pub(super) fn placement_inheritance(
+        &self,
+        context: &Context,
+        target: AssetRef,
+        relation: &wire::Relation,
+    ) -> Result<Vec<api::EffectiveResponsibility>> {
+        let mut mask = 0;
+        for facet in [Facet::ClaimedOwner, Facet::Operator] {
+            if context.field(
+                target,
+                wire::AssetKind::VirtualMachine as i32,
+                field_name(facet)?,
+                false,
+            ) {
+                mask |= 1 << (facet as i32 - 1);
+            }
+        }
+        let graph = graph::Graph::load(self, [(target, mask)].into())?;
+        let mut affected = Vec::new();
+        for facet in [Facet::ClaimedOwner, Facet::Operator] {
+            if mask & (1 << (facet as i32 - 1)) != 0
+                && let Some(assignment) = graph.assignment(target, facet)
+                && assignment.mode == Mode::Inherit as i32
+                && assignment.source_relation.as_deref() == Some(relation.relation_id.as_str())
+                && assignment.source_revision == Some(relation.revision)
+            {
+                let mut value = graph.resolve(context, target, facet)?;
+                // Placement review needs the affected party, not its contact
+                // route or independently addressable source metadata.
+                value.contact = None;
+                value.source = None;
+                value.source_revision = None;
+                affected.push(value);
+            }
+        }
+        Ok(affected)
+    }
+
     fn responsibility_state(
         &self,
         context: &Context,

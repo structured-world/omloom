@@ -610,11 +610,17 @@ impl Store {
                         "forward_owned"
                     };
                     predicate_joins.push(format!(
-                        " WITH {}, EXISTS {{ MATCH {path} WHERE {owner} }} AS {flag}",
+                        " OPTIONAL MATCH {path} WHERE {owner} WITH {}, p IS NOT NULL AS {flag}",
                         bindings.join(", ")
                     ));
-                    bindings.push(flag.into());
-                    clauses.push(format!("NOT {flag}"));
+                    if reverse {
+                        bindings.push(flag.into());
+                        clauses.push(format!("NOT {flag}"));
+                    } else {
+                        // Owned components cannot become roots in the reverse
+                        // branch. Reject them before performing another probe.
+                        predicate_joins.push(format!(" WHERE NOT {flag}"));
+                    }
                 }
             } else {
                 let owner = browse_clause(context, &mut values, None, &child_kinds);
@@ -1541,6 +1547,13 @@ impl Store {
             }
             tx.check_relationship(context, &selection, &existing)?;
             if request.remove {
+                if existing.kind == wire::RelationKind::RunsOn as i32 {
+                    let guest = parse_target(existing.from.as_ref())?;
+                    if number(&tx.asset(guest)?, "kind")? == wire::AssetKind::VirtualMachine as u64
+                    {
+                        tx.require_no_pending_operations(guest)?;
+                    }
+                }
                 if existing.kind == wire::RelationKind::ReleaseOf as i32
                     && tx.release_is_installed(parse_target(existing.from.as_ref())?)?
                 {

@@ -192,6 +192,78 @@ export interface WorkingContext {
     expected?: bigint;
 }
 /**
+ * Read-only review of a placement already changed outside Omloom. This request
+ * never executes a hypervisor migration or changes the guest's addresses.
+ *
+ * @generated from protobuf message omloom.workspace.v1.PrepareVmPlacement
+ */
+export interface PrepareVmPlacement {
+    /**
+     * User-selected existing VM incarnation, never identified by its current IP.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef vm = 1
+     */
+    vm?: AssetRef;
+    /**
+     * Optional proposed enabled hypervisor installation. Omit to read the actual
+     * current placement before choosing a destination in the enclosing context.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef destination = 2
+     */
+    destination?: AssetRef;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.VmPlacementReview
+ */
+export interface VmPlacementReview {
+    /**
+     * Current application basis, echoed as WorkingContext.expected on acceptance.
+     *
+     * @generated from protobuf field: uint64 revision = 1
+     */
+    revision: bigint;
+    /**
+     * Exact permitted VM identity/name and accepted inventory revision.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.Item vm = 2
+     */
+    vm?: Item;
+    /**
+     * Actual current placement and its conditional edit revision. Absent only
+     * when no placement exists; a hidden endpoint makes the review unavailable.
+     *
+     * @generated from protobuf field: optional omloom.v1.Relation current = 3
+     */
+    current?: Relation;
+    /**
+     * Independently permitted actual old host, including a legacy device host.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.Item current_host = 4
+     */
+    currentHost?: Item;
+    /**
+     * Independently permitted proposed enabled hypervisor installation.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.Item destination = 5
+     */
+    destination?: Item;
+    /**
+     * Permitted currently resolved facets whose explicit old placement binding
+     * becomes unavailable after a move. Contacts and source references are omitted;
+     * no owner is copied to the destination.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.EffectiveResponsibility invalidated_inheritance = 6
+     */
+    invalidatedInheritance: EffectiveResponsibility[];
+    /**
+     * Bounded permitted hardware-owner paths and local interface addresses for
+     * the actual old and proposed hosts, consistent with this review's revision.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.ItemContext contexts = 7
+     */
+    contexts: ItemContext[];
+}
+/**
  * @generated from protobuf message omloom.workspace.v1.Prepare
  */
 export interface Prepare {
@@ -3464,6 +3536,14 @@ export interface Request {
          */
         resolveIdentity: ResolveIdentity;
     } | {
+        oneofKind: "prepareVmPlacement";
+        /**
+         * Review current/proposed VM placement without invoking an external effect.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PrepareVmPlacement prepare_vm_placement = 32
+         */
+        prepareVmPlacement: PrepareVmPlacement;
+    } | {
         oneofKind: undefined;
     };
 }
@@ -3636,6 +3716,14 @@ export interface Reply {
          * @generated from protobuf field: omloom.workspace.v1.ResolvedIdentity resolved_identity = 20
          */
         resolvedIdentity: ResolvedIdentity;
+    } | {
+        oneofKind: "vmPlacementReview";
+        /**
+         * Current authorized placement and the independently reviewed destination.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.VmPlacementReview vm_placement_review = 21
+         */
+        vmPlacementReview: VmPlacementReview;
     } | {
         oneofKind: undefined;
     };
@@ -4206,6 +4294,37 @@ class WorkingContext$Type extends MessageType<WorkingContext> {
  * @generated MessageType for protobuf message omloom.workspace.v1.WorkingContext
  */
 export const WorkingContext = new WorkingContext$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PrepareVmPlacement$Type extends MessageType<PrepareVmPlacement> {
+    constructor() {
+        super("omloom.workspace.v1.PrepareVmPlacement", [
+            { no: 1, name: "vm", kind: "message", T: () => AssetRef },
+            { no: 2, name: "destination", kind: "message", T: () => AssetRef }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PrepareVmPlacement
+ */
+export const PrepareVmPlacement = new PrepareVmPlacement$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class VmPlacementReview$Type extends MessageType<VmPlacementReview> {
+    constructor() {
+        super("omloom.workspace.v1.VmPlacementReview", [
+            { no: 1, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 2, name: "vm", kind: "message", T: () => Item },
+            { no: 3, name: "current", kind: "message", T: () => Relation },
+            { no: 4, name: "current_host", kind: "message", T: () => Item },
+            { no: 5, name: "destination", kind: "message", T: () => Item },
+            { no: 6, name: "invalidated_inheritance", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => EffectiveResponsibility },
+            { no: 7, name: "contexts", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => ItemContext }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.VmPlacementReview
+ */
+export const VmPlacementReview = new VmPlacementReview$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class Prepare$Type extends MessageType<Prepare> {
     constructor() {
@@ -5613,7 +5732,8 @@ class Request$Type extends MessageType<Request> {
             { no: 28, name: "compare_host_identity", kind: "message", oneof: "command", T: () => CompareHostIdentity },
             { no: 29, name: "correct_identity", kind: "message", oneof: "command", T: () => IdentityCorrection },
             { no: 30, name: "find_identity_candidates", kind: "message", oneof: "command", T: () => FindIdentityCandidates },
-            { no: 31, name: "resolve_identity", kind: "message", oneof: "command", T: () => ResolveIdentity }
+            { no: 31, name: "resolve_identity", kind: "message", oneof: "command", T: () => ResolveIdentity },
+            { no: 32, name: "prepare_vm_placement", kind: "message", oneof: "command", T: () => PrepareVmPlacement }
         ]);
     }
 }
@@ -5644,7 +5764,8 @@ class Reply$Type extends MessageType<Reply> {
             { no: 17, name: "identity_correction", kind: "message", oneof: "result", T: () => IdentityCorrectionView },
             { no: 18, name: "identity_corrected", kind: "message", oneof: "result", T: () => IdentityCorrectionApplied },
             { no: 19, name: "identity_candidates", kind: "message", oneof: "result", T: () => IdentityCandidates },
-            { no: 20, name: "resolved_identity", kind: "message", oneof: "result", T: () => ResolvedIdentity }
+            { no: 20, name: "resolved_identity", kind: "message", oneof: "result", T: () => ResolvedIdentity },
+            { no: 21, name: "vm_placement_review", kind: "message", oneof: "result", T: () => VmPlacementReview }
         ]);
     }
 }
