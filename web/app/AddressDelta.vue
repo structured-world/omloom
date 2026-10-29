@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { model, enumLabel } from './api';
 defineProps<{ value: model.AddressDelta }>();
-const format = (value: model.CurrentAddress) => `${value.address}${value.prefixLength === undefined ? '' : '/'+value.prefixLength} (${enumLabel(model.AddressState, value.state)})`;
+const format = (value: model.CurrentAddress) => `${value.address}${value.prefixLength === undefined ? '' : '/'+value.prefixLength} (${enumLabel(model.AddressStability, value.stability)} · ${enumLabel(model.AddressState, value.state)})`;
 </script>
 <template><section aria-label="Address changes" class="address-delta">
 <h4>Interface address changes</h4><p>{{ value.source }}. {{ value.complete ? 'Complete refresh of this source only.' : 'Partial refresh; omitted addresses retain their previous observation dates.' }}</p>

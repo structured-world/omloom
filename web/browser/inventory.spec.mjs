@@ -306,10 +306,12 @@ test('host address replacement is reviewed without adopting another identity on 
         { key: 'installation', kind: m.AssetKind.SOFTWARE_INSTALLATION, parent: 'hardware', fields: [field(`Address OS ${width}`)] },
         { key: 'interface', kind: m.AssetKind.INTERFACE, parent: 'installation', fields: [field(`Address NIC ${width}`)], addresses: [address('192.0.2.7')], addressesComplete: true },
       ] });
+      // A stability-only update must identify the changed attribute in review.
+      report.findings[2].addresses.push(m.CurrentAddress.create({ address: '192.0.2.11', prefixLength: 24, state: m.AddressState.PREFERRED }));
       const prepared = await rpc({ oneofKind: 'hostImport', hostImport: m.HostImport.create({ source, report, selection: report.findings.map(v => ({ key: v.key })) }) });
       const accepted = await rpc({ oneofKind: 'hostImport', hostImport: m.HostImport.create({ preview: prepared.preview.id }) });
       report.observedAt = 200n;
-      report.findings[2].addresses = [address('192.0.2.9')];
+      report.findings[2].addresses = [address('192.0.2.9'), address('192.0.2.11')];
       const buffer = Buffer.from(m.Request.toBinary(m.Request.create({ command: { oneofKind: 'hostImport', hostImport: m.HostImport.create({ report }) } })));
       await page.setViewportSize({ width, height: 900 }); await page.goto(server.url);
       if (width === 390) await page.getByRole('button', { name: 'More', exact: true }).click();
@@ -319,13 +321,14 @@ test('host address replacement is reviewed without adopting another identity on 
       await dialog.getByLabel('Source name', { exact: true }).fill(source);
       for (let i = 0; i < 3; i++) await dialog.getByRole('checkbox').nth(i).check();
       await dialog.getByRole('button', { name: 'Prepare host preview', exact: true }).click();
-      await expect(dialog.getByText('Add 192.0.2.9/24 (preferred)', { exact: true })).toBeVisible();
-      await expect(dialog.getByText('Remove 192.0.2.7/24 (preferred) from this source', { exact: true })).toBeVisible();
+      await expect(dialog.getByText('Add 192.0.2.9/24 (stable · preferred)', { exact: true })).toBeVisible();
+      await expect(dialog.getByText('Remove 192.0.2.7/24 (stable · preferred) from this source', { exact: true })).toBeVisible();
+      await expect(dialog.getByText('Update 192.0.2.11/24 (unspecified · preferred) → 192.0.2.11/24 (stable · preferred)', { exact: true })).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await dialog.getByRole('button', { name: 'Accept selected observations', exact: true }).click();
       await expect(dialog).toBeHidden();
       const current = await rpc({ oneofKind: 'read', read: m.Read.create({ target: accepted.mutation.targets[2] }) });
-      expect(current.detail.currentAddresses[0].observations.map(v => v.value.address)).toEqual(['192.0.2.9']);
+      expect(current.detail.currentAddresses[0].observations.map(v => v.value.address).sort()).toEqual(['192.0.2.11', '192.0.2.9']);
       const hosts = await rpc({ oneofKind: 'query', query: m.Query.create({ search: `Address host ${width}`, limit: 25 }) });
       expect(hosts.page.total).toBe(1n);
       expect(hosts.page.items[0].target).toEqual(accepted.mutation.targets[0]);
