@@ -702,11 +702,11 @@ fn typed_relations_validate_endpoints_and_reopen() -> TestResult {
 fn relation_moves_preserve_parallel_edges() -> TestResult {
     let dir = tempfile::tempdir()?;
     let store = Store::open(dir.path(), policy())?;
-    let mut vm = asset();
-    vm.kind = omloom_contracts::wire::AssetKind::VirtualMachine as i32;
+    let mut service = asset();
+    service.kind = omloom_contracts::wire::AssetKind::Service as i32;
     let first = asset();
     let second = asset();
-    for object in [&vm, &first, &second] {
+    for object in [&service, &first, &second] {
         store.save_asset(
             &admit(record::Body::Asset(object.clone())),
             None,
@@ -716,9 +716,9 @@ fn relation_moves_preserve_parallel_edges() -> TestResult {
     }
     let mut relation = omloom_contracts::wire::Relation {
         relation_id: RelationId::generate().to_string(),
-        from: vm.target.clone(),
+        from: service.target.clone(),
         to: first.target.clone(),
-        kind: omloom_contracts::wire::RelationKind::RunsOn as i32,
+        kind: omloom_contracts::wire::RelationKind::DependsOn as i32,
         revision: 1,
         authority_id: AuthorityId::generate().to_string(),
     };
@@ -744,13 +744,13 @@ fn relation_moves_preserve_parallel_edges() -> TestResult {
         "admin",
         4,
     )?;
-    assert_eq!(store.relations(target(&vm), 10)?.len(), 2);
+    assert_eq!(store.relations(target(&service), 10)?.len(), 2);
     assert_eq!(store.relations(target(&first), 10)?, vec![parallel]);
     assert_eq!(store.relations(target(&second), 10)?, vec![relation]);
-    assert!(matches!(store.relations(target(&vm), 1), Err(Error::Limit)));
+    assert!(matches!(store.relations(target(&service), 1), Err(Error::Limit)));
     drop(store);
     let store = Store::open(dir.path(), policy())?;
-    assert_eq!(store.relations(target(&vm), 10)?.len(), 2);
+    assert_eq!(store.relations(target(&service), 10)?.len(), 2);
     assert_eq!(store.relations(target(&first), 10)?.len(), 1);
     assert_eq!(store.relations(target(&second), 10)?.len(), 1);
     Ok(())
