@@ -1844,7 +1844,7 @@ impl Tx<'_> {
             self.delete(&group_key)?;
         }
         self.retire_current_facts(target)?;
-        let mappings = self.query("MATCH (n:OmRow {asset:$asset}) WHERE n.parent='csv-mappings' AND n.incarnation=$incarnation RETURN properties(n) AS p LIMIT 2049", params([("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string()))]))?;
+        let mappings = self.query("MATCH (n:OmRow {asset:$asset}) WHERE n.parent='csv-mappings' AND n.incarnation=$incarnation AND n.class=$class RETURN properties(n) AS p LIMIT 2049", params([("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string())), ("class", Value::Int(Class::Inventory as i64))]))?;
         if mappings.len() > MAX_CHILDREN {
             return Err(Error::Limit);
         }

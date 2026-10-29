@@ -93,9 +93,9 @@ impl Tx<'_> {
         }
         for row in csv {
             let key = string(&row, "key")?;
-            let mut data = strip(row);
-            data.extend(target_props(to));
-            self.put(&key, "csv-mappings", Class::Inventory, data)?;
+            // Preserve the personal source's original target as a replay fence.
+            // It neither authorizes the retained identity nor creates a duplicate.
+            self.put(&key, "csv-mappings", Class::Checkpoint, target_props(from))?;
         }
         for (family, field) in [
             (Family::Addresses, "current_addresses"),

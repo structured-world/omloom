@@ -370,6 +370,9 @@ an explicit clear. Invalid rows identify the failing row and mapped column witho
 echoing its value or persisting a rejected preview; invalid input cannot be
 partially accepted. A valid preview expires, and applying it rechecks the current
 application revision, actor scope and field types. Raw CSV history is not saved.
+Identity correction does not retarget personal CSV approvals. A minimal binding
+to the retired identity prevents an old source from silently updating the retained
+resource or recreating a duplicate; reversing the correction restores that binding.
 Preparing a replacement atomically reclaims that importer's earlier review-only
 drafts and their rows. Failed preparation preserves the prior draft; another
 importer's previews remain under their own expiry and revision checks.

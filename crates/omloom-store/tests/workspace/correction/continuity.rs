@@ -1,5 +1,84 @@
 use super::*;
 
+// Another actor's personal CSV approval cannot become approval for a new target.
+#[test]
+fn correction_preserves_personal_csv_target_and_undo_binding() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut importer = operator();
+    importer.actor = "personal-importer".into();
+    let input = api::Import {
+        source: "Personal source".into(),
+        kind: K::Device as i32,
+        csv: "external_id,name\nsource-id,Duplicate\n".into(),
+        mappings: vec![api::Mapping {
+            source: "name".into(),
+            field: "name".into(),
+        }],
+        ..Default::default()
+    };
+    let Reply::Preview(preview) = call(&store, &importer, Command::Import(input.clone()))? else {
+        return Err("preview".into());
+    };
+    let Reply::Mutation(created) = call(
+        &store,
+        &importer,
+        Command::Import(api::Import {
+            preview: preview.id,
+            ..Default::default()
+        }),
+    )?
+    else {
+        return Err("import".into());
+    };
+    let duplicate = &created.targets[0];
+    let retained = create(&store, &operator(), K::Device, "Retained")?;
+    let preview = prepare(
+        &store,
+        vec![mapping(duplicate, &retained)],
+        api::IdentityDecision::DistinctInstallations,
+    )?;
+    let applied = apply(&store, &preview.id)?;
+    let before = store.usage()?;
+    let Reply::Preview(retry) = call(&store, &importer, Command::Import(input.clone()))? else {
+        return Err("retry".into());
+    };
+    assert!(
+        retry.id.is_none(),
+        "personal approval must not silently retarget: {retry:?}"
+    );
+    assert!(
+        retry
+            .rows
+            .iter()
+            .all(|row| row.change.is_none() && !row.diagnostic.is_empty())
+    );
+    assert_eq!(
+        store.usage()?,
+        before,
+        "a retired binding cannot create a new inventory identity"
+    );
+    call(
+        &store,
+        &operator(),
+        Command::CorrectIdentity(api::IdentityCorrection {
+            undo: Some(applied.id),
+            ..Default::default()
+        }),
+    )?;
+    let Reply::Preview(restored) = call(&store, &importer, Command::Import(input))? else {
+        return Err("restored".into());
+    };
+    assert_eq!(
+        restored.rows[0]
+            .change
+            .as_ref()
+            .and_then(|change| change.target.as_ref()),
+        Some(duplicate)
+    );
+    Ok(())
+}
+
 // Unrelated matching claims cannot consume another working scope's allowance.
 #[test]
 fn candidate_limit_counts_only_current_scope() -> TestResult {
