@@ -610,7 +610,7 @@ impl Store {
                         "forward_owned"
                     };
                     predicate_joins.push(format!(
-                        " OPTIONAL MATCH {path} WHERE {owner} WITH {}, p IS NOT NULL AS {flag}",
+                        " WITH {}, EXISTS {{ MATCH {path} WHERE {owner} }} AS {flag}",
                         bindings.join(", ")
                     ));
                     bindings.push(flag.into());
