@@ -531,6 +531,21 @@ and conflicting reports at the same source instant are refused. Each selected
 network section has its own current checkpoint, so accepting routes does not
 implicitly accept firewall data or prevent reviewing it separately.
 
+For selected interfaces, review lists added addresses, removed addresses from a
+complete refresh, and changed attributes. The comparison concerns the selected
+source only. A partial refresh preserves omitted addresses and their original
+observation dates. It never changes another source, an intended assignment or a
+service's literal bind. Current-address read rights apply even when an existing
+preview is reused. Preview custody stores the selected input, not another copy
+of the derived comparison or an address history.
+
+Select two devices, VMs, OS installations or interfaces and choose **Compare
+identity** to inspect their current permitted fields and source claims together.
+Hardware and installation identifiers have separate types and namespaces;
+matching reported digests do not establish authenticated identity or merge
+resources. Comparison reads only the two selected subjects, without loading
+their descendants or routing tables, and writes nothing.
+
 Files are limited to 256 KiB, 128 findings and 2944 protobuf field visits before
 decoding. The remaining request budget accommodates explicit matches and context;
 small files with excessive nested fields are refused before generated allocations.

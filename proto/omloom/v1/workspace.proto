@@ -1080,6 +1080,24 @@ message Address {
   // This is not observed election state and is absent for ordinary assignment.
   optional uint32 priority = 15;
 }
+message AddressAttributeChange {
+  // Previously accepted current value from this exact interface/source.
+  CurrentAddress before = 1;
+  // Selected incoming value for the same address, without rewriting a service bind.
+  CurrentAddress after = 2;
+}
+message AddressDelta {
+  // Selected import configuration whose current facts are being compared.
+  string source = 1;
+  // Incoming addresses absent from this source's current interface observations.
+  repeated CurrentAddress added = 2;
+  // Current addresses omitted by an explicitly complete source refresh only.
+  repeated CurrentAddress removed = 3;
+  // Attribute changes on retained addresses; no duplicate unchanged values.
+  repeated AddressAttributeChange updated = 4;
+  // Source-declared completeness; false means omissions are retained.
+  bool complete = 5;
+}
 message ImportRow {
   // One-based source row used to locate errors without losing input context.
   uint32 row = 1;
@@ -1087,6 +1105,9 @@ message ImportRow {
   Write change = 2;
   // Field-specific actionable validation diagnostic; never a successful error envelope.
   string diagnostic = 3;
+  // Authorized source-local address differences derived for this bounded review.
+  // Absent for non-interface rows or when current-address reading is not allowed.
+  AddressDelta addresses = 4;
 }
 message Preview {
   // Server-generated bounded-lived preview identity, absent for invalid previews.

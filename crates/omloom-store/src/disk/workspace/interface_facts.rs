@@ -42,6 +42,45 @@ pub(super) fn validate_address(value: &api::CurrentAddress) -> Result<()> {
 }
 
 impl Tx<'_> {
+    pub(super) fn address_delta(
+        &self,
+        context: &Context,
+        target: AssetRef,
+        source: &str,
+        incoming: &[api::CurrentAddress],
+        complete: bool,
+    ) -> Result<Option<api::AddressDelta>> {
+        if !context.field(target, wire::AssetKind::Interface as i32, FIELD, false) {
+            return Ok(None);
+        }
+        let key = source_key(target, source);
+        let mut prior = BTreeMap::new();
+        for row in self.fact_rows(&format!("{key}/values"), LIMIT)? {
+            let value = api::CurrentAddress::decode(binary(&row, "payload")?)
+                .map_err(|_| Error::Corrupt)?;
+            prior.insert(value.address.clone(), value);
+        }
+        let mut delta = api::AddressDelta {
+            source: source.into(),
+            complete,
+            ..Default::default()
+        };
+        for value in incoming {
+            match prior.remove(&value.address) {
+                Some(old) if old != *value => delta.updated.push(api::AddressAttributeChange {
+                    before: Some(old),
+                    after: Some(value.clone()),
+                }),
+                Some(_) => {}
+                None => delta.added.push(value.clone()),
+            }
+        }
+        if complete {
+            delta.removed.extend(prior.into_values());
+        }
+        Ok(Some(delta))
+    }
+
     pub(super) fn accept_addresses(&mut self, value: &api::InterfaceAddresses) -> Result<()> {
         let target = parse_target(value.interface.as_ref())?;
         let parent = source_parent(target);

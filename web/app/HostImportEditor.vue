@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onBeforeUnmount } from 'vue';
 import Dialog from './Dialog.vue';
+import AddressDelta from './AddressDelta.vue';
 import { readHostReport } from './host-report';
 import { call, model, AssetKind, label, display, key, type AssetRef } from './api';
 import { softwareFields } from './software-fields';
@@ -103,6 +104,6 @@ async function matchScope(candidate:string){
 <ul><li v-for="(route,index) in report.network.routes" :key="`route-${index}`">{{ route.family }} {{ route.destination }} via {{ route.gateway }} {{ route.interface }} {{ route.flags }}</li>
 <li v-for="rule in report.network.rules" :key="rule.subject">{{ rule.subject }}: {{ rule.action }}</li></ul></details>
 </fieldset></section></fieldset>
-<section v-if="preview"><h3>Review {{ preview.rows.length }} selected resources</h3><ol><li v-for="row in preview.rows" :key="row.row">{{ row.diagnostic }}<span v-if="row.change?.changes.length">: {{ display(row.change.changes.find(v=>v.name==='name')) }}</span> <a v-if="row.change?.target" :href="`#/?asset=${encodeURIComponent(row.change.target.assetId)}&incarnation=${encodeURIComponent(row.change.target.incarnation)}`" target="_blank" rel="noopener">Inspect existing resource</a></li></ol></section>
+<section v-if="preview"><h3>Review {{ preview.rows.length }} selected resources</h3><ol><li v-for="row in preview.rows" :key="row.row">{{ row.diagnostic }}<span v-if="row.change?.changes.length">: {{ display(row.change.changes.find(v=>v.name==='name')) }}</span> <a v-if="row.change?.target" :href="`#/?asset=${encodeURIComponent(row.change.target.assetId)}&incarnation=${encodeURIComponent(row.change.target.incarnation)}`" target="_blank" rel="noopener">Inspect existing resource</a><AddressDelta v-if="row.addresses" :value="row.addresses" /></li></ol></section>
 <p v-if="error" role="alert">{{ error }}</p><footer><button type="button" @click="emit('close')">Cancel</button><button :disabled="busy||!selected.length">Prepare host preview</button><button v-if="preview?.id" type="button" class="primary" :disabled="busy" @click="prepare(true)">Accept selected observations</button></footer>
 </form></Dialog></template>

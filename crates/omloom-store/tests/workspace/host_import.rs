@@ -247,6 +247,160 @@ fn host_identity_comparison_is_read_only_and_checks_both_subjects() -> TestResul
     assert_eq!(before, store.usage()?);
     Ok(())
 }
+
+// Address replacement follows the existing reviewed mapping, affects only its
+// source and cannot move a service's literal bind to the new interface address.
+#[test]
+fn host_address_preview_is_a_source_local_delta_without_identity_changes() -> TestResult {
+    fn detail(store: &Store, target: &wire::AssetRef) -> Result<api::Detail, Error> {
+        let Reply::Detail(value) = call(
+            store,
+            &operator(),
+            Command::Read(api::Read {
+                target: Some(target.clone()),
+                ..Default::default()
+            }),
+        )?
+        else {
+            return Err(Error::Corrupt);
+        };
+        Ok(*value)
+    }
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut request = draft();
+    request
+        .report
+        .as_mut()
+        .unwrap()
+        .findings
+        .push(api::HostFinding {
+            key: "service".into(),
+            kind: K::Service as i32,
+            parent: Some("installation".into()),
+            fields: vec![text_field("name", "Literal listener")],
+            ..Default::default()
+        });
+    request.selection.push(api::HostSelection {
+        key: "service".into(),
+        ..Default::default()
+    });
+    let initial = preview(&store, request.clone()).map_err(|e| format!("initial preview: {e}"))?;
+    let accepted = accept(&store, &initial).map_err(|e| format!("initial acceptance: {e}"))?;
+    let interface = &accepted.targets[2];
+    let service = &accepted.targets[3];
+    let address = |value: &str| api::CurrentAddress {
+        address: value.into(),
+        prefix_length: Some(24),
+        stability: api::AddressStability::Stable as i32,
+        state: api::AddressState::Preferred as i32,
+    };
+    call(
+        &store,
+        &operator(),
+        Command::InterfaceAddresses(api::InterfaceAddresses {
+            interface: Some(interface.clone()),
+            source: "Independent source".into(),
+            observed_at: 100,
+            addresses: vec![address("192.0.2.8")],
+            complete: true,
+        }),
+    )?;
+    store.workspace(
+        &operator(),
+        api::Request {
+            working: Some(api::WorkingContext {
+                focus: Some(accepted.targets[1].clone()),
+                expected: Some(store.usage()?.revision),
+                ..Default::default()
+            }),
+            command: Some(Command::HostNetwork(api::HostNetwork {
+                installation: Some(accepted.targets[1].clone()),
+                source: "Listener source".into(),
+                observed_at: 100,
+                basis: "b".repeat(64),
+                sockets: vec![api::SocketBind {
+                    service: Some(service.clone()),
+                    protocol: "tcp".into(),
+                    family: "IPv4".into(),
+                    bind: "192.0.2.7".into(),
+                    port: 443,
+                    ..Default::default()
+                }],
+                socket_coverage: "verified".into(),
+                route_coverage: "not collected".into(),
+                application_coverage: "not collected".into(),
+                packet_filter_coverage: "not collected".into(),
+                ..Default::default()
+            })),
+        },
+        100,
+    )?;
+    let listener = detail(&store, service)
+        .map_err(|e| format!("read listener: {e}"))?
+        .host_network;
+    assert!(!listener.is_empty());
+    let report = request.report.as_mut().unwrap();
+    report.observed_at = 200;
+    report.findings[2].addresses = vec![address("192.0.2.19")];
+    let plan = preview(&store, request.clone()).map_err(|e| format!("replacement preview: {e}"))?;
+    let delta = plan.rows[2].addresses.as_ref().ok_or("address delta")?;
+    assert_eq!(delta.source, "Native fixture");
+    assert_eq!(delta.added, vec![address("192.0.2.19")]);
+    assert_eq!(delta.removed, vec![address("192.0.2.7")]);
+    assert!(delta.updated.is_empty());
+    assert!(delta.complete);
+    let mut restricted = operator();
+    restricted.grants[0].read = Fields::Selected(vec!["name".into(), "relations".into()]);
+    let before_restricted_review = store.usage()?;
+    let Reply::Preview(hidden) = call(&store, &restricted, Command::HostImport(request.clone()))
+        .map_err(|e| format!("restricted review: {e}"))?
+    else {
+        return Err("restricted preview".into());
+    };
+    assert_eq!(
+        hidden.id, plan.id,
+        "repeating the same review does not store another copy"
+    );
+    assert!(
+        hidden.rows.iter().all(|row| row.addresses.is_none()),
+        "a cached review cannot disclose previously readable addresses after revocation"
+    );
+    assert_eq!(store.usage()?, before_restricted_review);
+    assert_eq!(accept(&store, &plan)?.targets, accepted.targets);
+    assert_eq!(detail(&store, service)?.host_network, listener);
+    let current = detail(&store, interface)?.current_addresses;
+    assert_eq!(current.len(), 2);
+    assert!(current.iter().any(
+        |s| s.coverage.as_ref().unwrap().source == "Independent source"
+            && s.observations[0].value.as_ref().unwrap().address == "192.0.2.8"
+    ));
+    let report = request.report.as_mut().unwrap();
+    report.observed_at = 300;
+    report.findings[2].addresses = vec![address("192.0.2.20")];
+    report.findings[2].addresses_complete = false;
+    let plan = preview(&store, request)?;
+    let delta = plan.rows[2].addresses.as_ref().ok_or("partial delta")?;
+    assert_eq!(delta.added, vec![address("192.0.2.20")]);
+    assert!(delta.removed.is_empty());
+    assert!(!delta.complete);
+    accept(&store, &plan)?;
+    let current = detail(&store, interface)?.current_addresses;
+    let native = current
+        .iter()
+        .find(|s| s.coverage.as_ref().unwrap().source == "Native fixture")
+        .ok_or("native source")?;
+    assert_eq!(
+        native
+            .observations
+            .iter()
+            .map(|v| (v.value.as_ref().unwrap().address.as_str(), v.observed_at))
+            .collect::<Vec<_>>(),
+        vec![("192.0.2.19", Some(200)), ("192.0.2.20", Some(300))]
+    );
+    assert_eq!(detail(&store, service)?.host_network, listener);
+    Ok(())
+}
 fn preview(store: &Store, request: api::HostImport) -> Result<api::Preview, Error> {
     let Reply::Preview(value) = call(store, &operator(), Command::HostImport(request))? else {
         return Err(Error::Corrupt);

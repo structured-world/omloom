@@ -312,10 +312,18 @@ impl Tx<'_> {
                     )?;
                 }
             }
+            let mut addresses = None;
             if node.kind == wire::AssetKind::Interface as i32 {
                 if !context.field(target, node.kind, "current_addresses", true) {
                     return Err(Error::Denied);
                 }
+                addresses = self.address_delta(
+                    context,
+                    target,
+                    &request.source,
+                    &node.addresses,
+                    node.addresses_complete,
+                )?;
                 self.accept_addresses(&api::InterfaceAddresses {
                     interface: Some(target_wire(target)),
                     source: request.source.clone(),
@@ -354,6 +362,7 @@ impl Tx<'_> {
             rows.push(api::ImportRow {
                 row: rows.len() as u32 + 1,
                 change: Some(change),
+                addresses,
                 diagnostic: if keep_fields {
                     "Keep previously accepted identity and local fields"
                 } else if existing.is_some() {
@@ -578,8 +587,14 @@ impl Store {
                 && number(&row, "revision")? == base
                 && number(&row, "expires")? > now
             {
-                let preview =
-                    api::Preview::decode(binary(&row, "query")?).map_err(|_| Error::Corrupt)?;
+                // Reuse custody, not an old disclosure decision. The dry run
+                // above derived these rows under the caller's current rights.
+                let key = string(&row, "key")?;
+                let preview = api::Preview {
+                    id: Some(key.strip_prefix("preview/").ok_or(Error::Corrupt)?.into()),
+                    revision: base,
+                    rows,
+                };
                 return Ok(reply(api::reply::Result::Preview(preview)));
             }
             let key = string(&row, "key")?;
@@ -611,7 +626,6 @@ impl Store {
                 ("working", Value::Binary(selector.encode_to_vec())),
                 ("digest", Value::Binary(fingerprint.into_bytes())),
                 ("payload", Value::Binary(bytes)),
-                ("query", Value::Binary(preview.encode_to_vec())),
             ]),
         )?;
         tx.commit()?;

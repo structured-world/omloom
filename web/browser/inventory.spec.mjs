@@ -128,6 +128,49 @@ test('identity comparison keeps two selected machines distinct on desktop and ph
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
 
+test('host address replacement is reviewed without adopting another identity on desktop and phone', async ({ page }) => {
+  // The import review shows only a selected source's changes. Accepting the
+  // new address reuses all three existing identities instead of creating hosts.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-address-delta-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const source = `Address source ${width}`;
+      const field = text => ({ name: 'name', value: { oneofKind: 'text', text } });
+      const address = value => m.CurrentAddress.create({ address: value, prefixLength: 24, stability: m.AddressStability.STABLE, state: m.AddressState.PREFERRED });
+      const report = m.HostReport.create({ version: 1, platform: 'linux', sourceBasis: `${width}`.padEnd(64, 'a'), bootBasis: 'b'.repeat(64), observedAt: 100n, findings: [
+        { key: 'hardware', kind: m.AssetKind.DEVICE, fields: [field(`Address host ${width}`)] },
+        { key: 'installation', kind: m.AssetKind.SOFTWARE_INSTALLATION, parent: 'hardware', fields: [field(`Address OS ${width}`)] },
+        { key: 'interface', kind: m.AssetKind.INTERFACE, parent: 'installation', fields: [field(`Address NIC ${width}`)], addresses: [address('192.0.2.7')], addressesComplete: true },
+      ] });
+      const prepared = await rpc({ oneofKind: 'hostImport', hostImport: m.HostImport.create({ source, report, selection: report.findings.map(v => ({ key: v.key })) }) });
+      const accepted = await rpc({ oneofKind: 'hostImport', hostImport: m.HostImport.create({ preview: prepared.preview.id }) });
+      report.observedAt = 200n;
+      report.findings[2].addresses = [address('192.0.2.9')];
+      const buffer = Buffer.from(m.Request.toBinary(m.Request.create({ command: { oneofKind: 'hostImport', hostImport: m.HostImport.create({ report }) } })));
+      await page.setViewportSize({ width, height: 900 }); await page.goto(server.url);
+      if (width === 390) await page.getByRole('button', { name: 'More', exact: true }).click();
+      await page.getByRole('button', { name: 'Import host report', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByLabel('Host report file').setInputFiles({ name: 'address-change.omloom', mimeType: 'application/octet-stream', buffer });
+      await dialog.getByLabel('Source name', { exact: true }).fill(source);
+      for (let i = 0; i < 3; i++) await dialog.getByRole('checkbox').nth(i).check();
+      await dialog.getByRole('button', { name: 'Prepare host preview', exact: true }).click();
+      await expect(dialog.getByText('Add 192.0.2.9/24 (preferred)', { exact: true })).toBeVisible();
+      await expect(dialog.getByText('Remove 192.0.2.7/24 (preferred) from this source', { exact: true })).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await dialog.getByRole('button', { name: 'Accept selected observations', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      const current = await rpc({ oneofKind: 'read', read: m.Read.create({ target: accepted.mutation.targets[2] }) });
+      expect(current.detail.currentAddresses[0].observations.map(v => v.value.address)).toEqual(['192.0.2.9']);
+      const hosts = await rpc({ oneofKind: 'query', query: m.Query.create({ search: `Address host ${width}`, limit: 25 }) });
+      expect(hosts.page.total).toBe(1n);
+      expect(hosts.page.items[0].target).toEqual(accepted.mutation.targets[0]);
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('execution host reports match the current VM scope on desktop and phone', async ({ page }) => {
   // Guest collection cannot invent a physical server or rename the accepted VM.
   const dir=await mkdtemp(join(tmpdir(),'omloom-host-vm-'));const server=await host(dir);

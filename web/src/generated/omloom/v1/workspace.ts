@@ -2540,6 +2540,58 @@ export interface Address {
     priority?: number;
 }
 /**
+ * @generated from protobuf message omloom.workspace.v1.AddressAttributeChange
+ */
+export interface AddressAttributeChange {
+    /**
+     * Previously accepted current value from this exact interface/source.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.CurrentAddress before = 1
+     */
+    before?: CurrentAddress;
+    /**
+     * Selected incoming value for the same address, without rewriting a service bind.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.CurrentAddress after = 2
+     */
+    after?: CurrentAddress;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.AddressDelta
+ */
+export interface AddressDelta {
+    /**
+     * Selected import configuration whose current facts are being compared.
+     *
+     * @generated from protobuf field: string source = 1
+     */
+    source: string;
+    /**
+     * Incoming addresses absent from this source's current interface observations.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.CurrentAddress added = 2
+     */
+    added: CurrentAddress[];
+    /**
+     * Current addresses omitted by an explicitly complete source refresh only.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.CurrentAddress removed = 3
+     */
+    removed: CurrentAddress[];
+    /**
+     * Attribute changes on retained addresses; no duplicate unchanged values.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.AddressAttributeChange updated = 4
+     */
+    updated: AddressAttributeChange[];
+    /**
+     * Source-declared completeness; false means omissions are retained.
+     *
+     * @generated from protobuf field: bool complete = 5
+     */
+    complete: boolean;
+}
+/**
  * @generated from protobuf message omloom.workspace.v1.ImportRow
  */
 export interface ImportRow {
@@ -2561,6 +2613,13 @@ export interface ImportRow {
      * @generated from protobuf field: string diagnostic = 3
      */
     diagnostic: string;
+    /**
+     * Authorized source-local address differences derived for this bounded review.
+     * Absent for non-interface rows or when current-address reading is not allowed.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.AddressDelta addresses = 4
+     */
+    addresses?: AddressDelta;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Preview
@@ -4806,12 +4865,42 @@ class Address$Type extends MessageType<Address> {
  */
 export const Address = new Address$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class AddressAttributeChange$Type extends MessageType<AddressAttributeChange> {
+    constructor() {
+        super("omloom.workspace.v1.AddressAttributeChange", [
+            { no: 1, name: "before", kind: "message", T: () => CurrentAddress },
+            { no: 2, name: "after", kind: "message", T: () => CurrentAddress }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.AddressAttributeChange
+ */
+export const AddressAttributeChange = new AddressAttributeChange$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class AddressDelta$Type extends MessageType<AddressDelta> {
+    constructor() {
+        super("omloom.workspace.v1.AddressDelta", [
+            { no: 1, name: "source", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "added", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => CurrentAddress },
+            { no: 3, name: "removed", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => CurrentAddress },
+            { no: 4, name: "updated", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AddressAttributeChange },
+            { no: 5, name: "complete", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.AddressDelta
+ */
+export const AddressDelta = new AddressDelta$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class ImportRow$Type extends MessageType<ImportRow> {
     constructor() {
         super("omloom.workspace.v1.ImportRow", [
             { no: 1, name: "row", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
             { no: 2, name: "change", kind: "message", T: () => Write },
-            { no: 3, name: "diagnostic", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+            { no: 3, name: "diagnostic", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "addresses", kind: "message", T: () => AddressDelta }
         ]);
     }
 }
