@@ -1,0 +1,52 @@
+name: Dependabot auto-merge
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+
+permissions: {}
+
+jobs:
+  enable:
+    name: Dependabot auto-merge admission
+    if: >-
+      github.repository == 'structured-world/omloom' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # This privileged workflow never checks out or executes pull-request code.
+      # Metadata must come from signed Dependabot commits in this repository.
+      - name: Verify Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@21025c705c08248db411dc16f3619e6b5f9ea21a # v2
+      # pull_request records the required check on the PR head. The trusted
+      # target run repeats admission before it can authorize the native merge.
+      - name: Verify every commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # The metadata action validates the first commit. Reject any later
+          # unsigned or human-authored addition before enabling native auto-merge.
+          gh api --paginate --slurp "repos/$GH_REPO/pulls/$PR_NUMBER/commits" |
+            jq -e '([.[][]] | length) > 0 and all(.[][]; .author.login == "dependabot[bot]" and .commit.verification.verified == true)' > /dev/null
+      - name: Enable auto-merge for GitHub Actions updates
+        if: >-
+          github.event_name == 'pull_request_target' &&
+          steps.metadata.outputs.package-ecosystem == 'github_actions'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh pr merge "$PR_URL" --auto --squash --match-head-commit "$PR_HEAD_SHA"
