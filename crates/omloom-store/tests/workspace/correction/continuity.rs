@@ -1,5 +1,80 @@
 use super::*;
 
+// Unrelated matching claims cannot consume another working scope's allowance.
+#[test]
+fn candidate_limit_counts_only_current_scope() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let claim = api::HostIdentityClaim {
+        kind: api::HostIdentityKind::HardwareUuid as i32,
+        namespace: "apple/platform-uuid".into(),
+        digest: "c".repeat(64),
+        quality: api::HostIdentityQuality::Reported as i32,
+    };
+    let mut targets = Vec::new();
+    for batch in 0..2 {
+        let mut input = super::super::host_import::draft();
+        let report = input.report.as_mut().ok_or("report")?;
+        report.source_basis = format!("{:064x}", batch + 10);
+        report.findings = (0..65)
+            .map(|index| api::HostFinding {
+                key: format!("hardware/{index}"),
+                kind: K::Device as i32,
+                fields: vec![text_field("name", &format!("Candidate {batch}/{index}"))],
+                identity: vec![claim.clone()],
+                ..Default::default()
+            })
+            .collect();
+        input.selection = report
+            .findings
+            .iter()
+            .map(|finding| api::HostSelection {
+                key: finding.key.clone(),
+                ..Default::default()
+            })
+            .collect();
+        targets.extend(
+            super::super::host_import::accept(
+                &store,
+                &super::super::host_import::preview(&store, input)?,
+            )?
+            .targets,
+        );
+    }
+    assert_eq!(targets.len(), 130);
+    let before = store.usage()?;
+    let started = std::time::Instant::now();
+    let result = store.workspace(
+        &operator(),
+        api::Request {
+            working: Some(api::WorkingContext {
+                roots: vec![targets[0].clone()],
+                ..Default::default()
+            }),
+            command: Some(Command::FindIdentityCandidates(
+                api::FindIdentityCandidates {
+                    kind: K::Device as i32,
+                    claims: vec![claim],
+                    ..Default::default()
+                },
+            )),
+        },
+        100,
+    );
+    eprintln!(
+        "130 matching claims, one scoped candidate: {:?}; inventory usage: {:?}",
+        started.elapsed(),
+        before
+    );
+    let Some(Reply::IdentityCandidates(value)) = result?.result else {
+        return Err("candidates".into());
+    };
+    assert_eq!(value.items.len(), 1);
+    assert_eq!(value.items[0].target.as_ref(), Some(&targets[0]));
+    assert_eq!(store.usage()?, before, "candidate reads must not write");
+    Ok(())
+}
+
 // Reboot/address refresh follows only an existing source binding. Reinstall,
 // cloned UUIDs/machine IDs and a movable NIC remain separate until reviewed.
 #[test]

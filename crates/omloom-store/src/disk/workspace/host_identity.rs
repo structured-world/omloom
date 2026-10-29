@@ -337,7 +337,25 @@ impl Store {
         ]);
         let visible = assets::visible_clause_for(context, Some(FIELD), &mut values, "a");
         let readable = assets::visible_clause_for(context, None, &mut values, "a");
-        let rows=tx.query(&format!("UNWIND $claims AS claim MATCH (n:OmRow {{claim:claim}}) MATCH (a:OmRow {{key:'asset/'+n.asset}}) WHERE NOT a.key IN $excluded AND a.kind=$kind AND a.incarnation=n.incarnation AND n.parent=a.key+'/'+a.incarnation+'/identity-evidence' AND a.adoption=$adopted AND {visible} AND {readable} RETURN DISTINCT properties(a) AS p LIMIT 129"),Some(values))?;
+        let members = if let Some(focus) = selection.focus {
+            let mut members = BTreeSet::from([focus]);
+            members.extend(tx.local_children(context, focus)?);
+            Some(members)
+        } else if !working.roots.is_empty() {
+            Some(tx.working_scope(context, &working.roots)?)
+        } else {
+            None
+        };
+        let scope = if let Some(members) = members {
+            values.insert(
+                "members".into(),
+                Value::Array(members.into_iter().map(|t| text(asset_key(t))).collect()),
+            );
+            "a.key IN $members"
+        } else {
+            "true"
+        };
+        let rows=tx.query(&format!("UNWIND $claims AS claim MATCH (n:OmRow {{claim:claim}}) MATCH (a:OmRow {{key:'asset/'+n.asset}}) WHERE NOT a.key IN $excluded AND a.kind=$kind AND a.incarnation=n.incarnation AND n.parent=a.key+'/'+a.incarnation+'/identity-evidence' AND a.adoption=$adopted AND {visible} AND {readable} AND {scope} RETURN DISTINCT properties(a) AS p LIMIT 129"),Some(values))?;
         if rows.len() > 128 {
             return Err(Error::Limit);
         }
