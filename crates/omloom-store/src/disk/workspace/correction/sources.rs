@@ -1,11 +1,14 @@
 use super::super::source_layout::{Family, Relocation};
 use super::*;
 
+#[cfg(test)]
+mod tests;
+
 fn renamed(mapping: &api::IdentityMapping, name: &str) -> String {
+    if let Some(choice) = mapping.sources.iter().find(|choice| name == choice.before) {
+        return choice.after.clone();
+    }
     for choice in &mapping.sources {
-        if name == choice.before {
-            return choice.after.clone();
-        }
         if let Some(part) = name.strip_prefix(&format!("{} / ", choice.before)) {
             return format!("{} / {part}", choice.after);
         }
