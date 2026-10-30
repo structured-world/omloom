@@ -70,6 +70,7 @@ fn field(value: &Field) -> Result<(), Error> {
     token(&value.name)?;
     match need(&value.value)? {
         field::Value::Text(s) => text(s, 4096, true),
+        field::Value::Equipment(v) => crate::equipment::validate_field(&value.name, v),
         field::Value::Clear(v) if *v != NullValue::NullValue as i32 => Err(Error::Enumeration),
         _ => Ok(()),
     }

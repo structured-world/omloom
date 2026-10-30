@@ -32,6 +32,9 @@ replaces its current claim; appending B's old sample to the layer is rejected.
 Empty current groups and split groups with identical provenance are rejected.
 Missing fields are absent claims; an explicit `clear` is a source's claim and
 does not erase another authority's value. Empty text and false are real values.
+`Field.equipment` adds bounded current quantities, model references, alternatives
+and supported exclusions under that same authority. It never establishes asset
+identity or operational fitness. See [partial equipment](inventory.md#partly-identified-equipment).
 Provider revisions are opaque, and source timestamps cannot order other sources.
 `SourceObject` and `Evidence` have one shared validation contract in standalone
 records and scan rows. A `SourceIdentity` supplies a standalone object's connection;

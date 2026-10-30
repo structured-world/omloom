@@ -52,6 +52,48 @@ qualify authentication or deployment for other users.
 
 ## Work with inventory
 
+### Partly identified equipment
+
+Create or edit a device and open **Equipment knowledge**. Manufacturer, family,
+generation, model and chassis variant are independent axes. Record a known value,
+quantity range, possible values or supported exclusions without selecting an exact
+catalog model. A range with only a lower bound of twelve drive bays leaves the
+total and drive bus unknown. It creates no disks or other installed components.
+
+Possible values can have uncalibrated normalized scores or attributed probabilities.
+Probabilities require their hypothesis domain, calibration basis and explicit
+unknown mass. An incomplete top-k list cannot sum to certainty. Calibration is
+recorded source evidence, not a certification or permission to apply firmware or
+declare physical fit. Exclusions require a reason and observed coverage; an unseen
+connector is not proof of absence. Contradictory candidates/exclusions remain
+visible for review, as do independent current sources.
+
+Refine the same device using a reviewed model reference with issuer, key and exact
+basis. This retains device identity, relationships and assignments, and never
+copies grants or creates the model's declared components. Ordinary known values
+remain ordinary fields. Reads, reordered alternatives and identical edits do not
+create history. Field permissions also apply to candidate detail and exports.
+
+The fields are `manufacturer`, `family`, `generation`, `model`, `variant`,
+`drive_bays`, `drive_bus`, `height`, `width`, `depth`, `weight` and `power_rating`.
+Quantities use fixed-point integer bounds with 0..6 decimal places: count for
+bays (scale zero), mm for dimensions, g for weight and W for power. Unknown bounds
+are absent, not zero. Each current claim is limited to 8192 encoded bytes, sixteen
+candidates and sixteen exclusions. Numeric confidence uses integer millionths.
+
+The API uses the existing field write, read, source-evidence, bulk and import
+paths. `Field.equipment` carries a quantity, model reference or alternative set.
+It has no separate history stream, catalog synchronization or effect endpoint.
+Machine CSV preserves claims as `equipment/claim/v1:` followed by hexadecimal
+protobuf `EquipmentClaim` bytes. Ordinary known values remain readable text;
+equipment text colliding with reserved markers exports as `equipment/text/v1:`
+followed by UTF-8 hex.
+Empty device equipment cells are omitted: unknown facts stay absent and existing
+values are preserved. Use `<clear>` for an explicit clear; a zero bay count is a
+supplied value.
+Ordinary text and bay counts can also be entered directly in an import. Preview
+and ordinary field validation apply before accepting imported claims.
+
 ### Ownership and responsibility
 
 Open a resource's **Ownership and responsibility** card to inspect or edit its

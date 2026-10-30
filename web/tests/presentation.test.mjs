@@ -22,6 +22,34 @@ async function renderer(name) {
   return (await import(pathToFileURL(outfile).href)).render;
 }
 
+async function equipmentFormatter() {
+  const outfile=resolve('dist/presentation/equipment-api.mjs');
+  await build({entryPoints:['web/app/api.ts'],bundle:true,platform:'node',format:'esm',packages:'external',outfile});
+  globalThis.location=new URL('http://127.0.0.1');
+  return (await import(pathToFileURL(outfile).href)).input;
+}
+
+test('equipment references keep opaque issuer key and basis distinguishable',async()=>{
+  // Delimiters in opaque components cannot disguise distinct references.
+  const input=await equipmentFormatter();
+  const left={issuer:'a / b',key:'c',basis:'v1'};
+  const right={issuer:'a',key:'b / c',basis:'v1'};
+  for(const mode of ['model','alternatives']){
+    const show=reference=>input({name:'model',value:{oneofKind:'equipment',equipment:{basis:'Reviewed label',assertion:mode==='model'?{oneofKind:'model',model:reference}:{oneofKind:'alternatives',alternatives:{candidates:[{value:'Same label',reference}],excluded:[],exhaustive:false}}}}});
+    assert.notEqual(show(left),show(right));
+    assert.match(show(left),/issuer: "a \/ b"; key: "c"; basis: "v1"/);
+  }
+});
+
+test('incomplete equipment alternatives name the field that remains unknown',async()=>{
+  // A drive bus or manufacturer alternative is not an unresolved model identity.
+  const input=await equipmentFormatter();
+  for(const name of ['model','variant','manufacturer','drive_bus']){
+    const claim={name,value:{oneofKind:'equipment',equipment:{basis:'Partial label',assertion:{oneofKind:'alternatives',alternatives:{candidates:[],excluded:[],exhaustive:false}}}}};
+    assert.ok(input(claim).includes(`Incomplete alternatives; other ${name.replaceAll('_',' ')} values remain unknown`));
+  }
+});
+
 test('interface address presentation retains unknown enum numbers without crashing', async () => {
   // A newer wire enum must not make the entire selected interface unreadable.
   const render = await renderer('CurrentAddresses');

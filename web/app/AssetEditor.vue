@@ -4,6 +4,8 @@ import Dialog from './Dialog.vue';
 import PlacementPicker from './PlacementSearch.vue';
 import InitialAddresses from './InitialAddresses.vue';
 import ObserveHypervisor from './ObserveHypervisor.vue';
+import EquipmentField from './EquipmentField.vue';
+import { equipmentFields as equipmentNames } from './equipment-fields';
 import { softwareFields, softwareChoiceLabel } from './software-fields';
 import { call, typedField, input, label, key, model, AssetKind, type AssetRef } from './api';
 
@@ -17,6 +19,12 @@ const placement = ref<model.Item>(); const placementReady = ref(true); const pla
 const placementActions = ref<model.Actions>();
 const initialAddresses = ref([model.InitialAddress.create()]);
 const values = reactive<Record<string, string>>({});
+const equipmentChanges = reactive<Record<string, import('./api').Field | undefined>>({});
+const equipmentValidity = reactive<Record<string,boolean>>({});
+const selectedEquipment = ref(props.item?.fields.filter(f=>equipmentNames.includes(f.name)).map(f=>f.name) ?? []);
+const equipmentToAdd = ref('');
+const equipmentFields = computed(()=>kind.value===AssetKind.DEVICE ? (props.item ? actions.value?.fields : choice.value?.fields)?.filter(f=>equipmentNames.includes(f)) ?? [] : []);
+function addEquipment(){if(equipmentFields.value.includes(equipmentToAdd.value)&&!selectedEquipment.value.includes(equipmentToAdd.value))selectedEquipment.value.push(equipmentToAdd.value);equipmentToAdd.value='';}
 const modes = reactive<Record<string, string>>({});
 const error = ref(''); const busy = ref(false); const preparing = ref(true); const more = ref(false);
 type EditorField = { id: string; name: string; type: model.FieldType; choices: string[]; advanced: boolean };
@@ -68,7 +76,7 @@ const fields = computed<EditorField[]>(() => {
   ];
   const custom = props.definitions.filter(d => !d.retired && kind.value !== undefined && d.kinds.includes(kind.value))
     .map(d => ({ id: d.id, name: d.name, type: d.type, choices: d.choices, advanced: false }));
-  return [...builtins, ...softwareFields(allowed), ...custom].filter(f => allowed.includes(f.id));
+  return [...builtins, ...softwareFields(allowed), ...custom].filter(f => allowed.includes(f.id) && !equipmentFields.value.includes(f.id));
 });
 watch(fields, available => {
   for (const f of available) {
@@ -125,7 +133,9 @@ async function save() {
   busy.value = true; error.value = '';
   try {
     if (kind.value === undefined || !actions.value || (!props.item && !choice.value)) throw Error('Choose a resource and its actual parent');
+    if(equipmentFields.value.some(name=>equipmentValidity[name]===false))throw Error('Correct the equipment input before saving.');
     const changes = fields.value.filter(f => modes[f.id] !== 'preserve').map(f => typedField(f.id, f.type, values[f.id] ?? '', modes[f.id] === 'clear'));
+    for(const name of equipmentFields.value){const change=equipmentChanges[name];if(change)changes.push(change);}
     if (placementKind.value && !placementReady.value) throw Error('Choose a listed placement or clear the search to leave it unknown');
     if (props.item && !changes.length) { emit('saved'); return; }
     const working = model.WorkingContext.create({ ...props.working, focus: props.working.focus && placement.value?.target ? placement.value.target : props.working.focus, expected: placementActions.value?.revision ?? actions.value.revision });
@@ -172,6 +182,10 @@ async function save() {
 <ObserveHypervisor v-if="!item && kind === AssetKind.SOFTWARE_INSTALLATION" :current-name="values.name" @use="useObservation" />
 <InitialAddresses v-if="!item && kind !== undefined && [AssetKind.DEVICE,AssetKind.VIRTUAL_MACHINE,AssetKind.SOFTWARE_INSTALLATION].includes(kind)" v-model="initialAddresses" />
 <button v-if="!item && kind === AssetKind.SOFTWARE_INSTALLATION && fields.some(f => f.id === 'virtualization_role')" type="button" @click="useProxmox">Use Proxmox VE defaults</button>
+<details v-if="equipmentFields.length"><summary>Equipment knowledge</summary><p>Record only what is known. Manufacturer, generation and model are separate facts. Refinement keeps this device's identity.</p>
+<EquipmentField v-for="name in selectedEquipment.filter(f=>equipmentFields.includes(f))" :key="name" :name="name" :value="equipmentChanges[name] ?? item?.fields.find(f=>f.name===name)" @change="equipmentChanges[name]=$event" @valid="equipmentValidity[name]=$event" />
+<label>Add equipment fact<select v-model="equipmentToAdd" aria-label="Add equipment fact"><option value="">Choose a fact to record</option><option v-for="name in equipmentFields.filter(f=>!selectedEquipment.includes(f))" :key="name" :value="name">{{ name.replaceAll('_',' ') }}</option></select></label><button type="button" :disabled="!equipmentToAdd" @click="addEquipment">Add selected fact</button>
+</details>
 <button v-if="known" type="button" :aria-expanded="more" @click="more = !more">{{ more ? 'Hide additional facts' : 'More known details' }}</button>
 <template v-for="f in fields" :key="f.id"><div v-if="!f.advanced || more" class="field-edit">
 <label :for="'value-'+f.id">{{ f.name }}</label>

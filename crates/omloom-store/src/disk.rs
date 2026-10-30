@@ -22,7 +22,7 @@ use std::{
 type Properties = BTreeMap<String, Value>;
 type Result<T> = std::result::Result<T, Error>;
 const ROOT: &str = "installation";
-const SCHEMA_VERSION: u64 = 13;
+const SCHEMA_VERSION: u64 = 14;
 const MAX_CHILDREN: usize = 2048;
 mod deltas;
 mod inventory;
@@ -235,6 +235,13 @@ fn hash_field(hash: &mut Sha256, value: &wire::Field) -> Result<()> {
         }
         field::Value::Flag(value) => hash.update([3, u8::from(*value)]),
         field::Value::Clear(0) => hash.update([4]),
+        field::Value::Equipment(value) => {
+            hash.update([5]);
+            hash_part(
+                hash,
+                &omloom_contracts::equipment::encode(value).map_err(|_| Error::Invalid)?,
+            );
+        }
         _ => return Err(Error::Invalid),
     }
     Ok(())

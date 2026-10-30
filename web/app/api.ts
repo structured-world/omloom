@@ -1,6 +1,6 @@
 import { GrpcWebFetchTransport } from '@protobuf-ts/grpcweb-transport';
 import { Request, Workspace, FieldType, type Reply, type WorkingContext } from '../src/generated/omloom/v1/workspace';
-import { AssetKind, NullValue, type Field, type AssetRef } from '../src/generated/omloom/v1/contracts';
+import { AssetKind, NullValue, type Field, type AssetRef, type EquipmentAlternative, type EquipmentExclusion, type EquipmentReference } from '../src/generated/omloom/v1/contracts';
 import { softwareChoiceLabel } from './software-fields';
 export * as model from '../src/generated/omloom/v1/workspace';
 export { AssetKind, RelationKind, NullValue, OperationState, EffectOutcome } from '../src/generated/omloom/v1/contracts';
@@ -30,12 +30,45 @@ export function display(field: Field | undefined): string {
   if (field?.value.oneofKind === 'text' && field.value.text === '') return '(empty)';
   return field ? softwareChoiceLabel(field.name, input(field)) : '';
 }
+function referenceLabel(value:EquipmentReference):string {
+  return `issuer: ${JSON.stringify(value.issuer)}; key: ${JSON.stringify(value.key)}; basis: ${JSON.stringify(value.basis)}`;
+}
 export function input(field: Field | undefined): string {
-  const v = field?.value;
+  if (!field) return '';
+  const v = field.value;
   if (!v || !v.oneofKind) return '';
   if (v.oneofKind === 'clear') return '';
   if (v.oneofKind === 'text') return v.text;
   if (v.oneofKind === 'integer') return String(v.integer);
+  if (v.oneofKind === 'equipment') {
+    const claim=v.equipment;const a=claim.assertion;
+    let value='Unresolved';
+    if(a.oneofKind==='quantity'){
+      const q=a.quantity;
+      const number=(n:bigint|undefined)=>{
+        if(n===undefined)return '?';const s=n.toString().padStart(q.scale+1,'0');
+        return q.scale ? s.slice(0,-q.scale)+'.'+s.slice(-q.scale):s;
+      };
+      const unit=field?.name==='drive_bays'?'bays':q.unit;
+      if(q.upper===undefined)value=`At least ${number(q.lower)} ${unit}; ${unit==='bays'?'total':'upper bound'} unknown`;
+      else if(q.lower===undefined)value=`At most ${number(q.upper)} ${unit}; lower bound unknown`;
+      else if(q.lower===q.upper)value=`Known: ${number(q.lower)} ${unit}`;
+      else value=`Known range: ${number(q.lower)}–${number(q.upper)} ${unit}`;
+    }else if(a.oneofKind==='model')value=`Known reference: ${referenceLabel(a.model)}`;
+    else if(a.oneofKind==='alternatives'){
+      const set=a.alternatives;
+      const reference=(r:EquipmentReference|undefined)=>r?` [${referenceLabel(r)}]`:'';
+      const possible=set.candidates.map(c=>c.value+reference(c.reference)+(c.probabilityPpm!==undefined?` (attributed probability ${c.probabilityPpm/10000}%)`:c.scorePpm!==undefined?` (uncalibrated score ${c.scorePpm/1000000})`:''));
+      const excluded=set.excluded.map(e=>`${e.value}${reference(e.reference)}, because ${e.reason}; coverage: ${e.coverage}`);
+      const same=(a:EquipmentAlternative|EquipmentExclusion,b:EquipmentAlternative|EquipmentExclusion)=>{
+        if(a.reference&&b.reference)return a.reference.issuer===b.reference.issuer&&a.reference.key===b.reference.key&&a.reference.basis===b.reference.basis;
+        return a.reference===undefined&&b.reference===undefined&&a.value===b.value;
+      };
+      const conflict=set.candidates.some(c=>set.excluded.some(e=>same(c,e)));
+      value=[possible.length?'Possible: '+possible.join(', '):'',excluded.length?'Excluded: '+excluded.join('; '):'',set.exhaustive?'Declared complete domain':`Incomplete alternatives; other ${field.name.replaceAll('_',' ')} values remain unknown`,set.residualPpm!==undefined?`Unknown probability: ${set.residualPpm/10000}%`:'',set.domain?`Domain: ${set.domain}`:'',set.calibrationBasis?`Attributed calibration: ${set.calibrationBasis}`:'',conflict?'Conflicting claims require review':''].filter(Boolean).join(' · ');
+    }
+    return `${value} · Basis: ${claim.basis}`;
+  }
   return String(v.flag);
 }
 export function key(target: AssetRef | undefined): string { return target ? `${target.assetId}/${target.incarnation}` : ''; }

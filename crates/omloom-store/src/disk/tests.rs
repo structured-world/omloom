@@ -1,4 +1,5 @@
 use super::*;
+mod equipment;
 
 // Name projections may exhaust an old budget; explicit increases must unblock recovery without relaxing retention or restore fences.
 #[test]

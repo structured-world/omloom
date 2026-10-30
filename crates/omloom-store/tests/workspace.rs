@@ -14,6 +14,8 @@ mod contexts;
 mod correction;
 #[path = "workspace/definitions.rs"]
 mod definitions;
+#[path = "workspace/equipment.rs"]
+mod equipment;
 #[path = "workspace/exchange.rs"]
 mod exchange;
 #[path = "workspace/groups.rs"]

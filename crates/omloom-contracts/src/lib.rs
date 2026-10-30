@@ -15,6 +15,7 @@
 //! assert_eq!(budget.used(), 0);
 //! ```
 #![deny(unsafe_code)]
+extern crate alloc;
 
 pub mod wire {
     include!(concat!(env!("OUT_DIR"), "/omloom.v1.rs"));
@@ -22,6 +23,7 @@ pub mod wire {
 pub mod workspace {
     include!(concat!(env!("OUT_DIR"), "/omloom.workspace.v1.rs"));
 }
+pub mod equipment;
 pub mod ids;
 mod preflight;
 mod validate;

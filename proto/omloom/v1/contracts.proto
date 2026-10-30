@@ -104,6 +104,80 @@ message Field {
     bool flag = 4;
     // Source/user explicit clear/unknown claim; never clears another authority.
     NullValue clear = 5;
+    // Current equipment assertion, not identity adoption or operational proof.
+    // At most 8192 encoded bytes, subject to the same field/source authority as scalars.
+    EquipmentClaim equipment = 6;
+  }
+}
+
+// Exact external/private reference supplied by the operator or source. No lookup,
+// grant or catalog acquisition is implied by accepting this reference.
+message EquipmentReference {
+  // Source namespace, max 160 bytes; private definitions identify their owner.
+  string issuer = 1;
+  // Opaque model/variant key within that namespace, max 160 bytes.
+  string key = 2;
+  // Exact interpretation revision, max 160 bytes; never implicit latest.
+  string basis = 3;
+}
+message QuantityRange {
+  // Observed lower bound in fixed-point units; absent means unknown.
+  optional sint64 lower = 1;
+  // Observed upper bound in the same units; absent does not mean zero.
+  optional sint64 upper = 2;
+  // Explicit unit: count, mm, g or W. No conversion is inferred from a model.
+  string unit = 3;
+  // Decimal places of the integer bounds, 0..6; count requires zero. This is
+  // numeric scale, not measurement precision; storage removes shared trailing zeros.
+  uint32 scale = 4;
+}
+message EquipmentAlternative {
+  // Candidate label for one classification axis, max 160 bytes.
+  string value = 1;
+  // Optional exact source-qualified model reference; label equality is not identity.
+  optional EquipmentReference reference = 2;
+  // Attributed probability in millionths, 0..1000000, requiring a domain and
+  // calibration basis on the containing set. Never grants operational authority.
+  optional uint32 probability_ppm = 3;
+  // Uncalibrated normalized score in millionths, not a probability. Mutually
+  // exclusive with probability_ppm across this entire candidate set.
+  optional uint32 score_ppm = 4;
+}
+message EquipmentExclusion {
+  // Excluded value on the current axis, max 160 bytes.
+  string value = 1;
+  // Optional exact source-qualified reference to the excluded model.
+  optional EquipmentReference reference = 2;
+  // Discriminating evidence, max 512 bytes; low score alone is insufficient.
+  string reason = 3;
+  // Observed coverage supporting this exclusion, max 256 bytes.
+  string coverage = 4;
+}
+message EquipmentAlternatives {
+  // At most 16 current candidates. Order carries no preference or identity.
+  repeated EquipmentAlternative candidates = 1;
+  // At most 16 current supported exclusions, independently of candidate rank.
+  repeated EquipmentExclusion excluded = 2;
+  // Explicit claim that the domain is exhaustive; top-k defaults to incomplete.
+  bool exhaustive = 3;
+  // Hypothesis domain, max 256 bytes, required for numeric confidence.
+  string domain = 4;
+  // Attributed producer/calibration revision, max 256 bytes, required for
+  // probabilities. Recording it does not certify the producer's calibration.
+  optional string calibration_basis = 5;
+  // Other/unknown probability, required for probability sets. Candidate mass
+  // plus this value equals 1000000; incomplete sets retain positive unknown mass.
+  optional uint32 residual_ppm = 6;
+}
+message EquipmentClaim {
+  // Relevant observation or reviewed manual basis, max 512 bytes. Source identity,
+  // time and authority stay with the enclosing existing field/evidence record.
+  string basis = 1;
+  // One current typed assertion. Known text/integer fields retain scalar encoding.
+  oneof assertion {
+    QuantityRange quantity = 2;
+    EquipmentReference model = 3;
+    EquipmentAlternatives alternatives = 4;
   }
 }
 

@@ -49,6 +49,133 @@ async function workspaceClient(url) {
   return { m, rpc };
 }
 
+test('partial equipment is created and refined on desktop and phone without changing identity', async ({browser})=>{
+  // Real disk/API/UI: uncertain models and visible quantities remain current
+  // attributed claims; refinement creates neither disks nor a second machine.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-equipment-'));const server=await host(dir);
+  try {
+    for(const width of [1440,390]){
+      const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600});
+      try {
+      await page.goto(server.url);
+      await page.getByRole('button',{name:'+ Create resource',exact:true}).click();
+      let dialog=page.getByRole('dialog');await dialog.getByLabel('Resource kind',{exact:true}).selectOption({label:'device'});
+      await dialog.getByLabel('Name',{exact:true}).fill(`Unresolved rack device ${width}`);
+      await dialog.getByText('Equipment knowledge',{exact:true}).click();
+      for(const fact of ['manufacturer','generation','drive_bays','model']){await dialog.getByLabel('Add equipment fact',{exact:true}).selectOption(fact);await dialog.getByRole('button',{name:'Add selected fact',exact:true}).click();}
+      await dialog.getByLabel('Knowledge for manufacturer',{exact:true}).selectOption('known');await dialog.getByLabel('Known manufacturer',{exact:true}).fill('HPE');
+      await dialog.getByLabel('Knowledge for generation',{exact:true}).selectOption('known');await dialog.getByLabel('Known generation',{exact:true}).fill('Gen10');
+      await dialog.getByLabel('Resource kind',{exact:true}).selectOption({label:'virtual machine'});
+      await dialog.getByLabel('Resource kind',{exact:true}).selectOption({label:'device'});
+      await dialog.getByText('Equipment knowledge',{exact:true}).click();
+      await expect(dialog.getByLabel('Known manufacturer',{exact:true})).toHaveValue('HPE');
+      await dialog.getByLabel('Knowledge for drive bays',{exact:true}).selectOption('quantity');await dialog.getByLabel('Evidence basis for drive bays',{exact:true}).fill('Twelve front bays visible; rear concealed');await dialog.getByLabel('Minimum drive bays',{exact:true}).fill('12');
+      await dialog.getByLabel('Knowledge for model',{exact:true}).selectOption('alternatives');await dialog.getByLabel('Evidence basis for model',{exact:true}).fill('Visible front label; exact chassis unresolved');
+      await dialog.getByRole('button',{name:'Add possible model',exact:true}).click();await dialog.getByLabel('Possible model 1',{exact:true}).fill('DL160');
+      await dialog.getByRole('button',{name:'Add possible model',exact:true}).click();await dialog.getByLabel('Possible model 2',{exact:true}).fill('DL120');
+      await dialog.getByLabel('Confidence for model',{exact:true}).selectOption('probability');await dialog.getByLabel('Hypothesis domain for model',{exact:true}).fill('HPE rack models');
+      await dialog.getByLabel('Probability percent 1',{exact:true}).fill('60');await dialog.getByLabel('Probability percent 2',{exact:true}).fill('20');await dialog.getByLabel('Calibration basis for model',{exact:true}).fill('Operator supplied corpus/v1');await dialog.getByLabel('Unknown probability percent for model',{exact:true}).fill('20');
+      await dialog.getByRole('button',{name:'Add excluded model',exact:true}).click();await dialog.getByLabel('Excluded model 1',{exact:true}).fill('Tower-only chassis');await dialog.getByLabel('Exclusion reason 1',{exact:true}).fill('Rack ears and horizontal enclosure visible');await dialog.getByLabel('Exclusion coverage 1',{exact:true}).fill('Entire front visible');
+      await dialog.screenshot({path:`test-results/equipment-editor-${width}.png`});
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+      await dialog.getByLabel('Probability percent 1',{exact:true}).fill('1e1');
+      await dialog.getByLabel('Evidence basis for model',{exact:true}).click();
+      await dialog.getByRole('button',{name:'Save resource',exact:true}).click();await expect(dialog).toBeVisible();
+      await dialog.getByLabel('Probability percent 1',{exact:true}).fill('60');
+      await dialog.getByRole('button',{name:'Save resource',exact:true}).click();await expect(dialog).toBeHidden();
+      const detail=page.getByRole('region',{name:'Resource details'});await expect(detail).toContainText('Unknown probability: 20%');await expect(detail).toContainText('At least 12 bays; total unknown');await expect(detail).toContainText('Excluded: Tower-only chassis');
+      const originalUrl=page.url();await page.reload();await expect(detail).toContainText('Unknown probability: 20%');
+      await page.getByRole('button',{name:'Edit resource',exact:true}).click();dialog=page.getByRole('dialog');await dialog.getByText('Equipment knowledge',{exact:true}).click();
+      await expect(dialog.getByLabel('Maximum drive bays',{exact:true})).toHaveValue('');await expect(dialog.getByLabel('Known manufacturer',{exact:true})).toHaveValue('HPE');
+      await dialog.getByLabel('Knowledge for model',{exact:true}).selectOption('model');await dialog.getByLabel('Evidence basis for model',{exact:true}).fill('Reviewed rear chassis label');await dialog.getByLabel('Model issuer',{exact:true}).fill('private/owner');await dialog.getByLabel('Model key',{exact:true}).fill('confirmed-dl160');await dialog.getByLabel('Model basis',{exact:true}).fill('label/v1');
+      await dialog.getByRole('button',{name:'Save resource',exact:true}).click();await expect(dialog).toBeHidden();await expect(detail).toContainText('Known reference: issuer: "private/owner"; key: "confirmed-dl160"; basis: "label/v1"');expect(page.url()).toBe(originalUrl);await expect(detail).toContainText('At least 12 bays; total unknown');
+      await page.screenshot({path:`test-results/equipment-${width}.png`,fullPage:true});
+      const hash=new URL(page.url()).hash;const params=new URLSearchParams(hash.slice(hash.indexOf('?')+1));
+      const {m,rpc}=await workspaceClient(server.url);
+      const exported=await rpc({oneofKind:'export',export:m.Export.create({query:{roots:[{assetId:params.get('asset'),incarnation:params.get('incarnation')}],columns:['model'],limit:25},spreadsheet:false})});
+      const cell=exported.download.csv.match(/equipment\/claim\/v1:[a-f0-9]+/)?.[0];expect(cell).toBeDefined();
+      await page.goto(server.url);if(width<600)await page.getByRole('button',{name:'More',exact:true}).tap();
+      await page.getByRole('button',{name:'Import CSV',exact:true}).click();dialog=page.getByRole('dialog',{name:'Import inventory',exact:true});
+      await dialog.getByLabel('Source name',{exact:true}).fill(`equipment-${width}`);
+      await dialog.getByLabel('CSV',{exact:true}).fill(`external_id,name,model\ncopy-${width},Imported equipment ${width},${cell}`);
+      await dialog.getByRole('button',{name:'Add mapping',exact:true}).click();await dialog.getByLabel('CSV column',{exact:true}).nth(1).fill('model');
+      const destination=dialog.getByLabel('Inventory field').nth(1);await expect(destination.locator('option[value="model"]')).toHaveCount(1);await destination.selectOption('model');
+      await dialog.getByRole('button',{name:'Prepare preview',exact:true}).click();await expect(dialog).toContainText('Known reference: issuer: "private/owner"; key: "confirmed-dl160"; basis: "label/v1"');
+      await dialog.getByRole('button',{name:'Accept reviewed rows',exact:true}).click();await expect(dialog).toBeHidden();
+      await page.getByRole('button',{name:`Imported equipment ${width}`,exact:true}).click();await expect(detail).toContainText('Known reference: issuer: "private/owner"; key: "confirmed-dl160"; basis: "label/v1"');expect(page.url()).not.toBe(originalUrl);
+      }finally{await page.close();}
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
+test('equipment editor checks UTF-8 candidate and exclusion bytes before submitting',async({page})=>{
+  // HTML maxlength counts code units; the wire contract limits UTF-8 bytes.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-equipment-utf8-'));const server=await host(dir);
+  try{
+    await page.goto(server.url);await page.getByRole('button',{name:'+ Create resource',exact:true}).click();const dialog=page.getByRole('dialog');
+    await dialog.getByLabel('Resource kind',{exact:true}).selectOption({label:'device'});await dialog.getByLabel('Name',{exact:true}).fill('UTF8 equipment');
+    await dialog.getByText('Equipment knowledge',{exact:true}).click();await dialog.getByLabel('Add equipment fact',{exact:true}).selectOption('model');await dialog.getByRole('button',{name:'Add selected fact',exact:true}).click();
+    await dialog.getByLabel('Knowledge for model',{exact:true}).selectOption('alternatives');await dialog.getByLabel('Evidence basis for model',{exact:true}).fill('Reviewed label');
+    await dialog.getByRole('button',{name:'Add possible model',exact:true}).click();await dialog.getByLabel('Possible model 1',{exact:true}).fill('Candidate');
+    await dialog.getByRole('button',{name:'Add excluded model',exact:true}).click();await dialog.getByLabel('Excluded model 1',{exact:true}).fill('Excluded');await dialog.getByLabel('Exclusion reason 1',{exact:true}).fill('Rear layout differs');await dialog.getByLabel('Exclusion coverage 1',{exact:true}).fill('Rear inspected');
+    let requests=0;page.on('request',request=>{if(request.method()==='POST')requests++;});
+    for(const [name,valid] of [['Possible model 1','界'.repeat(53)+'x'],['Excluded model 1','a'.repeat(160)]]){
+      const before=requests;await dialog.getByLabel(name,{exact:true}).fill('界'.repeat(53)+'xx');
+      await expect(dialog.getByRole('alert').filter({hasText:'160 UTF-8 bytes'})).toContainText('Enter at most 160 UTF-8 bytes for each possible or excluded value.');await dialog.getByRole('button',{name:'Save resource',exact:true}).click();expect(requests).toBe(before);
+      await dialog.getByLabel(name,{exact:true}).fill(valid);await expect(dialog.getByText('Error: Enter at most 160 UTF-8 bytes for each possible or excluded value.',{exact:true})).toHaveCount(0);
+    }
+    await dialog.getByRole('button',{name:'Save resource',exact:true}).click();await expect(dialog).toBeHidden();
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
+test('denied equipment fields stay hidden and unchanged after editing on desktop and phone',async({browser})=>{
+  // A restricted editor cannot expose, clear or replace an undisclosed model.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-equipment-grants-'));let server=await host(dir);
+  try{
+    let {m,rpc}=await workspaceClient(server.url);
+    const model={name:'model',value:{oneofKind:'equipment',equipment:{basis:'Reviewed label',assertion:{oneofKind:'model',model:{issuer:'catalog.example',key:'hidden-model',basis:'v1'}}}}};
+    const target=(await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.DEVICE,changes:[{name:'name',value:{oneofKind:'text',text:'Restricted equipment'}},model]})})).mutation.targets[0];
+    const before=(await rpc({oneofKind:'read',read:m.Read.create({target})})).detail.item.fields.find(f=>f.name==='model');
+    await server.stop();const grants=join(dir,'grants.json');
+    await writeFile(grants,JSON.stringify([{selection:{scope:'all'},read:{mode:'selected',fields:['name']},write:{mode:'selected',fields:['name']},writable:true}]));
+    server=await host(dir,'operator',grants);
+    for(const width of [1440,390]){
+      const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600});
+      try{
+        await page.goto(`${server.url}/#/?asset=${target.assetId}&incarnation=${target.incarnation}`);
+        const detail=page.getByRole('region',{name:'Resource details'});await expect(detail).toContainText('Restricted equipment');await expect(detail).not.toContainText('hidden-model');
+        await detail.getByRole('button',{name:'Edit resource',exact:true}).click();const dialog=page.getByRole('dialog');
+        await expect(dialog.getByText('Equipment knowledge',{exact:true})).toHaveCount(0);await expect(dialog.getByLabel('Add equipment fact').locator('option[value="model"]')).toHaveCount(0);await expect(dialog.getByLabel('Knowledge for model',{exact:true})).toHaveCount(0);
+        await dialog.getByLabel('Name change',{exact:true}).selectOption('set');await dialog.getByLabel('Name',{exact:true}).fill(`Restricted equipment ${width}`);await dialog.getByRole('button',{name:'Save resource',exact:true}).click();await expect(dialog).toBeHidden();
+      }finally{await page.close();}
+    }
+    await server.stop();server=await host(dir);({m,rpc}=await workspaceClient(server.url));
+    expect((await rpc({oneofKind:'read',read:m.Read.create({target})})).detail.item.fields.find(f=>f.name==='model')).toEqual(before);
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
+test('equipment conflicts use exact reference identity, not display aliases or separators',async({page})=>{
+  // Reference fields are opaque. Display spelling is neither identity nor a join key.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-equipment-identity-'));const server=await host(dir);
+  try{
+    const {m,rpc}=await workspaceClient(server.url);
+    const created=await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.DEVICE,changes:[{name:'name',value:{oneofKind:'text',text:'Model identity review'}}]})});const target=created.mutation.targets[0];
+    const reference={issuer:'private/catalog',key:'one-model',basis:'v1'};
+    const initial=(await rpc({oneofKind:'read',read:m.Read.create({target})})).detail.item;
+    await expect(rpc({oneofKind:'write',write:m.Write.create({target,expected:initial.revision,kind:m.AssetKind.DEVICE,changes:[{name:'model',value:{oneofKind:'equipment',equipment:{basis:'Two labels of the same model',assertion:{oneofKind:'alternatives',alternatives:{candidates:[{value:'Model label',reference},{value:'Model alias',reference}]}}}}}]})})).rejects.toMatchObject({code:'INVALID_ARGUMENT'});
+    expect((await rpc({oneofKind:'read',read:m.Read.create({target})})).detail.item.revision).toEqual(initial.revision);
+    for(const [same,left,right] of [[true,{issuer:'private/catalog',key:'one-model',basis:'v1'},{issuer:'private/catalog',key:'one-model',basis:'v1'}],[false,{issuer:'a / b',key:'c',basis:'v1'},{issuer:'a',key:'b / c',basis:'v1'}]]){
+      const current=(await rpc({oneofKind:'read',read:m.Read.create({target})})).detail.item;
+      await rpc({oneofKind:'write',write:m.Write.create({target,expected:current.revision,kind:m.AssetKind.DEVICE,changes:[{name:'model',value:{oneofKind:'equipment',equipment:{basis:'Reviewed labels and rear mounting pattern',assertion:{oneofKind:'alternatives',alternatives:{candidates:[{value:same?'Model label':'Same label',reference:left}],excluded:[{value:same?'Model alias':'Same label',reference:right,reason:'Rear pattern differs',coverage:'Rear inspected'}]}}}}}]})});
+      const url=`${server.url}/#/?asset=${target.assetId}&incarnation=${target.incarnation}`;
+      if(page.url()===url)await page.reload();else await page.goto(url);
+      const detail=page.getByRole('region',{name:'Resource details'});
+      await expect(detail).toContainText(same?'Model alias':'Same label');
+      if(same)await expect(detail).toContainText('Conflicting claims require review');else await expect(detail).not.toContainText('Conflicting claims require review');
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('typed DNS and contact values validate on desktop and phone', async ({ page }) => {
   // Display labels and provider IDs remain opaque. Typed routes reject malformed
   // values at the server; phone inputs also explain E.164 errors before submission.

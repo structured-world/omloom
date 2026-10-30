@@ -1,4 +1,4 @@
-//! Current software facts use the ordinary field authority, CAS, CSV and audit
+//! Current software and equipment facts use ordinary field authority, CAS, CSV and audit
 //! pipeline. Catalog references are relations, not copied installation snapshots.
 use super::*;
 use alloc::borrow::Cow;
@@ -6,6 +6,12 @@ use wire::AssetKind as K;
 
 const RELEASE_IDENTITY: [&str; 4] = ["version", "edition", "architecture", "artifact_digest"];
 const CONTAINER_IDENTITY: [&str; 2] = ["runtime_object_id", "runtime_lifetime"];
+
+fn is_equipment_field(kind: i32, value: &wire::Field) -> bool {
+    matches!(value.value, Some(field::Value::Equipment(_)))
+        || (kind == K::Device as i32
+            && omloom_contracts::equipment::FIELDS.contains(&value.name.as_str()))
+}
 
 fn stored_reference(row: &Properties, asset: &str, incarnation: &str) -> Result<AssetRef> {
     Ok(AssetRef {
@@ -260,7 +266,21 @@ impl Tx<'_> {
         Ok(())
     }
 
-    pub(in crate::disk) fn validate_full_software_asset(
+    pub(in crate::disk) fn validate_equipment_change(
+        &self,
+        kind: i32,
+        value: &wire::Field,
+        changed: bool,
+    ) -> Result<()> {
+        // Retained legacy claims survive unrelated saves; retyping changes their interpretation.
+        if changed && is_equipment_field(kind, value) {
+            self.validate_field(kind, value)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(in crate::disk) fn validate_full_asset_fields(
         &self,
         target: AssetRef,
         asset: &wire::Asset,
@@ -270,9 +290,9 @@ impl Tx<'_> {
             .intended
             .iter()
             .filter_map(|v| v.field.as_ref())
-            .filter(|v| known_field(&v.name))
+            .filter(|v| known_field(&v.name) && !is_equipment_field(asset.kind, v))
         {
-            validate_field(asset.kind, field)?;
+            self.validate_field(asset.kind, field)?;
         }
         self.validate_software_changes(target, kind, Changes::Full(&asset.intended))
     }

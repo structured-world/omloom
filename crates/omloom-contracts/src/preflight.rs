@@ -88,6 +88,7 @@ struct Shape {
     kind: Kind,
     repeated: bool,
     group: u32,
+    max_count: u16,
 }
 include!(concat!(env!("OUT_DIR"), "/shapes.rs"));
 
@@ -130,6 +131,7 @@ impl Work {
         }
         let mut seen = 0u64;
         let mut groups = 0u64;
+        let mut counts = [0u16; 64];
         while !bytes.is_empty() {
             self.field()?;
             let key = varint(&mut bytes)?;
@@ -139,6 +141,13 @@ impl Work {
                 .find(|f| f.tag == tag)
                 .ok_or(Error::UnknownField)?;
             let mask = 1u64.checked_shl(tag).ok_or(Error::Wire)?;
+            if shape.max_count != 0 {
+                let count = &mut counts[tag as usize];
+                if *count == shape.max_count {
+                    return Err(Error::Limit);
+                }
+                *count += 1;
+            }
             if !shape.repeated && seen & mask != 0 {
                 return Err(Error::DuplicateField);
             }
@@ -161,7 +170,12 @@ impl Work {
                     let body = bytes.get(..len).ok_or(Error::Wire)?;
                     bytes = &bytes[len..];
                     match kind {
-                        Kind::Message(child) => self.message(body, child, depth + 1)?,
+                        Kind::Message(child) => {
+                            if child == EQUIPMENT_ROOT && body.len() > crate::equipment::MAX_BYTES {
+                                return Err(Error::Limit);
+                            }
+                            self.message(body, child, depth + 1)?;
+                        }
                         Kind::Text => {
                             std::str::from_utf8(body).map_err(|_| Error::Wire)?;
                         }
@@ -190,6 +204,17 @@ pub(crate) fn check(bytes: &[u8], limits: Limits) -> Result<usize, Error> {
 }
 pub(crate) fn check_workspace(bytes: &[u8], limits: Limits) -> Result<usize, Error> {
     check_root(bytes, limits, WORKSPACE_ROOT)
+}
+pub(crate) fn check_equipment(bytes: &[u8]) -> Result<usize, Error> {
+    check_root(
+        bytes,
+        Limits {
+            bytes: crate::equipment::MAX_BYTES,
+            fields: 256,
+            depth: 8,
+        },
+        EQUIPMENT_ROOT,
+    )
 }
 fn check_root(bytes: &[u8], limits: Limits, root: usize) -> Result<usize, Error> {
     let limits = Limits {

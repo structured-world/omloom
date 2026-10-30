@@ -46,12 +46,21 @@ fn writable_fields(
         .filter(|name| context.field(target, kind as i32, name, true))
         .map(|s| s.to_string())
         .collect();
-    fields.extend(
-        software::fields(kind)
-            .iter()
-            .filter(|name| context.field(target, kind as i32, name, true))
-            .map(|name| name.to_string()),
-    );
+    if kind == K::Device {
+        fields.extend(
+            omloom_contracts::equipment::FIELDS
+                .iter()
+                .filter(|name| context.field(target, kind as i32, name, true))
+                .map(|s| s.to_string()),
+        );
+    }
+    for name in software::fields(kind) {
+        if !fields.iter().any(|field| field == name)
+            && context.field(target, kind as i32, name, true)
+        {
+            fields.push(name.to_string());
+        }
+    }
     fields.extend(
         definitions
             .iter()

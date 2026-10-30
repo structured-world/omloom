@@ -1,4 +1,5 @@
 use super::*;
+use prost::Message;
 
 pub(super) fn field_props(field: &wire::Field) -> Result<Properties> {
     let (kind, name, value) = match field.value.as_ref().ok_or(Error::Invalid)? {
@@ -6,6 +7,11 @@ pub(super) fn field_props(field: &wire::Field) -> Result<Properties> {
         field::Value::Integer(v) => (2, "vint", Value::Int(*v)),
         field::Value::Flag(v) => (3, "vflag", Value::Bool(*v)),
         field::Value::Clear(_) => (4, "vtext", Value::Null),
+        field::Value::Equipment(v) => (
+            5,
+            "payload",
+            Value::Binary(omloom_contracts::equipment::encode(v).map_err(|_| Error::Invalid)?),
+        ),
     };
     Ok(props([
         ("field", text(&field.name)),
@@ -27,6 +33,28 @@ pub(super) fn read_field(p: &Properties) -> Result<wire::Field> {
                 .ok_or(Error::Corrupt)?,
         ),
         4 => field::Value::Clear(0),
+        5 => {
+            let bytes = p
+                .get("payload")
+                .and_then(|v| {
+                    if let Value::Binary(b) = v {
+                        Some(b.as_slice())
+                    } else {
+                        None
+                    }
+                })
+                .ok_or(Error::Corrupt)?;
+            omloom_contracts::equipment::check_encoded(bytes).map_err(|_| Error::Corrupt)?;
+            let value = wire::EquipmentClaim::decode(bytes).map_err(|_| Error::Corrupt)?;
+            omloom_contracts::equipment::validate_field(
+                p.get("field")
+                    .and_then(Value::as_str)
+                    .ok_or(Error::Corrupt)?,
+                &value,
+            )
+            .map_err(|_| Error::Corrupt)?;
+            field::Value::Equipment(value)
+        }
         _ => return Err(Error::Corrupt),
     };
     Ok(wire::Field {
@@ -50,11 +78,113 @@ pub(super) fn field_matches(field: &wire::Field, p: &Properties) -> bool {
                 && p.get("vflag").and_then(Value::as_bool) == Some(*value)
         }
         Some(field::Value::Clear(0)) => p.get("vtype").and_then(Value::as_int) == Some(4),
+        Some(field::Value::Equipment(value)) => {
+            p.get("vtype").and_then(Value::as_int) == Some(5)
+                && omloom_contracts::equipment::encode(value)
+                    .is_ok_and(|b| p.get("payload") == Some(&Value::Binary(b)))
+        }
         _ => false,
     }
 }
 
 type EvidenceWindow<'a> = (Option<&'a str>, Option<&'a str>, u64, u64);
+pub(super) fn asset_projection(
+    target: AssetRef,
+    root: &Properties,
+    rows: &[Properties],
+    include: impl Fn(&str) -> bool,
+) -> Result<wire::Asset> {
+    let mut output = wire::Asset {
+        target: Some(wire::AssetRef {
+            asset_id: target.asset.to_string(),
+            incarnation: target.incarnation.to_string(),
+        }),
+        kind: number(root, "kind")? as i32,
+        adoption: number(root, "adoption")? as i32,
+        revision: number(root, "revision")?,
+        ..Default::default()
+    };
+    let by_key: BTreeMap<&str, &Properties> = rows
+        .iter()
+        .map(|p| {
+            Ok((
+                p.get("key").and_then(Value::as_str).ok_or(Error::Corrupt)?,
+                p,
+            ))
+        })
+        .collect::<Result<_>>()?;
+    for p in rows {
+        let Some(Value::String(layer)) = p.get("layer") else {
+            continue;
+        };
+        if matches!(layer.as_str(), "intent" | "observed" | "imported")
+            && !include(
+                p.get("field")
+                    .and_then(Value::as_str)
+                    .ok_or(Error::Corrupt)?,
+            )
+        {
+            continue;
+        }
+        match layer.as_str() {
+            "intent" => output.intended.push(wire::IntendedField {
+                field: Some(read_field(p)?),
+                authority_id: string(p, "authority")?,
+            }),
+            "mapping" => output.sources.push(wire::SourceIdentity {
+                connection_id: string(p, "connection")?,
+                object: Some(wire::SourceObject {
+                    object_kind: string(p, "object_kind")?,
+                    object_id: string(p, "object_id")?,
+                    incarnation_evidence: Some(string(p, "lifetime")?),
+                }),
+            }),
+            "observed" | "imported" => {
+                let fresh_key = format!("{}/freshness", string(p, "key")?);
+                let fresh = by_key.get(fresh_key.as_str()).ok_or(Error::Corrupt)?;
+                let evidence = wire::Evidence {
+                    source_id: string(p, "source")?,
+                    source_revision: fresh
+                        .get("source_revision")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    observed_at_ms: number(fresh, "observed")?,
+                    valid_until_ms: number(fresh, "valid")?,
+                    fields: vec![read_field(p)?],
+                };
+                let scan_id = fresh.get("scan").and_then(Value::as_str).map(str::to_owned);
+                let groups = if layer == "observed" {
+                    &mut output.observed
+                } else {
+                    &mut output.imported
+                };
+                if let Some(group) = groups.iter_mut().find(|o| {
+                    o.scan_id == scan_id
+                        && o.evidence.as_ref().is_some_and(|e| {
+                            e.source_id == evidence.source_id
+                                && e.source_revision == evidence.source_revision
+                                && e.observed_at_ms == evidence.observed_at_ms
+                                && e.valid_until_ms == evidence.valid_until_ms
+                        })
+                }) {
+                    group
+                        .evidence
+                        .as_mut()
+                        .ok_or(Error::Corrupt)?
+                        .fields
+                        .extend(evidence.fields);
+                } else {
+                    groups.push(wire::Observation {
+                        scan_id,
+                        evidence: Some(evidence),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(output)
+}
 fn validate_evidence(
     asset: &wire::Asset,
     children: &[Properties],
@@ -254,7 +384,10 @@ impl Store {
             })
             .collect::<Result<_>>()?;
         validate_evidence(asset, &children, &by_key)?;
-        tx.validate_full_software_asset(target, asset)?;
+        tx.validate_full_asset_fields(target, asset)?;
+        let kind_changed = old
+            .as_ref()
+            .is_some_and(|p| p.get("kind") != Some(&Value::Int(asset.kind.into())));
         let mut intent_changed = old.as_ref().is_none_or(|p| {
             p.get("kind") != Some(&Value::Int(asset.kind.into()))
                 || p.get("adoption") != Some(&Value::Int(asset.adoption.into()))
@@ -266,11 +399,14 @@ impl Store {
             let child = format!("{key}/intent/{}", field.name);
             keep.insert(child.clone());
             let previous = by_key.get(child.as_str()).copied();
-            if previous.is_some_and(|p| {
-                field_matches(field, p)
-                    && p.get("authority").and_then(Value::as_str)
+            let same_value = previous.is_some_and(|p| field_matches(field, p));
+            let same_claim = same_value
+                && previous.is_some_and(|p| {
+                    p.get("authority").and_then(Value::as_str)
                         == Some(intended.authority_id.as_str())
-            }) {
+                });
+            tx.validate_equipment_change(asset.kind, field, kind_changed || !same_claim)?;
+            if same_claim {
                 continue;
             }
             let mut p = field_props(field)?;
@@ -279,7 +415,7 @@ impl Store {
                     field.name.as_str(),
                     "runtime_object_id" | "runtime_lifetime"
                 )
-                && !previous.is_some_and(|p| field_matches(field, p))
+                && !same_value
             {
                 runtime_identity_changed = true;
             }
@@ -343,7 +479,9 @@ impl Store {
                 for field in &evidence.fields {
                     let child = format!("{key}/{layer}/{}/{}", evidence.source_id, field.name);
                     let previous = by_key.get(child.as_str()).copied();
-                    if !previous.is_some_and(|p| field_matches(field, p)) {
+                    let changed = !previous.is_some_and(|p| field_matches(field, p));
+                    tx.validate_equipment_change(asset.kind, field, kind_changed || changed)?;
+                    if changed {
                         let mut value = field_props(field)?;
                         value.extend(props([
                             ("layer", text(layer)),
@@ -424,86 +562,7 @@ impl Store {
         let root = tx.asset(target)?;
         let key = asset_key(target);
         let rows = tx.children(&key)?;
-        let mut output = wire::Asset {
-            target: Some(wire::AssetRef {
-                asset_id: target.asset.to_string(),
-                incarnation: target.incarnation.to_string(),
-            }),
-            kind: number(&root, "kind")? as i32,
-            adoption: number(&root, "adoption")? as i32,
-            revision: number(&root, "revision")?,
-            ..Default::default()
-        };
-        let by_key: BTreeMap<&str, &Properties> = rows
-            .iter()
-            .map(|p| {
-                Ok((
-                    p.get("key").and_then(Value::as_str).ok_or(Error::Corrupt)?,
-                    p,
-                ))
-            })
-            .collect::<Result<_>>()?;
-        for p in &rows {
-            let Some(Value::String(layer)) = p.get("layer") else {
-                continue;
-            };
-            match layer.as_str() {
-                "intent" => output.intended.push(wire::IntendedField {
-                    field: Some(read_field(p)?),
-                    authority_id: string(p, "authority")?,
-                }),
-                "mapping" => output.sources.push(wire::SourceIdentity {
-                    connection_id: string(p, "connection")?,
-                    object: Some(wire::SourceObject {
-                        object_kind: string(p, "object_kind")?,
-                        object_id: string(p, "object_id")?,
-                        incarnation_evidence: Some(string(p, "lifetime")?),
-                    }),
-                }),
-                "observed" | "imported" => {
-                    let fresh_key = format!("{}/freshness", string(p, "key")?);
-                    let fresh = by_key.get(fresh_key.as_str()).ok_or(Error::Corrupt)?;
-                    let evidence = wire::Evidence {
-                        source_id: string(p, "source")?,
-                        source_revision: fresh
-                            .get("source_revision")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned),
-                        observed_at_ms: number(fresh, "observed")?,
-                        valid_until_ms: number(fresh, "valid")?,
-                        fields: vec![read_field(p)?],
-                    };
-                    let scan_id = fresh.get("scan").and_then(Value::as_str).map(str::to_owned);
-                    let groups = if layer == "observed" {
-                        &mut output.observed
-                    } else {
-                        &mut output.imported
-                    };
-                    if let Some(group) = groups.iter_mut().find(|o| {
-                        o.scan_id == scan_id
-                            && o.evidence.as_ref().is_some_and(|e| {
-                                e.source_id == evidence.source_id
-                                    && e.source_revision == evidence.source_revision
-                                    && e.observed_at_ms == evidence.observed_at_ms
-                                    && e.valid_until_ms == evidence.valid_until_ms
-                            })
-                    }) {
-                        group
-                            .evidence
-                            .as_mut()
-                            .ok_or(Error::Corrupt)?
-                            .fields
-                            .extend(evidence.fields);
-                    } else {
-                        groups.push(wire::Observation {
-                            scan_id,
-                            evidence: Some(evidence),
-                        });
-                    }
-                }
-                _ => {}
-            }
-        }
+        let output = asset_projection(target, &root, &rows, |_| true)?;
         tx.commit()?;
         Ok(output)
     }
