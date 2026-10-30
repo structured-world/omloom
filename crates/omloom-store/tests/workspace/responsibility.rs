@@ -988,7 +988,7 @@ fn responsibility_global_filter_excludes_unselected_hosting_sources() -> TestRes
             ..query()
         },
         api::Query {
-            view: api::View::Services as i32,
+            view: api::View::Virtualization as i32,
             ..query()
         },
     ] {
