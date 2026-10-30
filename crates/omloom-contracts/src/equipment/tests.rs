@@ -57,6 +57,42 @@ fn probability_score_and_calibration_are_distinct() {
     assert_eq!(validate(&a), Err(Error::Missing));
 }
 #[test]
+fn qualified_reference_identity_does_not_depend_on_display_label() {
+    // Aliases of one exact model cannot consume two probability outcomes.
+    let mut a = possible();
+    let Some(equipment_claim::Assertion::Alternatives(v)) = &mut a.assertion else {
+        panic!()
+    };
+    let reference = EquipmentReference {
+        issuer: "private/catalog".into(),
+        key: "one-model".into(),
+        basis: "catalog/v1".into(),
+    };
+    for candidate in &mut v.candidates {
+        candidate.reference = Some(reference.clone());
+    }
+    assert_eq!(validate(&a), Err(Error::Duplicate));
+    let Some(equipment_claim::Assertion::Alternatives(v)) = &mut a.assertion else {
+        panic!()
+    };
+    v.candidates[1]
+        .reference
+        .as_mut()
+        .expect("qualified model")
+        .key = "other-model".into();
+    v.excluded = vec![
+        EquipmentExclusion {
+            value: "Model label".into(),
+            reference: Some(reference),
+            reason: "Rear pattern differs".into(),
+            coverage: "Rear inspected".into(),
+        };
+        2
+    ];
+    v.excluded[1].value = "Model alias".into();
+    assert_eq!(validate(&a), Err(Error::Duplicate));
+}
+#[test]
 fn quantities_preserve_open_bounds_and_units() {
     // Twelve visible bays establish a minimum, not twelve disks or an exact total.
     let mut a = EquipmentClaim {

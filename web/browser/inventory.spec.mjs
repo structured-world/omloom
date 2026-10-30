@@ -108,6 +108,28 @@ test('partial equipment is created and refined on desktop and phone without chan
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
 });
 
+test('equipment conflicts use exact reference identity, not display aliases or separators',async({page})=>{
+  // Reference fields are opaque. Display spelling is neither identity nor a join key.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-equipment-identity-'));const server=await host(dir);
+  try{
+    const {m,rpc}=await workspaceClient(server.url);
+    const created=await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.DEVICE,changes:[{name:'name',value:{oneofKind:'text',text:'Model identity review'}}]})});const target=created.mutation.targets[0];
+    const reference={issuer:'private/catalog',key:'one-model',basis:'v1'};
+    const initial=(await rpc({oneofKind:'read',read:m.Read.create({target})})).detail.item;
+    await expect(rpc({oneofKind:'write',write:m.Write.create({target,expected:initial.revision,kind:m.AssetKind.DEVICE,changes:[{name:'model',value:{oneofKind:'equipment',equipment:{basis:'Two labels of the same model',assertion:{oneofKind:'alternatives',alternatives:{candidates:[{value:'Model label',reference},{value:'Model alias',reference}]}}}}}]})})).rejects.toMatchObject({code:'INVALID_ARGUMENT'});
+    expect((await rpc({oneofKind:'read',read:m.Read.create({target})})).detail.item.revision).toEqual(initial.revision);
+    for(const [same,left,right] of [[true,{issuer:'private/catalog',key:'one-model',basis:'v1'},{issuer:'private/catalog',key:'one-model',basis:'v1'}],[false,{issuer:'a / b',key:'c',basis:'v1'},{issuer:'a',key:'b / c',basis:'v1'}]]){
+      const current=(await rpc({oneofKind:'read',read:m.Read.create({target})})).detail.item;
+      await rpc({oneofKind:'write',write:m.Write.create({target,expected:current.revision,kind:m.AssetKind.DEVICE,changes:[{name:'model',value:{oneofKind:'equipment',equipment:{basis:'Reviewed labels and rear mounting pattern',assertion:{oneofKind:'alternatives',alternatives:{candidates:[{value:same?'Model label':'Same label',reference:left}],excluded:[{value:same?'Model alias':'Same label',reference:right,reason:'Rear pattern differs',coverage:'Rear inspected'}]}}}}}]})});
+      const url=`${server.url}/#/?asset=${target.assetId}&incarnation=${target.incarnation}`;
+      if(page.url()===url)await page.reload();else await page.goto(url);
+      const detail=page.getByRole('region',{name:'Resource details'});
+      await expect(detail).toContainText(same?'Model alias':'Same label');
+      if(same)await expect(detail).toContainText('Conflicting claims require review');else await expect(detail).not.toContainText('Conflicting claims require review');
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('typed DNS and contact values validate on desktop and phone', async ({ page }) => {
   // Display labels and provider IDs remain opaque. Typed routes reject malformed
   // values at the server; phone inputs also explain E.164 errors before submission.

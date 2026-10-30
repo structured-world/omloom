@@ -162,7 +162,7 @@ pub fn validate(value: &EquipmentClaim) -> Result<(), Error> {
                 }
                 if v.candidates[..i]
                     .iter()
-                    .any(|old| old.value == c.value && old.reference == c.reference)
+                    .any(|old| same_identity(&old.value, &old.reference, &c.value, &c.reference))
                 {
                     return Err(Error::Duplicate);
                 }
@@ -194,13 +194,25 @@ pub fn validate(value: &EquipmentClaim) -> Result<(), Error> {
                 }
                 if v.excluded[..i]
                     .iter()
-                    .any(|old| old.value == e.value && old.reference == e.reference)
+                    .any(|old| same_identity(&old.value, &old.reference, &e.value, &e.reference))
                 {
                     return Err(Error::Duplicate);
                 }
             }
             Ok(())
         }
+    }
+}
+fn same_identity(
+    left: &str,
+    left_ref: &Option<EquipmentReference>,
+    right: &str,
+    right_ref: &Option<EquipmentReference>,
+) -> bool {
+    match (left_ref, right_ref) {
+        (Some(a), Some(b)) => a == b,
+        (None, None) => left == right,
+        _ => false,
     }
 }
 fn identity(value: &Option<EquipmentReference>) -> (&str, &str, &str) {

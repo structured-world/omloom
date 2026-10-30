@@ -1,6 +1,6 @@
 import { GrpcWebFetchTransport } from '@protobuf-ts/grpcweb-transport';
 import { Request, Workspace, FieldType, type Reply, type WorkingContext } from '../src/generated/omloom/v1/workspace';
-import { AssetKind, NullValue, type Field, type AssetRef } from '../src/generated/omloom/v1/contracts';
+import { AssetKind, NullValue, type Field, type AssetRef, type EquipmentAlternative, type EquipmentExclusion } from '../src/generated/omloom/v1/contracts';
 import { softwareChoiceLabel } from './software-fields';
 export * as model from '../src/generated/omloom/v1/workspace';
 export { AssetKind, RelationKind, NullValue, OperationState, EffectOutcome } from '../src/generated/omloom/v1/contracts';
@@ -56,7 +56,11 @@ export function input(field: Field | undefined): string {
       const reference=(r:import('../src/generated/omloom/v1/contracts').EquipmentReference|undefined)=>r?` [${r.issuer} / ${r.key} (${r.basis})]`:'';
       const possible=set.candidates.map(c=>c.value+reference(c.reference)+(c.probabilityPpm!==undefined?` (attributed probability ${c.probabilityPpm/10000}%)`:c.scorePpm!==undefined?` (uncalibrated score ${c.scorePpm/1000000})`:''));
       const excluded=set.excluded.map(e=>`${e.value}${reference(e.reference)}, because ${e.reason}; coverage: ${e.coverage}`);
-      const conflict=set.candidates.some(c=>set.excluded.some(e=>e.value===c.value&&reference(e.reference)===reference(c.reference)));
+      const same=(a:EquipmentAlternative|EquipmentExclusion,b:EquipmentAlternative|EquipmentExclusion)=>{
+        if(a.reference&&b.reference)return a.reference.issuer===b.reference.issuer&&a.reference.key===b.reference.key&&a.reference.basis===b.reference.basis;
+        return a.reference===undefined&&b.reference===undefined&&a.value===b.value;
+      };
+      const conflict=set.candidates.some(c=>set.excluded.some(e=>same(c,e)));
       value=[possible.length?'Possible: '+possible.join(', '):'',excluded.length?'Excluded: '+excluded.join('; '):'',set.exhaustive?'Declared complete domain':'Incomplete alternatives; other models remain unknown',set.residualPpm!==undefined?`Unknown probability: ${set.residualPpm/10000}%`:'',set.domain?`Domain: ${set.domain}`:'',set.calibrationBasis?`Attributed calibration: ${set.calibrationBasis}`:'',conflict?'Conflicting claims require review':''].filter(Boolean).join(' · ');
     }
     return `${value} · Basis: ${claim.basis}`;
