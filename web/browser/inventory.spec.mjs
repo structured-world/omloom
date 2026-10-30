@@ -243,6 +243,8 @@ test('hypervisor pagination resets for edited searches on desktop and phone', as
       try {await search.fill('Paginated host 20');} finally {release();}
       await expect(dialog.getByRole('status')).toHaveCount(0);
       await expect(next).toBeHidden();
+      await expect(dialog.getByRole('article',{name:'Destination Paginated host 20',exact:true})).toBeVisible();
+      await expect(dialog.getByRole('article').filter({has:page.getByRole('button',{name:/^Choose Paginated host/})})).toHaveCount(1);
       await page.unrouteAll({behavior:'wait'});
       await dialog.getByRole('button',{name:'Close dialog',exact:true}).click();
       await expect(dialog).toBeHidden();

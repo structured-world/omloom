@@ -33,7 +33,8 @@ async function candidates(cursor?: string) {
     predicates: [{ field: 'virtualization_role', value: text('virtualization_role', `VIRTUALIZATION_ROLE_${model.VirtualizationRole[model.VirtualizationRole.HYPERVISOR]}`) }],
   }) });
   if (response.oneofKind !== 'page') throw Error('Hypervisor selection is unavailable');
-  items.value = response.page.items; next.value = search.value === requestedSearch ? response.page.next : undefined; contexts.value = response.page.contexts;
+  if (search.value !== requestedSearch) return;
+  items.value = response.page.items; next.value = response.page.next; contexts.value = response.page.contexts;
 }
 async function load() {
   busy.value = true; error.value = '';
