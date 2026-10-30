@@ -876,6 +876,7 @@ fn level_browse_small_estate_has_bounded_latency() -> TestResult {
     for query in db.query_registry().top_by_impact(32) {
         if query.canonical_query.contains("forward_owned") {
             browse_plans += 1;
+            assert_eq!(query.count, 1, "browse execution must not repeat");
             let plan = query.last_plan.ok_or("missing browse plan")?;
             for index in ["omloom_asset(asset)", "omloom_to_asset(to_asset)"] {
                 assert_eq!(
@@ -888,7 +889,10 @@ fn level_browse_small_estate_has_bounded_latency() -> TestResult {
             eprintln!("browse statement: {} us", query.total_time_us);
         }
     }
-    assert_eq!(browse_plans, 2, "count and page plans must both be checked");
+    assert_eq!(
+        browse_plans, 1,
+        "one browse must supply both total and page"
+    );
     eprintln!("level browse elapsed: {elapsed:?}");
     assert_eq!(page.total, 16);
     assert_eq!(page.items.len(), 16);
@@ -897,6 +901,62 @@ fn level_browse_small_estate_has_bounded_latency() -> TestResult {
         elapsed < std::time::Duration::from_secs(2),
         "small estate browse: {elapsed:?}"
     );
+    Ok(())
+}
+
+// Shared total/page projection preserves empty results, duplicate sort values,
+// descending order and cursor continuation without incidental writes.
+#[test]
+fn shared_total_and_page_keep_empty_results_and_stable_ties() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let mut expected = Vec::new();
+    for name in ["beta", "alpha", "beta"] {
+        let target = create(&store, &actor, K::Device, name)?;
+        expected.push((name.to_owned(), target.asset_id));
+    }
+    expected.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    let before = store.usage()?;
+    let mut q = query();
+    q.level_only = true;
+    q.view = api::View::Hardware as i32;
+    q.limit = 1;
+    q.descending = true;
+    let mut actual = Vec::new();
+    loop {
+        let Reply::Page(page) = call(&store, &actor, Command::Query(q.clone()))? else {
+            return Err("page".into());
+        };
+        assert_eq!(page.total, 3);
+        assert_eq!(page.items.len(), 1);
+        actual.push(
+            page.items[0]
+                .target
+                .as_ref()
+                .ok_or("target")?
+                .asset_id
+                .clone(),
+        );
+        q.cursor = page.next;
+        if q.cursor.is_none() {
+            break;
+        }
+        assert!(actual.len() < 3, "cursor must advance");
+    }
+    assert_eq!(
+        actual,
+        expected.into_iter().map(|(_, id)| id).collect::<Vec<_>>()
+    );
+    q.search = "no resource matches this text".into();
+    q.cursor = None;
+    let Reply::Page(empty) = call(&store, &actor, Command::Query(q))? else {
+        return Err("empty page".into());
+    };
+    assert_eq!(empty.total, 0);
+    assert!(empty.items.is_empty());
+    assert!(empty.next.is_none());
+    assert_eq!(store.usage()?, before);
     Ok(())
 }
 
