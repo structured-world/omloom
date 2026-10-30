@@ -7,7 +7,7 @@ const props = defineProps<{ definitions: model.Definition[]; predicates: model.P
 const emit = defineEmits<{ close: []; apply: [model.Predicate[],model.ResponsibilityFilter?] }>();
 const ownerFilter=ref(false);const facet=ref(model.ResponsibilityFacet.CLAIMED_OWNER);const issuer=ref(props.responsibility?.issuer ?? '');const subject=ref(props.responsibility?.subject ?? '');
 const selected = ref('name'); const value = ref(''); const cleared = ref(false); const error = ref('');
-const fields = computed(() => [{ id: 'name', name: 'Name', type: model.FieldType.TEXT }, { id: 'description', name: 'Description', type: model.FieldType.TEXT }, { id: 'serial', name: 'Serial number', type: model.FieldType.TEXT }, ...softwareFields(), ...props.definitions.filter(d => !d.retired)]);
+const fields = computed(() => [{ id: 'name', name: 'Name', type: model.FieldType.TEXT }, { id: 'dns_name', name: 'DNS name', type: model.FieldType.TEXT }, { id: 'description', name: 'Description', type: model.FieldType.TEXT }, { id: 'serial', name: 'Serial number', type: model.FieldType.TEXT }, ...softwareFields(), ...props.definitions.filter(d => !d.retired)]);
 const definition = computed(() => fields.value.find(d => d.id === selected.value));
 const choices = computed(() => softwareChoices(selected.value));
 function apply() {

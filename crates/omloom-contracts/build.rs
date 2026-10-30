@@ -21,6 +21,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .boxed(".omloom.workspace.v1.Address.allocation")
         .boxed(".omloom.workspace.v1.Address.interface")
         .boxed(".omloom.workspace.v1.Reply.result.detail")
+        .boxed(".omloom.workspace.v1.Reply.result.vm_placement_review")
         .boxed(".omloom.workspace.v1.HostImport.report")
         .file_descriptor_set_path(&descriptor)
         .compile_protos(&[workspace], &["../../proto"])?;

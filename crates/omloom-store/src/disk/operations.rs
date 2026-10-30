@@ -1,5 +1,15 @@
 use super::*;
 
+impl Tx<'_> {
+    pub(super) fn require_no_pending_operations(&self, target: AssetRef) -> Result<()> {
+        let pending=self.query("MATCH (n:OmRow) WHERE n.parent='operations' AND n.class=$class AND n.asset=$asset AND n.incarnation=$incarnation RETURN properties(n) AS p LIMIT 1",params([("class",int(Class::Pending as u64)?),("asset",text(target.asset.to_string())),("incarnation",text(target.incarnation.to_string()))]))?;
+        if !pending.is_empty() {
+            return Err(Error::UnsafeTransition);
+        }
+        Ok(())
+    }
+}
+
 enum Change<'a> {
     Dispatch,
     Evidence {

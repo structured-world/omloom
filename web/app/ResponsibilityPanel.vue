@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref, computed } from 'vue';
+import { onMounted, ref, computed, defineAsyncComponent } from 'vue';
 import Dialog from './Dialog.vue';
+const LocatorInput=defineAsyncComponent(()=>import('./LocatorInput.vue'));
 import { call, model, display, key, type AssetRef } from './api';
 const props = defineProps<{ item:model.Item; working:model.WorkingContext }>();
 const emit = defineEmits<{ changed:[]; open:[target:AssetRef] }>();
@@ -9,6 +10,7 @@ const error = ref(''); const busy = ref(false); const editing = ref(false); cons
 const facet = ref(model.ResponsibilityFacet.CLAIMED_OWNER);
 const mode = ref(model.AssignmentMode.EXPLICIT);
 const party = ref(model.PartyRef.create({kind:model.PartyKind.TEAM})); const contact = ref(''); const source = ref('');
+const contactKind = ref(model.LocatorKind.UNSPECIFIED);
 const preview = ref<model.ResponsibilityState>(); const prepared = ref<model.Responsibility>();
 const json = ref(''); const imported = ref<model.ResponsibilityTransfer>(); const importPreview = ref<model.ResponsibilityTransferState>();
 const facets = [model.ResponsibilityFacet.CLAIMED_OWNER,model.ResponsibilityFacet.OPERATOR,model.ResponsibilityFacet.BENEFICIARY,model.ResponsibilityFacet.ACCOUNT_CONTROLLER,model.ResponsibilityFacet.CREATOR];
@@ -31,6 +33,7 @@ async function edit(selected:model.ResponsibilityFacet) {
     mode.value=assignment?.mode ?? model.AssignmentMode.EXPLICIT;
     party.value=model.PartyRef.create(assignment?.party ?? {kind:model.PartyKind.TEAM});
     contact.value=assignment?.contact ?? ''; source.value=assignment?.sourceRelation ?? '';
+    contactKind.value=assignment?.contactKind ?? model.LocatorKind.UNSPECIFIED;
     preview.value=undefined; prepared.value=undefined; editing.value=true;
   } catch(e){error.value=String(e);} finally{busy.value=false;}
 }
@@ -41,6 +44,7 @@ async function review() {
     const change=model.ResponsibilityAssignment.create({facet:facet.value,mode:mode.value,
       party:mode.value===model.AssignmentMode.EXPLICIT ? party.value : undefined,
       contact:mode.value===model.AssignmentMode.EXPLICIT && contact.value ? contact.value : undefined,
+      contactKind:mode.value===model.AssignmentMode.EXPLICIT && contact.value ? contactKind.value : model.LocatorKind.UNSPECIFIED,
       sourceRelation:mode.value===model.AssignmentMode.INHERIT ? selected?.relationId : undefined,
       sourceRevision:mode.value===model.AssignmentMode.INHERIT ? selected?.revision : undefined,
     });
@@ -101,7 +105,7 @@ async function acceptImport() {
 </section>
 <Dialog v-if="editing" :title="'Edit '+names[facet].toLowerCase()" @close="editing=false"><p v-if="error" role="alert">{{error}}</p>
 <form v-if="!preview" @submit.prevent="review"><label for="responsibility-assignment">Assignment</label><select id="responsibility-assignment" v-model.number="mode"><option :value="model.AssignmentMode.EXPLICIT">Explicit assignment</option><option v-if="inheritable" :value="model.AssignmentMode.INHERIT">Inherit from a qualified source</option><option :value="model.AssignmentMode.UNASSIGNED">Unassigned, stop inheritance</option></select>
-<template v-if="mode===model.AssignmentMode.EXPLICIT"><label for="responsibility-party-kind">Party kind</label><select id="responsibility-party-kind" v-model.number="party.kind"><option :value="model.PartyKind.INDIVIDUAL">Individual</option><option :value="model.PartyKind.ORGANIZATION">Organization</option><option :value="model.PartyKind.TEAM">Team</option></select><label>Party namespace<input v-model="party.issuer" required maxlength="256"></label><label>Party identity<input v-model="party.subject" required maxlength="256"></label><label>Party label<input v-model="party.name" required maxlength="160"></label><label>Contact route<input v-model="contact" maxlength="512"></label></template>
+<template v-if="mode===model.AssignmentMode.EXPLICIT"><label for="responsibility-party-kind">Party kind</label><select id="responsibility-party-kind" v-model.number="party.kind"><option :value="model.PartyKind.INDIVIDUAL">Individual</option><option :value="model.PartyKind.ORGANIZATION">Organization</option><option :value="model.PartyKind.TEAM">Team</option></select><label>Party namespace<input v-model="party.issuer" required maxlength="256"></label><label>Party identity<input v-model="party.subject" required maxlength="256"></label><label>Party label<input v-model="party.name" required maxlength="160"></label><LocatorInput v-model="contact" v-model:kind="contactKind" label="Contact route" /></template>
 <template v-if="mode===model.AssignmentMode.INHERIT"><label for="responsibility-source">Inheritance source</label><select id="responsibility-source" v-model="source"><option value="">Use the unique qualified component source, if present</option><option v-for="s in sources" :key="s.relation?.relationId" :value="s.relation?.relationId">{{display(s.parent?.fields.find(f=>f.name==='name'))}} · {{s.parent?.target?.assetId}}</option></select></template>
 <p v-if="mode===model.AssignmentMode.INHERIT" class="hint">Selecting a hosting relationship explicitly establishes administrative responsibility. Future VM placement changes will not transfer it.</p>
 <div class="actions"><button type="button" @click="editing=false">Cancel</button><button class="primary" :disabled="busy">Review assignment</button></div></form>

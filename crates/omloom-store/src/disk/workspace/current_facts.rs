@@ -17,6 +17,9 @@ pub(super) fn source_key(parent: &str, source: &str) -> String {
 // reattesting a value changes only its small freshness row, never its payload.
 impl Tx<'_> {
     pub(in crate::disk) fn retire_current_facts(&mut self, target: AssetRef) -> Result<()> {
+        for row in self.fact_rows(&super::host_identity::parent(target), 32)? {
+            self.delete(&string(&row, "key")?)?;
+        }
         for row in self.fact_rows(
             &format!("{}/host-mappings", asset_key(target)),
             MAX_CHILDREN,

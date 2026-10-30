@@ -758,12 +758,133 @@ fn level_browse_returns_containers_then_direct_children() -> TestResult {
     Ok(())
 }
 
+// Root filtering must keep an authorized child of hidden parents, but exclude
+// it when either typed direction has a visible parent, including mixed cases.
+#[test]
+fn level_browse_preserves_hidden_and_mixed_parent_semantics() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let visible_os = create(&store, &actor, K::SoftwareInstallation, "Visible OS")?;
+    let hidden_os = create(&store, &actor, K::SoftwareInstallation, "Hidden OS")?;
+    let visible_vm = create(&store, &actor, K::VirtualMachine, "Visible VM")?;
+    let hidden_vm = create(&store, &actor, K::VirtualMachine, "Hidden VM")?;
+    let forward_owned = child(&store, &actor, &visible_os, K::Service, "Forward owned")?;
+    let reverse_owned = child(&store, &actor, &hidden_os, K::Service, "Reverse owned")?;
+    let hidden_owned = child(&store, &actor, &hidden_os, K::Service, "Hidden owners only")?;
+    let orphan = create(&store, &actor, K::Service, "Unplaced service")?;
+    for (service, host) in [
+        (&forward_owned, &hidden_vm),
+        (&reverse_owned, &visible_vm),
+        (&hidden_owned, &hidden_vm),
+    ] {
+        call(
+            &store,
+            &actor,
+            Command::Relation(api::Relationship {
+                relation: Some(wire::Relation {
+                    from: Some(service.clone()),
+                    to: Some(host.clone()),
+                    kind: wire::RelationKind::RunsOn as i32,
+                    ..Default::default()
+                }),
+                remove: false,
+            }),
+        )?;
+    }
+    let targets = [
+        &visible_os,
+        &visible_vm,
+        &forward_owned,
+        &reverse_owned,
+        &hidden_owned,
+        &orphan,
+    ];
+    let mut restricted = actor.clone();
+    restricted.grants[0].scope = Scope::Targets(
+        targets
+            .into_iter()
+            .map(AssetRef::try_from)
+            .collect::<Result<_, _>>()?,
+    );
+    let usage = store.usage()?;
+    let Reply::Page(page) = call(
+        &store,
+        &restricted,
+        Command::Query(api::Query {
+            level_only: true,
+            ..query()
+        }),
+    )?
+    else {
+        return Err("page".into());
+    };
+    let actual: std::collections::BTreeSet<_> = page
+        .items
+        .iter()
+        .map(|i| {
+            i.target
+                .as_ref()
+                .map(|t| t.asset_id.as_str())
+                .ok_or("target")
+        })
+        .collect::<Result<_, _>>()?;
+    let expected: std::collections::BTreeSet<_> =
+        [&visible_os, &visible_vm, &hidden_owned, &orphan]
+            .map(|t| t.asset_id.as_str())
+            .into();
+    assert_eq!(actual, expected);
+    assert_eq!(page.total, 4);
+    assert_eq!(store.usage()?, usage);
+    Ok(())
+}
+
 // A small estate must not re-expand the estate for every candidate's parent probe.
 // The wall-clock ceiling is a required regression gate; indexed plans alone do not bound latency.
 #[test]
 fn level_browse_small_estate_has_bounded_latency() -> TestResult {
     let dir = tempfile::tempdir()?;
-    let store = Store::open(dir.path(), policy())?;
+    let mut store = Store::open(dir.path(), policy())?;
+    store.set_diagnostic_query_check(|db, statement| {
+        if !statement.contains("forward_owned") {
+            return;
+        }
+        // The outer EXPLAIN abbreviates expression subqueries. Inspect the
+        // actual statement's optimized subplans, not its normalized fingerprint.
+        let mut planned = db.explain_plan(statement, None).expect("browse plan");
+        let mut nested = Vec::new();
+        planned.root.for_each_expr_mut(&mut |expr| {
+            expr.for_each_subplan_mut(&mut |subplan| {
+                assert!(
+                    format!("{:?}", subplan.root).contains("Case {"),
+                    "parent lookup must gate ineligible relation kinds"
+                );
+                nested.push(subplan.explain());
+            });
+        });
+        assert_eq!(nested.len(), 2, "both ownership probes must be checked");
+        for plan in &nested {
+            assert!(
+                !plan.contains("Traverse("),
+                "parent endpoint must use its key: {plan}"
+            );
+            assert_eq!(
+                plan.matches("IndexScan(p:OmRow ON omloom_key(key))")
+                    .count(),
+                1,
+                "each probe must look up its exact parent: {plan}"
+            );
+        }
+        let plan = nested.join("\n");
+        for index in ["omloom_asset(asset)", "omloom_to_asset(to_asset)"] {
+            assert_eq!(
+                plan.matches(&format!("IndexScan(r:OmRow ON {index})"))
+                    .count(),
+                1,
+                "each parent probe must use its endpoint index: {plan}"
+            );
+        }
+    });
     let actor = operator();
     for index in 0..16 {
         let host = create(&store, &actor, K::Device, &format!("host {index}"))?;
@@ -795,19 +916,22 @@ fn level_browse_small_estate_has_bounded_latency() -> TestResult {
     for query in db.query_registry().top_by_impact(32) {
         if query.canonical_query.contains("forward_owned") {
             browse_plans += 1;
-            let plan = query.last_plan.ok_or("missing browse plan")?;
-            for index in ["omloom_asset(asset)", "omloom_to_asset(to_asset)"] {
-                assert_eq!(
-                    plan.matches(&format!("IndexScan(r:OmRow ON {index})"))
-                        .count(),
-                    1,
-                    "each parent probe must use its endpoint index: {plan}"
-                );
-            }
+            assert_eq!(query.count, 1, "browse execution must not repeat");
+            assert!(
+                !query
+                    .canonical_query
+                    .to_ascii_lowercase()
+                    .contains("collect("),
+                "page selection must not collect every matching key"
+            );
+            query.last_plan.ok_or("missing browse plan")?;
             eprintln!("browse statement: {} us", query.total_time_us);
         }
     }
-    assert_eq!(browse_plans, 2, "count and page plans must both be checked");
+    assert_eq!(
+        browse_plans, 2,
+        "count and bounded page plans must both be checked"
+    );
     eprintln!("level browse elapsed: {elapsed:?}");
     assert_eq!(page.total, 16);
     assert_eq!(page.items.len(), 16);
@@ -816,6 +940,62 @@ fn level_browse_small_estate_has_bounded_latency() -> TestResult {
         elapsed < std::time::Duration::from_secs(2),
         "small estate browse: {elapsed:?}"
     );
+    Ok(())
+}
+
+// Count/page projections preserve empty results, duplicate sort values,
+// descending order and cursor continuation without incidental writes.
+#[test]
+fn total_and_page_keep_empty_results_and_stable_ties() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let mut expected = Vec::new();
+    for name in ["beta", "alpha", "beta"] {
+        let target = create(&store, &actor, K::Device, name)?;
+        expected.push((name.to_owned(), target.asset_id));
+    }
+    expected.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    let before = store.usage()?;
+    let mut q = query();
+    q.level_only = true;
+    q.view = api::View::Hardware as i32;
+    q.limit = 1;
+    q.descending = true;
+    let mut actual = Vec::new();
+    loop {
+        let Reply::Page(page) = call(&store, &actor, Command::Query(q.clone()))? else {
+            return Err("page".into());
+        };
+        assert_eq!(page.total, 3);
+        assert_eq!(page.items.len(), 1);
+        actual.push(
+            page.items[0]
+                .target
+                .as_ref()
+                .ok_or("target")?
+                .asset_id
+                .clone(),
+        );
+        q.cursor = page.next;
+        if q.cursor.is_none() {
+            break;
+        }
+        assert!(actual.len() < 3, "cursor must advance");
+    }
+    assert_eq!(
+        actual,
+        expected.into_iter().map(|(_, id)| id).collect::<Vec<_>>()
+    );
+    q.search = "no resource matches this text".into();
+    q.cursor = None;
+    let Reply::Page(empty) = call(&store, &actor, Command::Query(q))? else {
+        return Err("empty page".into());
+    };
+    assert_eq!(empty.total, 0);
+    assert!(empty.items.is_empty());
+    assert!(empty.next.is_none());
+    assert_eq!(store.usage()?, before);
     Ok(())
 }
 

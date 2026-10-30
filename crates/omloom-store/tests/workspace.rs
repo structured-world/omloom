@@ -10,6 +10,8 @@ use support::*;
 mod accounts;
 #[path = "workspace/contexts.rs"]
 mod contexts;
+#[path = "workspace/correction.rs"]
+mod correction;
 #[path = "workspace/definitions.rs"]
 mod definitions;
 #[path = "workspace/exchange.rs"]
@@ -26,8 +28,12 @@ mod projections;
 mod responsibility;
 #[path = "workspace/software.rs"]
 mod software;
+#[path = "workspace/typed_values.rs"]
+mod typed_values;
 #[path = "workspace/views.rs"]
 mod views;
+#[path = "workspace/vm_placement.rs"]
+mod vm_placement;
 
 fn operator() -> Context {
     Context {

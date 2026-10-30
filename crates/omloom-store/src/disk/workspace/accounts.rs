@@ -42,6 +42,22 @@ fn link_key(account: AssetRef, kind: LinkKind, target: AssetRef) -> String {
     )
 }
 fn metadata_props(metadata: &api::AccountMetadata) -> Result<Properties> {
+    if !matches!(
+        api::LocatorKind::try_from(metadata.sender_kind),
+        Ok(api::LocatorKind::Unspecified | api::LocatorKind::Email | api::LocatorKind::Domain)
+    ) {
+        return Err(Error::Invalid);
+    }
+    for (value, kind) in [
+        (&metadata.sender, metadata.sender_kind),
+        (&metadata.recovery_route, metadata.recovery_route_kind),
+    ] {
+        if let Some(value) = value {
+            typed_values::locator(kind, value)?;
+        } else if kind != api::LocatorKind::Unspecified as i32 {
+            return Err(Error::Invalid);
+        }
+    }
     responsibility::bounded_value(&metadata.issuer, 256, true)?;
     responsibility::bounded_value(&metadata.subject, 256, true)?;
     if !matches!(
@@ -57,6 +73,15 @@ fn metadata_props(metadata: &api::AccountMetadata) -> Result<Properties> {
         ("account_kind", int(metadata.kind as u64)?),
         ("delegation", int(metadata.delegation as u64)?),
     ]);
+    if metadata.sender_kind != api::LocatorKind::Unspecified as i32 {
+        data.insert("sender_kind".into(), int(metadata.sender_kind as u64)?);
+    }
+    if metadata.recovery_route_kind != api::LocatorKind::Unspecified as i32 {
+        data.insert(
+            "recovery_route_kind".into(),
+            int(metadata.recovery_route_kind as u64)?,
+        );
+    }
     for (name, value, max) in [
         ("login", &metadata.login, 256),
         ("sender", &metadata.sender, 256),
@@ -154,13 +179,20 @@ impl Store {
             let key = account_key(account);
             let old = tx.get(&key)?;
             for field in METADATA_FIELDS {
+                let discriminator = match field {
+                    "sender" => Some("sender_kind"),
+                    "recovery_route" => Some("recovery_route_kind"),
+                    _ => None,
+                };
                 if !data.contains_key(field)
                     && old.as_ref().is_some_and(|row| row.contains_key(field))
                     && !permitted(context, account, field, false)
                 {
                     return Err(Error::Denied);
                 }
-                if old.as_ref().and_then(|r| r.get(field)) != data.get(field)
+                if (old.as_ref().and_then(|r| r.get(field)) != data.get(field)
+                    || discriminator
+                        .is_some_and(|key| old.as_ref().and_then(|r| r.get(key)) != data.get(key)))
                     && !permitted(context, account, field, true)
                 {
                     return Err(Error::Denied);
@@ -534,6 +566,13 @@ impl Tx<'_> {
                 if permitted(context, account, name, false) {
                     *value = data.get(name).and_then(Value::as_str).map(str::to_owned);
                 }
+            }
+            if visible.sender.is_some() {
+                visible.sender_kind = typed_values::read_kind(&data, "sender_kind")?;
+            }
+            if visible.recovery_route.is_some() {
+                visible.recovery_route_kind =
+                    typed_values::read_kind(&data, "recovery_route_kind")?;
             }
             if METADATA_FIELDS
                 .iter()

@@ -32,6 +32,8 @@ fn writable_fields(
             "vlan_tag",
             "description",
         ]
+    } else if kind == K::Domain {
+        &["name", "description", "dns_name"]
     } else if kind == K::SoftwareInstallation {
         &["name", "description", "virtualization_role"]
     } else if matches!(kind, K::Device | K::Rack | K::Port | K::Cable) {

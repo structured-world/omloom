@@ -630,6 +630,25 @@ impl Tx<'_> {
         actor: &str,
         now: u64,
     ) -> Result<u64> {
+        self.save_relation_inner(relation, expected, actor, now, false)
+    }
+    pub(super) fn save_rebound_relation(
+        &mut self,
+        relation: &wire::Relation,
+        expected: u64,
+        actor: &str,
+        now: u64,
+    ) -> Result<u64> {
+        self.save_relation_inner(relation, Some(expected), actor, now, true)
+    }
+    fn save_relation_inner(
+        &mut self,
+        relation: &wire::Relation,
+        expected: Option<u64>,
+        actor: &str,
+        now: u64,
+        detached: bool,
+    ) -> Result<u64> {
         let from = AssetRef::try_from(relation.from.as_ref().ok_or(Error::Invalid)?)
             .map_err(|_| Error::Invalid)?;
         let to = AssetRef::try_from(relation.to.as_ref().ok_or(Error::Invalid)?)
@@ -664,7 +683,7 @@ impl Tx<'_> {
             return Err(Error::Conflict);
         }
         if let Some(old) = &old {
-            self.check_software_relation_replacement(old, from, from_kind, to, kind)?;
+            self.check_software_relation_replacement(old, from, from_kind, to, kind, detached)?;
         }
         let placement = match kind {
             wire::RelationKind::InstalledIn => Some((from, to)),
@@ -674,7 +693,7 @@ impl Tx<'_> {
         if let Some((child, parent)) = placement {
             self.check_physical_parent(child, parent, &key)?;
         } else if kind == wire::RelationKind::RunsOn {
-            self.check_placement_cycle(from, to, &key)?;
+            self.check_placement_cycle(from, to, Some(&key))?;
         }
         if kind == wire::RelationKind::Contains
             && from_kind == wire::AssetKind::Interface
@@ -690,24 +709,31 @@ impl Tx<'_> {
             ("kind", Value::Int(relation.kind.into())),
             ("authority", text(&relation.authority_id)),
         ]));
-        if old
-            .as_ref()
-            .is_some_and(|prior| data.iter().all(|(k, v)| prior.get(k) == Some(v)))
+        if !detached
+            && old
+                .as_ref()
+                .is_some_and(|prior| data.iter().all(|(k, v)| prior.get(k) == Some(v)))
         {
             return expected.ok_or(Error::Corrupt);
         }
         let revision = expected.unwrap_or(0).checked_add(1).ok_or(Error::Limit)?;
+        if kind == wire::RelationKind::RunsOn && from_kind == wire::AssetKind::VirtualMachine {
+            self.require_no_pending_operations(from)?;
+        }
         if kind == wire::RelationKind::RunsOn && from_kind == wire::AssetKind::Container {
             self.bind_container_runtime(from, Some(to))?;
         }
         data.insert("revision".into(), int(revision)?);
-        let source_changed = old.as_ref().is_none_or(|p| {
-            p.get("asset") != data.get("asset") || p.get("incarnation") != data.get("incarnation")
-        });
-        let target_changed = old.as_ref().is_none_or(|p| {
-            p.get("to_asset") != data.get("to_asset")
-                || p.get("to_incarnation") != data.get("to_incarnation")
-        });
+        let source_changed = detached
+            || old.as_ref().is_none_or(|p| {
+                p.get("asset") != data.get("asset")
+                    || p.get("incarnation") != data.get("incarnation")
+            });
+        let target_changed = detached
+            || old.as_ref().is_none_or(|p| {
+                p.get("to_asset") != data.get("to_asset")
+                    || p.get("to_incarnation") != data.get("to_incarnation")
+            });
         self.put_against(&key, "relations", Class::Inventory, data, old.as_ref())?;
         if source_changed {
             if old.is_some() {
@@ -736,16 +762,16 @@ impl Tx<'_> {
         self.audit(&key, actor, "relation.accepted", revision, now)?;
         Ok(revision)
     }
-    fn physical_parent(&self, child: AssetRef, skip: &str) -> Result<Option<AssetRef>> {
+    fn physical_parent(&self, child: AssetRef, skip: Option<&str>) -> Result<Option<AssetRef>> {
         let mut parents = Vec::with_capacity(2);
         for (query, kinds, incoming) in [
             (
-                "MATCH (a:OmRow {key:$asset})-[:OmRelationFrom]->(r:OmRow) WHERE r.kind IN $kinds AND r.key<>$skip RETURN properties(r) AS p LIMIT 2",
+                "MATCH (a:OmRow {key:$asset})-[:OmRelationFrom]->(r:OmRow) WHERE r.kind IN $kinds AND ($skip IS NULL OR r.key<>$skip) RETURN properties(r) AS p LIMIT 2",
                 vec![wire::RelationKind::InstalledIn],
                 false,
             ),
             (
-                "MATCH (a:OmRow {key:$asset})<-[:OmRelationTo]-(r:OmRow) WHERE r.kind IN $kinds AND r.key<>$skip RETURN properties(r) AS p LIMIT 2",
+                "MATCH (a:OmRow {key:$asset})<-[:OmRelationTo]-(r:OmRow) WHERE r.kind IN $kinds AND ($skip IS NULL OR r.key<>$skip) RETURN properties(r) AS p LIMIT 2",
                 vec![wire::RelationKind::Contains, wire::RelationKind::HasPort],
                 true,
             ),
@@ -754,7 +780,7 @@ impl Tx<'_> {
                 query,
                 params([
                     ("asset", text(asset_key(child))),
-                    ("skip", text(skip)),
+                    ("skip", skip.map_or(Value::Null, text)),
                     (
                         "kinds",
                         Value::Array(
@@ -788,14 +814,19 @@ impl Tx<'_> {
         Ok(parents.pop())
     }
     fn check_physical_parent(&self, child: AssetRef, parent: AssetRef, skip: &str) -> Result<()> {
-        if self.physical_parent(child, skip)?.is_some() {
+        if self.physical_parent(child, Some(skip))?.is_some() {
             return Err(Error::Conflict);
         }
-        self.check_placement_cycle(child, parent, skip)
+        self.check_placement_cycle(child, parent, Some(skip))
     }
-    fn check_placement_cycle(&self, child: AssetRef, parent: AssetRef, skip: &str) -> Result<()> {
+    pub(super) fn check_placement_cycle(
+        &self,
+        child: AssetRef,
+        parent: AssetRef,
+        skip: Option<&str>,
+    ) -> Result<()> {
         // Execution placement and containment have opposite stored arrows but share ancestry.
-        // Multiple execution parents are traversed without imposing physical-parent uniqueness.
+        // Legacy multiple hosts are still traversed; None excludes no existing relation.
         let mut pending = vec![parent];
         let mut seen = std::collections::BTreeSet::from([parent]);
         while let Some(node) = pending.pop() {
@@ -804,8 +835,8 @@ impl Tx<'_> {
             }
             let physical = self.physical_parent(node, skip)?;
             let hosts = self.query(
-                "MATCH (a:OmRow {key:$asset})-[:OmRelationFrom]->(r:OmRow)-[:OmRelationTo]->(p:OmRow) WHERE r.kind=$kind AND r.key<>$skip RETURN properties(p) AS p LIMIT 129",
-                params([("asset", text(asset_key(node))), ("skip", text(skip)), ("kind", Value::Int(wire::RelationKind::RunsOn as i32 as i64))]),
+                "MATCH (a:OmRow {key:$asset})-[:OmRelationFrom]->(r:OmRow)-[:OmRelationTo]->(p:OmRow) WHERE r.kind=$kind AND ($skip IS NULL OR r.key<>$skip) RETURN properties(p) AS p LIMIT 129",
+                params([("asset", text(asset_key(node))), ("skip", skip.map_or(Value::Null, text)), ("kind", Value::Int(wire::RelationKind::RunsOn as i32 as i64))]),
             )?;
             if hosts.len() > 128 {
                 return Err(Error::Limit);

@@ -8,9 +8,11 @@ use std::collections::BTreeSet;
 mod accounts;
 mod addresses;
 mod assets;
+mod correction;
 mod current_facts;
 mod definitions;
 mod exchange;
+pub(super) mod host_identity;
 mod host_import;
 mod interface_facts;
 mod network;
@@ -18,7 +20,10 @@ pub(super) mod network_facts;
 mod projection;
 mod responsibility;
 mod software;
+mod source_layout;
+mod typed_values;
 mod views;
+mod vm_placement;
 mod working;
 
 pub const MAX_PAGE: usize = 100;
@@ -305,6 +310,32 @@ impl Store {
                 import,
                 working.as_ref().ok_or(Error::Invalid)?,
                 now,
+            ),
+            C::CompareHostIdentity(value) => self.workspace_compare_host_identity(
+                context,
+                value,
+                working.as_ref().ok_or(Error::Invalid)?,
+            ),
+            C::CorrectIdentity(value) => self.workspace_correct_identity(
+                context,
+                value,
+                working.as_ref().ok_or(Error::Invalid)?,
+                now,
+            ),
+            C::FindIdentityCandidates(value) => self.workspace_identity_candidates(
+                context,
+                value,
+                working.as_ref().ok_or(Error::Invalid)?,
+            ),
+            C::ResolveIdentity(value) => self.workspace_resolve_identity(
+                context,
+                value,
+                working.as_ref().ok_or(Error::Invalid)?,
+            ),
+            C::PrepareVmPlacement(value) => self.workspace_prepare_vm_placement(
+                context,
+                value,
+                working.as_ref().ok_or(Error::Invalid)?,
             ),
             C::Export(export) => self.workspace_export(context, export),
             C::Network(network) => self.workspace_network(

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onBeforeUnmount } from 'vue';
 import Dialog from './Dialog.vue';
+import AddressDelta from './AddressDelta.vue';
 import { readHostReport } from './host-report';
 import { call, model, AssetKind, label, display, key, type AssetRef } from './api';
 import { softwareFields } from './software-fields';
@@ -66,6 +67,17 @@ async function matchScope(candidate:string){
     match(candidate,response.detail.item);
   }catch(e){if(generation===matchGeneration)error.value=String(e);}
 }
+async function identityMatches(item:model.HostFinding){
+  const generation=++matchGeneration;matching.value=item.key;choices.value=[];next.value=undefined;error.value='';
+  try {
+    const kind=unclassified(item)?hostKind.value:item.kind;
+    if(!kind)throw Error('Choose the hardware subject type before comparing its claims.');
+    const response=await call({oneofKind:'findIdentityCandidates',findIdentityCandidates:model.FindIdentityCandidates.create({claims:item.identity,kind})},props.working);
+    if(generation!==matchGeneration)return;
+    if(response.oneofKind!=='identityCandidates')throw Error('Identity candidates are unavailable.');choices.value=response.identityCandidates.items;
+    if(!choices.value.length)error.value='No comparable candidates in this selection. Missing evidence does not establish a new identity.';
+  }catch(e){if(generation===matchGeneration)error.value=String(e);}
+}
 </script>
 <template><Dialog title="Import host observations" @close="emit('close')"><form @submit.prevent="prepare(false)">
 <p>Review current facts from an explicitly collected file. Nothing is adopted until you accept the preview. Select required parents with their components.</p>
@@ -87,6 +99,8 @@ async function matchScope(candidate:string){
 <ul v-if="report.binds.some(v=>v.owner===item.key)"><li v-for="(bind,index) in report.binds.filter(v=>v.owner===item.key)" :key="index">{{ bind.value?.protocol }} {{ bind.value?.family }} {{ bind.value?.bind }}:{{ bind.value?.port }}</li></ul>
 <p v-if="matches.has(item.key)">Existing match: {{ matches.get(item.key)?.name }}</p><p v-else>New adoption or previously reviewed source mapping</p>
 <button type="button" @click="search=''; find(item.key)">Match existing resource</button>
+<button v-if="item.identity.length" type="button" @click="identityMatches(item)">Find candidates by reported identifiers</button>
+<p v-if="matching===item.key&&item.identity.length">Candidates share this subject layer and at least one reported identifier. Cloned or movable identifiers are not proof. Choose a match only after review.</p>
 <button v-if="unclassified(item)&&(working.focus||working.roots.length===1)" type="button" @click="matchScope(item.key)">Use current device or VM scope</button>
 <button v-if="matches.has(item.key)" type="button" @click="matches.delete(item.key); preview=undefined">Clear match</button>
 <section v-if="matching===item.key"><label>Find existing resource<input v-model="search" @input="find(item.key)"></label>
@@ -103,6 +117,6 @@ async function matchScope(candidate:string){
 <ul><li v-for="(route,index) in report.network.routes" :key="`route-${index}`">{{ route.family }} {{ route.destination }} via {{ route.gateway }} {{ route.interface }} {{ route.flags }}</li>
 <li v-for="rule in report.network.rules" :key="rule.subject">{{ rule.subject }}: {{ rule.action }}</li></ul></details>
 </fieldset></section></fieldset>
-<section v-if="preview"><h3>Review {{ preview.rows.length }} selected resources</h3><ol><li v-for="row in preview.rows" :key="row.row">{{ row.diagnostic }}<span v-if="row.change?.changes.length">: {{ display(row.change.changes.find(v=>v.name==='name')) }}</span> <a v-if="row.change?.target" :href="`#/?asset=${encodeURIComponent(row.change.target.assetId)}&incarnation=${encodeURIComponent(row.change.target.incarnation)}`" target="_blank" rel="noopener">Inspect existing resource</a></li></ol></section>
+<section v-if="preview"><h3>Review {{ preview.rows.length }} selected resources</h3><ol><li v-for="row in preview.rows" :key="row.row">{{ row.diagnostic }}<span v-if="row.change?.changes.length">: {{ display(row.change.changes.find(v=>v.name==='name')) }}</span> <a v-if="row.change?.target" :href="`#/?asset=${encodeURIComponent(row.change.target.assetId)}&incarnation=${encodeURIComponent(row.change.target.incarnation)}`" target="_blank" rel="noopener">Inspect existing resource</a><AddressDelta v-if="row.addresses" :value="row.addresses" /></li></ol></section>
 <p v-if="error" role="alert">{{ error }}</p><footer><button type="button" @click="emit('close')">Cancel</button><button :disabled="busy||!selected.length">Prepare host preview</button><button v-if="preview?.id" type="button" class="primary" :disabled="busy" @click="prepare(true)">Accept selected observations</button></footer>
 </form></Dialog></template>

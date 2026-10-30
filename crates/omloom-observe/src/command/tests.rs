@@ -80,12 +80,12 @@ async fn oversized_output_refunds_only_unused_pipe_capacity() {
     #[cfg(windows)]
     let result = runner
         .run(
-            "powershell.exe",
+            "cmd.exe",
             &[
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "[Console]::Out.Write('12345678901234567890123456789012')",
+                "/D",
+                "/Q",
+                "/C",
+                "<nul set /p =12345678901234567890123456789012&exit /b 0",
             ],
         )
         .await;
@@ -113,13 +113,8 @@ async fn deadline_terminates_the_owned_child() {
     #[cfg(windows)]
     let result = runner
         .run(
-            "powershell.exe",
-            &[
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "Start-Sleep -Seconds 5",
-            ],
+            "cmd.exe",
+            &["/D", "/Q", "/C", "for /L %i in (1,1,2147483647) do @rem"],
         )
         .await;
     #[cfg(not(windows))]

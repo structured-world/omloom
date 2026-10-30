@@ -192,6 +192,78 @@ export interface WorkingContext {
     expected?: bigint;
 }
 /**
+ * Read-only review of a placement already changed outside Omloom. This request
+ * never executes a hypervisor migration or changes the guest's addresses.
+ *
+ * @generated from protobuf message omloom.workspace.v1.PrepareVmPlacement
+ */
+export interface PrepareVmPlacement {
+    /**
+     * User-selected existing VM incarnation, never identified by its current IP.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef vm = 1
+     */
+    vm?: AssetRef;
+    /**
+     * Optional proposed enabled hypervisor installation. Omit to read the actual
+     * current placement before choosing a destination in the enclosing context.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef destination = 2
+     */
+    destination?: AssetRef;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.VmPlacementReview
+ */
+export interface VmPlacementReview {
+    /**
+     * Current application basis, echoed as WorkingContext.expected on acceptance.
+     *
+     * @generated from protobuf field: uint64 revision = 1
+     */
+    revision: bigint;
+    /**
+     * Exact permitted VM identity/name and accepted inventory revision.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.Item vm = 2
+     */
+    vm?: Item;
+    /**
+     * Actual current placement and its conditional edit revision. Absent only
+     * when no placement exists; a hidden endpoint makes the review unavailable.
+     *
+     * @generated from protobuf field: optional omloom.v1.Relation current = 3
+     */
+    current?: Relation;
+    /**
+     * Independently permitted actual old host, including a legacy device host.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.Item current_host = 4
+     */
+    currentHost?: Item;
+    /**
+     * Independently permitted proposed enabled hypervisor installation.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.Item destination = 5
+     */
+    destination?: Item;
+    /**
+     * Permitted currently resolved facets whose explicit old placement binding
+     * becomes unavailable after a move. Contacts and source references are omitted;
+     * no owner is copied to the destination.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.EffectiveResponsibility invalidated_inheritance = 6
+     */
+    invalidatedInheritance: EffectiveResponsibility[];
+    /**
+     * Bounded permitted hardware-owner paths and local interface addresses for
+     * the actual old and proposed hosts, consistent with this review's revision.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.ItemContext contexts = 7
+     */
+    contexts: ItemContext[];
+}
+/**
  * @generated from protobuf message omloom.workspace.v1.Prepare
  */
 export interface Prepare {
@@ -292,6 +364,13 @@ export interface ResponsibilityAssignment {
      * @generated from protobuf field: optional string contact = 6
      */
     contact?: string;
+    /**
+     * User-selected syntax of contact; unspecified preserves an opaque route.
+     * Requires contact and shares its read/write permissions.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.LocatorKind contact_kind = 7
+     */
+    contactKind: LocatorKind;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.EffectiveResponsibility
@@ -333,6 +412,12 @@ export interface EffectiveResponsibility {
      * @generated from protobuf field: optional string contact = 6
      */
     contact?: string;
+    /**
+     * Server-returned declared syntax, disclosed only together with contact.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.LocatorKind contact_kind = 7
+     */
+    contactKind: LocatorKind;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Responsibility
@@ -523,6 +608,20 @@ export interface AccountMetadata {
      * @generated from protobuf field: optional string recovery_route = 8
      */
     recoveryRoute?: string;
+    /**
+     * User-selected sender constraint syntax: email, domain or unspecified opaque text.
+     * Requires sender and shares its independent field permissions.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.LocatorKind sender_kind = 9
+     */
+    senderKind: LocatorKind;
+    /**
+     * User-selected recovery route syntax, disclosed and editable with recovery_route.
+     * Requires recovery_route; validation neither contacts a provider nor proves authority.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.LocatorKind recovery_route_kind = 10
+     */
+    recoveryRouteKind: LocatorKind;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.AccountLink
@@ -1068,6 +1167,13 @@ export interface Detail {
      * @generated from protobuf field: optional string network_next = 12
      */
     networkNext?: string;
+    /**
+     * Current selected layer-specific identity claims, filtered by identity_evidence
+     * field rights. Equality does not establish authenticated identity or access.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.HostIdentityObservation identity = 13
+     */
+    identity: HostIdentityObservation[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.AddressObservation
@@ -1103,6 +1209,18 @@ export interface InterfaceAddressView {
      * @generated from protobuf field: repeated omloom.workspace.v1.AddressObservation observations = 2
      */
     observations: AddressObservation[];
+    /**
+     * Opaque local source reference, independent of a possibly duplicated display label.
+     *
+     * @generated from protobuf field: string source_id = 3
+     */
+    sourceId: string;
+    /**
+     * True when legacy facts could not be attributed to one reviewed native binding.
+     *
+     * @generated from protobuf field: bool binding_unresolved = 4
+     */
+    bindingUnresolved: boolean;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.NetworkObservation
@@ -1183,6 +1301,18 @@ export interface HostNetworkView {
      * @generated from protobuf field: repeated omloom.workspace.v1.OwnerContext services = 3
      */
     services: OwnerContext[];
+    /**
+     * Opaque local source reference, independent of its display label.
+     *
+     * @generated from protobuf field: string source_id = 4
+     */
+    sourceId: string;
+    /**
+     * True when migrated current facts have unresolved native source provenance.
+     *
+     * @generated from protobuf field: bool binding_unresolved = 5
+     */
+    bindingUnresolved: boolean;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.FirewallSetting
@@ -2191,6 +2321,395 @@ export interface HostFinding {
      * @generated from protobuf field: optional string runtime = 7
      */
     runtime?: string;
+    /**
+     * Selected layer-specific source claims, at most four. Missing evidence stays
+     * unknown. Claims support reviewed comparison, never authentication or grants.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.HostIdentityClaim identity = 8
+     */
+    identity: HostIdentityClaim[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.HostIdentityClaim
+ */
+export interface HostIdentityClaim {
+    /**
+     * Collector-selected subject layer and identifier meaning.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.HostIdentityKind kind = 1
+     */
+    kind: HostIdentityKind;
+    /**
+     * Actual identifier namespace, at most 80 UTF-8 bytes. Equal digests in
+     * different namespaces are not matching evidence.
+     *
+     * @generated from protobuf field: string namespace = 2
+     */
+    namespace: string;
+    /**
+     * Collector SHA-256 of the normalized identifier, 64 lowercase hex digits.
+     * This minimizes retained raw identifiers but is not a confidentiality claim.
+     *
+     * @generated from protobuf field: string digest = 3
+     */
+    digest: string;
+    /**
+     * Actual source limitation. Unspecified quality is invalid, not trusted.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.HostIdentityQuality quality = 4
+     */
+    quality: HostIdentityQuality;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.HostIdentityObservation
+ */
+export interface HostIdentityObservation {
+    /**
+     * Original source claim, including namespace and known limitations.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.HostIdentityClaim claim = 1
+     */
+    claim?: HostIdentityClaim;
+    /**
+     * Reviewed import configuration name, not the actor or a trusted issuer.
+     *
+     * @generated from protobuf field: string source = 2
+     */
+    source: string;
+    /**
+     * Actual claim collection instant, Unix milliseconds. A report omitting this
+     * claim cannot freshen it by merely updating the source checkpoint.
+     *
+     * @generated from protobuf field: uint64 observed_at = 3
+     */
+    observedAt: bigint;
+    /**
+     * Boot/session basis of that collection. It is evidence, not an OS asset ID.
+     *
+     * @generated from protobuf field: string boot_basis = 4
+     */
+    bootBasis: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.CompareHostIdentity
+ */
+export interface CompareHostIdentity {
+    /**
+     * First explicitly selected accepted resource incarnation, never a name/IP.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef left = 1
+     */
+    left?: AssetRef;
+    /**
+     * Second explicitly selected accepted resource incarnation in the same
+     * authorized working context. Comparison itself changes no identity.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef right = 2
+     */
+    right?: AssetRef;
+    /**
+     * Explicit expansion of bounded affected relation metadata for correction planning.
+     *
+     * @generated from protobuf field: bool include_relations = 3
+     */
+    includeRelations: boolean;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.HostIdentitySubject
+ */
+export interface HostIdentitySubject {
+    /**
+     * Current accepted fields that the caller may read, without descendants,
+     * routes, firewall configuration or implied rights to those resources.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.Item item = 1
+     */
+    item?: Item;
+    /**
+     * Current permitted source claims with their original evidence windows.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.HostIdentityObservation identity = 2
+     */
+    identity: HostIdentityObservation[];
+    /**
+     * Permitted current source labels; no source payloads or hidden counts.
+     *
+     * @generated from protobuf field: repeated string sources = 3
+     */
+    sources: string[];
+    /**
+     * Selected relation metadata, only when explicitly requested and both ends visible.
+     *
+     * @generated from protobuf field: repeated omloom.v1.Relation relations = 4
+     */
+    relations: Relation[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.HostIdentityComparison
+ */
+export interface HostIdentityComparison {
+    /**
+     * Server-selected consistent application revision for both subjects.
+     *
+     * @generated from protobuf field: uint64 revision = 1
+     */
+    revision: bigint;
+    /**
+     * Authorized first resource and selected identity evidence.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.HostIdentitySubject left = 2
+     */
+    left?: HostIdentitySubject;
+    /**
+     * Authorized second resource and selected identity evidence.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.HostIdentitySubject right = 3
+     */
+    right?: HostIdentitySubject;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.FindIdentityCandidates
+ */
+export interface FindIdentityCandidates {
+    /**
+     * Selected current subject whose permitted claims supply exact indexed probes.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef target = 1
+     */
+    target?: AssetRef;
+    /**
+     * Source claims supplied for explicit pre-adoption lookup, at most four.
+     * Mutually exclusive with target; matching never adopts or authenticates a host.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.HostIdentityClaim claims = 2
+     */
+    claims: HostIdentityClaim[];
+    /**
+     * User-reviewed subject layer for claims-only lookup; absent when target is set.
+     *
+     * @generated from protobuf field: omloom.v1.AssetKind kind = 3
+     */
+    kind: AssetKind;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.IdentityCandidates
+ */
+export interface IdentityCandidates {
+    /**
+     * Bounded visible same-layer subjects; a match is evidence, never a merge.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.Item items = 1
+     */
+    items: Item[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.ResolveIdentity
+ */
+export interface ResolveIdentity {
+    /**
+     * Original retired local reference. Resolution is read-only, never an effect target.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef original = 1
+     */
+    original?: AssetRef;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.ResolvedIdentity
+ */
+export interface ResolvedIdentity {
+    /**
+     * Original reference retained for provenance in the UI.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef original = 1
+     */
+    original?: AssetRef;
+    /**
+     * Current canonical resource with current rights applied independently.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.Item canonical = 2
+     */
+    canonical?: Item;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.IdentityFieldChoice
+ */
+export interface IdentityFieldChoice {
+    /**
+     * Exact accepted field being resolved on the selected duplicate.
+     *
+     * @generated from protobuf field: string name = 1
+     */
+    name: string;
+    /**
+     * Explicit choice to use the duplicate's value instead of the retained value.
+     *
+     * @generated from protobuf field: bool use_duplicate = 2
+     */
+    useDuplicate: boolean;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.IdentitySourceChoice
+ */
+export interface IdentitySourceChoice {
+    /**
+     * Existing label group on this duplicate, shown by the server. A rename
+     * applies to all bindings with this label, without combining their data.
+     *
+     * @generated from protobuf field: string before = 1
+     */
+    before: string;
+    /**
+     * Reviewed display label after relocation; native binding identity is unchanged.
+     *
+     * @generated from protobuf field: string after = 2
+     */
+    after: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.IdentityMapping
+ */
+export interface IdentityMapping {
+    /**
+     * Explicitly selected duplicate incarnation to retire, never inferred from IP.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef duplicate = 1
+     */
+    duplicate?: AssetRef;
+    /**
+     * Existing canonical incarnation to retain at the same subject layer.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef retained = 2
+     */
+    retained?: AssetRef;
+    /**
+     * Explicit decisions for every field on the retiring identity, at most 32.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.IdentityFieldChoice fields = 3
+     */
+    fields: IdentityFieldChoice[];
+    /**
+     * Optional label changes, at most eight. Unbound source name collisions are refused;
+     * native sources retain independent bindings even when labels are identical.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.IdentitySourceChoice sources = 4
+     */
+    sources: IdentitySourceChoice[];
+    /**
+     * Individually confirmed physical attachment relation UUIDs, at most 128.
+     *
+     * @generated from protobuf field: repeated string attachments = 5
+     */
+    attachments: string[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.IdentityCorrection
+ */
+export interface IdentityCorrection {
+    /**
+     * Operator conclusion; equality of identifiers never supplies this decision.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.IdentityDecision decision = 1
+     */
+    decision: IdentityDecision;
+    /**
+     * Selected layer mappings, at most eight; never an instruction to merge descendants.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.IdentityMapping mappings = 2
+     */
+    mappings: IdentityMapping[];
+    /**
+     * Exact bounded preview to accept; mappings/decision must be absent on apply.
+     *
+     * @generated from protobuf field: optional string preview = 3
+     */
+    preview?: string;
+    /**
+     * Exact accepted correction to reverse within its window, after fresh checks.
+     *
+     * @generated from protobuf field: optional string undo = 4
+     */
+    undo?: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.IdentityImpact
+ */
+export interface IdentityImpact {
+    /**
+     * Existing relation before the proposed correction.
+     *
+     * @generated from protobuf field: omloom.v1.Relation before = 1
+     */
+    before?: Relation;
+    /**
+     * Proposed relation; absent means an explicitly redundant/self attachment is removed.
+     *
+     * @generated from protobuf field: optional omloom.v1.Relation after = 2
+     */
+    after?: Relation;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.IdentityCorrectionView
+ */
+export interface IdentityCorrectionView {
+    /**
+     * Server-owned review identifier; no mutation has yet been accepted.
+     *
+     * @generated from protobuf field: string id = 1
+     */
+    id: string;
+    /**
+     * Installation revision fencing the complete reviewed change.
+     *
+     * @generated from protobuf field: uint64 revision = 2
+     */
+    revision: bigint;
+    /**
+     * Selected explicit mappings, preserving the operator's field/source decisions.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.IdentityMapping mappings = 3
+     */
+    mappings: IdentityMapping[];
+    /**
+     * Bounded affected relations only, without loading descendant payloads.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.IdentityImpact relations = 4
+     */
+    relations: IdentityImpact[];
+    /**
+     * Server-declared expiry of this preview in Unix milliseconds.
+     *
+     * @generated from protobuf field: uint64 expires_at = 5
+     */
+    expiresAt: bigint;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.IdentityCorrectionApplied
+ */
+export interface IdentityCorrectionApplied {
+    /**
+     * Actual application revision after this correction or its explicit inverse.
+     *
+     * @generated from protobuf field: uint64 revision = 1
+     */
+    revision: bigint;
+    /**
+     * Server-owned correction identifier for the bounded inverse window.
+     *
+     * @generated from protobuf field: string id = 2
+     */
+    id: string;
+    /**
+     * Expiry of the inverse window in Unix milliseconds; zero after reversal.
+     *
+     * @generated from protobuf field: uint64 undo_until = 3
+     */
+    undoUntil: bigint;
+    /**
+     * Canonical identities affected by the accepted operator decision.
+     *
+     * @generated from protobuf field: repeated omloom.v1.AssetRef retained = 4
+     */
+    retained: AssetRef[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.HostBind
@@ -2406,6 +2925,58 @@ export interface Address {
     priority?: number;
 }
 /**
+ * @generated from protobuf message omloom.workspace.v1.AddressAttributeChange
+ */
+export interface AddressAttributeChange {
+    /**
+     * Previously accepted current value from this exact interface/source.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.CurrentAddress before = 1
+     */
+    before?: CurrentAddress;
+    /**
+     * Selected incoming value for the same address, without rewriting a service bind.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.CurrentAddress after = 2
+     */
+    after?: CurrentAddress;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.AddressDelta
+ */
+export interface AddressDelta {
+    /**
+     * Selected import configuration whose current facts are being compared.
+     *
+     * @generated from protobuf field: string source = 1
+     */
+    source: string;
+    /**
+     * Incoming addresses absent from this source's current interface observations.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.CurrentAddress added = 2
+     */
+    added: CurrentAddress[];
+    /**
+     * Current addresses omitted by an explicitly complete source refresh only.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.CurrentAddress removed = 3
+     */
+    removed: CurrentAddress[];
+    /**
+     * Attribute changes on retained addresses; no duplicate unchanged values.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.AddressAttributeChange updated = 4
+     */
+    updated: AddressAttributeChange[];
+    /**
+     * Source-declared completeness; false means omissions are retained.
+     *
+     * @generated from protobuf field: bool complete = 5
+     */
+    complete: boolean;
+}
+/**
  * @generated from protobuf message omloom.workspace.v1.ImportRow
  */
 export interface ImportRow {
@@ -2427,6 +2998,13 @@ export interface ImportRow {
      * @generated from protobuf field: string diagnostic = 3
      */
     diagnostic: string;
+    /**
+     * Authorized source-local address differences derived for this bounded review.
+     * Absent for non-interface rows or when current-address reading is not allowed.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.AddressDelta addresses = 4
+     */
+    addresses?: AddressDelta;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Preview
@@ -2953,6 +3531,46 @@ export interface Request {
          */
         hostImport: HostImport;
     } | {
+        oneofKind: "compareHostIdentity";
+        /**
+         * Compare two selected identities without adopting, merging or writing.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.CompareHostIdentity compare_host_identity = 28
+         */
+        compareHostIdentity: CompareHostIdentity;
+    } | {
+        oneofKind: "correctIdentity";
+        /**
+         * Preview/apply/reverse an explicit bounded identity correction.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.IdentityCorrection correct_identity = 29
+         */
+        correctIdentity: IdentityCorrection;
+    } | {
+        oneofKind: "findIdentityCandidates";
+        /**
+         * Find bounded identity candidates within current permissions and working context.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.FindIdentityCandidates find_identity_candidates = 30
+         */
+        findIdentityCandidates: FindIdentityCandidates;
+    } | {
+        oneofKind: "resolveIdentity";
+        /**
+         * Resolve a retired reference without transferring its old grants.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.ResolveIdentity resolve_identity = 31
+         */
+        resolveIdentity: ResolveIdentity;
+    } | {
+        oneofKind: "prepareVmPlacement";
+        /**
+         * Review current/proposed VM placement without invoking an external effect.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PrepareVmPlacement prepare_vm_placement = 32
+         */
+        prepareVmPlacement: PrepareVmPlacement;
+    } | {
         oneofKind: undefined;
     };
 }
@@ -3085,6 +3703,54 @@ export interface Reply {
          * @generated from protobuf field: omloom.workspace.v1.ResponsibilityTransferState responsibility_transfer = 15
          */
         responsibilityTransfer: ResponsibilityTransferState;
+    } | {
+        oneofKind: "hostIdentityComparison";
+        /**
+         * Consistent bounded comparison, not a correction or authority grant.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.HostIdentityComparison host_identity_comparison = 16
+         */
+        hostIdentityComparison: HostIdentityComparison;
+    } | {
+        oneofKind: "identityCorrection";
+        /**
+         * Derived correction effects under current field and relation rights.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.IdentityCorrectionView identity_correction = 17
+         */
+        identityCorrection: IdentityCorrectionView;
+    } | {
+        oneofKind: "identityCorrected";
+        /**
+         * Accepted correction receipt, not a grant or an external effect receipt.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.IdentityCorrectionApplied identity_corrected = 18
+         */
+        identityCorrected: IdentityCorrectionApplied;
+    } | {
+        oneofKind: "identityCandidates";
+        /**
+         * Current authorized candidates; no hidden totals or candidate persistence.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.IdentityCandidates identity_candidates = 19
+         */
+        identityCandidates: IdentityCandidates;
+    } | {
+        oneofKind: "resolvedIdentity";
+        /**
+         * Explicit reference provenance and the independently authorized current target.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.ResolvedIdentity resolved_identity = 20
+         */
+        resolvedIdentity: ResolvedIdentity;
+    } | {
+        oneofKind: "vmPlacementReview";
+        /**
+         * Current authorized placement and the independently reviewed destination.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.VmPlacementReview vm_placement_review = 21
+         */
+        vmPlacementReview: VmPlacementReview;
     } | {
         oneofKind: undefined;
     };
@@ -3261,6 +3927,43 @@ export enum AssignmentMode {
      * @generated from protobuf enum value: ASSIGNMENT_MODE_UNASSIGNED = 3;
      */
     UNASSIGNED = 3
+}
+/**
+ * User-declared syntax for a locator. Parsing never proves ownership or delivery.
+ *
+ * @generated from protobuf enum omloom.workspace.v1.LocatorKind
+ */
+export enum LocatorKind {
+    /**
+     * An opaque route or constraint, including older values without a declared type.
+     *
+     * @generated from protobuf enum value: LOCATOR_KIND_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * One SMTP mailbox, without display-name syntax or provider normalization.
+     *
+     * @generated from protobuf enum value: LOCATOR_KIND_EMAIL = 1;
+     */
+    EMAIL = 1,
+    /**
+     * One valid international telephone number in E.164 form, with no inferred country.
+     *
+     * @generated from protobuf enum value: LOCATOR_KIND_PHONE = 2;
+     */
+    PHONE = 2,
+    /**
+     * One HTTP(S) contact URL without embedded credentials; never fetched by validation.
+     *
+     * @generated from protobuf enum value: LOCATOR_KIND_WEB = 3;
+     */
+    WEB = 3,
+    /**
+     * One DNS name. Public suffix recognition is not proof of registration.
+     *
+     * @generated from protobuf enum value: LOCATOR_KIND_DOMAIN = 4;
+     */
+    DOMAIN = 4
 }
 /**
  * @generated from protobuf enum omloom.workspace.v1.ResponsibilityStatus
@@ -3476,6 +4179,79 @@ export enum AddressState {
     DEPRECATED = 2
 }
 /**
+ * What a source identifier describes. Boot sessions stay in HostReport.boot_basis
+ * and never become permanent host or OS identities.
+ *
+ * @generated from protobuf enum omloom.workspace.v1.HostIdentityKind
+ */
+export enum HostIdentityKind {
+    /**
+     * @generated from protobuf enum value: HOST_IDENTITY_KIND_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: HOST_IDENTITY_KIND_HARDWARE_UUID = 1;
+     */
+    HARDWARE_UUID = 1,
+    /**
+     * @generated from protobuf enum value: HOST_IDENTITY_KIND_INSTALLATION_ID = 2;
+     */
+    INSTALLATION_ID = 2,
+    /**
+     * @generated from protobuf enum value: HOST_IDENTITY_KIND_INTERFACE_ID = 3;
+     */
+    INTERFACE_ID = 3,
+    /**
+     * @generated from protobuf enum value: HOST_IDENTITY_KIND_FACTORY_MAC = 4;
+     */
+    FACTORY_MAC = 4
+}
+/**
+ * Evidence limitations are independent of equality. Even a reported hardware
+ * UUID can be cloned or forged and cannot authorize a connection or correction.
+ *
+ * @generated from protobuf enum omloom.workspace.v1.HostIdentityQuality
+ */
+export enum HostIdentityQuality {
+    /**
+     * @generated from protobuf enum value: HOST_IDENTITY_QUALITY_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: HOST_IDENTITY_QUALITY_REPORTED = 1;
+     */
+    REPORTED = 1,
+    /**
+     * @generated from protobuf enum value: HOST_IDENTITY_QUALITY_MOVABLE = 2;
+     */
+    MOVABLE = 2,
+    /**
+     * @generated from protobuf enum value: HOST_IDENTITY_QUALITY_UNRELIABLE = 3;
+     */
+    UNRELIABLE = 3
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.IdentityDecision
+ */
+export enum IdentityDecision {
+    /**
+     * @generated from protobuf enum value: IDENTITY_DECISION_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: IDENTITY_DECISION_KEEP_SEPARATE = 1;
+     */
+    KEEP_SEPARATE = 1,
+    /**
+     * @generated from protobuf enum value: IDENTITY_DECISION_DISTINCT_INSTALLATIONS = 2;
+     */
+    DISTINCT_INSTALLATIONS = 2,
+    /**
+     * @generated from protobuf enum value: IDENTITY_DECISION_DUPLICATE_INSTALLATION = 3;
+     */
+    DUPLICATE_INSTALLATION = 3
+}
+/**
  * @generated from protobuf enum omloom.workspace.v1.HostNetworkPart
  */
 export enum HostNetworkPart {
@@ -3583,6 +4359,37 @@ class WorkingContext$Type extends MessageType<WorkingContext> {
  */
 export const WorkingContext = new WorkingContext$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class PrepareVmPlacement$Type extends MessageType<PrepareVmPlacement> {
+    constructor() {
+        super("omloom.workspace.v1.PrepareVmPlacement", [
+            { no: 1, name: "vm", kind: "message", T: () => AssetRef },
+            { no: 2, name: "destination", kind: "message", T: () => AssetRef }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PrepareVmPlacement
+ */
+export const PrepareVmPlacement = new PrepareVmPlacement$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class VmPlacementReview$Type extends MessageType<VmPlacementReview> {
+    constructor() {
+        super("omloom.workspace.v1.VmPlacementReview", [
+            { no: 1, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 2, name: "vm", kind: "message", T: () => Item },
+            { no: 3, name: "current", kind: "message", T: () => Relation },
+            { no: 4, name: "current_host", kind: "message", T: () => Item },
+            { no: 5, name: "destination", kind: "message", T: () => Item },
+            { no: 6, name: "invalidated_inheritance", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => EffectiveResponsibility },
+            { no: 7, name: "contexts", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => ItemContext }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.VmPlacementReview
+ */
+export const VmPlacementReview = new VmPlacementReview$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class Prepare$Type extends MessageType<Prepare> {
     constructor() {
         super("omloom.workspace.v1.Prepare", [
@@ -3620,7 +4427,8 @@ class ResponsibilityAssignment$Type extends MessageType<ResponsibilityAssignment
             { no: 3, name: "party", kind: "message", T: () => PartyRef },
             { no: 4, name: "source_relation", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 5, name: "source_revision", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
-            { no: 6, name: "contact", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 6, name: "contact", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 7, name: "contact_kind", kind: "enum", T: () => ["omloom.workspace.v1.LocatorKind", LocatorKind, "LOCATOR_KIND_"] }
         ]);
     }
 }
@@ -3637,7 +4445,8 @@ class EffectiveResponsibility$Type extends MessageType<EffectiveResponsibility> 
             { no: 3, name: "party", kind: "message", T: () => PartyRef },
             { no: 4, name: "source", kind: "message", T: () => AssetRef },
             { no: 5, name: "source_revision", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
-            { no: 6, name: "contact", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 6, name: "contact", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 7, name: "contact_kind", kind: "enum", T: () => ["omloom.workspace.v1.LocatorKind", LocatorKind, "LOCATOR_KIND_"] }
         ]);
     }
 }
@@ -3729,7 +4538,9 @@ class AccountMetadata$Type extends MessageType<AccountMetadata> {
             { no: 5, name: "login", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 6, name: "sender", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 7, name: "credential_binding_id", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
-            { no: 8, name: "recovery_route", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 8, name: "recovery_route", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 9, name: "sender_kind", kind: "enum", T: () => ["omloom.workspace.v1.LocatorKind", LocatorKind, "LOCATOR_KIND_"] },
+            { no: 10, name: "recovery_route_kind", kind: "enum", T: () => ["omloom.workspace.v1.LocatorKind", LocatorKind, "LOCATOR_KIND_"] }
         ]);
     }
 }
@@ -3949,7 +4760,8 @@ class Detail$Type extends MessageType<Detail> {
             { no: 9, name: "host_network", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostNetworkView },
             { no: 10, name: "current_addresses", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => InterfaceAddressView },
             { no: 11, name: "relations_next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
-            { no: 12, name: "network_next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 12, name: "network_next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 13, name: "identity", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostIdentityObservation }
         ]);
     }
 }
@@ -3975,7 +4787,9 @@ class InterfaceAddressView$Type extends MessageType<InterfaceAddressView> {
     constructor() {
         super("omloom.workspace.v1.InterfaceAddressView", [
             { no: 1, name: "coverage", kind: "message", T: () => InterfaceAddresses },
-            { no: 2, name: "observations", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AddressObservation }
+            { no: 2, name: "observations", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AddressObservation },
+            { no: 3, name: "source_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "binding_unresolved", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
         ]);
     }
 }
@@ -4006,7 +4820,9 @@ class HostNetworkView$Type extends MessageType<HostNetworkView> {
         super("omloom.workspace.v1.HostNetworkView", [
             { no: 1, name: "coverage", kind: "message", T: () => HostNetwork },
             { no: 2, name: "observations", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => NetworkObservation },
-            { no: 3, name: "services", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => OwnerContext }
+            { no: 3, name: "services", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => OwnerContext },
+            { no: 4, name: "source_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 5, name: "binding_unresolved", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
         ]);
     }
 }
@@ -4440,7 +5256,8 @@ class HostFinding$Type extends MessageType<HostFinding> {
             { no: 4, name: "fields", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Field },
             { no: 5, name: "addresses", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => CurrentAddress },
             { no: 6, name: "addresses_complete", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
-            { no: 7, name: "runtime", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 7, name: "runtime", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 8, name: "identity", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostIdentityClaim }
         ]);
     }
 }
@@ -4448,6 +5265,231 @@ class HostFinding$Type extends MessageType<HostFinding> {
  * @generated MessageType for protobuf message omloom.workspace.v1.HostFinding
  */
 export const HostFinding = new HostFinding$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class HostIdentityClaim$Type extends MessageType<HostIdentityClaim> {
+    constructor() {
+        super("omloom.workspace.v1.HostIdentityClaim", [
+            { no: 1, name: "kind", kind: "enum", T: () => ["omloom.workspace.v1.HostIdentityKind", HostIdentityKind, "HOST_IDENTITY_KIND_"] },
+            { no: 2, name: "namespace", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "digest", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "quality", kind: "enum", T: () => ["omloom.workspace.v1.HostIdentityQuality", HostIdentityQuality, "HOST_IDENTITY_QUALITY_"] }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostIdentityClaim
+ */
+export const HostIdentityClaim = new HostIdentityClaim$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class HostIdentityObservation$Type extends MessageType<HostIdentityObservation> {
+    constructor() {
+        super("omloom.workspace.v1.HostIdentityObservation", [
+            { no: 1, name: "claim", kind: "message", T: () => HostIdentityClaim },
+            { no: 2, name: "source", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "observed_at", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 4, name: "boot_basis", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostIdentityObservation
+ */
+export const HostIdentityObservation = new HostIdentityObservation$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class CompareHostIdentity$Type extends MessageType<CompareHostIdentity> {
+    constructor() {
+        super("omloom.workspace.v1.CompareHostIdentity", [
+            { no: 1, name: "left", kind: "message", T: () => AssetRef },
+            { no: 2, name: "right", kind: "message", T: () => AssetRef },
+            { no: 3, name: "include_relations", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.CompareHostIdentity
+ */
+export const CompareHostIdentity = new CompareHostIdentity$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class HostIdentitySubject$Type extends MessageType<HostIdentitySubject> {
+    constructor() {
+        super("omloom.workspace.v1.HostIdentitySubject", [
+            { no: 1, name: "item", kind: "message", T: () => Item },
+            { no: 2, name: "identity", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostIdentityObservation },
+            { no: 3, name: "sources", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "relations", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Relation }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostIdentitySubject
+ */
+export const HostIdentitySubject = new HostIdentitySubject$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class HostIdentityComparison$Type extends MessageType<HostIdentityComparison> {
+    constructor() {
+        super("omloom.workspace.v1.HostIdentityComparison", [
+            { no: 1, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 2, name: "left", kind: "message", T: () => HostIdentitySubject },
+            { no: 3, name: "right", kind: "message", T: () => HostIdentitySubject }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostIdentityComparison
+ */
+export const HostIdentityComparison = new HostIdentityComparison$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class FindIdentityCandidates$Type extends MessageType<FindIdentityCandidates> {
+    constructor() {
+        super("omloom.workspace.v1.FindIdentityCandidates", [
+            { no: 1, name: "target", kind: "message", T: () => AssetRef },
+            { no: 2, name: "claims", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostIdentityClaim },
+            { no: 3, name: "kind", kind: "enum", T: () => ["omloom.v1.AssetKind", AssetKind, "ASSET_KIND_"] }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.FindIdentityCandidates
+ */
+export const FindIdentityCandidates = new FindIdentityCandidates$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class IdentityCandidates$Type extends MessageType<IdentityCandidates> {
+    constructor() {
+        super("omloom.workspace.v1.IdentityCandidates", [
+            { no: 1, name: "items", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Item }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.IdentityCandidates
+ */
+export const IdentityCandidates = new IdentityCandidates$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class ResolveIdentity$Type extends MessageType<ResolveIdentity> {
+    constructor() {
+        super("omloom.workspace.v1.ResolveIdentity", [
+            { no: 1, name: "original", kind: "message", T: () => AssetRef }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.ResolveIdentity
+ */
+export const ResolveIdentity = new ResolveIdentity$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class ResolvedIdentity$Type extends MessageType<ResolvedIdentity> {
+    constructor() {
+        super("omloom.workspace.v1.ResolvedIdentity", [
+            { no: 1, name: "original", kind: "message", T: () => AssetRef },
+            { no: 2, name: "canonical", kind: "message", T: () => Item }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.ResolvedIdentity
+ */
+export const ResolvedIdentity = new ResolvedIdentity$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class IdentityFieldChoice$Type extends MessageType<IdentityFieldChoice> {
+    constructor() {
+        super("omloom.workspace.v1.IdentityFieldChoice", [
+            { no: 1, name: "name", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "use_duplicate", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.IdentityFieldChoice
+ */
+export const IdentityFieldChoice = new IdentityFieldChoice$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class IdentitySourceChoice$Type extends MessageType<IdentitySourceChoice> {
+    constructor() {
+        super("omloom.workspace.v1.IdentitySourceChoice", [
+            { no: 1, name: "before", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "after", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.IdentitySourceChoice
+ */
+export const IdentitySourceChoice = new IdentitySourceChoice$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class IdentityMapping$Type extends MessageType<IdentityMapping> {
+    constructor() {
+        super("omloom.workspace.v1.IdentityMapping", [
+            { no: 1, name: "duplicate", kind: "message", T: () => AssetRef },
+            { no: 2, name: "retained", kind: "message", T: () => AssetRef },
+            { no: 3, name: "fields", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => IdentityFieldChoice },
+            { no: 4, name: "sources", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => IdentitySourceChoice },
+            { no: 5, name: "attachments", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.IdentityMapping
+ */
+export const IdentityMapping = new IdentityMapping$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class IdentityCorrection$Type extends MessageType<IdentityCorrection> {
+    constructor() {
+        super("omloom.workspace.v1.IdentityCorrection", [
+            { no: 1, name: "decision", kind: "enum", T: () => ["omloom.workspace.v1.IdentityDecision", IdentityDecision, "IDENTITY_DECISION_"] },
+            { no: 2, name: "mappings", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => IdentityMapping },
+            { no: 3, name: "preview", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "undo", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.IdentityCorrection
+ */
+export const IdentityCorrection = new IdentityCorrection$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class IdentityImpact$Type extends MessageType<IdentityImpact> {
+    constructor() {
+        super("omloom.workspace.v1.IdentityImpact", [
+            { no: 1, name: "before", kind: "message", T: () => Relation },
+            { no: 2, name: "after", kind: "message", T: () => Relation }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.IdentityImpact
+ */
+export const IdentityImpact = new IdentityImpact$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class IdentityCorrectionView$Type extends MessageType<IdentityCorrectionView> {
+    constructor() {
+        super("omloom.workspace.v1.IdentityCorrectionView", [
+            { no: 1, name: "id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 3, name: "mappings", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => IdentityMapping },
+            { no: 4, name: "relations", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => IdentityImpact },
+            { no: 5, name: "expires_at", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.IdentityCorrectionView
+ */
+export const IdentityCorrectionView = new IdentityCorrectionView$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class IdentityCorrectionApplied$Type extends MessageType<IdentityCorrectionApplied> {
+    constructor() {
+        super("omloom.workspace.v1.IdentityCorrectionApplied", [
+            { no: 1, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 2, name: "id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "undo_until", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 4, name: "retained", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AssetRef }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.IdentityCorrectionApplied
+ */
+export const IdentityCorrectionApplied = new IdentityCorrectionApplied$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class HostBind$Type extends MessageType<HostBind> {
     constructor() {
@@ -4532,12 +5574,42 @@ class Address$Type extends MessageType<Address> {
  */
 export const Address = new Address$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class AddressAttributeChange$Type extends MessageType<AddressAttributeChange> {
+    constructor() {
+        super("omloom.workspace.v1.AddressAttributeChange", [
+            { no: 1, name: "before", kind: "message", T: () => CurrentAddress },
+            { no: 2, name: "after", kind: "message", T: () => CurrentAddress }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.AddressAttributeChange
+ */
+export const AddressAttributeChange = new AddressAttributeChange$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class AddressDelta$Type extends MessageType<AddressDelta> {
+    constructor() {
+        super("omloom.workspace.v1.AddressDelta", [
+            { no: 1, name: "source", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "added", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => CurrentAddress },
+            { no: 3, name: "removed", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => CurrentAddress },
+            { no: 4, name: "updated", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AddressAttributeChange },
+            { no: 5, name: "complete", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.AddressDelta
+ */
+export const AddressDelta = new AddressDelta$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class ImportRow$Type extends MessageType<ImportRow> {
     constructor() {
         super("omloom.workspace.v1.ImportRow", [
             { no: 1, name: "row", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
             { no: 2, name: "change", kind: "message", T: () => Write },
-            { no: 3, name: "diagnostic", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+            { no: 3, name: "diagnostic", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "addresses", kind: "message", T: () => AddressDelta }
         ]);
     }
 }
@@ -4724,7 +5796,12 @@ class Request$Type extends MessageType<Request> {
             { no: 24, name: "external_account", kind: "message", oneof: "command", T: () => ExternalAccount },
             { no: 25, name: "owner_request", kind: "message", oneof: "command", T: () => OwnerRequest },
             { no: 26, name: "responsibility_transfer", kind: "message", oneof: "command", T: () => ResponsibilityTransfer },
-            { no: 27, name: "host_import", kind: "message", oneof: "command", T: () => HostImport }
+            { no: 27, name: "host_import", kind: "message", oneof: "command", T: () => HostImport },
+            { no: 28, name: "compare_host_identity", kind: "message", oneof: "command", T: () => CompareHostIdentity },
+            { no: 29, name: "correct_identity", kind: "message", oneof: "command", T: () => IdentityCorrection },
+            { no: 30, name: "find_identity_candidates", kind: "message", oneof: "command", T: () => FindIdentityCandidates },
+            { no: 31, name: "resolve_identity", kind: "message", oneof: "command", T: () => ResolveIdentity },
+            { no: 32, name: "prepare_vm_placement", kind: "message", oneof: "command", T: () => PrepareVmPlacement }
         ]);
     }
 }
@@ -4750,7 +5827,13 @@ class Reply$Type extends MessageType<Reply> {
             { no: 12, name: "responsibility", kind: "message", oneof: "result", T: () => ResponsibilityState },
             { no: 13, name: "external_account", kind: "message", oneof: "result", T: () => ExternalAccountState },
             { no: 14, name: "owner_request", kind: "message", oneof: "result", T: () => OwnerRequestState },
-            { no: 15, name: "responsibility_transfer", kind: "message", oneof: "result", T: () => ResponsibilityTransferState }
+            { no: 15, name: "responsibility_transfer", kind: "message", oneof: "result", T: () => ResponsibilityTransferState },
+            { no: 16, name: "host_identity_comparison", kind: "message", oneof: "result", T: () => HostIdentityComparison },
+            { no: 17, name: "identity_correction", kind: "message", oneof: "result", T: () => IdentityCorrectionView },
+            { no: 18, name: "identity_corrected", kind: "message", oneof: "result", T: () => IdentityCorrectionApplied },
+            { no: 19, name: "identity_candidates", kind: "message", oneof: "result", T: () => IdentityCandidates },
+            { no: 20, name: "resolved_identity", kind: "message", oneof: "result", T: () => ResolvedIdentity },
+            { no: 21, name: "vm_placement_review", kind: "message", oneof: "result", T: () => VmPlacementReview }
         ]);
     }
 }
