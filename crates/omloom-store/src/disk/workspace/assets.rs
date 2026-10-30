@@ -103,7 +103,7 @@ fn browse_clause(
     kinds: &[wire::AssetKind],
 ) -> String {
     format!(
-        "p.parent='assets' AND p.key<>a.key AND p.adoption={} AND {} AND {} AND {}",
+        "r.parent='relations' AND p.parent='assets' AND p.key<>a.key AND p.adoption={} AND {} AND {} AND {}",
         wire::Adoption::Adopted as i32,
         visible_clause_for(context, Some("relations"), values, "p"),
         visible_clause_for(context, Some("relations"), values, "a"),
@@ -576,12 +576,11 @@ impl Store {
                     clauses.join(" AND ")
                 ));
                 clauses.clear();
-                // Probe indexed relation endpoints directly; repeating a resource
-                // probe adds a join before reaching the same adjacent relation.
-                for (reverse, endpoint, path) in [
-                    (false, "to_asset", "(r)<-[:OmRelationFrom]-(p:OmRow)"),
-                    (true, "asset", "(r)-[:OmRelationTo]->(p:OmRow)"),
-                ] {
+                // Endpoints and adjacency projections commit together. Resolve
+                // parent keys directly, rejecting ineligible relations first.
+                for (reverse, endpoint, parent_endpoint) in
+                    [(false, "to_asset", "asset"), (true, "asset", "to_asset")]
+                {
                     let relation_kinds = ownership_groups(Some(reverse), &child_kinds)
                         .keys()
                         .map(|(kind, _, _)| *kind)
@@ -621,7 +620,7 @@ impl Store {
                         "forward_owned"
                     };
                     predicate_joins.push(format!(
-                        " WITH {}, EXISTS {{ MATCH (r:OmRow {{{endpoint}:a.asset}}) WHERE r.kind IN {relation_kinds:?} MATCH {path} WHERE {owner} }} AS {flag}",
+                        " WITH {}, EXISTS {{ MATCH (r:OmRow {{{endpoint}:a.asset}}), (p:OmRow {{key:CASE WHEN r.parent='relations' AND r.kind IN {relation_kinds:?} THEN 'asset/'+r.{parent_endpoint} ELSE null END}}) WHERE {owner} }} AS {flag}",
                         bindings.join(", ")
                     ));
                     if reverse {

@@ -854,17 +854,25 @@ fn level_browse_small_estate_has_bounded_latency() -> TestResult {
         let mut planned = db.explain_plan(statement, None).expect("browse plan");
         let mut nested = Vec::new();
         planned.root.for_each_expr_mut(&mut |expr| {
-            expr.for_each_subplan_mut(&mut |subplan| nested.push(subplan.explain()));
+            expr.for_each_subplan_mut(&mut |subplan| {
+                assert!(
+                    format!("{:?}", subplan.root).contains("Case {"),
+                    "parent lookup must gate ineligible relation kinds"
+                );
+                nested.push(subplan.explain());
+            });
         });
         assert_eq!(nested.len(), 2, "both ownership probes must be checked");
         for plan in &nested {
-            let relation_filter = plan
-                .find("Filter(In { item: Property { base: Variable(\"r\"), key: \"kind\" }")
-                .expect("relation kind must be filtered before fetching its parent");
-            let traversal = plan.rfind("Traverse(").expect("parent traversal");
             assert!(
-                relation_filter > traversal,
-                "filter must feed the traversal: {plan}"
+                !plan.contains("Traverse("),
+                "parent endpoint must use its key: {plan}"
+            );
+            assert_eq!(
+                plan.matches("IndexScan(p:OmRow ON omloom_key(key))")
+                    .count(),
+                1,
+                "each probe must look up its exact parent: {plan}"
             );
         }
         let plan = nested.join("\n");
