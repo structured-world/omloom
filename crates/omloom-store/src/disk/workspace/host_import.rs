@@ -14,6 +14,14 @@ fn mapping(actor: &str, source: &str, basis: &str, key: &str) -> String {
     }
     format!("host-mapping/{:x}", hash.finalize())
 }
+fn network_suffix(part: i32) -> Result<&'static str> {
+    match api::HostNetworkPart::try_from(part).map_err(|_| Error::Invalid)? {
+        api::HostNetworkPart::Sockets => Ok("sockets"),
+        api::HostNetworkPart::Routes => Ok("routes"),
+        api::HostNetworkPart::ApplicationFirewall => Ok("application-fw"),
+        _ => Err(Error::Invalid),
+    }
+}
 fn validate(report: &api::HostReport) -> Result<()> {
     if report.version != 1
         || !matches!(report.platform.as_str(), "macos" | "linux" | "windows")
@@ -335,6 +343,20 @@ impl Tx<'_> {
                     &key,
                 )?;
             }
+            if node.key == "installation" && report.network.is_some() {
+                // Legacy provenance must match the previous mapping window,
+                // before this report advances the checkpoint below.
+                for part in &request.network_parts {
+                    let suffix = network_suffix(*part)?;
+                    self.native_source(
+                        target,
+                        &format!("{projection_source} / {suffix}"),
+                        &format!("{key}/{suffix}"),
+                        &key,
+                        source_layout::Family::Network,
+                    )?;
+                }
+            }
             self.accept_host_identity(
                 context,
                 target,
@@ -437,12 +459,7 @@ impl Tx<'_> {
             for part in &request.network_parts {
                 let mut selected = network.clone();
                 let part = api::HostNetworkPart::try_from(*part).map_err(|_| Error::Invalid)?;
-                let suffix = match part {
-                    api::HostNetworkPart::Sockets => "sockets",
-                    api::HostNetworkPart::Routes => "routes",
-                    api::HostNetworkPart::ApplicationFirewall => "application-fw",
-                    _ => return Err(Error::Invalid),
-                };
+                let suffix = network_suffix(part as i32)?;
                 selected.source = format!("{projection_source} / {suffix}");
                 if part != api::HostNetworkPart::Sockets {
                     selected.sockets.clear();
@@ -473,7 +490,7 @@ impl Tx<'_> {
                     &report.source_basis,
                     "installation",
                 );
-                self.accept_native_network(&selected, &format!("{base}/{suffix}"), &base)?;
+                self.accept_native_network(&selected, &format!("{base}/{suffix}"))?;
             }
         }
         Ok(rows)

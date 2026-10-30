@@ -404,15 +404,7 @@ impl Tx<'_> {
         &mut self,
         value: &api::HostNetwork,
         binding: &str,
-        base: &str,
     ) -> Result<()> {
-        self.native_source(
-            parse_target(value.installation.as_ref())?,
-            &value.source,
-            binding,
-            base,
-            source_layout::Family::Network,
-        )?;
         self.accept_network_owned(value, Some(binding))
     }
     fn accept_network_owned(

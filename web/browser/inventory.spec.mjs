@@ -1547,6 +1547,7 @@ test('mutations reset ordinary and local continuations on desktop and phone', as
   test.setTimeout(90_000);
   const dir = await mkdtemp(join(tmpdir(), 'omloom-mutation-cursors-'));
   const server = await host(dir);
+  let release;
   try {
     const { m, rpc } = await workspaceClient(server.url);
     const csv = 'external_id,name\n' + Array.from({ length: 26 }, (_, i) => `${i},root-${String(i).padStart(2,'0')}`).join('\n');
@@ -1557,10 +1558,26 @@ test('mutations reset ordinary and local continuations on desktop and phone', as
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto(server.url);
+      await expect(page.getByRole('button', { name: '+ Create resource', exact: true })).toBeEnabled();
+      // The previous page stays visible while its replacement loads, but cannot be selected.
+      let held = false;
+      const resumed = new Promise(resolve => { release = resolve; });
+      await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+        const bytes = route.request().postDataBuffer();
+        const command = bytes ? m.Request.fromBinary(bytes.subarray(5)).command : undefined;
+        if (!held && command?.oneofKind === 'query' && command.query.cursor) { held = true; await resumed; }
+        await route.continue();
+      });
       await page.getByRole('button', { name: 'Next page →', exact: true }).click();
+      await expect.poll(() => held).toBe(true);
+      const selectPage = page.getByRole('checkbox', { name: width === 390 ? 'Select phone page' : 'Select visible page', exact: true });
+      await expect(selectPage).toBeDisabled();
+      release();
       await expect(page).toHaveURL(/cursor=/);
       await expect(page.getByRole('button', { name: 'root-25', exact: true })).toBeVisible();
-      await page.getByRole('checkbox', { name: width === 390 ? 'Select phone page' : 'Select visible page', exact: true }).check();
+      await expect(selectPage).toBeEnabled();
+      await page.unrouteAll({ behavior: 'wait' });
+      await selectPage.check();
       await page.getByRole('button', { name: 'Review bulk change', exact: true }).click();
       const dialog = page.getByRole('dialog');
       await dialog.getByRole('combobox', { name: 'Change', exact: true }).selectOption('set');
@@ -1591,14 +1608,14 @@ test('mutations reset ordinary and local continuations on desktop and phone', as
       await expect(page.getByRole('button', { name: 'port-25', exact: true })).toBeVisible();
       await page.getByRole('button', { name: 'Edit resource', exact: true }).click();
       await dialog.getByRole('combobox', { name: 'Name change', exact: true }).selectOption('set');
-      await dialog.getByLabel('Name', { exact: true }).fill(`Updated parent ${width}`);
+      await dialog.getByLabel('Name', { exact: true }).fill(`root-00 Updated parent ${width}`);
       await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
       await expect(dialog).toBeHidden();
       await expect(page).not.toHaveURL(/localCursor=/);
-      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `Updated parent ${width}`, exact: true })).toBeVisible();
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `root-00 Updated parent ${width}`, exact: true })).toBeVisible();
       await expect(page.getByRole('alert')).toHaveCount(0);
     }
-  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+  } finally { release?.(); await page.unrouteAll({ behavior: 'wait' }); await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
 
 test('responsibility and account mutations discard enclosing page continuations', async ({ page }) => {

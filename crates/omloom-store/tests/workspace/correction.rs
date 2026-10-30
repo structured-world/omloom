@@ -122,6 +122,19 @@ fn undo_restores_deleted_relation_adjacency() -> TestResult {
         .ok_or("relation before correction")?
         .relation_id;
     let applied = apply(&store, &plan.id)?;
+    assert!(matches!(read(&store, &os), Err(Error::Missing)));
+    assert!(
+        !read(&store, &retained_os)?
+            .relations
+            .iter()
+            .any(|r| r.relation_id == relation_id)
+    );
+    assert!(
+        !read(&store, &retained)?
+            .relations
+            .iter()
+            .any(|r| r.relation_id == relation_id)
+    );
     call(
         &store,
         &operator(),
