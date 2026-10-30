@@ -13,6 +13,21 @@ fn correction_and_undo_keep_stale_placement_inheritance_unavailable() -> TestRes
     let retained = hypervisor(&store, "Retained host")?;
     responsibility(
         &store,
+        &first,
+        vec![api::ResponsibilityAssignment {
+            facet: F::ClaimedOwner as i32,
+            mode: M::Explicit as i32,
+            party: Some(api::PartyRef {
+                issuer: "company.example".into(),
+                subject: "original".into(),
+                name: "Original team".into(),
+                kind: api::PartyKind::Team as i32,
+            }),
+            ..Default::default()
+        }],
+    )?;
+    responsibility(
+        &store,
         &retained,
         vec![api::ResponsibilityAssignment {
             facet: F::ClaimedOwner as i32,
@@ -55,6 +70,17 @@ fn correction_and_undo_keep_stale_placement_inheritance_unavailable() -> TestRes
             ..Default::default()
         }],
     )?;
+    let inherited = responsibility(&store, &guest, Vec::new())?;
+    assert_eq!(
+        inherited
+            .effective
+            .iter()
+            .find(|v| v.facet == F::ClaimedOwner as i32)
+            .and_then(|v| v.party.as_ref())
+            .ok_or("inherited owner before migration")?
+            .subject,
+        "original"
+    );
     placement.to = Some(duplicate.clone());
     call(
         &store,

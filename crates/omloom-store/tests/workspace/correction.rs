@@ -115,6 +115,12 @@ fn undo_restores_deleted_relation_adjacency() -> TestResult {
         vec![mapping(&duplicate, &retained), mapping(&os, &retained_os)],
         api::IdentityDecision::DuplicateInstallation,
     )?;
+    let relation_id = read(&store, &os)?
+        .relations
+        .into_iter()
+        .find(|r| r.from.as_ref() == Some(&duplicate))
+        .ok_or("relation before correction")?
+        .relation_id;
     let applied = apply(&store, &plan.id)?;
     call(
         &store,
@@ -125,10 +131,20 @@ fn undo_restores_deleted_relation_adjacency() -> TestResult {
         }),
     )?;
     assert!(
+        read(&store, &duplicate)?
+            .relations
+            .iter()
+            .any(|r| r.relation_id == relation_id
+                && r.from.as_ref() == Some(&duplicate)
+                && r.to.as_ref() == Some(&os))
+    );
+    assert!(
         read(&store, &os)?
             .relations
             .iter()
-            .any(|r| r.from.as_ref() == Some(&duplicate))
+            .any(|r| r.relation_id == relation_id
+                && r.from.as_ref() == Some(&duplicate)
+                && r.to.as_ref() == Some(&os))
     );
     Ok(())
 }
