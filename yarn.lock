@@ -1179,6 +1179,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"libphonenumber-js@npm:1.13.15":
+  version: 1.13.15
+  resolution: "libphonenumber-js@npm:1.13.15"
+  checksum: 10c0/041fa295a526566a9e0910240887d1daa678faf546303ef2580479dadafc40c240dae50cc9f1c73632d0772f09fd3d87fbb47ec505d9f569025997807c6fe6ae
+  languageName: node
+  linkType: hard
+
 "lightningcss-android-arm64@npm:1.33.0":
   version: 1.33.0
   resolution: "lightningcss-android-arm64@npm:1.33.0"
@@ -1437,6 +1444,7 @@ __metadata:
     "@types/node": "npm:26.6.5"
     "@vitejs/plugin-vue": "npm:6.0.10"
     esbuild: "npm:0.28.2"
+    libphonenumber-js: "npm:1.13.15"
     typescript: "npm:7.0.2"
     typescript-vue: "npm:typescript@6.0.3"
     vite: "npm:8.3.5"

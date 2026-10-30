@@ -13,11 +13,10 @@ fn parameter(values: &mut HashMap<String, Value>, value: Value) -> String {
     format!("${name}")
 }
 
-// Use the same typed ownership rules as creation; peer links never form levels.
-pub(super) fn ownership_clause(
+fn ownership_groups(
     reverse_only: Option<bool>,
     child_kinds: &[wire::AssetKind],
-) -> String {
+) -> BTreeMap<(i32, bool, i32), Vec<i32>> {
     use wire::AssetKind as K;
     let kinds = [
         K::Site,
@@ -54,6 +53,15 @@ pub(super) fn ownership_clause(
             }
         }
     }
+    groups
+}
+
+// Use the same typed ownership rules as creation; peer links never form levels.
+pub(super) fn ownership_clause(
+    reverse_only: Option<bool>,
+    child_kinds: &[wire::AssetKind],
+) -> String {
+    let groups = ownership_groups(reverse_only, child_kinds);
     let mut terms = Vec::new();
     for ((relation, reverse, parent), children) in groups {
         let owner = if reverse {
@@ -95,7 +103,7 @@ fn browse_clause(
     kinds: &[wire::AssetKind],
 ) -> String {
     format!(
-        "p.parent='assets' AND p.key<>a.key AND p.adoption={} AND {} AND {} AND {}",
+        "r.parent='relations' AND p.parent='assets' AND p.key<>a.key AND p.adoption={} AND {} AND {} AND {}",
         wire::Adoption::Adopted as i32,
         visible_clause_for(context, Some("relations"), values, "p"),
         visible_clause_for(context, Some("relations"), values, "a"),
@@ -568,15 +576,17 @@ impl Store {
                     clauses.join(" AND ")
                 ));
                 clauses.clear();
-                // Probe indexed relation endpoints directly; repeating a resource
-                // probe adds a join before reaching the same adjacent relation.
-                for (reverse, path) in [
-                    (
-                        false,
-                        "(r:OmRow {to_asset:a.asset})<-[:OmRelationFrom]-(p:OmRow)",
-                    ),
-                    (true, "(r:OmRow {asset:a.asset})-[:OmRelationTo]->(p:OmRow)"),
-                ] {
+                // Endpoints and adjacency projections commit together. Resolve
+                // parent keys directly, rejecting ineligible relations first.
+                for (reverse, endpoint, parent_endpoint) in
+                    [(false, "to_asset", "asset"), (true, "asset", "to_asset")]
+                {
+                    let relation_kinds = ownership_groups(Some(reverse), &child_kinds)
+                        .keys()
+                        .map(|(kind, _, _)| *kind)
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect::<Vec<_>>();
                     let mut owner =
                         browse_clause(context, &mut values, Some(reverse), &child_kinds);
                     if view == api::View::Virtualization {
@@ -610,11 +620,17 @@ impl Store {
                         "forward_owned"
                     };
                     predicate_joins.push(format!(
-                        " OPTIONAL MATCH {path} WHERE {owner} WITH {}, p IS NOT NULL AS {flag}",
+                        " WITH {}, EXISTS {{ MATCH (r:OmRow {{{endpoint}:a.asset}}), (p:OmRow {{key:CASE WHEN r.parent='relations' AND r.kind IN {relation_kinds:?} THEN 'asset/'+r.{parent_endpoint} ELSE null END}}) WHERE {owner} }} AS {flag}",
                         bindings.join(", ")
                     ));
-                    bindings.push(flag.into());
-                    clauses.push(format!("NOT {flag}"));
+                    if reverse {
+                        bindings.push(flag.into());
+                        clauses.push(format!("NOT {flag}"));
+                    } else {
+                        // Owned components cannot become roots in the reverse
+                        // branch. Reject them before performing another probe.
+                        predicate_joins.push(format!(" WHERE NOT {flag}"));
+                    }
                 }
             } else {
                 let owner = browse_clause(context, &mut values, None, &child_kinds);
@@ -735,6 +751,7 @@ impl Store {
                     "name".to_owned(),
                     "description".to_owned(),
                     "serial".to_owned(),
+                    "dns_name".to_owned(),
                 ];
                 searchable.extend(
                     definitions
@@ -1286,6 +1303,11 @@ impl Store {
             current_addresses,
             relations_next,
             network_next: None,
+            identity: if read.relations_cursor.is_none() {
+                tx.host_identity(context, target, asset.kind)?
+            } else {
+                Vec::new()
+            },
         };
         if read.relations_cursor.is_none() {
             tx.read_network_page(context, target, asset.kind, working, None, &mut detail)?;
@@ -1536,6 +1558,13 @@ impl Store {
             }
             tx.check_relationship(context, &selection, &existing)?;
             if request.remove {
+                if existing.kind == wire::RelationKind::RunsOn as i32 {
+                    let guest = parse_target(existing.from.as_ref())?;
+                    if number(&tx.asset(guest)?, "kind")? == wire::AssetKind::VirtualMachine as u64
+                    {
+                        tx.require_no_pending_operations(guest)?;
+                    }
+                }
                 if existing.kind == wire::RelationKind::ReleaseOf as i32
                     && tx.release_is_installed(parse_target(existing.from.as_ref())?)?
                 {
@@ -1775,7 +1804,7 @@ impl Tx<'_> {
             }
         }
     }
-    fn workspace_remove(
+    pub(super) fn workspace_remove(
         &mut self,
         context: &Context,
         target: AssetRef,
@@ -1788,10 +1817,7 @@ impl Tx<'_> {
         let key = asset_key(target);
         // Existing operation/retirement code owns uncertain effects and identity fences.
         self.require_no_account_references(target)?;
-        let pending = self.query("MATCH (n:OmRow) WHERE n.parent='operations' AND n.class=$class AND n.asset=$asset AND n.incarnation=$incarnation RETURN properties(n) AS p LIMIT 1",params([("class", int(Class::Pending as u64)?), ("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string()))]))?;
-        if !pending.is_empty() {
-            return Err(Error::UnsafeTransition);
-        }
+        self.require_no_pending_operations(target)?;
         let linked = self.query("MATCH (n:OmRow) WHERE n.parent='relations' AND (n.asset=$asset OR n.to_asset=$asset) RETURN properties(n) AS p LIMIT 1",params([("asset", text(target.asset.to_string()))]))?;
         if !linked.is_empty() {
             return Err(Error::Conflict);
@@ -1829,7 +1855,7 @@ impl Tx<'_> {
             self.delete(&group_key)?;
         }
         self.retire_current_facts(target)?;
-        let mappings = self.query("MATCH (n:OmRow {asset:$asset}) WHERE n.parent='csv-mappings' AND n.incarnation=$incarnation RETURN properties(n) AS p LIMIT 2049", params([("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string()))]))?;
+        let mappings = self.query("MATCH (n:OmRow {asset:$asset}) WHERE n.parent='csv-mappings' AND n.incarnation=$incarnation AND n.class=$class RETURN properties(n) AS p LIMIT 2049", params([("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string())), ("class", Value::Int(Class::Inventory as i64))]))?;
         if mappings.len() > MAX_CHILDREN {
             return Err(Error::Limit);
         }
@@ -1903,6 +1929,7 @@ pub(super) fn validate_column(name: &str, definitions: &[api::Definition]) -> Re
         "name",
         "description",
         "serial",
+        "dns_name",
         "virtualization_role",
         "vlan_tag",
         "cidr",

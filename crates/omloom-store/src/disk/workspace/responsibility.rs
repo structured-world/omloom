@@ -210,8 +210,13 @@ fn assignment_props(value: &api::ResponsibilityAssignment) -> Result<Properties>
         _ => return Err(Error::Invalid),
     }
     if let Some(contact) = &value.contact {
-        bounded_value(contact, 512, true)?;
+        typed_values::locator(value.contact_kind, contact)?;
         row.insert("contact".into(), text(contact));
+        if value.contact_kind != api::LocatorKind::Unspecified as i32 {
+            row.insert("contact_kind".into(), int(value.contact_kind as u64)?);
+        }
+    } else if value.contact_kind != api::LocatorKind::Unspecified as i32 {
+        return Err(Error::Invalid);
     }
     Ok(row)
 }
@@ -242,6 +247,7 @@ fn read_assignment(row: &Properties) -> Result<api::ResponsibilityAssignment> {
             .get("contact")
             .and_then(Value::as_str)
             .map(str::to_owned),
+        contact_kind: typed_values::read_kind(row, "contact_kind")?,
     })
 }
 
@@ -466,7 +472,9 @@ impl Tx<'_> {
                 {
                     return Err(Error::Denied);
                 }
-                if old.as_ref().and_then(|row| row.get("contact")) != data.get("contact")
+                if (old.as_ref().and_then(|row| row.get("contact")) != data.get("contact")
+                    || old.as_ref().and_then(|row| row.get("contact_kind"))
+                        != data.get("contact_kind"))
                     && !context.field(target, kind, &format!("{field}.contact"), true)
                 {
                     return Err(Error::Denied);
@@ -485,6 +493,45 @@ impl Tx<'_> {
         }
         Ok(kind)
     }
+    pub(super) fn placement_inheritance(
+        &self,
+        context: &Context,
+        target: AssetRef,
+        relation: &wire::Relation,
+    ) -> Result<Vec<api::EffectiveResponsibility>> {
+        let mut mask = 0;
+        for facet in [Facet::ClaimedOwner, Facet::Operator] {
+            if context.field(
+                target,
+                wire::AssetKind::VirtualMachine as i32,
+                field_name(facet)?,
+                false,
+            ) {
+                mask |= 1 << (facet as i32 - 1);
+            }
+        }
+        let graph = graph::Graph::load(self, [(target, mask)].into())?;
+        let mut affected = Vec::new();
+        for facet in [Facet::ClaimedOwner, Facet::Operator] {
+            if mask & (1 << (facet as i32 - 1)) != 0
+                && let Some(assignment) = graph.assignment(target, facet)
+                && assignment.mode == Mode::Inherit as i32
+                && assignment.source_relation.as_deref() == Some(relation.relation_id.as_str())
+                && assignment.source_revision == Some(relation.revision)
+            {
+                let mut value = graph.resolve(context, target, facet)?;
+                // Placement review needs the affected party, not its contact
+                // route or independently addressable source metadata.
+                value.contact = None;
+                value.contact_kind = api::LocatorKind::Unspecified as i32;
+                value.source = None;
+                value.source_revision = None;
+                affected.push(value);
+            }
+        }
+        Ok(affected)
+    }
+
     fn responsibility_state(
         &self,
         context: &Context,
@@ -521,6 +568,7 @@ impl Tx<'_> {
                 let mut declaration = local.clone();
                 if !context.field(target, kind, &format!("{field}.contact"), false) {
                     declaration.contact = None;
+                    declaration.contact_kind = api::LocatorKind::Unspecified as i32;
                 }
                 if let Some(id) = &declaration.source_relation
                     && (!context.field(target, kind, "relations", false)

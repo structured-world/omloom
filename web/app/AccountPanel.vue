@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, defineAsyncComponent } from 'vue';
 import Dialog from './Dialog.vue';
+const LocatorInput=defineAsyncComponent(()=>import('./LocatorInput.vue'));
 import { call,model,AssetKind,OperationState,EffectOutcome,display,key,text,type AssetRef } from './api';
 const props=defineProps<{item:model.Item;working:model.WorkingContext}>();
 const emit=defineEmits<{changed:[];open:[target:AssetRef];share:[]}>();
@@ -37,6 +38,10 @@ async function load(cursor?:string){
 }
 onMounted(()=>load().catch(e=>error.value=String(e)));
 function editMetadata(){metadata.value=state.value?.metadata ? model.AccountMetadata.create(state.value.metadata) : model.AccountMetadata.create();editor.value='metadata';error.value='';}
+function locatorValue(field:'sender'|'recoveryRoute', text:string) {
+  metadata.value[field]=text||undefined;
+  if(!text) metadata.value[field==='sender'?'senderKind':'recoveryRouteKind']=model.LocatorKind.UNSPECIFIED;
+}
 async function mutate(request:Partial<model.ExternalAccount>,context:model.WorkingContext=working()){
   error.value='';busy.value=true;
   try{const result=await call({oneofKind:'externalAccount',externalAccount:model.ExternalAccount.create({...request,target:props.item.target,expected:state.value?.item?.revision})},context);if(result.oneofKind!=='externalAccount')throw Error('Unexpected account response');state.value=result.externalAccount;editor.value='';emit('changed');}
@@ -106,9 +111,9 @@ function linkName(kind:model.AccountLinkKind){return model.AccountLinkKind[kind]
     <label for="external-account-delegation">Provider delegation</label>
     <select id="external-account-delegation" v-model.number="metadata.delegation"><option :value="model.AccountDelegation.UNSPECIFIED">Unknown</option><option :value="model.AccountDelegation.OWNER_ONLY">Owner action only</option><option :value="model.AccountDelegation.SCOPED">Scoped delegation supported</option></select>
     <label>Login label<input :value="metadata.login" maxlength="256" @input="metadata.login=($event.target as HTMLInputElement).value||undefined"></label>
-    <label>Sender constraint<input :value="metadata.sender" maxlength="256" @input="metadata.sender=($event.target as HTMLInputElement).value||undefined"></label>
+    <LocatorInput :model-value="metadata.sender" :kind="metadata.senderKind" label="Sender constraint" :allowed="[model.LocatorKind.UNSPECIFIED,model.LocatorKind.EMAIL,model.LocatorKind.DOMAIN]" @update:model-value="locatorValue('sender',$event)" @update:kind="metadata.senderKind=$event" />
     <label>Credential binding UUID<input :value="metadata.credentialBindingId" maxlength="36" @input="metadata.credentialBindingId=($event.target as HTMLInputElement).value||undefined"></label>
-    <label>Provider recovery route<input :value="metadata.recoveryRoute" maxlength="512" @input="metadata.recoveryRoute=($event.target as HTMLInputElement).value||undefined"></label>
+    <LocatorInput :model-value="metadata.recoveryRoute" :kind="metadata.recoveryRouteKind" label="Provider recovery route" @update:model-value="locatorValue('recoveryRoute',$event)" @update:kind="metadata.recoveryRouteKind=$event" />
     <button class="primary" :disabled="busy">Save account metadata</button>
   </form>
 </Dialog>

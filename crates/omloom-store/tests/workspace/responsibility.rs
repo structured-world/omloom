@@ -923,7 +923,8 @@ fn responsibility_global_filter_excludes_unselected_hosting_sources() -> TestRes
     let actor = operator();
     let first = create(&store, &actor, K::Device, "Administrative host")?;
     let second = create(&store, &actor, K::Device, "Placement host")?;
-    let guest = create(&store, &actor, K::VirtualMachine, "Unrelated guest")?;
+    // Services can have multiple hosting relations with one selected administrative source.
+    let guest = create(&store, &actor, K::Service, "Unrelated service")?;
     responsibility(&store, &actor, &first, Action::Apply, vec![owner("other")])?;
     responsibility(
         &store,
@@ -987,7 +988,7 @@ fn responsibility_global_filter_excludes_unselected_hosting_sources() -> TestRes
             ..query()
         },
         api::Query {
-            view: api::View::Services as i32,
+            view: api::View::Virtualization as i32,
             ..query()
         },
     ] {

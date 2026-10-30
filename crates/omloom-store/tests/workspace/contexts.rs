@@ -318,9 +318,10 @@ fn hypervisor_ownership_cycles_are_rejected_in_both_insertion_orders() -> TestRe
     Ok(())
 }
 
-// Shared acyclic execution ancestors are valid; a later edge cannot close a multi-installation cycle.
+// A move between installations on the same hardware remains valid; a later
+// placement replacement cannot close a multi-installation cycle.
 #[test]
-fn shared_hypervisor_ancestors_are_valid_but_indirect_cycles_are_not() -> TestResult {
+fn shared_hypervisor_ancestry_survives_moves_but_indirect_cycles_do_not() -> TestResult {
     let dir = tempfile::tempdir()?;
     let store = Store::open(dir.path(), policy())?;
     let actor = operator();
@@ -343,20 +344,37 @@ fn shared_hypervisor_ancestors_are_valid_but_indirect_cycles_are_not() -> TestRe
         )?));
     }
     let guest = create(&store, &actor, K::VirtualMachine, "Shared guest")?;
+    let mut placement = wire::Relation {
+        from: Some(guest.clone()),
+        kind: wire::RelationKind::RunsOn as i32,
+        ..Default::default()
+    };
     for host in &hosts {
+        placement.to = Some(host.clone());
         call(
             &store,
             &actor,
             Command::Relation(api::Relationship {
-                relation: Some(wire::Relation {
-                    from: Some(guest.clone()),
-                    to: Some(host.clone()),
-                    kind: wire::RelationKind::RunsOn as i32,
-                    ..Default::default()
-                }),
+                relation: Some(placement.clone()),
                 remove: false,
             }),
         )?;
+        let Reply::Detail(current) = call(
+            &store,
+            &actor,
+            Command::Read(api::Read {
+                target: Some(guest.clone()),
+                ..Default::default()
+            }),
+        )?
+        else {
+            return Err("detail".into());
+        };
+        placement = current
+            .relations
+            .into_iter()
+            .find(|r| r.kind == wire::RelationKind::RunsOn as i32)
+            .ok_or("placement")?;
     }
     let vm = create(&store, &actor, K::VirtualMachine, "Nested guest")?;
     let nested = changed(within(
@@ -401,18 +419,14 @@ fn shared_hypervisor_ancestors_are_valid_but_indirect_cycles_are_not() -> TestRe
         }),
     )?);
     let before = store.usage()?;
+    placement.to = Some(inner);
     // Guest -> nested OS -> nested guest -> inner OS -> guest would close the cycle.
     assert!(matches!(
         call(
             &store,
             &actor,
             Command::Relation(api::Relationship {
-                relation: Some(wire::Relation {
-                    from: Some(guest),
-                    to: Some(inner),
-                    kind: wire::RelationKind::RunsOn as i32,
-                    ..Default::default()
-                }),
+                relation: Some(placement),
                 remove: false
             })
         ),

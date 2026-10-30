@@ -162,7 +162,16 @@ async fn docker_at(
     report: &mut api::HostReport,
 ) -> Result<()> {
     local_docker_endpoint(&report.platform, endpoint)?;
-    let info=runner.read(&["--host",endpoint,"info","--format","{\"id\":{{json .ID}},\"os\":{{json .OperatingSystem}},\"type\":{{json .OSType}},\"version\":{{json .ServerVersion}}}"]).await.map_err(|e|docker_step("daemon inspection",e))?;
+    let info = runner
+        .read(&[
+            "--host",
+            endpoint,
+            "info",
+            "--format",
+            "{\"id\":{{json .ID}},\"os\":{{json .OperatingSystem}},\"type\":{{json .OSType}}}",
+        ])
+        .await
+        .map_err(|e| docker_step("daemon inspection", e))?;
     let info = json(&info)?;
     if info.get("id").and_then(Value::as_str) == Some("") {
         return Err("Docker daemon identity unavailable".into());
@@ -188,16 +197,48 @@ async fn docker_at(
         .read(&["--host", endpoint, "ps", "-q", "--no-trunc"])
         .await
         .map_err(|e| docker_step("container listing", e))?;
-    if ids.lines().count() > 32 {
+    let count = ids.lines().count();
+    if count > 32 {
         return Err("Selected Docker instance count limit exceeded".into());
     }
     for id in ids.lines() {
         if id.len() != 64 || !id.bytes().all(|v| v.is_ascii_hexdigit()) {
             return Err("Invalid Docker container identity".into());
         }
-        let result=runner.read(&["--host",endpoint,"inspect",id,"--format","{\"id\":{{json .Id}},\"name\":{{json .Name}},\"created\":{{json .Created}},\"image\":{{json .Image}},\"project\":{{json (index .Config.Labels \"com.docker.compose.project\")}},\"service\":{{json (index .Config.Labels \"com.docker.compose.service\")}},\"working_directory\":{{json (index .Config.Labels \"com.docker.compose.project.working_dir\")}},\"networks\":{{json .NetworkSettings.Networks}}}"]).await.map_err(|e|docker_step("container inspection",e))?;
-        let value = json(&result)?;
-        if string(&value, "id")? != id {
+    }
+    let mut selected: std::collections::BTreeSet<_> = ids.lines().collect();
+    if selected.len() != count {
+        return Err("Repeated Docker container identity".into());
+    }
+    // Docker applies the template to each requested object. Select only fields
+    // with report consumers, and validate the complete returned identity set.
+    let inspected = if selected.is_empty() {
+        String::new()
+    } else {
+        let template = r#"{"id":{{json .Id}},"name":{{json .Name}},"created":{{json .Created}},"image":{{json .Image}},"project":{{json (index .Config.Labels "com.docker.compose.project")}},"service":{{json (index .Config.Labels "com.docker.compose.service")}},"working_directory":{{json (index .Config.Labels "com.docker.compose.project.working_dir")}},"networks":{ {{$first := true}}{{range $name,$net := .NetworkSettings.Networks}}{{if not $first}},{{end}}{{$first = false}}{{json $name}}:{"EndpointID":{{json $net.EndpointID}},"IPAddress":{{json $net.IPAddress}},"IPPrefixLen":{{json $net.IPPrefixLen}},"GlobalIPv6Address":{{json $net.GlobalIPv6Address}},"GlobalIPv6PrefixLen":{{json $net.GlobalIPv6PrefixLen}}}{{end}} }}"#;
+        let mut args = Vec::with_capacity(7 + count);
+        args.extend_from_slice(&[
+            "--host",
+            endpoint,
+            "inspect",
+            "--type",
+            "container",
+            "--format",
+            template,
+        ]);
+        args.extend(selected.iter().copied());
+        runner
+            .read(&args)
+            .await
+            .map_err(|e| docker_step("container inspection", e))?
+    };
+    if inspected.lines().count() != count {
+        return Err("Container set changed during inspection".into());
+    }
+    for row in inspected.lines() {
+        let value = json(row)?;
+        let id = string(&value, "id")?;
+        if !selected.remove(id) {
             return Err("Container changed during inspection".into());
         }
         let name = string(&value, "name")?

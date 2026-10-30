@@ -3,6 +3,9 @@ import HostNetwork from './HostNetwork.vue';
 import HostImportEditor from './HostImportEditor.vue';
 import CategoryNav from './CategoryNav.vue';
 import CurrentAddresses from './CurrentAddresses.vue';
+import HostIdentityEvidence from './HostIdentityEvidence.vue';
+import HostIdentityCompare from './HostIdentityCompare.vue';
+import VmPlacement from './VmPlacement.vue';
 import ResponsibilityPanel from './ResponsibilityPanel.vue';
 import AccountPanel from './AccountPanel.vue';
 import { softwareFields } from './software-fields';
@@ -28,7 +31,7 @@ const editor = ref<'' | 'asset' | 'schema' | 'import' | 'host-import' | 'view' |
 const initialKind = computed(() => query.value.kinds.length===1 ? query.value.kinds[0] as K : ({ [model.View.OVERVIEW]: K.DEVICE, [model.View.NETWORK]: K.ADDRESS_REFERENCE, [model.View.HARDWARE]: K.DEVICE, [model.View.VIRTUALIZATION]: K.VIRTUAL_MACHINE, [model.View.SERVICES]: K.SERVICE })[query.value.view]);
 const kindOptions = kinds.map(k => ({ id: String(k), name: label(k) }));
 const columnOptions = computed(() => {
-  const options = [{ id: 'name', name: 'Name' }, { id: 'description', name: 'Description' }, { id: 'serial', name: 'Serial number' }, ...softwareFields(), ...definitions.value.filter(d => !d.retired)];
+  const options = [{ id: 'name', name: 'Name' }, { id: 'dns_name', name: 'DNS name' }, { id: 'description', name: 'Description' }, { id: 'serial', name: 'Serial number' }, ...softwareFields(), ...definitions.value.filter(d => !d.retired)];
   for (const id of query.value.columns) if (!options.some(o => o.id === id)) options.push({ id, name: `${id} (unavailable)` });
   return options;
 });
@@ -40,6 +43,34 @@ let returnQuery: LocationQuery | undefined;
 const detailHeading = ref<HTMLElement>();
 const moreActions = ref(false);
 const selected = ref<string[]>([]); const search = ref('');
+const identityPair = ref<{left:AssetRef;right:AssetRef;working:model.WorkingContext}>();
+const placementVm = ref<AssetRef>();
+async function placementSaved(vm: AssetRef, host: AssetRef) {
+  placementVm.value = undefined;
+  await router.push({path:'/',query:{view:String(model.View.VIRTUALIZATION),scope:[host.assetId],scopeInc:[host.incarnation],asset:vm.assetId,incarnation:vm.incarnation}});
+}
+const identityCandidates=ref<model.Item[]>();const findingCandidates=ref(false);
+const resolvedAlias=ref<model.ResolvedIdentity>();
+const comparable = computed(() => {
+  const items = page.value.items.filter(item => selected.value.includes(key(item.target)));
+  return items.length === 2 && items.every(item => item.target && [K.DEVICE, K.VIRTUAL_MACHINE, K.SOFTWARE_INSTALLATION, K.INTERFACE].includes(item.kind));
+});
+function compareIdentity() {
+  const items = page.value.items.filter(item => selected.value.includes(key(item.target)));
+  if (comparable.value && items[0]?.target && items[1]?.target) identityPair.value = {left:items[0].target,right:items[1].target,working:model.WorkingContext.create(working.value)};
+}
+async function findIdentityCandidates(){
+  const current=detail.value;if(!current?.item?.target||findingCandidates.value)return;
+  findingCandidates.value=true;error.value='';identityCandidates.value=undefined;
+  try{const value=await call({oneofKind:'findIdentityCandidates',findIdentityCandidates:model.FindIdentityCandidates.create({target:current.item.target})},enclosing.value);if(value.oneofKind!=='identityCandidates')throw Error('Candidate search is unavailable.');if(detail.value===current)identityCandidates.value=value.identityCandidates.items;}
+  catch(e){if(detail.value===current)error.value=String(e);}finally{findingCandidates.value=false;}
+}
+function compareCandidate(item:model.Item){const left=detail.value?.item?.target;if(left&&item.target)identityPair.value={left,right:item.target,working:model.WorkingContext.create(enclosing.value)};}
+async function resolveIdentityReference(){
+  if(typeof route.query.asset!=='string'||typeof route.query.incarnation!=='string')return;
+  try{const value=await call({oneofKind:'resolveIdentity',resolveIdentity:model.ResolveIdentity.create({original:{assetId:route.query.asset,incarnation:route.query.incarnation}})},enclosing.value);if(value.oneofKind!=='resolvedIdentity')throw Error('Reference resolution is unavailable.');resolvedAlias.value=value.resolvedIdentity;}
+  catch(e){error.value=String(e);}
+}
 const viewSearch = ref('');
 const matchingViews = computed(() => views.value.filter(v => v.name.toLocaleLowerCase().includes(viewSearch.value.toLocaleLowerCase())));
 const presentations = [{ id: model.View.OVERVIEW, name: 'Overview', symbol: '▦' }, { id: model.View.NETWORK, name: 'Network', symbol: '⇄' }, { id: model.View.HARDWARE, name: 'Hardware', symbol: '▤' }, { id: model.View.VIRTUALIZATION, name: 'Virtualization', symbol: '◫' }, { id: model.View.SERVICES, name: 'Software & services', symbol: '◇' }];
@@ -133,6 +164,7 @@ const detailName = computed(() => display(detail.value?.item?.fields.find(f => f
 let generation = 0;
 let loadedQuery = '';
 async function load() {
+  identityCandidates.value=undefined;resolvedAlias.value=undefined;
   const turn = ++generation; loading.value = true; error.value = '';
   preparedActions.value = model.Actions.create();
   const signature = JSON.stringify(model.Query.toJson(query.value));
@@ -210,6 +242,13 @@ async function open(target: AssetRef | undefined, selection: LocationQuery = rou
   if (detail.value?.item?.target && key(detail.value.item.target) !== key(target)) trail.push(JSON.stringify({ ...selection, trail: undefined }));
   await router.push({ path: '/', query: { ...selection, origin: selection.asset ? selection.origin : JSON.stringify({...selection,origin:undefined}), localSearch: undefined, localKind: undefined, localFilter: undefined, localCursor: undefined, trail: trail.length ? trail : undefined, asset: target.assetId, incarnation: target.incarnation } });
 }
+async function openResolvedIdentity() {
+  const original = resolvedAlias.value?.original;
+  const canonical = resolvedAlias.value?.canonical?.target;
+  if (!original || !canonical) return;
+  const scope = roots().map(root => key(root) === key(original) ? canonical : root);
+  await open(canonical, { ...route.query, scope: scope.map(root => root.assetId), scopeInc: scope.map(root => root.incarnation) });
+}
 async function closeDetail() {
   const trail = parameters('trail'); const parent = trail.pop();
   if (parent) {
@@ -234,7 +273,7 @@ watch(detail, async (value, previous) => {
     else if (window.matchMedia('(max-width: 1349px)').matches) detailHeading.value?.scrollIntoView({ block: 'start' });
   }
   if (!value && previous && !error.value) {
-    if (loadedQuery === listQuery) { selected.value = listSelection; if (listFocus?.isConnected) listFocus.focus({ preventScroll: true }); window.scrollTo(0, listScroll); }
+    if (loadedQuery === listQuery) { selected.value = listSelection; await nextTick(); if (listFocus?.isConnected) listFocus.focus({ preventScroll: true }); window.scrollTo(0, listScroll); }
     else window.scrollTo(0, 0);
   }
 });
@@ -312,13 +351,14 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <div class="workspace-head"><div><h1>{{ currentTitle }}</h1></div><div class="actions workspace-actions" @keydown.esc="moreActions = false"><div id="workspace-secondary" class="secondary-actions" :class="{ open: moreActions }"><button class="phone-refresh" @click="load" :disabled="loading">Refresh inventory</button><button @click="exportCsv">Export CSV</button><button v-if="identity?.writable" @click="editor = 'import'">Import CSV</button><button v-if="identity?.writable" @click="moreActions = false; editor = 'host-import'">Import host report</button><button v-if="identity?.schemaAdmin" @click="editor = 'schema'">Company fields</button></div><button v-if="identity?.writable" class="primary" :disabled="loading" @click="create">+ Create resource</button><button class="phone-more" :aria-expanded="moreActions" aria-controls="workspace-secondary" @click="moreActions = !moreActions">More</button></div></div>
 <div class="scopebar"><span class="scope-label">SCOPE</span><template v-if="detail?.item"><strong>{{ detailName || detail.item.target?.assetId.slice(-8) }}</strong><button @click="closeDetail">Enclosing selection</button></template><button v-else-if="query.roots.length" @click="change({ scope: undefined, scopeInc: undefined })">{{ query.roots.length }} selected root{{ query.roots.length === 1 ? '' : 's' }} <span aria-hidden="true">×</span></button><span v-else>All permitted infrastructure</span><small>{{ detail?.item ? 'Local components and known facts' : 'Changing views preserves this scope.' }}</small></div>
 <CategoryNav :view="query.view" :kinds="query.kinds" @select="kinds => change({kind:kinds.length?kinds.map(String):undefined})" />
-<p v-if="notice" class="notice" role="status">{{ notice }}<button aria-label="Dismiss notice" @click="notice = ''">×</button></p><p v-if="error" class="error" role="alert">{{ error }}<button @click="reloadSelection">Reload selection</button></p>
+<p v-if="notice" class="notice" role="status">{{ notice }}<button aria-label="Dismiss notice" @click="notice = ''">×</button></p><p v-if="error" class="error" role="alert">{{ error }}<button @click="reloadSelection">Reload selection</button><button v-if="route.query.asset&&route.query.incarnation" @click="resolveIdentityReference">Locate retained identity</button></p>
+<section v-if="resolvedAlias?.canonical" aria-label="Corrected reference"><p>Original reference {{ resolvedAlias.original?.assetId }}. Current permitted identity: {{ display(resolvedAlias.canonical.fields.find(v=>v.name==='name')) }}.</p><button @click="openResolvedIdentity">Open retained resource</button></section>
 <div class="workspace-content" :class="{ split: !!detail?.item }"><section class="inventory" aria-label="Inventory"><div class="inventory-toolbar"><form class="search" @submit.prevent="change({ search: search || undefined })"><input v-model="search" aria-label="Search inventory" placeholder="Search inventory…" maxlength="256"><button>Search</button></form><div class="query-tools"><button aria-label="Resource kinds" @click="editor = 'kinds'">Resource kinds<span v-if="query.kinds.length"> ({{ query.kinds.length }})</span></button><button @click="editor = 'filter'">Add filter<span v-if="query.predicates.length"> ({{ query.predicates.length }})</span></button><label class="check"><input :checked="query.unplaced" type="checkbox" @change="change({ unplaced: ($event.target as HTMLInputElement).checked ? '1' : undefined })">Unplaced</label></div></div>
 <div class="table-meta"><span>{{ page.total.toString() }} resources<span v-if="loading"> · Loading…</span></span><div><button @click="editor = 'columns'">Columns</button><button @click="editor = 'view'">Save view</button><button v-if="activeView" @click="useView(activeView)">Reset adjustments</button><button v-if="identity?.writable && query.view === model.View.NETWORK && actions.allocations.length" @click="allocate">Allocate IP / prefix</button></div></div>
 <div v-if="query.predicates.length||query.responsibility" class="selection"><span v-for="(p, index) in query.predicates" :key="index" class="chip">{{ definitions.find(d => d.id === p.field)?.name ?? p.field }} = {{ display(p.value) }}<button :aria-label="`Remove filter ${index + 1}`" @click="filters(query.predicates.filter((_, i) => i !== index),query.responsibility)">×</button></span><span v-if="query.responsibility" class="chip">{{model.ResponsibilityFacet[query.responsibility.facet]?.toLowerCase().replaceAll('_',' ')}}: {{query.responsibility.issuer}} / {{query.responsibility.subject}}<button aria-label="Remove responsibility filter" @click="filters(query.predicates)">×</button></span></div>
-<div v-if="selected.length" class="selection">{{ selected.length }} selected on this page<button @click="selectedScope">Use selected as scope</button><button v-if="identity?.writable" @click="editor = 'bulk'">Review bulk change</button><button @click="selected = []">Clear selection</button></div>
-<div v-if="page.items.length" class="phone-list-tools"><label class="check"><input type="checkbox" aria-label="Select phone page" :checked="selected.length === page.items.length" @change="selected = ($event.target as HTMLInputElement).checked ? page.items.map(i => key(i.target)) : []">Select page</label><label>Sort<select aria-label="Sort resources" :value="`${query.sort}:${query.descending ? 'desc' : 'asc'}`" @change="change({ sort: ($event.target as HTMLSelectElement).value.split(':')[0], desc: ($event.target as HTMLSelectElement).value.endsWith(':desc') ? '1' : undefined })"><option value="name:asc">Name A–Z</option><option value="name:desc">Name Z–A</option><option value="kind:asc">Resource kind</option></select></label></div>
-<div class="table-scroll"><table :class="{ 'has-name': query.columns.includes('name') }"><thead><tr><th class="select-col"><input aria-label="Select visible page" type="checkbox" :checked="!!page.items.length && selected.length === page.items.length" @change="selected = ($event.target as HTMLInputElement).checked ? page.items.map(i => key(i.target)) : []"></th><th><button @click="change({ sort: 'kind', desc: query.sort === 'kind' && !query.descending ? '1' : undefined })">Resource kind <span v-if="query.sort === 'kind'">{{ query.descending ? '↓' : '↑' }}</span></button></th><th v-for="c in columnLabels" :key="c.id"><button v-if="c.id === 'name'" @click="change({ sort: 'name', desc: query.sort === 'name' && !query.descending ? '1' : undefined })">{{ c.name }} <span v-if="query.sort === 'name'">{{ query.descending ? '↓' : '↑' }}</span></button><span v-else>{{ c.name }}</span></th><th>Identity</th></tr></thead><tbody><template v-for="(group, groupIndex) in rowGroups" :key="groupIndex"><tr v-if="grouping && group.title" class="context-group"><td :colspan="columnLabels.length + 3"><button v-if="group.owner" :aria-label="`Open owner ${group.title}`" @click="open(group.owner)">{{ group.title }}</button><strong v-else>{{ group.title }}</strong><small>Resources on this page</small></td></tr><tr v-for="i in group.items" :key="key(i.target)" :class="{ focused: key(i.target) === key(detail?.item?.target) }"><td><input v-model="selected" type="checkbox" :value="key(i.target)" :aria-label="`Select ${display(i.fields.find(f => f.name === 'name'))}`"></td><td><span class="kind-tag">{{ label(i.kind) }}</span></td><td v-for="c in columnLabels" :key="c.id" :data-label="c.name" :class="{ 'empty-field': c.id !== 'name' && !display(i.fields.find(f => f.name === c.id)) }">
+<div v-if="selected.length" class="selection">{{ selected.length }} selected on this page<button :disabled="loading" @click="selectedScope">Use selected as scope</button><button v-if="comparable" :disabled="loading" @click="compareIdentity">Compare identity</button><button v-if="identity?.writable" :disabled="loading" @click="editor = 'bulk'">Review bulk change</button><button @click="selected = []">Clear selection</button></div>
+<div v-if="page.items.length" class="phone-list-tools"><label class="check"><input type="checkbox" aria-label="Select phone page" :disabled="loading" :checked="selected.length === page.items.length" @change="selected = ($event.target as HTMLInputElement).checked ? page.items.map(i => key(i.target)) : []">Select page</label><label>Sort<select aria-label="Sort resources" :value="`${query.sort}:${query.descending ? 'desc' : 'asc'}`" @change="change({ sort: ($event.target as HTMLSelectElement).value.split(':')[0], desc: ($event.target as HTMLSelectElement).value.endsWith(':desc') ? '1' : undefined })"><option value="name:asc">Name A–Z</option><option value="name:desc">Name Z–A</option><option value="kind:asc">Resource kind</option></select></label></div>
+<div class="table-scroll"><table :class="{ 'has-name': query.columns.includes('name') }"><thead><tr><th class="select-col"><input aria-label="Select visible page" type="checkbox" :disabled="loading" :checked="!!page.items.length && selected.length === page.items.length" @change="selected = ($event.target as HTMLInputElement).checked ? page.items.map(i => key(i.target)) : []"></th><th><button @click="change({ sort: 'kind', desc: query.sort === 'kind' && !query.descending ? '1' : undefined })">Resource kind <span v-if="query.sort === 'kind'">{{ query.descending ? '↓' : '↑' }}</span></button></th><th v-for="c in columnLabels" :key="c.id"><button v-if="c.id === 'name'" @click="change({ sort: 'name', desc: query.sort === 'name' && !query.descending ? '1' : undefined })">{{ c.name }} <span v-if="query.sort === 'name'">{{ query.descending ? '↓' : '↑' }}</span></button><span v-else>{{ c.name }}</span></th><th>Identity</th></tr></thead><tbody><template v-for="(group, groupIndex) in rowGroups" :key="groupIndex"><tr v-if="grouping && group.title" class="context-group"><td :colspan="columnLabels.length + 3"><button v-if="group.owner" :aria-label="`Open owner ${group.title}`" @click="open(group.owner)">{{ group.title }}</button><strong v-else>{{ group.title }}</strong><small>Resources on this page</small></td></tr><tr v-for="i in group.items" :key="key(i.target)" :class="{ focused: key(i.target) === key(detail?.item?.target) }"><td><input v-model="selected" type="checkbox" :disabled="loading" :value="key(i.target)" :aria-label="`Select ${display(i.fields.find(f => f.name === 'name'))}`"></td><td><span class="kind-tag">{{ label(i.kind) }}</span></td><td v-for="c in columnLabels" :key="c.id" :data-label="c.name" :class="{ 'empty-field': c.id !== 'name' && !display(i.fields.find(f => f.name === c.id)) }">
 <div v-if="c.id === 'name' && rowAddresses(i)" class="resource-address">{{ rowAddresses(i) }}</div>
 <small v-if="c.id === 'name' && [K.SERVICE, K.INTERFACE].includes(i.kind)" class="resource-owner">{{ contextPath(i) || 'Owner not known' }}</small>
 <small v-if="c.id === 'name' && [K.WORKLOAD, K.CONTAINER].includes(i.kind)" class="resource-owner">{{ contextPath(i) || 'Execution context not available' }}</small>
@@ -331,11 +371,14 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <section class="phone-context" aria-label="Local resources"><label for="local-perspective">Resource perspective</label><select id="local-perspective" :value="query.view" @change="change({ view: ($event.target as HTMLSelectElement).value, kind: undefined })"><option v-for="v in presentations" :key="v.id" :value="v.id">{{ v.name }}</option></select><div class="actions"><button v-if="identity?.writable && actions.creations.length" class="primary" @click="create">+ Create resource</button><button v-if="identity?.writable && query.view === model.View.NETWORK && actions.allocations.length" @click="allocate">Allocate IP / prefix</button></div><ul><li v-for="item in page.items.filter(i => key(i.target) !== key(detail?.item?.target))" :key="key(item.target)"><button @click="open(item.target)">{{ display(item.fields.find(f => f.name === 'name')) || item.target?.assetId.slice(-8) }}</button><span>{{ label(item.kind) }}</span></li></ul><button v-if="page.next" @click="change({ cursor: page.next })">Next local resources</button></section>
 <section v-if="[K.IP_ADDRESS, K.PREFIX, K.VLAN, K.ADDRESS_GROUP].includes(detail.item.kind)"><div class="section-title"><h3>Address allocation</h3><button v-if="identity?.writable" @click="editing = detail.item; editor = 'network'">Review network settings</button><button v-if="identity?.writable && [K.IP_ADDRESS, K.ADDRESS_GROUP].includes(detail.item.kind)" @click="editor = 'member'">Assign participant</button></div><p v-if="detail.group">Shared group: <button @click="open(detail.group.target)">{{ display(detail.group.fields.find(f => f.name === 'name')) }} · {{ detail.group.target?.assetId.slice(-8) }}</button></p><p v-if="!detail.participantsComplete" class="hint">Participant coverage is restricted. Missing participants do not prove the allocation is free.</p><ul><li v-for="p in detail.participants" :key="key(p.interface)"><button @click="open(p.interface)">Interface {{ p.interface?.assetId.slice(-8) }}</button><span v-if="p.priority !== undefined"> · Intended priority {{ p.priority }}</span><button v-if="identity?.writable" @click="removeParticipant(p)">Remove participant</button></li></ul></section>
 <button v-if="detail.item.kind === K.ADDRESS_REFERENCE && identity?.writable" @click="editor = 'binding'">Resolve address in broader scope</button>
-<CurrentAddresses v-for="value in detail.currentAddresses" :key="value.coverage?.source" :value="value" />
+<CurrentAddresses v-for="value in detail.currentAddresses" :key="value.sourceId" :value="value" />
+<section v-if="[K.DEVICE,K.VIRTUAL_MACHINE,K.SOFTWARE_INSTALLATION,K.INTERFACE].includes(detail.item.kind)" aria-label="Identity candidates"><button :disabled="findingCandidates" @click="findIdentityCandidates">Find possible duplicates in enclosing selection</button><p v-if="findingCandidates" role="status">Checking indexed source claims…</p><template v-if="identityCandidates"><p v-if="!identityCandidates.length">No comparable candidates are available in this selection. Missing evidence does not prove that there are no duplicates.</p><ul><li v-for="candidate in identityCandidates" :key="key(candidate.target)">{{ label(candidate.kind) }} · {{ display(candidate.fields.find(v=>v.name==='name')) }} <button @click="compareCandidate(candidate)">Compare with candidate</button></li></ul></template></section>
+<button v-if="detail.item.kind === K.VIRTUAL_MACHINE && identity?.writable && detail.item.target" @click="placementVm=detail.item.target">Change hypervisor after migration</button>
+<HostIdentityEvidence :observations="detail.identity" />
 <ResponsibilityPanel v-if="detail.item&&!loading" :key="key(detail.item.target)+'/'+detail.item.revision" :item="detail.item" :working="working" @changed="saved()" @open="open" />
 <AccountPanel v-if="detail.item?.kind===K.PROVIDER_ACCOUNT&&!loading" :key="key(detail.item.target)+'/'+detail.item.revision" :item="detail.item" :working="working" @changed="saved()" @open="open" @share="editor='view'" />
 <p v-if="detail.networkNext || networkCursor" class="hint">Showing one bounded evidence page. Observation counts and filters apply to this page.</p>
-<HostNetwork v-for="evidence in detail.hostNetwork" :key="key(detail.item.target)+'/'+evidence.coverage?.source" :evidence="evidence" @open="open" />
+<HostNetwork v-for="evidence in detail.hostNetwork" :key="evidence.sourceId" :evidence="evidence" @open="open" />
 <div v-if="detail.networkNext || networkCursor" class="actions"><button v-if="networkCursor" :disabled="networkLoading" @click="networkEvidence()">First evidence page</button><button v-if="detail.networkNext" :disabled="networkLoading" @click="networkEvidence(detail.networkNext)">Next evidence page</button></div>
 <div class="section-title"><h3>Typed relationships</h3><button v-if="identity?.writable" @click="relations">Connections in broader scope</button></div><p v-if="!detail.relations.length" class="hint">No relationships visible in this scope. This does not establish absence outside it.</p><ul><li v-for="r in detail.relations" :key="r.relationId"><button @click="open(key(r.from) === key(detail.item?.target) ? r.to : r.from)">{{ RelationKind[r.kind]?.replace('RELATION_KIND_', '').toLowerCase().replaceAll('_',' ') }} · {{ relatedName(key(r.from) === key(detail.item?.target) ? r.to : r.from) }}</button><button v-if="identity?.writable" @click="removeRelation(r)">Remove relationship</button></li></ul>
 <button v-if="detail.relationsNext" @click="nextRelations">Next relationships</button>
@@ -345,6 +388,8 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <SchemaEditor v-if="editor === 'schema'" :definitions="definitions" :revision="page.revision" @close="editor = ''" @saved="saved" />
 <ImportEditor v-if="editor === 'import'" :definitions="definitions" :working="working" @close="editor = ''" @saved="saved" />
 <HostImportEditor v-if="editor === 'host-import'" :working="working" @close="editor = ''" @saved="saved" />
+<HostIdentityCompare v-if="identityPair" :left="identityPair.left" :right="identityPair.right" :working="identityPair.working" @close="identityPair=undefined" @changed="load()" />
+<VmPlacement v-if="placementVm" :target="placementVm" :working="enclosing" @close="placementVm=undefined" @saved="placementSaved" />
 <ViewEditor v-if="editor === 'view' && identity" :query="query" :identity="identity" :existing="activeView" @close="editor = ''" @saved="saved" />
 <NetworkEditor v-if="editor === 'network'" :item="editing" :group="editing ? detail?.group : undefined" :definitions="definitions" :working="editing ? enclosing : working" :allocations="actions.allocations" :view="query.view" @close="editor = ''" @saved="saved" @refresh="load" />
 <MemberEditor v-if="editor === 'member' && detail" :detail="detail" :working="enclosing" :removal="participantRemoval" @close="editor = ''; participantRemoval = undefined" @saved="participantRemoval = undefined; saved()" />
