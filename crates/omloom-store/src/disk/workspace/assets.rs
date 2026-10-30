@@ -610,7 +610,7 @@ impl Store {
                         "forward_owned"
                     };
                     predicate_joins.push(format!(
-                        " OPTIONAL MATCH {path} WHERE {owner} WITH {}, p IS NOT NULL AS {flag}",
+                        " WITH {}, EXISTS {{ MATCH {path} WHERE {owner} }} AS {flag}",
                         bindings.join(", ")
                     ));
                     if reverse {
@@ -938,6 +938,16 @@ impl Store {
             bindings.join(", "),
             clauses.join(" AND ")
         );
+        let count = tx.raw(
+            &format!("{base} RETURN count(DISTINCT a.key) AS total"),
+            values.clone(),
+        )?;
+        let total = count
+            .first()
+            .and_then(|r| r.get("total"))
+            .and_then(Value::as_int)
+            .and_then(|n| u64::try_from(n).ok())
+            .ok_or(Error::Corrupt)?;
         let sort = match query.sort.as_str() {
             "" | "name" => format!(
                 "CASE WHEN {} THEN a.name_sort ELSE a.asset END",
@@ -949,23 +959,12 @@ impl Store {
         let direction = if query.descending { "DESC" } else { "ASC" };
         let limit = query.limit;
         values.insert("offset".into(), int(offset)?);
-        values.insert(
-            "end".into(),
-            int(offset.checked_add(u64::from(limit)).ok_or(Error::Limit)?)?,
-        );
-        // Resolve visibility and parents once. Collect only ordered keys in the
-        // engine and return the requested slice and total, never the full estate.
-        let mut selected = tx.raw(&format!("{base} WITH DISTINCT a.key AS key, {sort} AS ordering ORDER BY ordering {direction}, key ASC WITH collect(key) AS keys RETURN size(keys) AS total, keys[$offset..$end] AS selected"), values)?;
-        let mut selected = selected.pop().ok_or(Error::Corrupt)?;
-        let total = number(&selected, "total")?;
-        let Some(Value::Array(keys)) = selected.remove("selected") else {
-            return Err(Error::Corrupt);
-        };
-        if keys.len() > usize::try_from(limit).map_err(|_| Error::Limit)?
-            || keys.iter().any(|key| key.as_str().is_none())
-        {
-            return Err(Error::Corrupt);
-        }
+        values.insert("limit".into(), int(u64::from(limit))?);
+        let selected = tx.raw(&format!("{base} RETURN DISTINCT a.key AS key, {sort} AS ordering ORDER BY ordering {direction}, key ASC SKIP $offset LIMIT $limit"), values)?;
+        let keys: Vec<_> = selected
+            .iter()
+            .map(|p| string(p, "key").map(text))
+            .collect::<Result<_>>()?;
         let fetched = tx.query(
             "UNWIND $keys AS key MATCH (a:OmRow) WHERE a.key=key RETURN properties(a) AS p LIMIT $ceiling",
             params([("keys", Value::Array(keys.clone())), ("ceiling", Value::Int((MAX_PAGE + 1) as i64))]),
@@ -974,13 +973,9 @@ impl Store {
             .into_iter()
             .map(|row| Ok((string(&row, "key")?, row)))
             .collect::<Result<BTreeMap<_, _>>>()?;
-        let rows = keys
+        let rows = selected
             .iter()
-            .map(|key| {
-                by_key
-                    .remove(key.as_str().ok_or(Error::Corrupt)?)
-                    .ok_or(Error::Corrupt)
-            })
+            .map(|item| by_key.remove(&string(item, "key")?).ok_or(Error::Corrupt))
             .collect::<Result<Vec<_>>>()?;
         let fields = tx.query("UNWIND $keys AS owner UNWIND $fields AS name MATCH (f:OmRow) WHERE f.key=owner+'/intent/'+name RETURN properties(f) AS p LIMIT $ceiling", params([
             ("keys", Value::Array(keys)), ("fields", strings(&query.columns)),

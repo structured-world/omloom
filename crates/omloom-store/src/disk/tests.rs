@@ -48,6 +48,8 @@ fn capacity_increase_resumes_quota_bound_name_migration()
     let legacy = Store {
         db: store.db,
         policy: previous.clone(),
+        #[cfg(feature = "diagnostics")]
+        query_check: None,
     };
     let mut tx = legacy.begin()?;
     tx.root

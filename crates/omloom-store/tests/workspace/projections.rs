@@ -844,7 +844,29 @@ fn level_browse_preserves_hidden_and_mixed_parent_semantics() -> TestResult {
 #[test]
 fn level_browse_small_estate_has_bounded_latency() -> TestResult {
     let dir = tempfile::tempdir()?;
-    let store = Store::open(dir.path(), policy())?;
+    let mut store = Store::open(dir.path(), policy())?;
+    store.set_diagnostic_query_check(|db, statement| {
+        if !statement.contains("forward_owned") {
+            return;
+        }
+        // The outer EXPLAIN abbreviates expression subqueries. Inspect the
+        // actual statement's optimized subplans, not its normalized fingerprint.
+        let mut planned = db.explain_plan(statement, None).expect("browse plan");
+        let mut nested = Vec::new();
+        planned.root.for_each_expr_mut(&mut |expr| {
+            expr.for_each_subplan_mut(&mut |subplan| nested.push(subplan.explain()));
+        });
+        assert_eq!(nested.len(), 2, "both ownership probes must be checked");
+        let plan = nested.join("\n");
+        for index in ["omloom_asset(asset)", "omloom_to_asset(to_asset)"] {
+            assert_eq!(
+                plan.matches(&format!("IndexScan(r:OmRow ON {index})"))
+                    .count(),
+                1,
+                "each parent probe must use its endpoint index: {plan}"
+            );
+        }
+    });
     let actor = operator();
     for index in 0..16 {
         let host = create(&store, &actor, K::Device, &format!("host {index}"))?;
@@ -877,21 +899,20 @@ fn level_browse_small_estate_has_bounded_latency() -> TestResult {
         if query.canonical_query.contains("forward_owned") {
             browse_plans += 1;
             assert_eq!(query.count, 1, "browse execution must not repeat");
-            let plan = query.last_plan.ok_or("missing browse plan")?;
-            for index in ["omloom_asset(asset)", "omloom_to_asset(to_asset)"] {
-                assert_eq!(
-                    plan.matches(&format!("IndexScan(r:OmRow ON {index})"))
-                        .count(),
-                    1,
-                    "each parent probe must use its endpoint index: {plan}"
-                );
-            }
+            assert!(
+                !query
+                    .canonical_query
+                    .to_ascii_lowercase()
+                    .contains("collect("),
+                "page selection must not collect every matching key"
+            );
+            query.last_plan.ok_or("missing browse plan")?;
             eprintln!("browse statement: {} us", query.total_time_us);
         }
     }
     assert_eq!(
-        browse_plans, 1,
-        "one browse must supply both total and page"
+        browse_plans, 2,
+        "count and bounded page plans must both be checked"
     );
     eprintln!("level browse elapsed: {elapsed:?}");
     assert_eq!(page.total, 16);
@@ -904,10 +925,10 @@ fn level_browse_small_estate_has_bounded_latency() -> TestResult {
     Ok(())
 }
 
-// Shared total/page projection preserves empty results, duplicate sort values,
+// Count/page projections preserve empty results, duplicate sort values,
 // descending order and cursor continuation without incidental writes.
 #[test]
-fn shared_total_and_page_keep_empty_results_and_stable_ties() -> TestResult {
+fn total_and_page_keep_empty_results_and_stable_ties() -> TestResult {
     let dir = tempfile::tempdir()?;
     let store = Store::open(dir.path(), policy())?;
     let actor = operator();

@@ -82,6 +82,8 @@ impl From<DatabaseError> for Error {
 pub struct Store {
     db: Database,
     policy: Policy,
+    #[cfg(feature = "diagnostics")]
+    query_check: Option<fn(&Database, &str)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -681,7 +683,12 @@ impl Store {
                 Err(error) => return Err(error.into()),
             }
         }
-        let store = Self { db, policy };
+        let store = Self {
+            db,
+            policy,
+            #[cfg(feature = "diagnostics")]
+            query_check: None,
+        };
         if store.read(ROOT)?.is_none() {
             if previous.is_some() {
                 return Err(Error::Missing);
@@ -857,6 +864,11 @@ impl Store {
     pub fn diagnostic_database(&self) -> &Database {
         &self.db
     }
+    /// Inspect actual executed statements without retaining inputs or results.
+    #[cfg(feature = "diagnostics")]
+    pub fn set_diagnostic_query_check(&mut self, check: fn(&Database, &str)) {
+        self.query_check = Some(check);
+    }
 }
 
 fn usage(root: &Properties) -> Result<Usage> {
@@ -909,6 +921,10 @@ impl Tx<'_> {
             .store
             .db
             .execute_in_transaction(self.id.ok_or(Error::Corrupt)?, q, p)?;
+        #[cfg(feature = "diagnostics")]
+        if let Some(check) = self.store.query_check {
+            check(&self.store.db, q);
+        }
         #[cfg(feature = "diagnostics")]
         if let Some(started) = started {
             eprintln!(
