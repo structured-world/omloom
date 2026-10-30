@@ -87,7 +87,7 @@ pub fn decode_hex(hex: &str, budget: &crate::MemoryBudget) -> Result<Input, Erro
             _ => Err(Error::Wire),
         }
     }
-    for pair in hex.as_bytes().chunks_exact(2) {
+    for pair in hex.as_bytes().as_chunks::<2>().0 {
         bytes.push(digit(pair[0])? * 16 + digit(pair[1])?);
     }
     decode(&bytes, budget)
