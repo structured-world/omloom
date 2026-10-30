@@ -20,12 +20,56 @@ impl std::io::Write for CsvOutput {
     }
 }
 
-fn csv_value(name: &str, value: &str, definitions: &[api::Definition]) -> Result<wire::Field> {
+fn csv_value(
+    name: &str,
+    value: &str,
+    definitions: &[api::Definition],
+    budget: &omloom_contracts::MemoryBudget,
+    inputs: &mut Vec<omloom_contracts::equipment::Input>,
+) -> Result<wire::Field> {
     let kind = definitions.iter().find(|d| d.id == name).map(|d| d.r#type);
+    if omloom_contracts::equipment::FIELDS.contains(&name) {
+        if let Some(body) = value.strip_prefix("equipment/claim/v1:") {
+            let mut input =
+                omloom_contracts::equipment::decode_hex(body, budget).map_err(|e| match e {
+                    omloom_contracts::Error::Limit => Error::Limit,
+                    _ => Error::Invalid,
+                })?;
+            let claim = input.take();
+            inputs.push(input);
+            return Ok(wire::Field {
+                name: name.into(),
+                value: Some(field::Value::Equipment(claim)),
+            });
+        }
+        if let Some(body) = value.strip_prefix("equipment/text/v1:") {
+            if body.len() > (if name == "model" { 1024 } else { 320 })
+                || !body.len().is_multiple_of(2)
+            {
+                return Err(Error::Invalid);
+            }
+            let bytes = body
+                .as_bytes()
+                .chunks_exact(2)
+                .map(|c| {
+                    std::str::from_utf8(c)
+                        .ok()
+                        .and_then(|s| u8::from_str_radix(s, 16).ok())
+                        .ok_or(Error::Invalid)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(wire::Field {
+                name: name.into(),
+                value: Some(field::Value::Text(
+                    String::from_utf8(bytes).map_err(|_| Error::Invalid)?,
+                )),
+            });
+        }
+    }
     let value = if value == "<clear>" {
         field::Value::Clear(EXPLICIT_CLEAR)
     } else if kind == Some(api::FieldType::Integer as i32)
-        || matches!(name, "prefix_length" | "vlan_tag")
+        || matches!(name, "prefix_length" | "vlan_tag" | "drive_bays")
     {
         field::Value::Integer(value.parse().map_err(|_| Error::Invalid)?)
     } else if kind == Some(api::FieldType::Boolean as i32) {
@@ -119,6 +163,9 @@ impl Store {
             return Err(Error::Invalid);
         }
         let definitions = self.workspace_definitions(context)?;
+        // Keep decoded-claim reservations for the entire preview construction.
+        let claim_budget = omloom_contracts::MemoryBudget::new(16 * 1_048_576);
+        let mut claim_inputs = Vec::new();
         let mut reader = csv::ReaderBuilder::new()
             .flexible(false)
             .from_reader(request.csv.as_bytes());
@@ -206,8 +253,13 @@ impl Store {
                     .map(|(index, name)| {
                         diagnostic =
                             format!("column '{}'", headers.get(*index).ok_or(Error::Invalid)?);
-                        let field =
-                            csv_value(name, line.get(*index).ok_or(Error::Invalid)?, &definitions)?;
+                        let field = csv_value(
+                            name,
+                            line.get(*index).ok_or(Error::Invalid)?,
+                            &definitions,
+                            &claim_budget,
+                            &mut claim_inputs,
+                        )?;
                         tx.require_changes(
                             context,
                             write_target,
@@ -352,6 +404,17 @@ impl Store {
                 ];
                 for name in &columns {
                     let cell = match field_value(&item.fields, name) {
+                        Some(field::Value::Equipment(v)) => format!(
+                            "equipment/claim/v1:{}",
+                            hex(&omloom_contracts::equipment::encode(v)
+                                .map_err(|_| Error::Corrupt)?)
+                        ),
+                        Some(field::Value::Text(s))
+                            if omloom_contracts::equipment::FIELDS.contains(&name.as_str())
+                                && (s.starts_with("equipment/") || s == "<clear>") =>
+                        {
+                            format!("equipment/text/v1:{}", hex(s.as_bytes()))
+                        }
                         None => String::new(),
                         Some(field::Value::Clear(EXPLICIT_CLEAR)) => "<clear>".into(),
                         // OWASP CSV Injection: protect literal text, including control

@@ -57,10 +57,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                 _ => return Err("add a preflight rule before using this protobuf type".into()),
             };
             shapes.push_str(&format!(
-                "Shape {{ tag: {}, kind: {kind}, repeated: {}, group: {} }},\n",
+                "Shape {{ tag: {}, kind: {kind}, repeated: {}, group: {}, max_count: {} }},\n",
                 field.number(),
                 field.label() == Label::Repeated,
-                field.oneof_index.map_or(0, |index| index + 1)
+                field.oneof_index.map_or(0, |index| index + 1),
+                if message.name() == "EquipmentAlternatives"
+                    && matches!(field.name(), "candidates" | "excluded")
+                {
+                    16
+                } else {
+                    0
+                }
             ));
         }
         shapes.push_str("],\n");
@@ -71,6 +78,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         .position(|(package, m)| *package == "omloom.v1" && m.name() == "Record")
         .ok_or("no Record")?;
     shapes.push_str(&format!("\nconst ROOT: usize = {record};\n"));
+    let equipment = messages
+        .iter()
+        .position(|(package, m)| *package == "omloom.v1" && m.name() == "EquipmentClaim")
+        .ok_or("no EquipmentClaim")?;
+    shapes.push_str(&format!("\nconst EQUIPMENT_ROOT: usize = {equipment};\n"));
     let request = messages
         .iter()
         .position(|(package, m)| *package == "omloom.workspace.v1" && m.name() == "Request")

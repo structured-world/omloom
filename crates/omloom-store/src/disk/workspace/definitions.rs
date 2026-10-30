@@ -501,6 +501,34 @@ impl Tx<'_> {
         if value.name.len() > 100 {
             return Err(Error::Invalid);
         }
+        if omloom_contracts::equipment::FIELDS.contains(&value.name.as_str())
+            && (kind == wire::AssetKind::Device as i32
+                || !software::fields(wire::AssetKind::try_from(kind).map_err(|_| Error::Invalid)?)
+                    .contains(&value.name.as_str()))
+        {
+            if kind != wire::AssetKind::Device as i32 {
+                return Err(Error::Invalid);
+            }
+            return match value.value.as_ref() {
+                Some(field::Value::Equipment(v)) => {
+                    omloom_contracts::equipment::validate_field(&value.name, v)
+                        .map_err(|_| Error::Invalid)
+                }
+                Some(field::Value::Text(s))
+                    if !matches!(
+                        value.name.as_str(),
+                        "drive_bays" | "height" | "width" | "depth" | "weight" | "power_rating"
+                    ) && s.len() <= (if value.name == "model" { 512 } else { 160 })
+                        && !s.trim().is_empty()
+                        && !s.chars().any(char::is_control) =>
+                {
+                    Ok(())
+                }
+                Some(field::Value::Integer(n)) if *n >= 0 && value.name == "drive_bays" => Ok(()),
+                Some(field::Value::Clear(EXPLICIT_CLEAR)) => Ok(()),
+                _ => Err(Error::Invalid),
+            };
+        }
         if software::known_field(&value.name) {
             return software::validate_field(kind, value);
         }

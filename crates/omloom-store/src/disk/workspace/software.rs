@@ -1,4 +1,4 @@
-//! Current software facts use the ordinary field authority, CAS, CSV and audit
+//! Current software and equipment facts use ordinary field authority, CAS, CSV and audit
 //! pipeline. Catalog references are relations, not copied installation snapshots.
 use super::*;
 use alloc::borrow::Cow;
@@ -260,7 +260,7 @@ impl Tx<'_> {
         Ok(())
     }
 
-    pub(in crate::disk) fn validate_full_software_asset(
+    pub(in crate::disk) fn validate_full_asset_fields(
         &self,
         target: AssetRef,
         asset: &wire::Asset,
@@ -270,9 +270,28 @@ impl Tx<'_> {
             .intended
             .iter()
             .filter_map(|v| v.field.as_ref())
-            .filter(|v| known_field(&v.name))
+            .filter(|v| {
+                known_field(&v.name)
+                    || matches!(v.value, Some(field::Value::Equipment(_)))
+                    || (kind == K::Device
+                        && omloom_contracts::equipment::FIELDS.contains(&v.name.as_str()))
+            })
         {
-            validate_field(asset.kind, field)?;
+            self.validate_field(asset.kind, field)?;
+        }
+        for field in asset
+            .imported
+            .iter()
+            .chain(&asset.observed)
+            .filter_map(|o| o.evidence.as_ref())
+            .flat_map(|e| &e.fields)
+            .filter(|v| {
+                matches!(v.value, Some(field::Value::Equipment(_)))
+                    || (kind == K::Device
+                        && omloom_contracts::equipment::FIELDS.contains(&v.name.as_str()))
+            })
+        {
+            self.validate_field(asset.kind, field)?;
         }
         self.validate_software_changes(target, kind, Changes::Full(&asset.intended))
     }

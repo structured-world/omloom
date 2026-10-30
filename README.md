@@ -33,6 +33,9 @@ selected external-account references and durable owner-action requests. These
 records do not grant infrastructure or credential access.
 It also supports [software installations and workloads](docs/inventory.md#software-and-workloads)
 as current inventory, independently of discovery or execution adapters.
+Devices can retain [partial equipment knowledge](docs/inventory.md#partly-identified-equipment),
+including bounded quantities, model alternatives and supported exclusions,
+then be refined without changing their identity.
 
 ## License
 

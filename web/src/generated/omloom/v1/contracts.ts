@@ -158,6 +158,212 @@ export interface Field {
          */
         clear: NullValue;
     } | {
+        oneofKind: "equipment";
+        /**
+         * Current equipment assertion, not identity adoption or operational proof.
+         * At most 8192 encoded bytes, subject to the same field/source authority as scalars.
+         *
+         * @generated from protobuf field: omloom.v1.EquipmentClaim equipment = 6
+         */
+        equipment: EquipmentClaim;
+    } | {
+        oneofKind: undefined;
+    };
+}
+/**
+ * Exact external/private reference supplied by the operator or source. No lookup,
+ * grant or catalog acquisition is implied by accepting this reference.
+ *
+ * @generated from protobuf message omloom.v1.EquipmentReference
+ */
+export interface EquipmentReference {
+    /**
+     * Source namespace, max 160 bytes; private definitions identify their owner.
+     *
+     * @generated from protobuf field: string issuer = 1
+     */
+    issuer: string;
+    /**
+     * Opaque model/variant key within that namespace, max 160 bytes.
+     *
+     * @generated from protobuf field: string key = 2
+     */
+    key: string;
+    /**
+     * Exact interpretation revision, max 160 bytes; never implicit latest.
+     *
+     * @generated from protobuf field: string basis = 3
+     */
+    basis: string;
+}
+/**
+ * @generated from protobuf message omloom.v1.QuantityRange
+ */
+export interface QuantityRange {
+    /**
+     * Observed lower bound in fixed-point units; absent means unknown.
+     *
+     * @generated from protobuf field: optional sint64 lower = 1
+     */
+    lower?: bigint;
+    /**
+     * Observed upper bound in the same units; absent does not mean zero.
+     *
+     * @generated from protobuf field: optional sint64 upper = 2
+     */
+    upper?: bigint;
+    /**
+     * Explicit unit: count, mm, g or W. No conversion is inferred from a model.
+     *
+     * @generated from protobuf field: string unit = 3
+     */
+    unit: string;
+    /**
+     * Decimal places of the integer bounds, 0..6; count requires zero. This is
+     * numeric scale, not measurement precision; storage removes shared trailing zeros.
+     *
+     * @generated from protobuf field: uint32 scale = 4
+     */
+    scale: number;
+}
+/**
+ * @generated from protobuf message omloom.v1.EquipmentAlternative
+ */
+export interface EquipmentAlternative {
+    /**
+     * Candidate label for one classification axis, max 160 bytes.
+     *
+     * @generated from protobuf field: string value = 1
+     */
+    value: string;
+    /**
+     * Optional exact source-qualified model reference; label equality is not identity.
+     *
+     * @generated from protobuf field: optional omloom.v1.EquipmentReference reference = 2
+     */
+    reference?: EquipmentReference;
+    /**
+     * Attributed probability in millionths, 0..1000000, requiring a domain and
+     * calibration basis on the containing set. Never grants operational authority.
+     *
+     * @generated from protobuf field: optional uint32 probability_ppm = 3
+     */
+    probabilityPpm?: number;
+    /**
+     * Uncalibrated normalized score in millionths, not a probability. Mutually
+     * exclusive with probability_ppm across this entire candidate set.
+     *
+     * @generated from protobuf field: optional uint32 score_ppm = 4
+     */
+    scorePpm?: number;
+}
+/**
+ * @generated from protobuf message omloom.v1.EquipmentExclusion
+ */
+export interface EquipmentExclusion {
+    /**
+     * Excluded value on the current axis, max 160 bytes.
+     *
+     * @generated from protobuf field: string value = 1
+     */
+    value: string;
+    /**
+     * Optional exact source-qualified reference to the excluded model.
+     *
+     * @generated from protobuf field: optional omloom.v1.EquipmentReference reference = 2
+     */
+    reference?: EquipmentReference;
+    /**
+     * Discriminating evidence, max 512 bytes; low score alone is insufficient.
+     *
+     * @generated from protobuf field: string reason = 3
+     */
+    reason: string;
+    /**
+     * Observed coverage supporting this exclusion, max 256 bytes.
+     *
+     * @generated from protobuf field: string coverage = 4
+     */
+    coverage: string;
+}
+/**
+ * @generated from protobuf message omloom.v1.EquipmentAlternatives
+ */
+export interface EquipmentAlternatives {
+    /**
+     * At most 16 current candidates. Order carries no preference or identity.
+     *
+     * @generated from protobuf field: repeated omloom.v1.EquipmentAlternative candidates = 1
+     */
+    candidates: EquipmentAlternative[];
+    /**
+     * At most 16 current supported exclusions, independently of candidate rank.
+     *
+     * @generated from protobuf field: repeated omloom.v1.EquipmentExclusion excluded = 2
+     */
+    excluded: EquipmentExclusion[];
+    /**
+     * Explicit claim that the domain is exhaustive; top-k defaults to incomplete.
+     *
+     * @generated from protobuf field: bool exhaustive = 3
+     */
+    exhaustive: boolean;
+    /**
+     * Hypothesis domain, max 256 bytes, required for numeric confidence.
+     *
+     * @generated from protobuf field: string domain = 4
+     */
+    domain: string;
+    /**
+     * Attributed producer/calibration revision, max 256 bytes, required for
+     * probabilities. Recording it does not certify the producer's calibration.
+     *
+     * @generated from protobuf field: optional string calibration_basis = 5
+     */
+    calibrationBasis?: string;
+    /**
+     * Other/unknown probability, required for probability sets. Candidate mass
+     * plus this value equals 1000000; incomplete sets retain positive unknown mass.
+     *
+     * @generated from protobuf field: optional uint32 residual_ppm = 6
+     */
+    residualPpm?: number;
+}
+/**
+ * @generated from protobuf message omloom.v1.EquipmentClaim
+ */
+export interface EquipmentClaim {
+    /**
+     * Relevant observation or reviewed manual basis, max 512 bytes. Source identity,
+     * time and authority stay with the enclosing existing field/evidence record.
+     *
+     * @generated from protobuf field: string basis = 1
+     */
+    basis: string;
+    /**
+     * One current typed assertion. Known text/integer fields retain scalar encoding.
+     *
+     * @generated from protobuf oneof: assertion
+     */
+    assertion: {
+        oneofKind: "quantity";
+        /**
+         * @generated from protobuf field: omloom.v1.QuantityRange quantity = 2
+         */
+        quantity: QuantityRange;
+    } | {
+        oneofKind: "model";
+        /**
+         * @generated from protobuf field: omloom.v1.EquipmentReference model = 3
+         */
+        model: EquipmentReference;
+    } | {
+        oneofKind: "alternatives";
+        /**
+         * @generated from protobuf field: omloom.v1.EquipmentAlternatives alternatives = 4
+         */
+        alternatives: EquipmentAlternatives;
+    } | {
         oneofKind: undefined;
     };
 }
@@ -1228,7 +1434,8 @@ class Field$Type extends MessageType<Field> {
             { no: 2, name: "text", kind: "scalar", oneof: "value", T: 9 /*ScalarType.STRING*/ },
             { no: 3, name: "integer", kind: "scalar", oneof: "value", T: 18 /*ScalarType.SINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 4, name: "flag", kind: "scalar", oneof: "value", T: 8 /*ScalarType.BOOL*/ },
-            { no: 5, name: "clear", kind: "enum", oneof: "value", T: () => ["omloom.v1.NullValue", NullValue] }
+            { no: 5, name: "clear", kind: "enum", oneof: "value", T: () => ["omloom.v1.NullValue", NullValue] },
+            { no: 6, name: "equipment", kind: "message", oneof: "value", T: () => EquipmentClaim }
         ]);
     }
 }
@@ -1236,6 +1443,97 @@ class Field$Type extends MessageType<Field> {
  * @generated MessageType for protobuf message omloom.v1.Field
  */
 export const Field = new Field$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class EquipmentReference$Type extends MessageType<EquipmentReference> {
+    constructor() {
+        super("omloom.v1.EquipmentReference", [
+            { no: 1, name: "issuer", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "key", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "basis", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.v1.EquipmentReference
+ */
+export const EquipmentReference = new EquipmentReference$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class QuantityRange$Type extends MessageType<QuantityRange> {
+    constructor() {
+        super("omloom.v1.QuantityRange", [
+            { no: 1, name: "lower", kind: "scalar", opt: true, T: 18 /*ScalarType.SINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 2, name: "upper", kind: "scalar", opt: true, T: 18 /*ScalarType.SINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 3, name: "unit", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "scale", kind: "scalar", T: 13 /*ScalarType.UINT32*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.v1.QuantityRange
+ */
+export const QuantityRange = new QuantityRange$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class EquipmentAlternative$Type extends MessageType<EquipmentAlternative> {
+    constructor() {
+        super("omloom.v1.EquipmentAlternative", [
+            { no: 1, name: "value", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "reference", kind: "message", T: () => EquipmentReference },
+            { no: 3, name: "probability_ppm", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ },
+            { no: 4, name: "score_ppm", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.v1.EquipmentAlternative
+ */
+export const EquipmentAlternative = new EquipmentAlternative$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class EquipmentExclusion$Type extends MessageType<EquipmentExclusion> {
+    constructor() {
+        super("omloom.v1.EquipmentExclusion", [
+            { no: 1, name: "value", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "reference", kind: "message", T: () => EquipmentReference },
+            { no: 3, name: "reason", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "coverage", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.v1.EquipmentExclusion
+ */
+export const EquipmentExclusion = new EquipmentExclusion$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class EquipmentAlternatives$Type extends MessageType<EquipmentAlternatives> {
+    constructor() {
+        super("omloom.v1.EquipmentAlternatives", [
+            { no: 1, name: "candidates", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => EquipmentAlternative },
+            { no: 2, name: "excluded", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => EquipmentExclusion },
+            { no: 3, name: "exhaustive", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 4, name: "domain", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 5, name: "calibration_basis", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 6, name: "residual_ppm", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.v1.EquipmentAlternatives
+ */
+export const EquipmentAlternatives = new EquipmentAlternatives$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class EquipmentClaim$Type extends MessageType<EquipmentClaim> {
+    constructor() {
+        super("omloom.v1.EquipmentClaim", [
+            { no: 1, name: "basis", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "quantity", kind: "message", oneof: "assertion", T: () => QuantityRange },
+            { no: 3, name: "model", kind: "message", oneof: "assertion", T: () => EquipmentReference },
+            { no: 4, name: "alternatives", kind: "message", oneof: "assertion", T: () => EquipmentAlternatives }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.v1.EquipmentClaim
+ */
+export const EquipmentClaim = new EquipmentClaim$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class IntendedField$Type extends MessageType<IntendedField> {
     constructor() {

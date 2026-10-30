@@ -107,5 +107,44 @@ fn retrieval(c: &mut Criterion) {
     }
     group.finish();
 }
-criterion_group!(benches, retrieval);
+fn equipment_claim(c: &mut Criterion) {
+    // Measure bounded semantic comparison inputs, including order normalization.
+    let mut group = c.benchmark_group("equipment_claim");
+    group
+        .sample_size(10)
+        .warm_up_time(Duration::from_millis(100))
+        .measurement_time(Duration::from_millis(250));
+    for count in [1, 16] {
+        for reverse in [false, true] {
+            let mut alternatives = wire::EquipmentAlternatives {
+                candidates: (0..count)
+                    .map(|i| wire::EquipmentAlternative {
+                        value: format!("Candidate-{i:02}"),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            };
+            if reverse {
+                alternatives.candidates.reverse();
+            }
+            let claim = wire::EquipmentClaim {
+                basis: "Reviewed chassis label".into(),
+                assertion: Some(wire::equipment_claim::Assertion::Alternatives(alternatives)),
+            };
+            group.bench_with_input(
+                BenchmarkId::new(if reverse { "reordered" } else { "canonical" }, count),
+                &claim,
+                |b, value| {
+                    b.iter(|| {
+                        omloom_contracts::equipment::encode(black_box(value))
+                            .expect("valid bounded claim")
+                    })
+                },
+            );
+        }
+    }
+    group.finish();
+}
+criterion_group!(benches, retrieval, equipment_claim);
 criterion_main!(benches);

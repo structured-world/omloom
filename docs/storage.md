@@ -10,7 +10,7 @@ synthetic contexts for test-owned data. These qualify application projection
 without claiming identity-provider enforcement.
 
 The backend pins CoordiNode Git revision
-`1862962a3da20e5e57d7ab5126e69bd5817d7c61` and a consumer lockfile. This source
+`1d0e00f714d669c092879fd3494a8b67f361556f` and a consumer lockfile. This source
 revision includes nullable Boolean, correlated lookup and edge-orientation
 corrections required by inventory queries. It is not a published embedded release. Its
 filesystem capability requires the `std` feature. Policy types also compile
@@ -29,6 +29,22 @@ remain unchanged. Reattesting an unchanged value updates its freshness row
 without rewriting the value or incrementing the accepted intent revision.
 Explicit clears remain claims. Different sources never overwrite each other.
 Repeated identical input and retrieval do not create application history.
+
+Equipment uncertainty is one bounded typed value on its existing current field
+row. Its actual consumer is scoped inspection/refinement, source reconciliation
+and lossless export. The field envelope retains source, authority and revisions;
+the claim retains only necessary basis, quantities, references and alternatives.
+Canonical candidate/exclusion ordering and fixed-point scale normalization prevent
+representation-only rewrites. The bounded
+protobuf payload has no candidate index or second model inventory. Scalar known
+values keep their existing representation. A changed assertion replaces only
+that current field; deletion and required audit detail follow existing lifecycle
+and retention. Physical reclamation remains subject to the backend's separately
+qualified guarantees.
+
+Format 14 adds this value representation. Opening format 13 preserves definite
+inventory without creating hypothesis rows and advances the format marker
+transactionally. Older binaries reject format 14 rather than misread new values.
 
 Resource responsibility adds at most five current assignment rows per asset.
 Only explicit assignments have an issuer/subject lookup digest, used by the
@@ -108,8 +124,8 @@ envelope, but are **application accounting**, not total filesystem allocation.
 Pinned detail and unresolved work count against their budgets. Admission fails
 atomically when it cannot fit; it does not evict safety state.
 
-This unreleased storage format uses schema version 13. Supported versions 2
-through 12 upgrade in bounded restartable batches, including asset name/sort
+This unreleased storage format uses schema version 14. Supported versions 2
+through 13 upgrade in bounded restartable batches, including asset name/sort
 projections from accepted intent, normalized IP
 ordering and source-scoped current observation facts with separate freshness
 and accounting. No inventory history is added. The upgrade keeps restore fences

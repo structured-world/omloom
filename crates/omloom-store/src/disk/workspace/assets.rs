@@ -1179,19 +1179,13 @@ impl Store {
             }
             return Ok(detail);
         }
-        let asset = self.asset(target)?;
-        if asset.adoption != wire::Adoption::Adopted as i32 {
-            return Err(Error::Missing);
-        }
-        if !context.readable(target, asset.kind) {
-            return Err(Error::Denied);
-        }
-        let mut fields: Vec<_> = asset
-            .intended
-            .into_iter()
-            .filter_map(|f| f.field)
-            .filter(|f| context.field(target, asset.kind, &f.name, false))
-            .collect();
+        let row = tx.visible_asset(context, target)?;
+        let kind = number(&row, "kind")? as i32;
+        let asset =
+            inventory::asset_projection(target, &row, &tx.children(&asset_key(target))?, |name| {
+                context.field(target, kind, name, false)
+            })?;
+        let mut fields: Vec<_> = asset.intended.into_iter().filter_map(|f| f.field).collect();
         let mut relations = Vec::new();
         let mut related_keys = BTreeSet::new();
         let RelationPage {
@@ -1262,22 +1256,6 @@ impl Store {
                 fields,
             });
         }
-        let redact = |observations: Vec<wire::Observation>| {
-            observations
-                .into_iter()
-                .filter_map(|mut o| {
-                    let evidence = o.evidence.as_mut()?;
-                    evidence
-                        .fields
-                        .retain(|f| context.field(target, asset.kind, &f.name, false));
-                    if evidence.fields.is_empty() {
-                        None
-                    } else {
-                        Some(o)
-                    }
-                })
-                .collect()
-        };
         let (participants, participants_complete, group) =
             self.workspace_network_fields(context, target, asset.kind, &mut fields)?;
         let current_addresses = if read.relations_cursor.is_none() {
@@ -1293,8 +1271,8 @@ impl Store {
                 fields,
             }),
             relations,
-            observed: redact(asset.observed),
-            imported: redact(asset.imported),
+            observed: asset.observed,
+            imported: asset.imported,
             participants,
             participants_complete,
             group,
@@ -1947,6 +1925,7 @@ pub(super) fn validate_column(name: &str, definitions: &[api::Definition]) -> Re
     ]
     .contains(&name)
         || software::known_field(name)
+        || omloom_contracts::equipment::FIELDS.contains(&name)
         || definitions.iter().any(|d| d.id == name && !d.retired)
     {
         Ok(())

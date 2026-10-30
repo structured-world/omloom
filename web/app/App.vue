@@ -9,6 +9,7 @@ import VmPlacement from './VmPlacement.vue';
 import ResponsibilityPanel from './ResponsibilityPanel.vue';
 import AccountPanel from './AccountPanel.vue';
 import { softwareFields } from './software-fields';
+import { equipmentFields } from './equipment-fields';
 import { ref, computed, watch, onMounted, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import type { LocationQuery } from 'vue-router';
@@ -31,7 +32,7 @@ const editor = ref<'' | 'asset' | 'schema' | 'import' | 'host-import' | 'view' |
 const initialKind = computed(() => query.value.kinds.length===1 ? query.value.kinds[0] as K : ({ [model.View.OVERVIEW]: K.DEVICE, [model.View.NETWORK]: K.ADDRESS_REFERENCE, [model.View.HARDWARE]: K.DEVICE, [model.View.VIRTUALIZATION]: K.VIRTUAL_MACHINE, [model.View.SERVICES]: K.SERVICE })[query.value.view]);
 const kindOptions = kinds.map(k => ({ id: String(k), name: label(k) }));
 const columnOptions = computed(() => {
-  const options = [{ id: 'name', name: 'Name' }, { id: 'dns_name', name: 'DNS name' }, { id: 'description', name: 'Description' }, { id: 'serial', name: 'Serial number' }, ...softwareFields(), ...definitions.value.filter(d => !d.retired)];
+  const options = [{ id: 'name', name: 'Name' }, { id: 'dns_name', name: 'DNS name' }, { id: 'description', name: 'Description' }, { id: 'serial', name: 'Serial number' }, ...equipmentFields.map(id=>({id,name:id.replaceAll('_',' ')})), ...softwareFields().filter(f=>!equipmentFields.includes(f.id)), ...definitions.value.filter(d => !d.retired)];
   for (const id of query.value.columns) if (!options.some(o => o.id === id)) options.push({ id, name: `${id} (unavailable)` });
   return options;
 });

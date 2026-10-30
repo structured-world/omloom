@@ -36,6 +36,31 @@ export function input(field: Field | undefined): string {
   if (v.oneofKind === 'clear') return '';
   if (v.oneofKind === 'text') return v.text;
   if (v.oneofKind === 'integer') return String(v.integer);
+  if (v.oneofKind === 'equipment') {
+    const claim=v.equipment;const a=claim.assertion;
+    let value='Unresolved';
+    if(a.oneofKind==='quantity'){
+      const q=a.quantity;
+      const number=(n:bigint|undefined)=>{
+        if(n===undefined)return '?';const s=n.toString().padStart(q.scale+1,'0');
+        return q.scale ? s.slice(0,-q.scale)+'.'+s.slice(-q.scale):s;
+      };
+      const unit=field?.name==='drive_bays'?'bays':q.unit;
+      if(q.upper===undefined)value=`At least ${number(q.lower)} ${unit}; ${unit==='bays'?'total':'upper bound'} unknown`;
+      else if(q.lower===undefined)value=`At most ${number(q.upper)} ${unit}; lower bound unknown`;
+      else if(q.lower===q.upper)value=`Known: ${number(q.lower)} ${unit}`;
+      else value=`Known range: ${number(q.lower)}–${number(q.upper)} ${unit}`;
+    }else if(a.oneofKind==='model')value=`Known reference: ${a.model.issuer} / ${a.model.key} (${a.model.basis})`;
+    else if(a.oneofKind==='alternatives'){
+      const set=a.alternatives;
+      const reference=(r:import('../src/generated/omloom/v1/contracts').EquipmentReference|undefined)=>r?` [${r.issuer} / ${r.key} (${r.basis})]`:'';
+      const possible=set.candidates.map(c=>c.value+reference(c.reference)+(c.probabilityPpm!==undefined?` (attributed probability ${c.probabilityPpm/10000}%)`:c.scorePpm!==undefined?` (uncalibrated score ${c.scorePpm/1000000})`:''));
+      const excluded=set.excluded.map(e=>`${e.value}${reference(e.reference)}, because ${e.reason}; coverage: ${e.coverage}`);
+      const conflict=set.candidates.some(c=>set.excluded.some(e=>e.value===c.value&&reference(e.reference)===reference(c.reference)));
+      value=[possible.length?'Possible: '+possible.join(', '):'',excluded.length?'Excluded: '+excluded.join('; '):'',set.exhaustive?'Declared complete domain':'Incomplete alternatives; other models remain unknown',set.residualPpm!==undefined?`Unknown probability: ${set.residualPpm/10000}%`:'',set.domain?`Domain: ${set.domain}`:'',set.calibrationBasis?`Attributed calibration: ${set.calibrationBasis}`:'',conflict?'Conflicting claims require review':''].filter(Boolean).join(' · ');
+    }
+    return `${value} · Basis: ${claim.basis}`;
+  }
   return String(v.flag);
 }
 export function key(target: AssetRef | undefined): string { return target ? `${target.assetId}/${target.incarnation}` : ''; }
