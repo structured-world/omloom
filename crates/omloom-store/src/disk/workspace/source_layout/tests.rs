@@ -254,7 +254,7 @@ fn identity_lookup_upgrade_preserves_restore_fence_and_evidence() -> TestResult 
     let store = Store::open(dir.path(), policy())?;
     let tx = store.begin()?;
     assert_eq!(tx.root.get("restored"), Some(&Value::Bool(true)));
-    assert_eq!(number(&tx.root, "schema")?, 13);
+    assert_eq!(number(&tx.root, "schema")?, SCHEMA_VERSION);
     let row = tx.get("host-identity/legacy")?.ok_or(Error::Corrupt)?;
     assert_eq!(number(&row, "observed")?, 100);
     assert_eq!(

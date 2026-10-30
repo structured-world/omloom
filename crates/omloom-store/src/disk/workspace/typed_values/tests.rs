@@ -97,7 +97,10 @@ fn typed_values_upgrade_format_twelve_schema_and_backup()
     let restored_dir = tempfile::tempdir()?;
     let restored = Store::restore(restored_dir.path(), &backup, policy, backup.len() as u64)?;
     for store in [opened, restored] {
-        assert_eq!(number(&store.read(ROOT)?.ok_or("root")?, "schema")?, 13);
+        assert_eq!(
+            number(&store.read(ROOT)?.ok_or("root")?, "schema")?,
+            SCHEMA_VERSION
+        );
         let legacy = store.read("legacy-route")?.ok_or("route")?;
         assert_eq!(string(&legacy, "contact")?, "Ask the owner");
         assert_eq!(
