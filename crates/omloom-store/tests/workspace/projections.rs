@@ -857,6 +857,16 @@ fn level_browse_small_estate_has_bounded_latency() -> TestResult {
             expr.for_each_subplan_mut(&mut |subplan| nested.push(subplan.explain()));
         });
         assert_eq!(nested.len(), 2, "both ownership probes must be checked");
+        for plan in &nested {
+            let relation_filter = plan
+                .find("Filter(In { item: Property { base: Variable(\"r\"), key: \"kind\" }")
+                .expect("relation kind must be filtered before fetching its parent");
+            let traversal = plan.rfind("Traverse(").expect("parent traversal");
+            assert!(
+                relation_filter > traversal,
+                "filter must feed the traversal: {plan}"
+            );
+        }
         let plan = nested.join("\n");
         for index in ["omloom_asset(asset)", "omloom_to_asset(to_asset)"] {
             assert_eq!(

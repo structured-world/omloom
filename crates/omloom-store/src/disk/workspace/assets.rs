@@ -13,11 +13,10 @@ fn parameter(values: &mut HashMap<String, Value>, value: Value) -> String {
     format!("${name}")
 }
 
-// Use the same typed ownership rules as creation; peer links never form levels.
-pub(super) fn ownership_clause(
+fn ownership_groups(
     reverse_only: Option<bool>,
     child_kinds: &[wire::AssetKind],
-) -> String {
+) -> BTreeMap<(i32, bool, i32), Vec<i32>> {
     use wire::AssetKind as K;
     let kinds = [
         K::Site,
@@ -54,6 +53,15 @@ pub(super) fn ownership_clause(
             }
         }
     }
+    groups
+}
+
+// Use the same typed ownership rules as creation; peer links never form levels.
+pub(super) fn ownership_clause(
+    reverse_only: Option<bool>,
+    child_kinds: &[wire::AssetKind],
+) -> String {
+    let groups = ownership_groups(reverse_only, child_kinds);
     let mut terms = Vec::new();
     for ((relation, reverse, parent), children) in groups {
         let owner = if reverse {
@@ -570,13 +578,16 @@ impl Store {
                 clauses.clear();
                 // Probe indexed relation endpoints directly; repeating a resource
                 // probe adds a join before reaching the same adjacent relation.
-                for (reverse, path) in [
-                    (
-                        false,
-                        "(r:OmRow {to_asset:a.asset})<-[:OmRelationFrom]-(p:OmRow)",
-                    ),
-                    (true, "(r:OmRow {asset:a.asset})-[:OmRelationTo]->(p:OmRow)"),
+                for (reverse, endpoint, path) in [
+                    (false, "to_asset", "(r)<-[:OmRelationFrom]-(p:OmRow)"),
+                    (true, "asset", "(r)-[:OmRelationTo]->(p:OmRow)"),
                 ] {
+                    let relation_kinds = ownership_groups(Some(reverse), &child_kinds)
+                        .keys()
+                        .map(|(kind, _, _)| *kind)
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect::<Vec<_>>();
                     let mut owner =
                         browse_clause(context, &mut values, Some(reverse), &child_kinds);
                     if view == api::View::Virtualization {
@@ -610,7 +621,7 @@ impl Store {
                         "forward_owned"
                     };
                     predicate_joins.push(format!(
-                        " WITH {}, EXISTS {{ MATCH {path} WHERE {owner} }} AS {flag}",
+                        " WITH {}, EXISTS {{ MATCH (r:OmRow {{{endpoint}:a.asset}}) WHERE r.kind IN {relation_kinds:?} MATCH {path} WHERE {owner} }} AS {flag}",
                         bindings.join(", ")
                     ));
                     if reverse {
