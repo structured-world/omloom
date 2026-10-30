@@ -433,6 +433,44 @@ fn migration_keeps_guest_components_and_accepts_a_separate_ip_change() -> TestRe
     Ok(())
 }
 
+// Losing the old host's role must not prevent reviewing a move to an eligible
+// destination. Preparation still shows the actual old host and writes nothing.
+#[test]
+fn placement_review_allows_move_away_from_ineligible_current_host() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let guest = create(&store, &operator(), K::VirtualMachine, "Guest")?;
+    let first = hypervisor(&store, "First host")?;
+    let second = hypervisor(&store, "Second host")?;
+    place(&store, &guest, &first)?;
+    call(
+        &store,
+        &operator(),
+        Command::Write(api::Write {
+            target: Some(first.clone()),
+            expected: Some(store.asset(AssetRef::try_from(&first)?)?.revision),
+            kind: K::SoftwareInstallation as i32,
+            changes: vec![text_field(
+                "virtualization_role",
+                "VIRTUALIZATION_ROLE_NOT_HYPERVISOR",
+            )],
+            ..Default::default()
+        }),
+    )?;
+    let usage = store.usage()?;
+    let review = prepare(&store, &operator(), &guest, Some(&second))?;
+    assert_eq!(
+        review.current_host.as_ref().and_then(|i| i.target.as_ref()),
+        Some(&first)
+    );
+    assert_eq!(
+        review.destination.as_ref().and_then(|i| i.target.as_ref()),
+        Some(&second)
+    );
+    assert_eq!(store.usage()?, usage);
+    Ok(())
+}
+
 // A caller cannot disguise a hidden old host as "unplaced", use a local VM
 // context for peer placement, or apply an obsolete role/revision review.
 #[test]
