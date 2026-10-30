@@ -88,6 +88,9 @@ Machine CSV preserves claims as `equipment/claim/v1:` followed by hexadecimal
 protobuf `EquipmentClaim` bytes. Ordinary known values remain readable text;
 equipment text colliding with reserved markers exports as `equipment/text/v1:`
 followed by UTF-8 hex.
+Empty device equipment cells are omitted: unknown facts stay absent and existing
+values are preserved. Use `<clear>` for an explicit clear; a zero bay count is a
+supplied value.
 Ordinary text and bay counts can also be entered directly in an import. Preview
 and ordinary field validation apply before accepting imported claims.
 

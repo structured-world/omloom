@@ -994,12 +994,30 @@ impl Store {
         if fields.len() > MAX_PAGE * MAX_FIELDS {
             return Err(Error::Limit);
         }
+        let owners = rows
+            .iter()
+            .map(|row| {
+                let key = row
+                    .get("key")
+                    .and_then(Value::as_str)
+                    .ok_or(Error::Corrupt)?;
+                Ok((key, (target(row)?, number(row, "kind")? as i32)))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
         let mut grouped: BTreeMap<String, Vec<wire::Field>> = BTreeMap::new();
         for f in &fields {
             let key = f
                 .get("parent")
                 .and_then(Value::as_str)
                 .ok_or(Error::Corrupt)?;
+            let (owner, kind) = owners.get(key).ok_or(Error::Corrupt)?;
+            let name = f
+                .get("field")
+                .and_then(Value::as_str)
+                .ok_or(Error::Corrupt)?;
+            if !context.field(*owner, *kind, name, false) {
+                continue;
+            }
             grouped
                 .entry(key.to_owned())
                 .or_default()
@@ -1056,10 +1074,9 @@ impl Store {
             {
                 values.extend(network::projection(settings, &["vrid".into()])?);
             }
-            if let Some(root) = rows.iter().find(|p| p.get("key") == Some(&text(&key))) {
-                let kind = number(root, "kind")? as i32;
+            if let Some((_, kind)) = owners.get(key.as_str()) {
                 for value in values {
-                    if context.field(owner, kind, &value.name, false) {
+                    if context.field(owner, *kind, &value.name, false) {
                         grouped.entry(key.clone()).or_default().push(value);
                     }
                 }
@@ -1073,12 +1090,7 @@ impl Store {
                 .get("key")
                 .and_then(Value::as_str)
                 .ok_or(Error::Corrupt)?;
-            let fields = grouped
-                .remove(key)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|f| context.field(target, kind, &f.name, false))
-                .collect();
+            let fields = grouped.remove(key).unwrap_or_default();
             items.push(api::Item {
                 target: Some(target_wire(target)),
                 kind,

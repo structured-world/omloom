@@ -1,6 +1,6 @@
 import { GrpcWebFetchTransport } from '@protobuf-ts/grpcweb-transport';
 import { Request, Workspace, FieldType, type Reply, type WorkingContext } from '../src/generated/omloom/v1/workspace';
-import { AssetKind, NullValue, type Field, type AssetRef, type EquipmentAlternative, type EquipmentExclusion } from '../src/generated/omloom/v1/contracts';
+import { AssetKind, NullValue, type Field, type AssetRef, type EquipmentAlternative, type EquipmentExclusion, type EquipmentReference } from '../src/generated/omloom/v1/contracts';
 import { softwareChoiceLabel } from './software-fields';
 export * as model from '../src/generated/omloom/v1/workspace';
 export { AssetKind, RelationKind, NullValue, OperationState, EffectOutcome } from '../src/generated/omloom/v1/contracts';
@@ -30,8 +30,12 @@ export function display(field: Field | undefined): string {
   if (field?.value.oneofKind === 'text' && field.value.text === '') return '(empty)';
   return field ? softwareChoiceLabel(field.name, input(field)) : '';
 }
+function referenceLabel(value:EquipmentReference):string {
+  return `issuer: ${JSON.stringify(value.issuer)}; key: ${JSON.stringify(value.key)}; basis: ${JSON.stringify(value.basis)}`;
+}
 export function input(field: Field | undefined): string {
-  const v = field?.value;
+  if (!field) return '';
+  const v = field.value;
   if (!v || !v.oneofKind) return '';
   if (v.oneofKind === 'clear') return '';
   if (v.oneofKind === 'text') return v.text;
@@ -50,10 +54,10 @@ export function input(field: Field | undefined): string {
       else if(q.lower===undefined)value=`At most ${number(q.upper)} ${unit}; lower bound unknown`;
       else if(q.lower===q.upper)value=`Known: ${number(q.lower)} ${unit}`;
       else value=`Known range: ${number(q.lower)}–${number(q.upper)} ${unit}`;
-    }else if(a.oneofKind==='model')value=`Known reference: ${a.model.issuer} / ${a.model.key} (${a.model.basis})`;
+    }else if(a.oneofKind==='model')value=`Known reference: ${referenceLabel(a.model)}`;
     else if(a.oneofKind==='alternatives'){
       const set=a.alternatives;
-      const reference=(r:import('../src/generated/omloom/v1/contracts').EquipmentReference|undefined)=>r?` [${r.issuer} / ${r.key} (${r.basis})]`:'';
+      const reference=(r:EquipmentReference|undefined)=>r?` [${referenceLabel(r)}]`:'';
       const possible=set.candidates.map(c=>c.value+reference(c.reference)+(c.probabilityPpm!==undefined?` (attributed probability ${c.probabilityPpm/10000}%)`:c.scorePpm!==undefined?` (uncalibrated score ${c.scorePpm/1000000})`:''));
       const excluded=set.excluded.map(e=>`${e.value}${reference(e.reference)}, because ${e.reason}; coverage: ${e.coverage}`);
       const same=(a:EquipmentAlternative|EquipmentExclusion,b:EquipmentAlternative|EquipmentExclusion)=>{
@@ -61,7 +65,7 @@ export function input(field: Field | undefined): string {
         return a.reference===undefined&&b.reference===undefined&&a.value===b.value;
       };
       const conflict=set.candidates.some(c=>set.excluded.some(e=>same(c,e)));
-      value=[possible.length?'Possible: '+possible.join(', '):'',excluded.length?'Excluded: '+excluded.join('; '):'',set.exhaustive?'Declared complete domain':'Incomplete alternatives; other models remain unknown',set.residualPpm!==undefined?`Unknown probability: ${set.residualPpm/10000}%`:'',set.domain?`Domain: ${set.domain}`:'',set.calibrationBasis?`Attributed calibration: ${set.calibrationBasis}`:'',conflict?'Conflicting claims require review':''].filter(Boolean).join(' · ');
+      value=[possible.length?'Possible: '+possible.join(', '):'',excluded.length?'Excluded: '+excluded.join('; '):'',set.exhaustive?'Declared complete domain':`Incomplete alternatives; other ${field.name.replaceAll('_',' ')} values remain unknown`,set.residualPpm!==undefined?`Unknown probability: ${set.residualPpm/10000}%`:'',set.domain?`Domain: ${set.domain}`:'',set.calibrationBasis?`Attributed calibration: ${set.calibrationBasis}`:'',conflict?'Conflicting claims require review':''].filter(Boolean).join(' · ');
     }
     return `${value} · Basis: ${claim.basis}`;
   }

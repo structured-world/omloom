@@ -250,27 +250,21 @@ impl Store {
                     .map(|p| number(p, "revision"))
                     .transpose()?;
                 let write_target = target.unwrap_or_else(new_target);
-                let fields: Vec<_> = mapping
-                    .iter()
-                    .map(|(index, name)| {
-                        diagnostic =
-                            format!("column '{}'", headers.get(*index).ok_or(Error::Invalid)?);
-                        let field = csv_value(
-                            name,
-                            line.get(*index).ok_or(Error::Invalid)?,
-                            &definitions,
-                            &claim_budget,
-                            &mut claim_inputs,
-                        )?;
-                        tx.require_changes(
-                            context,
-                            write_target,
-                            kind,
-                            std::slice::from_ref(&field),
-                        )?;
-                        Ok(field)
-                    })
-                    .collect::<Result<_>>()?;
+                let mut fields = Vec::with_capacity(mapping.len());
+                for (index, name) in &mapping {
+                    diagnostic = format!("column '{}'", headers.get(*index).ok_or(Error::Invalid)?);
+                    let cell = line.get(*index).ok_or(Error::Invalid)?;
+                    if cell.is_empty()
+                        && typed_kind == wire::AssetKind::Device
+                        && omloom_contracts::equipment::FIELDS.contains(name)
+                    {
+                        continue;
+                    }
+                    let field =
+                        csv_value(name, cell, &definitions, &claim_budget, &mut claim_inputs)?;
+                    tx.require_changes(context, write_target, kind, std::slice::from_ref(&field))?;
+                    fields.push(field);
+                }
                 let change = api::Write {
                     target: target.map(target_wire),
                     expected,

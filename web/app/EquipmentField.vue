@@ -40,6 +40,12 @@ function numeric(event:Event,set:(value:number|undefined)=>void,places:number){
   if(!new RegExp(`^\\d+(\\.\\d{1,${places}})?$`).test(value)){error.value='Enter a nonnegative decimal value.';emit('valid',false);return;}
   const [whole,fraction='']=value.split('.');set(Number(whole+fraction.padEnd(places,'0')));changed();
 }
+function validateValueBytes(value:EquipmentAlternatives){
+  const encoder=new TextEncoder();const scratch=new Uint8Array(160);
+  function check(text:string){if(encoder.encodeInto(text,scratch).read!==text.length)throw Error('Enter at most 160 UTF-8 bytes for each possible or excluded value.');}
+  for(const candidate of value.candidates)check(candidate.value);
+  for(const exclusion of value.excluded)check(exclusion.value);
+}
 function changed(){
   error.value='';
   emit('valid',true);
@@ -58,6 +64,7 @@ function changed(){
     if(mode.value==='quantity')assertion={oneofKind:'quantity',quantity:quantity()};
     else if(mode.value==='model')assertion={oneofKind:'model',model:r.value};
     else {
+      validateValueBytes(alternatives.value);
       const set=EquipmentAlternatives.clone(alternatives.value);
       for(const c of set.candidates){if(confidence.value!=='probability')c.probabilityPpm=undefined;if(confidence.value!=='score')c.scorePpm=undefined;}
       if(confidence.value!=='probability'){set.calibrationBasis=undefined;set.residualPpm=undefined;}

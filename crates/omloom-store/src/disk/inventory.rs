@@ -385,6 +385,9 @@ impl Store {
             .collect::<Result<_>>()?;
         validate_evidence(asset, &children, &by_key)?;
         tx.validate_full_asset_fields(target, asset)?;
+        let kind_changed = old
+            .as_ref()
+            .is_some_and(|p| p.get("kind") != Some(&Value::Int(asset.kind.into())));
         let mut intent_changed = old.as_ref().is_none_or(|p| {
             p.get("kind") != Some(&Value::Int(asset.kind.into()))
                 || p.get("adoption") != Some(&Value::Int(asset.adoption.into()))
@@ -396,11 +399,14 @@ impl Store {
             let child = format!("{key}/intent/{}", field.name);
             keep.insert(child.clone());
             let previous = by_key.get(child.as_str()).copied();
-            if previous.is_some_and(|p| {
-                field_matches(field, p)
-                    && p.get("authority").and_then(Value::as_str)
+            let same_value = previous.is_some_and(|p| field_matches(field, p));
+            let same_claim = same_value
+                && previous.is_some_and(|p| {
+                    p.get("authority").and_then(Value::as_str)
                         == Some(intended.authority_id.as_str())
-            }) {
+                });
+            tx.validate_equipment_change(asset.kind, field, kind_changed || !same_claim)?;
+            if same_claim {
                 continue;
             }
             let mut p = field_props(field)?;
@@ -409,7 +415,7 @@ impl Store {
                     field.name.as_str(),
                     "runtime_object_id" | "runtime_lifetime"
                 )
-                && !previous.is_some_and(|p| field_matches(field, p))
+                && !same_value
             {
                 runtime_identity_changed = true;
             }
@@ -473,7 +479,9 @@ impl Store {
                 for field in &evidence.fields {
                     let child = format!("{key}/{layer}/{}/{}", evidence.source_id, field.name);
                     let previous = by_key.get(child.as_str()).copied();
-                    if !previous.is_some_and(|p| field_matches(field, p)) {
+                    let changed = !previous.is_some_and(|p| field_matches(field, p));
+                    tx.validate_equipment_change(asset.kind, field, kind_changed || changed)?;
+                    if changed {
                         let mut value = field_props(field)?;
                         value.extend(props([
                             ("layer", text(layer)),
