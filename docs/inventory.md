@@ -601,6 +601,9 @@ MAC as device identity.
 Optional local Docker and NetBird modules do not scan arbitrary software packages.
 Docker candidates distinguish runtime, workload, container lifetime and endpoint
 attachments. Docker Desktop guest addresses are not macOS host interfaces.
+Selected containers are inspected in one bounded batch. Missing, repeated or
+unexpected identities refuse that batch; only consumed container and attachment
+fields are requested. Windows socket collection avoids repeated array copies.
 The selected context or environment endpoint is resolved once using Docker's
 context precedence. All daemon reads pin that checked local Unix socket or
 Windows named pipe; remote endpoints are refused. Daemon identity is rechecked

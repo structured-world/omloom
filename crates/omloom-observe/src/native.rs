@@ -220,7 +220,7 @@ pub(super) async fn identity(runner: &mut Runner) -> Result<Identity> {
             })
         }
         "windows" => {
-            let result = ps(runner, "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $os=Get-CimInstance Win32_OperatingSystem; $cs=Get-CimInstance Win32_ComputerSystemProduct; @{source=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography').MachineGuid; boot=$os.LastBootUpTime.ToUniversalTime().ToString('o'); name=$cs.Name; hardware=$cs.UUID} | ConvertTo-Json -Compress").await?;
+            let result = ps(runner, "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $os=Get-CimInstance Win32_OperatingSystem -Property LastBootUpTime; $cs=Get-CimInstance Win32_ComputerSystemProduct -Property Name,UUID; @{source=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography').MachineGuid; boot=$os.LastBootUpTime.ToUniversalTime().ToString('o'); name=$cs.Name; hardware=$cs.UUID} | ConvertTo-Json -Compress").await?;
             let value = json(&result)?;
             Ok(Identity {
                 platform: "windows",
@@ -664,7 +664,7 @@ async fn sockets(runner: &mut Runner, report: &mut api::HostReport) -> Result<()
             network.sockets_complete = complete;
         }
         "windows" => {
-            let output=ps(runner,"$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $rows=@(); foreach($s in Get-NetTCPConnection -State Listen){$rows+=@{protocol='tcp';bind=$s.LocalAddress;port=$s.LocalPort;pid=$s.OwningProcess}}; foreach($s in Get-NetUDPEndpoint){$rows+=@{protocol='udp';bind=$s.LocalAddress;port=$s.LocalPort;pid=$s.OwningProcess}}; ConvertTo-Json -InputObject @($rows) -Depth 4 -Compress").await?;
+            let output=ps(runner,"$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $rows=@(foreach($s in Get-NetTCPConnection -State Listen){@{protocol='tcp';bind=$s.LocalAddress;port=$s.LocalPort;pid=$s.OwningProcess}}; foreach($s in Get-NetUDPEndpoint){@{protocol='udp';bind=$s.LocalAddress;port=$s.LocalPort;pid=$s.OwningProcess}}); ConvertTo-Json -InputObject @($rows) -Depth 4 -Compress").await?;
             let values = json(&output)?;
             for row in array(&values)? {
                 let ip = string(row, "bind")?;

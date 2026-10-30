@@ -15,9 +15,13 @@ fn context_selection_does_not_read_an_overridden_host() {
     assert!(matches!(selected, DockerSelection::Context(name) if name == "selected"));
 }
 
-struct Commands(std::collections::VecDeque<(String, String)>);
+struct Commands(
+    std::collections::VecDeque<(String, String)>,
+    Vec<Vec<String>>,
+);
 impl DockerCommands for Commands {
     async fn read(&mut self, args: &[&str]) -> Result<String> {
+        self.1.push(args.iter().map(|s| (*s).to_owned()).collect());
         let (expected, result) = self.0.pop_front().expect("expected Docker read");
         assert_eq!(args[0], "--host");
         assert_eq!(args[1], "npipe:////./pipe/docker_engine");
@@ -40,6 +44,7 @@ async fn changed_daemon_identity_invalidates_the_batch() {
             ("info".into(), r#""second""#.into()),
         ]
         .into(),
+        Vec::new(),
     );
     let mut report = api::HostReport {
         platform: "windows".into(),
@@ -63,6 +68,7 @@ async fn absent_daemon_identity_is_reported_as_unavailable() {
             r#"{"id":"","os":"","type":"","version":""}"#.into(),
         )]
         .into(),
+        Vec::new(),
     );
     let mut report = api::HostReport {
         platform: "windows".into(),
@@ -94,6 +100,7 @@ async fn local_named_pipe_preserves_container_and_interface_context() {
             ("info".into(), r#""first""#.into()),
         ]
         .into(),
+        Vec::new(),
     );
     let mut report = api::HostReport {
         platform: "windows".into(),
@@ -118,6 +125,69 @@ async fn local_named_pipe_preserves_container_and_interface_context() {
     );
     assert_eq!(report.findings[3].addresses[0].address, "192.0.2.20");
     assert!(report.binds.is_empty());
+}
+
+// One bounded inspect covers all selected containers, including out-of-order
+// results. Missing, repeated or unexpected identities cannot form a complete batch.
+#[tokio::test]
+async fn docker_inspection_batches_selected_identities_without_unused_payloads() {
+    let ids = ["a".repeat(64), "b".repeat(64)];
+    let row = |id: &str| {
+        serde_json::json!({"id":id,"name":"/web","created":"2026-10-30T00:00:00Z","image":"sha256:test","project":null,"service":null,"working_directory":null,"networks":{}}).to_string()
+    };
+    for (output, accepted) in [
+        (format!("{}\n{}", row(&ids[1]), row(&ids[0])), true),
+        (row(&ids[0]), false),
+        (format!("{}\n{}", row(&ids[0]), row(&ids[0])), false),
+        (format!("{}\n{}", row(&ids[0]), row(&"c".repeat(64))), false),
+    ] {
+        let mut commands = Commands(
+            [
+                (
+                    "info".into(),
+                    r#"{"id":"first","os":"Windows","type":"windows"}"#.into(),
+                ),
+                ("ps".into(), ids.join("\n")),
+                ("inspect".into(), output),
+                ("info".into(), r#""first""#.into()),
+            ]
+            .into(),
+            Vec::new(),
+        );
+        let mut report = api::HostReport {
+            platform: "windows".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            docker_at(&mut commands, "npipe:////./pipe/docker_engine", &mut report)
+                .await
+                .is_ok(),
+            accepted
+        );
+        let inspections: Vec<_> = commands
+            .1
+            .iter()
+            .filter(|args| args[2] == "inspect")
+            .collect();
+        assert_eq!(inspections.len(), 1);
+        assert!(inspections[0].contains(&ids[0]) && inspections[0].contains(&ids[1]));
+        assert!(
+            !commands.1[0]
+                .last()
+                .expect("info format")
+                .contains("ServerVersion")
+        );
+        let template = inspections[0]
+            .iter()
+            .position(|v| v == "--format")
+            .expect("format")
+            + 1;
+        assert!(!inspections[0][template].contains("json .NetworkSettings.Networks"));
+        if accepted {
+            assert_eq!(report.findings.len(), 5);
+            assert!(commands.0.is_empty());
+        }
+    }
 }
 
 // Named pipes can address another Windows machine. Only the local pipe syntax
