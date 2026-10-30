@@ -288,7 +288,8 @@ impl Tx<'_> {
     ) -> Result<()> {
         use wire::RelationKind as R;
         if !matches!(kind, R::ReleaseOf | R::InstalledRelease)
-            && !(kind == R::RunsOn && matches!(from_kind, K::Container | K::Workload))
+            && !(kind == R::RunsOn
+                && matches!(from_kind, K::Container | K::Workload | K::VirtualMachine))
         {
             return Ok(());
         }
@@ -307,6 +308,7 @@ impl Tx<'_> {
         from_kind: K,
         to: AssetRef,
         kind: wire::RelationKind,
+        rebound: bool,
     ) -> Result<()> {
         use wire::RelationKind as R;
         let old_kind = R::try_from(number(old, "kind")? as i32).map_err(|_| Error::Corrupt)?;
@@ -314,12 +316,21 @@ impl Tx<'_> {
             return Ok(());
         }
         let old_from = stored_reference(old, "asset", "incarnation")?;
-        let container = old_kind == R::RunsOn
-            && if old_from == from {
-                from_kind == K::Container
-            } else {
-                number(&self.asset(old_from)?, "kind")? == K::Container as u64
-            };
+        let old_from_kind = if old_from == from {
+            from_kind
+        } else {
+            K::try_from(number(&self.asset(old_from)?, "kind")? as i32)
+                .map_err(|_| Error::Corrupt)?
+        };
+        if old_kind == R::RunsOn && old_from_kind == K::VirtualMachine {
+            if !rebound && (from != old_from || kind != old_kind) {
+                return Err(Error::Conflict);
+            }
+            if from != old_from || kind != old_kind {
+                self.require_no_pending_operations(old_from)?;
+            }
+        }
+        let container = old_kind == R::RunsOn && old_from_kind == K::Container;
         if matches!(old_kind, R::ReleaseOf | R::InstalledRelease) || container {
             if from != old_from || kind != old_kind {
                 return Err(Error::Conflict);

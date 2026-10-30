@@ -138,6 +138,28 @@ Replacing account metadata cannot implicitly clear an unreadable saved field.
 The complete metadata form requires disclosure of every metadata field; selected
 binding changes retain their independent permissions.
 
+Domain resources keep a free display name and an optional `dns_name`. DNS syntax
+is checked with IDNA and structured-public-domains; private namespaces and public
+suffix nodes remain valid names. Validation does not prove registration or resolve
+the name. Create, edit, bulk and CSV writes share the server validator; DNS names
+can also be selected as columns, filtered and searched.
+
+Responsibility contacts and account recovery routes declare an optional syntax:
+email, international E.164 phone, HTTP(S) URL or DNS name. Account sender constraints
+may declare an email or domain. Email uses structured-email-address's SMTP mailbox
+parser, without display names or provider-specific normalization. Phone input uses
+libphonenumber-js with full metadata, and the server independently checks E.164
+syntax and number validity. URL validation rejects embedded credentials and never
+fetches the address. Syntax does not establish delivery, ownership or account control.
+Provider namespaces, provider identities, login labels and resource names stay opaque.
+
+An unspecified type preserves an opaque route or constraint, including existing
+values. Selecting a type is explicit; the server never guesses or silently converts
+old data. The discriminator shares its value's read/write permissions and is hidden
+with it. Format 13 adds optional discriminator columns on open and restore, without
+creating route history or rewriting existing contact payloads. Unchanged submissions
+do not create new records or advance the inventory revision.
+
 For a personal account without delegation, the card says **Account owner action
 required**. A company approver cannot acquire that account. A request retains
 the exact managed target, non-secret proposed change, target/account revisions,
@@ -370,6 +392,9 @@ an explicit clear. Invalid rows identify the failing row and mapped column witho
 echoing its value or persisting a rejected preview; invalid input cannot be
 partially accepted. A valid preview expires, and applying it rechecks the current
 application revision, actor scope and field types. Raw CSV history is not saved.
+Identity correction does not retarget personal CSV approvals. A minimal binding
+to the retired identity prevents an old source from silently updating the retained
+resource or recreating a duplicate; reversing the correction restores that binding.
 Preparing a replacement atomically reclaims that importer's earlier review-only
 drafts and their rows. Failed preparation preserves the prior draft; another
 importer's previews remain under their own expiry and revision checks.
@@ -531,6 +556,21 @@ and conflicting reports at the same source instant are refused. Each selected
 network section has its own current checkpoint, so accepting routes does not
 implicitly accept firewall data or prevent reviewing it separately.
 
+For selected interfaces, review lists added addresses, removed addresses from a
+complete refresh, and changed attributes. The comparison concerns the selected
+source only. A partial refresh preserves omitted addresses and their original
+observation dates. It never changes another source, an intended assignment or a
+service's literal bind. Current-address read rights apply even when an existing
+preview is reused. Preview custody stores the selected input, not another copy
+of the derived comparison or an address history.
+
+Select two devices, VMs, OS installations or interfaces and choose **Compare
+identity** to inspect their current permitted fields and source claims together.
+Hardware and installation identifiers have separate types and namespaces;
+matching reported digests do not establish authenticated identity or merge
+resources. Comparison reads only the two selected subjects, without loading
+their descendants or routing tables, and writes nothing.
+
 Files are limited to 256 KiB, 128 findings and 2944 protobuf field visits before
 decoding. The remaining request budget accommodates explicit matches and context;
 small files with excessive nested fields are refused before generated allocations.
@@ -572,6 +612,65 @@ IP evidence and a unique observed interface match; it retains no peers or keys.
 Reports contain no environment, full commands, credentials or installed-package
 inventory. There is no implicit elevation, remote Docker connection, SSH delivery
 or resident installation.
+
+## Reviewed identity correction
+
+Select two devices, VMs, OS installations or interfaces and choose **Compare
+identity**. Matching reported identifiers support review but do not prove identity
+or authorize a connection. Candidate lookup is also available before adopting
+report findings, within the current permitted selection. Missing evidence,
+cloned UUIDs, movable interfaces and reused addresses never trigger an automatic
+merge or an access grant.
+
+Choose whether the records are separate, one chassis with distinct OS installs,
+or duplicates of the same installation. Choose the retained identity and every
+field resolution. Add only the OS/interface mappings actually established as
+duplicates. Separate boots retain their own services, interfaces and current
+addresses. Each physical attachment needs individual confirmation, followed by
+ordinary containment, exclusivity and cycle validation.
+
+Native sources keep independent bindings even when their display labels match.
+Manual or unresolved legacy namespace collisions require a reviewed rename.
+Neither source relocation nor an address change rewrites literal service binds,
+routes, firewall policy or VLAN/VRF membership. No grants, secrets, account control
+or operation targets transfer. Explicit responsibility and external-effect
+conflicts must be resolved first.
+
+The bounded preview changes no inventory. Accepting it checks the same working
+context, current authority and installation revision, then commits atomically.
+Its receipt supports an exact retry and a finite reversal window. Reversal
+requires current rights and no subsequent accepted mutation; otherwise prepare a
+fresh correction. Old references resolve read-only to the canonical incarnation
+only when both original and canonical rights permit it. They never become write
+or execution aliases.
+
+## Record a VM's new hypervisor
+
+After migrating a VM outside Omloom, open its details and choose **Change
+hypervisor after migration**. Drag the VM card onto an enabled destination on
+desktop, or use **Choose** on a phone or keyboard. Destination cards show
+permitted hardware paths, addresses and exact identities. Searching and paging
+stay within the selected enclosing context; choosing all permitted infrastructure
+is an explicit action.
+
+Review the actual old and new host, then **Record and view VM**. This records
+inventory placement only: it does not invoke a hypervisor migration. The same
+VM, OS installations, interfaces, services and source mappings remain in place.
+Current IPs can stay unchanged or be updated by a separate guest observation.
+Service binds, routes, network/storage membership and grants are not inferred
+from the destination.
+
+One VM has one accepted current hosting placement. Recording a move conditionally
+updates that relation, rather than adding another host. A hidden old host, an
+obsolete review, an ineligible destination, a cycle or unresolved guest effects
+prevent acceptance. Ambiguous existing multi-host records require explicit
+resolution through **Connections in broader scope**; upgrading never guesses
+which host to retain.
+
+Direct ownership stays unchanged. The review identifies permitted inherited
+facets bound to the old placement; those become source-unavailable after its
+revision changes. Review their administrative source separately in the existing
+responsibility editor. The new host never silently becomes the owner.
 
 ## Verification
 

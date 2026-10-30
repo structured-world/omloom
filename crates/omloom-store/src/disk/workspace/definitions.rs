@@ -505,6 +505,11 @@ impl Tx<'_> {
             return software::validate_field(kind, value);
         }
         match value.name.as_str() {
+            "dns_name" if kind == wire::AssetKind::Domain as i32 => match value.value.as_ref() {
+                Some(field::Value::Text(value)) => typed_values::dns_name(value),
+                Some(field::Value::Clear(EXPLICIT_CLEAR)) => Ok(()),
+                _ => Err(Error::Invalid),
+            },
             "vlan_tag" => match (wire::AssetKind::try_from(kind), value.value.as_ref()) {
                 (
                     Ok(wire::AssetKind::AddressReference),

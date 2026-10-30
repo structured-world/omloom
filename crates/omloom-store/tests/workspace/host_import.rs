@@ -1,7 +1,7 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
-fn draft() -> api::HostImport {
+pub(super) fn draft() -> api::HostImport {
     api::HostImport {
         source: "Native fixture".into(),
         report: Some(Box::new(api::HostReport {
@@ -53,13 +53,362 @@ fn draft() -> api::HostImport {
         network_parts: Vec::new(),
     }
 }
-fn preview(store: &Store, request: api::HostImport) -> Result<api::Preview, Error> {
+
+fn identity_claim(
+    kind: api::HostIdentityKind,
+    namespace: &str,
+    digest: char,
+) -> api::HostIdentityClaim {
+    api::HostIdentityClaim {
+        kind: kind as i32,
+        namespace: namespace.into(),
+        digest: digest.to_string().repeat(64),
+        quality: api::HostIdentityQuality::Reported as i32,
+    }
+}
+
+// Identity equality is layer-specific evidence, not a host/OS merge. Missing
+// later claims retain their exact old collection window rather than freshening.
+#[test]
+fn host_identity_evidence_is_current_scoped_and_not_freshened_by_omission() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut request = draft();
+    let report = request.report.as_mut().unwrap();
+    report.findings[0].identity.push(identity_claim(
+        api::HostIdentityKind::HardwareUuid,
+        "apple/platform-uuid",
+        'a',
+    ));
+    report.findings[1].identity.push(identity_claim(
+        api::HostIdentityKind::InstallationId,
+        "macos/apfs-volume",
+        'a',
+    ));
+    let accepted = accept(&store, &preview(&store, request.clone())?)?;
+    let host = accepted.targets[0].clone();
+    let installation = accepted.targets[1].clone();
+    let read = |target: wire::AssetRef| -> Result<api::Detail, Error> {
+        let Reply::Detail(value) = call(
+            &store,
+            &operator(),
+            Command::Read(api::Read {
+                target: Some(target),
+                ..Default::default()
+            }),
+        )?
+        else {
+            return Err(Error::Corrupt);
+        };
+        Ok(*value)
+    };
+    let first = read(host.clone())?;
+    let os = read(installation)?;
+    assert_eq!(first.identity.len(), 1);
+    assert_eq!(os.identity.len(), 1);
+    assert_ne!(
+        first.identity[0].claim.as_ref().unwrap().kind,
+        os.identity[0].claim.as_ref().unwrap().kind
+    );
+    assert_eq!(first.identity[0].observed_at, 100);
+    let before = store.usage()?;
+    assert!(matches!(
+        call(&store, &operator(), Command::HostImport(request.clone()))?,
+        Reply::Mutation(_)
+    ));
+    assert_eq!(
+        before,
+        store.usage()?,
+        "identical claim input writes nothing"
+    );
+    request.report.as_mut().unwrap().observed_at = 200;
+    request.report.as_mut().unwrap().findings[0]
+        .identity
+        .clear();
+    accept(&store, &preview(&store, request)?)?;
+    let current = read(host)?;
+    assert_eq!(
+        first.identity, current.identity,
+        "omission does not reattest identity"
+    );
+    let before = store.usage()?;
+    read(accepted.targets[0].clone())?;
+    assert_eq!(
+        before,
+        store.usage()?,
+        "reading claims creates no history or touches"
+    );
+    Ok(())
+}
+
+// A source cannot change a claim at the same instant or place installation
+// evidence on a hardware identity, even through a forged native report.
+#[test]
+fn host_identity_rejects_layer_forgery_and_same_instant_equivocation() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut request = draft();
+    request.report.as_mut().unwrap().findings[0]
+        .identity
+        .push(identity_claim(
+            api::HostIdentityKind::InstallationId,
+            "linux/machine-id",
+            'a',
+        ));
+    let before = store.usage()?;
+    assert!(matches!(
+        preview(&store, request.clone()),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(before, store.usage()?);
+    request.report.as_mut().unwrap().findings[0].identity[0].kind =
+        api::HostIdentityKind::HardwareUuid as i32;
+    accept(&store, &preview(&store, request.clone())?)?;
+    request.report.as_mut().unwrap().findings[0].identity[0].digest = "b".repeat(64);
+    let before = store.usage()?;
+    assert!(matches!(preview(&store, request), Err(Error::Conflict)));
+    assert_eq!(before, store.usage()?);
+    Ok(())
+}
+
+// Pair comparison reads only the two selected current subjects, applies each
+// field's actual rights and cannot freshen evidence or change inventory.
+#[test]
+fn host_identity_comparison_is_read_only_and_checks_both_subjects() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut request = draft();
+    request.report.as_mut().unwrap().findings[0]
+        .identity
+        .push(identity_claim(
+            api::HostIdentityKind::HardwareUuid,
+            "apple/platform-uuid",
+            'a',
+        ));
+    let accepted = accept(&store, &preview(&store, request)?)?;
+    let pair = api::CompareHostIdentity {
+        left: Some(accepted.targets[0].clone()),
+        right: Some(accepted.targets[1].clone()),
+        include_relations: false,
+    };
+    let before = store.usage()?;
+    let Reply::HostIdentityComparison(value) = call(
+        &store,
+        &operator(),
+        Command::CompareHostIdentity(pair.clone()),
+    )?
+    else {
+        return Err("comparison".into());
+    };
+    assert_eq!(value.left.as_ref().unwrap().identity.len(), 1);
+    assert!(value.right.as_ref().unwrap().identity.is_empty());
+    assert_eq!(value.revision, before.revision);
+    assert_eq!(before, store.usage()?);
+    let mut restricted = operator();
+    restricted.grants[0].read = Fields::Selected(vec!["name".into()]);
+    let Reply::HostIdentityComparison(value) = call(
+        &store,
+        &restricted,
+        Command::CompareHostIdentity(pair.clone()),
+    )?
+    else {
+        return Err("restricted comparison".into());
+    };
+    assert!(
+        value.left.unwrap().identity.is_empty(),
+        "hidden claims are not disclosed on a readable host"
+    );
+    restricted.grants[0].scope = Scope::Targets(vec![AssetRef::try_from(&accepted.targets[0])?]);
+    assert!(matches!(
+        call(
+            &store,
+            &restricted,
+            Command::CompareHostIdentity(pair.clone())
+        ),
+        Err(Error::Denied)
+    ));
+    assert_eq!(before, store.usage()?);
+    let unrelated = create(&store, &operator(), K::Device, "Outside selected scope")?;
+    let before = store.usage()?;
+    let result = store.workspace(
+        &operator(),
+        api::Request {
+            working: Some(api::WorkingContext {
+                roots: vec![unrelated],
+                ..Default::default()
+            }),
+            command: Some(Command::CompareHostIdentity(pair)),
+        },
+        100,
+    );
+    assert!(
+        matches!(result, Err(Error::Denied)),
+        "a broader actor grant cannot silently widen the working context"
+    );
+    assert_eq!(before, store.usage()?);
+    Ok(())
+}
+
+// Address replacement follows the existing reviewed mapping, affects only its
+// source and cannot move a service's literal bind to the new interface address.
+#[test]
+fn host_address_preview_is_a_source_local_delta_without_identity_changes() -> TestResult {
+    fn detail(store: &Store, target: &wire::AssetRef) -> Result<api::Detail, Error> {
+        let Reply::Detail(value) = call(
+            store,
+            &operator(),
+            Command::Read(api::Read {
+                target: Some(target.clone()),
+                ..Default::default()
+            }),
+        )?
+        else {
+            return Err(Error::Corrupt);
+        };
+        Ok(*value)
+    }
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut request = draft();
+    request
+        .report
+        .as_mut()
+        .unwrap()
+        .findings
+        .push(api::HostFinding {
+            key: "service".into(),
+            kind: K::Service as i32,
+            parent: Some("installation".into()),
+            fields: vec![text_field("name", "Literal listener")],
+            ..Default::default()
+        });
+    request.selection.push(api::HostSelection {
+        key: "service".into(),
+        ..Default::default()
+    });
+    let initial = preview(&store, request.clone()).map_err(|e| format!("initial preview: {e}"))?;
+    let accepted = accept(&store, &initial).map_err(|e| format!("initial acceptance: {e}"))?;
+    let interface = &accepted.targets[2];
+    let service = &accepted.targets[3];
+    let address = |value: &str| api::CurrentAddress {
+        address: value.into(),
+        prefix_length: Some(24),
+        stability: api::AddressStability::Stable as i32,
+        state: api::AddressState::Preferred as i32,
+    };
+    call(
+        &store,
+        &operator(),
+        Command::InterfaceAddresses(api::InterfaceAddresses {
+            interface: Some(interface.clone()),
+            source: "Independent source".into(),
+            observed_at: 100,
+            addresses: vec![address("192.0.2.8")],
+            complete: true,
+        }),
+    )?;
+    store.workspace(
+        &operator(),
+        api::Request {
+            working: Some(api::WorkingContext {
+                focus: Some(accepted.targets[1].clone()),
+                expected: Some(store.usage()?.revision),
+                ..Default::default()
+            }),
+            command: Some(Command::HostNetwork(api::HostNetwork {
+                installation: Some(accepted.targets[1].clone()),
+                source: "Listener source".into(),
+                observed_at: 100,
+                basis: "b".repeat(64),
+                sockets: vec![api::SocketBind {
+                    service: Some(service.clone()),
+                    protocol: "tcp".into(),
+                    family: "IPv4".into(),
+                    bind: "192.0.2.7".into(),
+                    port: 443,
+                    ..Default::default()
+                }],
+                socket_coverage: "verified".into(),
+                route_coverage: "not collected".into(),
+                application_coverage: "not collected".into(),
+                packet_filter_coverage: "not collected".into(),
+                ..Default::default()
+            })),
+        },
+        100,
+    )?;
+    let listener = detail(&store, service)
+        .map_err(|e| format!("read listener: {e}"))?
+        .host_network;
+    assert!(!listener.is_empty());
+    let report = request.report.as_mut().unwrap();
+    report.observed_at = 200;
+    report.findings[2].addresses = vec![address("192.0.2.19")];
+    let plan = preview(&store, request.clone()).map_err(|e| format!("replacement preview: {e}"))?;
+    let delta = plan.rows[2].addresses.as_ref().ok_or("address delta")?;
+    assert_eq!(delta.source, "Native fixture");
+    assert_eq!(delta.added, vec![address("192.0.2.19")]);
+    assert_eq!(delta.removed, vec![address("192.0.2.7")]);
+    assert!(delta.updated.is_empty());
+    assert!(delta.complete);
+    let mut restricted = operator();
+    restricted.grants[0].read = Fields::Selected(vec!["name".into(), "relations".into()]);
+    let before_restricted_review = store.usage()?;
+    let Reply::Preview(hidden) = call(&store, &restricted, Command::HostImport(request.clone()))
+        .map_err(|e| format!("restricted review: {e}"))?
+    else {
+        return Err("restricted preview".into());
+    };
+    assert_eq!(
+        hidden.id, plan.id,
+        "repeating the same review does not store another copy"
+    );
+    assert!(
+        hidden.rows.iter().all(|row| row.addresses.is_none()),
+        "a cached review cannot disclose previously readable addresses after revocation"
+    );
+    assert_eq!(store.usage()?, before_restricted_review);
+    assert_eq!(accept(&store, &plan)?.targets, accepted.targets);
+    assert_eq!(detail(&store, service)?.host_network, listener);
+    let current = detail(&store, interface)?.current_addresses;
+    assert_eq!(current.len(), 2);
+    assert!(current.iter().any(
+        |s| s.coverage.as_ref().unwrap().source == "Independent source"
+            && s.observations[0].value.as_ref().unwrap().address == "192.0.2.8"
+    ));
+    let report = request.report.as_mut().unwrap();
+    report.observed_at = 300;
+    report.findings[2].addresses = vec![address("192.0.2.20")];
+    report.findings[2].addresses_complete = false;
+    let plan = preview(&store, request)?;
+    let delta = plan.rows[2].addresses.as_ref().ok_or("partial delta")?;
+    assert_eq!(delta.added, vec![address("192.0.2.20")]);
+    assert!(delta.removed.is_empty());
+    assert!(!delta.complete);
+    accept(&store, &plan)?;
+    let current = detail(&store, interface)?.current_addresses;
+    let native = current
+        .iter()
+        .find(|s| s.coverage.as_ref().unwrap().source == "Native fixture")
+        .ok_or("native source")?;
+    assert_eq!(
+        native
+            .observations
+            .iter()
+            .map(|v| (v.value.as_ref().unwrap().address.as_str(), v.observed_at))
+            .collect::<Vec<_>>(),
+        vec![("192.0.2.19", Some(200)), ("192.0.2.20", Some(300))]
+    );
+    assert_eq!(detail(&store, service)?.host_network, listener);
+    Ok(())
+}
+pub(super) fn preview(store: &Store, request: api::HostImport) -> Result<api::Preview, Error> {
     let Reply::Preview(value) = call(store, &operator(), Command::HostImport(request))? else {
         return Err(Error::Corrupt);
     };
     Ok(value)
 }
-fn accept(store: &Store, preview: &api::Preview) -> Result<api::Mutation, Error> {
+pub(super) fn accept(store: &Store, preview: &api::Preview) -> Result<api::Mutation, Error> {
     let Reply::Mutation(value) = call(
         store,
         &operator(),

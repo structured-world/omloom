@@ -17,7 +17,7 @@ async function host(directory, fixture = 'operator', grants) {
     child.stderr.on('data', chunk => { output += chunk; });
     child.once('exit', code => { clearTimeout(timer); reject(Error(`Host exited ${code}: ${output}`)); });
   });
-  return { url, async stop() { if (child.exitCode !== null || child.signalCode !== null) return; const exit = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGINT'); await exit; } };
+  return { url, async crash() { const exit=new Promise(resolve=>child.once('exit',resolve));child.kill('SIGKILL');await exit; }, async stop() { if (child.exitCode !== null || child.signalCode !== null) return; const exit = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGINT'); await exit; } };
 }
 async function create(page, name, kind = 'DEVICE') {
   // These fixtures create independent roots. Child creation has its own scoped journey.
@@ -48,6 +48,65 @@ async function workspaceClient(url) {
   }
   return { m, rpc };
 }
+
+test('typed DNS and contact values validate on desktop and phone', async ({ page }) => {
+  // Display labels and provider IDs remain opaque. Typed routes reject malformed
+  // values at the server; phone inputs also explain E.164 errors before submission.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-typed-values-'));const server=await host(dir);
+  try {
+    const {m}=await workspaceClient(server.url);
+    for(const width of [1440,390]) {
+      await page.setViewportSize({width,height:900});await page.goto(server.url);
+      await create(page,`Domain label ${width}`,'DOMAIN');
+      await page.getByRole('button',{name:'Edit resource',exact:true}).click();
+      let dialog=page.getByRole('dialog');
+      await dialog.getByLabel('DNS name change',{exact:true}).selectOption('set');
+      await dialog.getByLabel('DNS name',{exact:true}).fill('bad domain');
+      await dialog.getByRole('button',{name:'Save resource',exact:true}).click();
+      await expect(dialog.getByRole('alert')).toBeVisible();
+      await dialog.getByLabel('DNS name',{exact:true}).fill('münchen.de');
+      await dialog.getByRole('button',{name:'Save resource',exact:true}).click();await expect(dialog).toBeHidden();
+      await expect(page.getByRole('region',{name:'Resource details'}).getByText('münchen.de',{exact:true})).toBeVisible();
+      await page.getByRole('button',{name:'Edit claimed owner',exact:true}).click();dialog=page.getByRole('dialog');
+      await dialog.getByLabel('Assignment',{exact:true}).selectOption(String(m.AssignmentMode.EXPLICIT));
+      await dialog.getByLabel('Party namespace',{exact:true}).fill('opaque namespace');
+      await dialog.getByLabel('Party identity',{exact:true}).fill('team/7');
+      await dialog.getByLabel('Party label',{exact:true}).fill('Operations');
+      await dialog.getByLabel('Contact route type',{exact:true}).selectOption(String(m.LocatorKind.PHONE));
+      await dialog.getByLabel('Contact route',{exact:true}).fill('+123');
+      await dialog.getByRole('button',{name:'Review assignment',exact:true}).click();
+      expect(await dialog.getByLabel('Contact route',{exact:true}).evaluate(input=>input.checkValidity())).toBe(false);
+      await expect(dialog.getByText(/Enter a valid international E.164/)).toBeVisible();
+      await dialog.getByLabel('Contact route',{exact:true}).fill('+442079460018');
+      await dialog.getByRole('button',{name:'Review assignment',exact:true}).click();await dialog.getByRole('button',{name:'Apply assignment',exact:true}).click();await expect(dialog).toBeHidden();
+      await page.getByRole('button',{name:'Edit claimed owner',exact:true}).click();dialog=page.getByRole('dialog');
+      await dialog.getByLabel('Contact route type',{exact:true}).selectOption(String(m.LocatorKind.EMAIL));
+      await dialog.getByLabel('Contact route',{exact:true}).fill('bad email');
+      await dialog.getByRole('button',{name:'Review assignment',exact:true}).click();await expect(dialog.getByRole('alert')).toBeVisible();
+      await dialog.getByLabel('Contact route',{exact:true}).fill('User+tag@example.test');
+      await dialog.getByRole('button',{name:'Review assignment',exact:true}).click();await dialog.getByRole('button',{name:'Apply assignment',exact:true}).click();await expect(dialog).toBeHidden();
+      await expect(page.getByText('Contact: User+tag@example.test',{exact:true})).toBeVisible();
+      await create(page,`Opaque account ${width}`,'PROVIDER_ACCOUNT');
+      await page.getByRole('button',{name:'Edit account metadata',exact:true}).click();dialog=page.getByRole('dialog');
+      await dialog.getByLabel('Provider namespace',{exact:true}).fill('opaque provider namespace');
+      await dialog.getByLabel('Provider account identity',{exact:true}).fill(`personal ID / ${width}`);
+      await dialog.getByLabel('Account kind',{exact:true}).selectOption(String(m.ExternalAccountKind.ADMINISTRATION));
+      await dialog.getByLabel('Sender constraint type',{exact:true}).selectOption(String(m.LocatorKind.EMAIL));
+      await dialog.getByLabel('Sender constraint',{exact:true}).fill('not email');
+      await dialog.getByRole('button',{name:'Save account metadata',exact:true}).click();await expect(dialog.getByRole('alert')).toContainText('INVALID_ARGUMENT');
+      await dialog.getByLabel('Sender constraint',{exact:true}).fill('User+tag@example.test');
+      await dialog.getByLabel('Provider recovery route type',{exact:true}).selectOption(String(m.LocatorKind.WEB));
+      await dialog.getByLabel('Provider recovery route',{exact:true}).fill('https://user:password@example.test/');
+      await dialog.getByRole('button',{name:'Save account metadata',exact:true}).click();await expect(dialog.getByRole('alert')).toContainText('INVALID_ARGUMENT');
+      await dialog.getByLabel('Provider recovery route',{exact:true}).fill('https://example.test/recovery');
+      await dialog.getByRole('button',{name:'Save account metadata',exact:true}).click();await expect(dialog).toBeHidden();
+      await page.getByRole('button',{name:'Edit account metadata',exact:true}).click();dialog=page.getByRole('dialog');
+      await expect(dialog.getByLabel('Sender constraint type',{exact:true})).toHaveValue(String(m.LocatorKind.EMAIL));
+      await expect(dialog.getByLabel('Provider recovery route',{exact:true})).toHaveValue('https://example.test/recovery');
+      await dialog.getByRole('button',{name:'Close dialog',exact:true}).click();
+    }
+  } finally {await server.stop();await rm(dir,{recursive:true,force:true});}
+});
 
 test('host report adoption is selective and scoped on desktop and phone', async ({ page }) => {
   // Report-local keys stay outside inventory until explicit review. Accepted
@@ -85,6 +144,342 @@ test('host report adoption is selective and scoped on desktop and phone', async 
       expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
     }
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
+test('VM placement uses desktop drag and phone selection without changing guest identity or IP', async ({page})=>{
+  // Real host/store/UI: record an external migration, then independently update
+  // current guest addresses. No hypervisor call or migration result is mocked.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-vm-placement-'));const server=await host(dir);
+  try {
+    const {m,rpc}=await workspaceClient(server.url);
+    async function resource(kind,name,parent,extra=[]){const result=await rpc({oneofKind:'write',write:m.Write.create({kind,parent,changes:[{name:'name',value:{oneofKind:'text',text:name}},...extra]})});return result.mutation.targets[0];}
+    const role={name:'virtualization_role',value:{oneofKind:'text',text:'VIRTUALIZATION_ROLE_HYPERVISOR'}};
+    const chassisA=await resource(m.AssetKind.DEVICE,'Compute chassis A');
+    const chassisB=await resource(m.AssetKind.DEVICE,'Compute chassis B');
+    const a=await resource(m.AssetKind.SOFTWARE_INSTALLATION,'Migration host A',chassisA,[role]);
+    const b=await resource(m.AssetKind.SOFTWARE_INSTALLATION,'Migration host B',chassisB,[role]);
+    const vm=await resource(m.AssetKind.VIRTUAL_MACHINE,'Retained guest');
+    const os=await resource(m.AssetKind.SOFTWARE_INSTALLATION,'Retained guest OS',vm);
+    const nic=await resource(m.AssetKind.INTERFACE,'Guest eth0',os);
+    const service=await resource(m.AssetKind.SERVICE,'Guest listener',os);
+    await rpc({oneofKind:'relation',relation:m.Relationship.create({relation:{from:vm,to:a,kind:m.RelationKind.RUNS_ON}})});
+    async function address(value,time){await rpc({oneofKind:'interfaceAddresses',interfaceAddresses:m.InterfaceAddresses.create({interface:nic,source:'Guest report',observedAt:BigInt(time),complete:true,addresses:[{address:value,stability:m.AddressStability.STABLE,state:m.AddressState.PREFERRED}]})});}
+    await address('192.0.2.40',50);
+    const originalChildren=[];
+    for(const target of [os,nic,service]) originalChildren.push((await rpc({oneofKind:'read',read:m.Read.create({target})})).detail.item);
+    let expectedIp='192.0.2.40';
+    for(const [width,from,to,name] of [[1440,a,b,'Migration host B'],[390,b,a,'Migration host A']]) {
+      await page.setViewportSize({width,height:900});
+      await page.goto(`${server.url}/#/?view=3&kind=${m.AssetKind.DEVICE}&scope=${from.assetId}&scopeInc=${from.incarnation}&asset=${vm.assetId}&incarnation=${vm.incarnation}`);
+      await page.getByRole('button',{name:'Change hypervisor after migration',exact:true}).click();
+      const dialog=page.getByRole('dialog',{name:'Record VM placement'});
+      await expect(dialog.getByText('Current host:',{exact:false})).toBeVisible();
+      // Widening the selected context is explicit, rather than a hidden search fallback.
+      await dialog.getByRole('button',{name:'Choose from all permitted infrastructure',exact:true}).click();
+      const destination=dialog.getByRole('article',{name:`Destination ${name}`,exact:true});
+      await expect(destination).toBeVisible();
+      await expect(destination).toContainText(width===1440?'Compute chassis B':'Compute chassis A');
+      const before=(await rpc({oneofKind:'query',query:m.Query.create({limit:1})})).page.revision;
+      if(width===1440) await dialog.getByRole('article',{name:'VM to relocate',exact:true}).dragTo(destination);
+      else await destination.getByRole('button',{name:`Choose ${name}`,exact:true}).click();
+      await expect(dialog.getByRole('button',{name:'Record and view VM',exact:true})).toBeVisible();
+      await dialog.getByRole('button',{name:'Back to destinations',exact:true}).click();
+      await destination.getByRole('button',{name:`Choose ${name}`,exact:true}).click();
+      expect((await rpc({oneofKind:'query',query:m.Query.create({limit:1})})).page.revision).toBe(before);
+      expect(await dialog.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+      await page.screenshot({path:`test-results/vm-placement-${width}.png`,fullPage:true});
+      await dialog.getByRole('button',{name:'Record and view VM',exact:true}).click();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByRole('heading',{name:'Retained guest',exact:true})).toBeVisible();
+      const current=(await rpc({oneofKind:'prepareVmPlacement',prepareVmPlacement:m.PrepareVmPlacement.create({vm})})).vmPlacementReview;
+      expect(current.vm.target).toEqual(vm);expect(current.currentHost.target).toEqual(to);
+      const addresses=(await rpc({oneofKind:'read',read:m.Read.create({target:nic})})).detail.currentAddresses;
+      expect(addresses).toHaveLength(1);expect(addresses[0].observations[0].value.address).toBe(expectedIp);
+      for(const [index,target] of [os,nic,service].entries()) expect((await rpc({oneofKind:'read',read:m.Read.create({target})})).detail.item).toEqual(originalChildren[index]);
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+      await page.getByRole('button',{name:'Close resource details',exact:true}).click();
+      await expect(page.getByRole('button',{name:'Retained guest',exact:true})).toBeVisible();
+      if(width===1440){await address('192.0.2.41',60);expectedIp='192.0.2.41';}
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
+test('hypervisor pagination resets for edited searches on desktop and phone', async ({page})=>{
+  // A cursor belongs to the submitted query, not a later edit of its search field.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-placement-search-'));const server=await host(dir);
+  let release;
+  try {
+    const {m,rpc}=await workspaceClient(server.url);
+    const guest=(await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.VIRTUAL_MACHINE,changes:[{name:'name',value:{oneofKind:'text',text:'Pagination guest'}}]})})).mutation.targets[0];
+    for(let index=0;index<21;index++) await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.SOFTWARE_INSTALLATION,changes:[{name:'name',value:{oneofKind:'text',text:`Paginated host ${String(index).padStart(2,'0')}`}},{name:'virtualization_role',value:{oneofKind:'text',text:'VIRTUALIZATION_ROLE_HYPERVISOR'}}]})});
+    for(const width of [1440,390]) {
+      await page.setViewportSize({width,height:900});await page.goto(`${server.url}/#/?view=3&asset=${guest.assetId}&incarnation=${guest.incarnation}`);
+      await page.getByRole('button',{name:'Change hypervisor after migration',exact:true}).click();
+      const dialog=page.getByRole('dialog',{name:'Record VM placement',exact:true});
+      const next=dialog.getByRole('button',{name:'Next hypervisors',exact:true});
+      const search=dialog.getByRole('searchbox',{name:'Find hypervisor',exact:true});
+      await expect(next).toBeVisible();
+      await search.fill('Paginated host 20');
+      await expect(next).toBeHidden();
+      await dialog.getByRole('button',{name:'Search',exact:true}).click();
+      await expect(dialog.getByRole('article',{name:'Destination Paginated host 20',exact:true})).toBeVisible();
+      await expect(dialog.getByRole('article').filter({has:page.getByRole('button',{name:/^Choose Paginated host/})})).toHaveCount(1);
+      await expect(dialog.getByRole('alert')).toHaveCount(0);
+      await search.fill('Paginated');await dialog.getByRole('button',{name:'Search',exact:true}).click();
+      await expect(next).toBeVisible();await next.click();
+      await expect(dialog.getByRole('article',{name:'Destination Paginated host 20',exact:true})).toBeVisible();
+      await expect(next).toBeHidden();await expect(dialog.getByRole('alert')).toHaveCount(0);
+      // Delay, then forward a real request; an old response cannot resurrect its cursor.
+      let held=false;
+      const resumed=new Promise(resolve=>{release=resolve;});
+      await page.route('**/omloom.workspace.v1.Workspace/Call',async route=>{
+        const bytes=route.request().postDataBuffer();
+        const command=bytes?m.Request.fromBinary(bytes.subarray(5)).command:undefined;
+        if(!held&&command?.oneofKind==='query'){held=true;await resumed;}
+        await route.continue();
+      });
+      await dialog.getByRole('button',{name:'Search',exact:true}).click();
+      await expect.poll(()=>held).toBe(true);
+      try {await search.fill('Paginated host 20');} finally {release();}
+      await expect(dialog.getByRole('status')).toHaveCount(0);
+      await expect(next).toBeHidden();
+      await page.unrouteAll({behavior:'wait'});
+      await dialog.getByRole('button',{name:'Close dialog',exact:true}).click();
+      await expect(dialog).toBeHidden();
+    }
+  } finally {release?.();await page.unrouteAll({behavior:'wait'});await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
+test('accepted correction and exact retry survive an abrupt host exit', async ({page})=>{
+  // Process crash after acknowledgement, not a claim about device power loss.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-correction-crash-'));let server=await host(dir);
+  try {
+    let {m,rpc}=await workspaceClient(server.url);const targets=[];
+    for(const name of ['Crash retained','Crash duplicate']){const saved=await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.DEVICE,changes:[{name:'name',value:{oneofKind:'text',text:name}}]})});targets.push(saved.mutation.targets[0]);}
+    const prepared=await rpc({oneofKind:'correctIdentity',correctIdentity:m.IdentityCorrection.create({decision:m.IdentityDecision.DISTINCT_INSTALLATIONS,mappings:[{duplicate:targets[1],retained:targets[0],fields:[{name:'name',useDuplicate:false}]}]})});
+    const accepted=await rpc({oneofKind:'correctIdentity',correctIdentity:m.IdentityCorrection.create({preview:prepared.identityCorrection.id})});
+    await server.crash();server=await host(dir);({m,rpc}=await workspaceClient(server.url));
+    const retry=await rpc({oneofKind:'correctIdentity',correctIdentity:m.IdentityCorrection.create({preview:prepared.identityCorrection.id})});expect(retry.identityCorrected).toEqual(accepted.identityCorrected);
+    const alias=await rpc({oneofKind:'resolveIdentity',resolveIdentity:m.ResolveIdentity.create({original:targets[1]})});expect(alias.resolvedIdentity.canonical.target).toEqual(targets[0]);
+    await rpc({oneofKind:'correctIdentity',correctIdentity:m.IdentityCorrection.create({undo:accepted.identityCorrected.id})});
+    await page.goto(server.url);await expect(page.getByRole('button',{name:'Crash duplicate',exact:true})).toBeVisible();await expect(page.getByRole('button',{name:'Crash retained',exact:true})).toBeVisible();
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
+test('reviewed identity correction keeps both boots and reverses on desktop and phone', async ({ page }) => {
+  // Real disk/API/UI: a hardware correction keeps separate installations and
+  // their interfaces. Back preserves the reviewed draft; reversal restores it.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-correction-'));const server=await host(dir);
+  try {
+    const {m,rpc}=await workspaceClient(server.url);
+    for(const width of [1440,390]) {
+      const prefix=`Correction ${width}`;const targets=[];
+      for(const side of ['left','right']) {
+        const report=m.HostReport.create({version:1,platform:'linux',sourceBasis:`${width}${side==='left'?'1':'2'}`.padEnd(64,'a'),bootBasis:'b'.repeat(64),observedAt:100n,findings:[
+          {key:'hardware',kind:m.AssetKind.DEVICE,fields:[{name:'name',value:{oneofKind:'text',text:`${prefix} ${side}`}}],identity:[{kind:m.HostIdentityKind.HARDWARE_UUID,namespace:'smbios/system-uuid',digest:'a'.repeat(64),quality:m.HostIdentityQuality.REPORTED}]},
+          {key:'installation',parent:'hardware',kind:m.AssetKind.SOFTWARE_INSTALLATION,fields:[{name:'name',value:{oneofKind:'text',text:`Boot ${side}`}}]},
+          {key:'interface/en0',parent:'installation',kind:m.AssetKind.INTERFACE,fields:[{name:'name',value:{oneofKind:'text',text:'en0'}}],addresses:[{address:side==='left'?'192.0.2.10':'192.0.2.11',stability:m.AddressStability.STABLE,state:m.AddressState.PREFERRED}],addressesComplete:true}
+        ]});
+        const prepared=await rpc({oneofKind:'hostImport',hostImport:m.HostImport.create({source:`Boot ${side} ${width}`,report,selection:report.findings.map(v=>({key:v.key}))})});
+        const accepted=await rpc({oneofKind:'hostImport',hostImport:m.HostImport.create({preview:prepared.preview.id})});targets.push(accepted.mutation.targets);
+      }
+      await page.setViewportSize({width,height:900});await page.goto(`${server.url}/#/?view=2&asset=${targets[0][0].assetId}&incarnation=${targets[0][0].incarnation}`);
+      await page.getByRole('button',{name:'Find possible duplicates in enclosing selection',exact:true}).click();
+      await page.getByRole('region',{name:'Identity candidates',exact:true}).locator('li').filter({hasText:`${prefix} right`}).getByRole('button',{name:'Compare with candidate',exact:true}).click();const dialog=page.getByRole('dialog');
+      await dialog.getByRole('button',{name:'Plan identity correction',exact:true}).click();
+      await dialog.getByRole('radio',{name:'Same hardware, different OS installations',exact:true}).check();
+      await dialog.getByRole('button',{name:'Continue',exact:true}).click();
+      await dialog.getByRole('combobox',{name:'Retained identity',exact:true}).selectOption('left',{timeout:5000});
+      await dialog.getByRole('button',{name:'Keep all retained field values',exact:true}).click();
+      await dialog.getByRole('button',{name:'Prepare correction preview',exact:true}).click();
+      await expect(dialog.getByRole('heading',{name:'Review identity correction',exact:true})).toBeVisible();
+      await dialog.getByRole('button',{name:'Back',exact:true}).click();
+      await expect(dialog.getByRole('combobox',{name:'Retained identity',exact:true})).toHaveValue('left');
+      await dialog.getByRole('button',{name:'Prepare correction preview',exact:true}).click();
+      await dialog.getByRole('button',{name:'Accept identity correction',exact:true}).click();
+      await expect(dialog.getByRole('heading',{name:'Correction applied',exact:true})).toBeVisible();
+      const query=await rpc({oneofKind:'query',query:m.Query.create({view:m.View.HARDWARE,search:prefix,limit:25})});expect(query.page.total).toBe(1n);
+      for(const [index,side] of ['left','right'].entries()) {
+        const detail=await rpc({oneofKind:'read',read:m.Read.create({target:targets[index][1]})});
+        expect(detail.detail.relations.some(v=>v.kind===m.RelationKind.CONTAINS&&v.from?.assetId===targets[0][0].assetId&&v.to?.assetId===targets[index][1].assetId)).toBe(true);
+        const iface=await rpc({oneofKind:'read',read:m.Read.create({target:targets[index][2]})});expect(iface.detail.currentAddresses[0].observations[0].value.address).toBe(side==='left'?'192.0.2.10':'192.0.2.11');
+      }
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+      await dialog.getByRole('button',{name:'Reverse this correction',exact:true}).click();
+      await expect(dialog.getByRole('heading',{name:'Correction reversed',exact:true})).toBeVisible();
+      await page.screenshot({path:`test-results/identity-correction-${width}.png`,fullPage:true});
+      await dialog.getByRole('button',{name:'Close',exact:true}).click();
+      const restored=await rpc({oneofKind:'query',query:m.Query.create({view:m.View.HARDWARE,search:prefix,limit:25})});expect(restored.page.total).toBe(2n);
+    }
+  } finally {await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
+test('duplicate installation review maps only selected layers on desktop and phone',async({page})=>{
+  // Each selected layer has its own field decision. Equal native labels keep
+  // separate source bindings, and reversal restores both source namespaces.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-layer-correction-'));const server=await host(dir);
+  try {
+    const {m,rpc}=await workspaceClient(server.url);
+    for(const width of [1440,390]) {
+      const prefix=`Layer ${width}`;const targets=[];
+      for(const side of ['left','right']) {
+        const field=text=>({name:'name',value:{oneofKind:'text',text}});
+        const report=m.HostReport.create({version:1,platform:'linux',sourceBasis:`${width}${side==='left'?'1':'2'}`.padEnd(64,'a'),bootBasis:'b'.repeat(64),observedAt:100n,findings:[
+          {key:'hardware',kind:m.AssetKind.DEVICE,fields:[field(`${prefix} ${side}`)]},
+          {key:'installation',parent:'hardware',kind:m.AssetKind.SOFTWARE_INSTALLATION,fields:[field(`${prefix} OS ${side}`)]},
+          {key:'interface/en0',parent:'installation',kind:m.AssetKind.INTERFACE,fields:[field(`${prefix} NIC ${side}`)],addresses:[{address:side==='left'?'192.0.2.10':'192.0.2.11',stability:m.AddressStability.STABLE,state:m.AddressState.PREFERRED}],addressesComplete:true}
+        ]});
+        const prepared=await rpc({oneofKind:'hostImport',hostImport:m.HostImport.create({source:`Shared native label ${width}`,report,selection:report.findings.map(v=>({key:v.key}))})});
+        const accepted=await rpc({oneofKind:'hostImport',hostImport:m.HostImport.create({preview:prepared.preview.id})});targets.push(accepted.mutation.targets);
+      }
+      await page.setViewportSize({width,height:900});await page.goto(`${server.url}/#/?view=2&search=${encodeURIComponent(prefix)}`);
+      for(const side of ['left','right'])await page.getByRole('checkbox',{name:`Select ${prefix} ${side}`,exact:true}).check();
+      await page.getByRole('button',{name:'Compare identity',exact:true}).click();const dialog=page.getByRole('dialog');
+      await dialog.getByRole('button',{name:'Plan identity correction',exact:true}).click();await dialog.getByRole('radio',{name:'Duplicate records of the same hardware and installation',exact:true}).check();await dialog.getByRole('button',{name:'Continue',exact:true}).click();
+      await dialog.getByRole('combobox',{name:'Retained identity',exact:true}).selectOption('left');await dialog.getByRole('button',{name:'Keep all retained field values',exact:true}).click();
+      await dialog.getByText('Add an installation or interface mapping',{exact:true}).click();
+      for(const [index,kind,name] of [[2,m.AssetKind.SOFTWARE_INSTALLATION,'OS'],[3,m.AssetKind.INTERFACE,'NIC']]) {
+        await dialog.getByRole('combobox',{name:'Layer',exact:true}).selectOption(String(kind));await dialog.getByRole('button',{name:'Find layer resources',exact:true}).click();
+        for(const [side,action] of [['right','Use as duplicate'],['left','Use as retained']])await dialog.locator('li').filter({hasText:`${prefix} ${name} ${side}`}).getByRole('button',{name:action,exact:true}).click();
+        await dialog.getByRole('button',{name:'Add layer mapping',exact:true}).click();
+        await dialog.getByRole('region',{name:`Layer mapping ${index}`,exact:true}).getByRole('button',{name:'Keep all retained field values',exact:true}).click();
+      }
+      // Final approval must show the actual field values and source decisions at every layer.
+      await dialog.getByRole('region',{name:'Layer mapping 1',exact:true}).getByRole('textbox').first().fill(`Renamed hardware ${width}`);
+      await dialog.getByRole('button',{name:'Prepare correction preview',exact:true}).click();
+      await expect(dialog.getByRole('heading',{name:'Review identity correction',exact:true})).toBeVisible();
+      for(const [index,suffix] of [[1,''],[2,' OS'],[3,' NIC']]) {
+        const summary=dialog.getByRole('region',{name:`Final layer review ${index}`,exact:true});
+        await expect(summary.getByText(`name: keep retained value: ${prefix}${suffix} left`,{exact:true})).toBeVisible();
+        await expect(summary.getByText('Confirmed physical attachments: 0',{exact:true})).toBeVisible();
+      }
+      await expect(dialog.getByText(`Source label Shared native label ${width} becomes Renamed hardware ${width}`,{exact:true})).toBeVisible();
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+      await page.screenshot({path:`test-results/identity-final-review-${width}.png`,fullPage:true});
+      await dialog.getByRole('button',{name:'Accept identity correction',exact:true}).click();await expect(dialog.getByRole('heading',{name:'Correction applied',exact:true})).toBeVisible();
+      const current=await rpc({oneofKind:'read',read:m.Read.create({target:targets[0][2]})});expect(current.detail.currentAddresses).toHaveLength(2);expect(new Set(current.detail.currentAddresses.map(v=>v.sourceId)).size).toBe(2);
+      expect(current.detail.currentAddresses.flatMap(v=>v.observations.map(v=>v.value.address)).sort()).toEqual(['192.0.2.10','192.0.2.11']);
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+      await dialog.getByRole('button',{name:'Reverse this correction',exact:true}).click();await expect(dialog.getByRole('heading',{name:'Correction reversed',exact:true})).toBeVisible();await dialog.getByRole('button',{name:'Close',exact:true}).click();
+      for(const target of targets){const restored=await rpc({oneofKind:'read',read:m.Read.create({target:target[2]})});expect(restored.detail.currentAddresses).toHaveLength(1);}
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
+test('identity comparison keeps two selected machines distinct on desktop and phone', async ({ page }) => {
+  // Equal unauthenticated hardware claims support a pair review. Opening and
+  // leaving that review must not merge identities, widen scope or write state.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-identity-pair-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const prefix = `Identity pair ${width}`;
+      for (const side of ['left', 'right']) {
+        const report = m.HostReport.create({ version: 1, platform: 'linux', sourceBasis: `${width}${side === 'left' ? '1' : '2'}`.padEnd(64, 'a'), bootBasis: 'b'.repeat(64), observedAt: 100n,
+          findings: [{ key: 'hardware', kind: m.AssetKind.DEVICE, fields: [{ name: 'name', value: { oneofKind: 'text', text: `${prefix} ${side}` } }],
+            identity: [{ kind: m.HostIdentityKind.HARDWARE_UUID, namespace: 'smbios/system-uuid', digest: 'a'.repeat(64), quality: m.HostIdentityQuality.REPORTED }] }] });
+        const prepared = await rpc({ oneofKind: 'hostImport', hostImport: m.HostImport.create({ source: `${width} ${side}`, report, selection: [{ key: 'hardware' }] }) });
+        expect(prepared.oneofKind).toBe('preview');
+        await rpc({ oneofKind: 'hostImport', hostImport: m.HostImport.create({ preview: prepared.preview.id }) });
+      }
+      const query = { oneofKind: 'query', query: m.Query.create({ search: prefix, limit: 25 }) };
+      const before = await rpc(query);
+      expect(before.page.total).toBe(2n);
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${server.url}/#/?view=2&search=${encodeURIComponent(prefix)}`);
+      await page.getByRole('checkbox', { name: `Select ${prefix} left`, exact: true }).check();
+      await page.getByRole('checkbox', { name: `Select ${prefix} right`, exact: true }).check();
+      await page.getByRole('button', { name: 'Compare identity', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await expect(dialog.getByRole('heading', { name: `${prefix} left`, exact: true })).toBeVisible();
+      await expect(dialog.getByRole('heading', { name: `${prefix} right`, exact: true })).toBeVisible();
+      await expect(dialog.getByText('Some identifiers match within the same layer and namespace.', { exact: false })).toBeVisible();
+      await expect(dialog.getByText('smbios/system-uuid · reported', { exact: true })).toHaveCount(2);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await dialog.getByRole('button', { name: 'Back', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      await expect(page.getByRole('checkbox', { name: `Select ${prefix} left`, exact: true })).toBeChecked();
+      const after = await rpc(query);
+      expect(after.page.total).toBe(2n);
+      expect(after.page.revision).toBe(before.page.revision);
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('retired scoped links open the retained identity on desktop and phone', async ({ page }) => {
+  // Alias navigation replaces only its exact retired root, retaining other scope and query choices.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-scoped-alias-'));const server=await host(dir);
+  try {
+    const {m,rpc}=await workspaceClient(server.url);
+    for(const width of [1440,390]) {
+      const targets=[];
+      for(const name of [`Retained ${width}`,`Retired ${width}`,`Unrelated ${width}`]) {
+        const result=await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.DEVICE,changes:[{name:'name',value:{oneofKind:'text',text:name}}]})});
+        targets.push(result.mutation.targets[0]);
+      }
+      const [retained,retired,other]=targets;
+      const preview=await rpc({oneofKind:'correctIdentity',correctIdentity:m.IdentityCorrection.create({decision:m.IdentityDecision.DISTINCT_INSTALLATIONS,mappings:[{duplicate:retired,retained,fields:[{name:'name',useDuplicate:false}]}]})});
+      await rpc({oneofKind:'correctIdentity',correctIdentity:m.IdentityCorrection.create({preview:preview.identityCorrection.id})});
+      const query=new URLSearchParams({view:'2',asset:retired.assetId,incarnation:retired.incarnation,columns:'name,description'});
+      for(const target of [retired,other]) {query.append('scope',target.assetId);query.append('scopeInc',target.incarnation);}
+      await page.setViewportSize({width,height:900});await page.goto(`${server.url}/#/?${query}`);
+      await page.getByRole('button',{name:'Locate retained identity',exact:true}).click();
+      await page.getByRole('button',{name:'Open retained resource',exact:true}).click();
+      await expect(page.getByRole('region',{name:'Resource details'}).getByRole('heading',{name:`Retained ${width}`,exact:true})).toBeVisible();
+      const route=new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
+      expect(route.getAll('scope')).toEqual([retained.assetId,other.assetId]);
+      expect(route.getAll('scopeInc')).toEqual([retained.incarnation,other.incarnation]);
+      expect(route.get('columns')).toBe('name,description');
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    }
+  } finally {await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
+test('host address replacement is reviewed without adopting another identity on desktop and phone', async ({ page }) => {
+  // The import review shows only a selected source's changes. Accepting the
+  // new address reuses all three existing identities instead of creating hosts.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-address-delta-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const source = `Address source ${width}`;
+      const field = text => ({ name: 'name', value: { oneofKind: 'text', text } });
+      const address = value => m.CurrentAddress.create({ address: value, prefixLength: 24, stability: m.AddressStability.STABLE, state: m.AddressState.PREFERRED });
+      const report = m.HostReport.create({ version: 1, platform: 'linux', sourceBasis: `${width}`.padEnd(64, 'a'), bootBasis: 'b'.repeat(64), observedAt: 100n, findings: [
+        { key: 'hardware', kind: m.AssetKind.DEVICE, fields: [field(`Address host ${width}`)] },
+        { key: 'installation', kind: m.AssetKind.SOFTWARE_INSTALLATION, parent: 'hardware', fields: [field(`Address OS ${width}`)] },
+        { key: 'interface', kind: m.AssetKind.INTERFACE, parent: 'installation', fields: [field(`Address NIC ${width}`)], addresses: [address('192.0.2.7')], addressesComplete: true },
+      ] });
+      // A stability-only update must identify the changed attribute in review.
+      report.findings[2].addresses.push(m.CurrentAddress.create({ address: '192.0.2.11', prefixLength: 24, state: m.AddressState.PREFERRED }));
+      const prepared = await rpc({ oneofKind: 'hostImport', hostImport: m.HostImport.create({ source, report, selection: report.findings.map(v => ({ key: v.key })) }) });
+      const accepted = await rpc({ oneofKind: 'hostImport', hostImport: m.HostImport.create({ preview: prepared.preview.id }) });
+      report.observedAt = 200n;
+      report.findings[2].addresses = [address('192.0.2.9'), address('192.0.2.11')];
+      const buffer = Buffer.from(m.Request.toBinary(m.Request.create({ command: { oneofKind: 'hostImport', hostImport: m.HostImport.create({ report }) } })));
+      await page.setViewportSize({ width, height: 900 }); await page.goto(server.url);
+      if (width === 390) await page.getByRole('button', { name: 'More', exact: true }).click();
+      await page.getByRole('button', { name: 'Import host report', exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByLabel('Host report file').setInputFiles({ name: 'address-change.omloom', mimeType: 'application/octet-stream', buffer });
+      await dialog.getByLabel('Source name', { exact: true }).fill(source);
+      for (let i = 0; i < 3; i++) await dialog.getByRole('checkbox').nth(i).check();
+      await dialog.getByRole('button', { name: 'Prepare host preview', exact: true }).click();
+      await expect(dialog.getByText('Add 192.0.2.9/24 (stable · preferred)', { exact: true })).toBeVisible();
+      await expect(dialog.getByText('Remove 192.0.2.7/24 (stable · preferred) from this source', { exact: true })).toBeVisible();
+      await expect(dialog.getByText('Update 192.0.2.11/24 (unspecified · preferred) → 192.0.2.11/24 (stable · preferred)', { exact: true })).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await dialog.getByRole('button', { name: 'Accept selected observations', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      const current = await rpc({ oneofKind: 'read', read: m.Read.create({ target: accepted.mutation.targets[2] }) });
+      expect(current.detail.currentAddresses[0].observations.map(v => v.value.address).sort()).toEqual(['192.0.2.11', '192.0.2.9']);
+      const hosts = await rpc({ oneofKind: 'query', query: m.Query.create({ search: `Address host ${width}`, limit: 25 }) });
+      expect(hosts.page.total).toBe(1n);
+      expect(hosts.page.items[0].target).toEqual(accepted.mutation.targets[0]);
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
 
 test('execution host reports match the current VM scope on desktop and phone', async ({ page }) => {
@@ -1211,6 +1606,7 @@ test('mutations reset ordinary and local continuations on desktop and phone', as
   test.setTimeout(90_000);
   const dir = await mkdtemp(join(tmpdir(), 'omloom-mutation-cursors-'));
   const server = await host(dir);
+  let release;
   try {
     const { m, rpc } = await workspaceClient(server.url);
     const csv = 'external_id,name\n' + Array.from({ length: 26 }, (_, i) => `${i},root-${String(i).padStart(2,'0')}`).join('\n');
@@ -1221,10 +1617,26 @@ test('mutations reset ordinary and local continuations on desktop and phone', as
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto(server.url);
+      await expect(page.getByRole('button', { name: '+ Create resource', exact: true })).toBeEnabled();
+      // The previous page stays visible while its replacement loads, but cannot be selected.
+      let held = false;
+      const resumed = new Promise(resolve => { release = resolve; });
+      await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+        const bytes = route.request().postDataBuffer();
+        const command = bytes ? m.Request.fromBinary(bytes.subarray(5)).command : undefined;
+        if (!held && command?.oneofKind === 'query' && command.query.cursor) { held = true; await resumed; }
+        await route.continue();
+      });
       await page.getByRole('button', { name: 'Next page →', exact: true }).click();
+      await expect.poll(() => held).toBe(true);
+      const selectPage = page.getByRole('checkbox', { name: width === 390 ? 'Select phone page' : 'Select visible page', exact: true });
+      await expect(selectPage).toBeDisabled();
+      release();
       await expect(page).toHaveURL(/cursor=/);
       await expect(page.getByRole('button', { name: 'root-25', exact: true })).toBeVisible();
-      await page.getByRole('checkbox', { name: width === 390 ? 'Select phone page' : 'Select visible page', exact: true }).check();
+      await expect(selectPage).toBeEnabled();
+      await page.unrouteAll({ behavior: 'wait' });
+      await selectPage.check();
       await page.getByRole('button', { name: 'Review bulk change', exact: true }).click();
       const dialog = page.getByRole('dialog');
       await dialog.getByRole('combobox', { name: 'Change', exact: true }).selectOption('set');
@@ -1255,14 +1667,14 @@ test('mutations reset ordinary and local continuations on desktop and phone', as
       await expect(page.getByRole('button', { name: 'port-25', exact: true })).toBeVisible();
       await page.getByRole('button', { name: 'Edit resource', exact: true }).click();
       await dialog.getByRole('combobox', { name: 'Name change', exact: true }).selectOption('set');
-      await dialog.getByLabel('Name', { exact: true }).fill(`Updated parent ${width}`);
+      await dialog.getByLabel('Name', { exact: true }).fill(`root-00 Updated parent ${width}`);
       await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
       await expect(dialog).toBeHidden();
       await expect(page).not.toHaveURL(/localCursor=/);
-      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `Updated parent ${width}`, exact: true })).toBeVisible();
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: `root-00 Updated parent ${width}`, exact: true })).toBeVisible();
       await expect(page.getByRole('alert')).toHaveCount(0);
     }
-  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+  } finally { release?.(); await page.unrouteAll({ behavior: 'wait' }); await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
 
 test('responsibility and account mutations discard enclosing page continuations', async ({ page }) => {

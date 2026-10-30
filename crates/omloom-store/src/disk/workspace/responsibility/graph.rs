@@ -85,7 +85,7 @@ impl Graph {
                         ])
                     };
                     let query = if DETAILS {
-                        "UNWIND $keys AS key MATCH (n:OmRow {parent:key}) WHERE n.facet IS NOT NULL RETURN {parent:n.parent,facet:n.facet,mode:n.mode,issuer:n.issuer,subject:n.subject,party_kind:n.party_kind,name:n.name,contact:n.contact,source_relation:n.source_relation,source_binding_revision:n.source_binding_revision} AS p LIMIT $limit"
+                        "UNWIND $keys AS key MATCH (n:OmRow {parent:key}) WHERE n.facet IS NOT NULL RETURN {parent:n.parent,facet:n.facet,mode:n.mode,issuer:n.issuer,subject:n.subject,party_kind:n.party_kind,name:n.name,contact:n.contact,contact_kind:n.contact_kind,source_relation:n.source_relation,source_binding_revision:n.source_binding_revision} AS p LIMIT $limit"
                     } else {
                         "UNWIND $keys AS key MATCH (n:OmRow {parent:key}) WHERE n.facet=$facet RETURN {parent:n.parent,facet:n.facet,mode:n.mode,issuer:n.issuer,subject:n.subject,party_kind:n.party_kind,name:n.name,source_relation:n.source_relation,source_binding_revision:n.source_binding_revision} AS p LIMIT $limit"
                     };
@@ -355,6 +355,7 @@ impl Graph {
                         result.party = assignment.party.clone();
                         if contact_visible {
                             result.contact = assignment.contact.clone();
+                            result.contact_kind = assignment.contact_kind;
                         }
                         if DETAILS
                             && (current == target || source_visible)

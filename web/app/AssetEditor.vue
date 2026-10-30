@@ -61,6 +61,7 @@ const fields = computed<EditorField[]>(() => {
     { id: 'description', name: 'Description', type: model.FieldType.TEXT, choices: [], advanced: true },
   ] : [
     { id: 'name', name: 'Name', type: model.FieldType.TEXT, choices: [], advanced: false },
+    { id: 'dns_name', name: 'DNS name', type: model.FieldType.TEXT, choices: [], advanced: false },
     { id: 'description', name: 'Description', type: model.FieldType.TEXT, choices: [], advanced: false },
     { id: 'serial', name: 'Serial number', type: model.FieldType.TEXT, choices: [], advanced: false },
     { id: 'virtualization_role', name: 'Virtualization role', type: model.FieldType.CHOICE, choices: virtualizationChoices.map(v => v.value), advanced: false },

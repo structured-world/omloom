@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import Dialog from './Dialog.vue';
-import { call, model, typedField, display, key } from './api';
+import { call, model, typedField, display, key, AssetKind } from './api';
 const props = defineProps<{ items: model.Item[]; revision: bigint; definitions: model.Definition[]; working: model.WorkingContext }>();
 const emit = defineEmits<{ close: []; saved: [] }>();
 const name = ref('description'); const mode = ref('preserve'); const value = ref(''); const error = ref('');
-const fields = computed(() => [{ id: 'description', name: 'Description', type: model.FieldType.TEXT }, { id: 'serial', name: 'Serial number', type: model.FieldType.TEXT }, ...props.definitions.filter(d => !d.retired && props.items.every(i => d.kinds.includes(i.kind)))]);
+const fields = computed(() => [{ id: 'description', name: 'Description', type: model.FieldType.TEXT }, { id: 'serial', name: 'Serial number', type: model.FieldType.TEXT }, ...(props.items.length && props.items.every(i=>i.kind===AssetKind.DOMAIN) ? [{id:'dns_name',name:'DNS name',type:model.FieldType.TEXT}] : []), ...props.definitions.filter(d => !d.retired && props.items.every(i => d.kinds.includes(i.kind)))]);
 const field = computed(() => fields.value.find(f => f.id === name.value));
 async function apply(remove = false) {
   try {

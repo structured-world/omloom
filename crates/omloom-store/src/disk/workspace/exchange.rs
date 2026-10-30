@@ -236,8 +236,8 @@ impl Store {
                 Ok((external, change))
             })();
             match parsed {
-                Ok((external, change)) => rows.push((external, api::ImportRow { row: row_number, change: Some(change), diagnostic: String::new() })),
-                Err(error) => rows.push((String::new(), api::ImportRow { row: row_number, change: None, diagnostic: format!("Row {row_number}, {diagnostic}: {error}. Review the mapping, declared type and current scope.") })),
+                Ok((external, change)) => rows.push((external, api::ImportRow { row: row_number, change: Some(change), diagnostic: String::new(), addresses: None })),
+                Err(error) => rows.push((String::new(), api::ImportRow { row: row_number, change: None, diagnostic: format!("Row {row_number}, {diagnostic}: {error}. Review the mapping, declared type and current scope."), addresses: None })),
             }
         }
         if rows.is_empty() {

@@ -22,8 +22,9 @@ use std::{
 type Properties = BTreeMap<String, Value>;
 type Result<T> = std::result::Result<T, Error>;
 const ROOT: &str = "installation";
-const SCHEMA_VERSION: u64 = 10;
+const SCHEMA_VERSION: u64 = 13;
 const MAX_CHILDREN: usize = 2048;
+mod deltas;
 mod inventory;
 mod lifecycle;
 mod operations;
@@ -65,7 +66,8 @@ impl From<DatabaseError> for Error {
         match e {
             DatabaseError::RevisionMismatch { .. }
             | DatabaseError::UniqueViolation { .. }
-            | DatabaseError::TransactionConflict { .. } => Self::Conflict,
+            | DatabaseError::TransactionConflict { .. }
+            | DatabaseError::InvariantRefused { .. } => Self::Conflict,
             DatabaseError::Budget(coordinode_core::budget::BudgetStop::Memory { .. }) => {
                 Self::Limit
             }
@@ -434,6 +436,9 @@ impl Store {
         }
         for name in [
             "schema",
+            "contact_kind",
+            "sender_kind",
+            "recovery_route_kind",
             "revision",
             "class",
             "size",
@@ -519,7 +524,7 @@ impl Store {
             let previous_version = root.rows.first().and_then(|row| row.get("version"));
             if !matches!(
                 root.rows.first().and_then(|row| row.get("version")),
-                Some(Value::Int(2..=8))
+                Some(Value::Int(version)) if (2..SCHEMA_VERSION as i64).contains(version)
             ) || current.mode != schema.mode
                 || current.placement != schema.placement
                 || current.temporal != schema.temporal
@@ -536,6 +541,9 @@ impl Store {
                             "issuer",
                             "subject",
                             "contact",
+                            "contact_kind",
+                            "sender_kind",
+                            "recovery_route_kind",
                             "source_relation",
                             "facet",
                             "mode",
@@ -662,6 +670,7 @@ impl Store {
             ("omloom_group", "group"),
             ("omloom_party_lookup", "party_lookup"),
             ("omloom_request_account", "request_account"),
+            ("omloom_claim", "claim"),
         ] {
             match db.execute_cypher(&format!("CREATE INDEX {name} ON :OmRow({property})")) {
                 Ok(_) => {}
@@ -717,6 +726,9 @@ impl Store {
         if version < 8 {
             workspace::upgrade_asset_names(&store)?;
         }
+        if version < 12 {
+            workspace::host_identity::upgrade(&store)?;
+        }
         if version < SCHEMA_VERSION {
             // Publish the format only after all resumable projections are ready.
             let mut tx = store.begin()?;
@@ -741,6 +753,7 @@ impl Store {
             "MATCH (n:OmRow {group:'probe'}) RETURN n.key AS key LIMIT 1",
             "MATCH (n:OmRow {party_lookup:'probe'}) RETURN n.key AS key LIMIT 1",
             "MATCH (n:OmRow {request_account:'probe'}) RETURN n.key AS key LIMIT 1",
+            "MATCH (n:OmRow {claim:'probe'}) RETURN n.key AS key LIMIT 1",
         ] {
             store
                 .db
@@ -823,6 +836,7 @@ impl Store {
                 id: Some(tx),
                 root,
                 changed: false,
+                inverse: None,
             })
         })();
         if result.is_err() {
@@ -874,6 +888,7 @@ struct Tx<'a> {
     id: Option<TransactionId>,
     root: Properties,
     changed: bool,
+    inverse: Option<deltas::Capture>,
 }
 impl Tx<'_> {
     fn query(&self, q: &str, p: Option<HashMap<String, Value>>) -> Result<Vec<Properties>> {
@@ -1015,6 +1030,9 @@ impl Tx<'_> {
         if old == Some(&data) {
             return Ok(false);
         }
+        if let Some(capture) = &mut self.inverse {
+            capture.record(key, old, class)?;
+        }
         self.counters(old, Some(&data))?;
         let query = if old.is_some() {
             "MATCH (n:OmRow {key:$key}) SET n = $p"
@@ -1037,6 +1055,9 @@ impl Tx<'_> {
     }
     fn delete_projection(&mut self, key: &str) -> Result<()> {
         if let Some(old) = self.get(key)? {
+            if let Some(capture) = &mut self.inverse {
+                capture.record(key, Some(&old), Class::Inventory)?;
+            }
             self.counters(Some(&old), None)?;
             self.store.db.execute_in_transaction(
                 self.id.ok_or(Error::Corrupt)?,

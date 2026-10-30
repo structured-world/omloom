@@ -613,8 +613,14 @@ impl Store {
                         " OPTIONAL MATCH {path} WHERE {owner} WITH {}, p IS NOT NULL AS {flag}",
                         bindings.join(", ")
                     ));
-                    bindings.push(flag.into());
-                    clauses.push(format!("NOT {flag}"));
+                    if reverse {
+                        bindings.push(flag.into());
+                        clauses.push(format!("NOT {flag}"));
+                    } else {
+                        // Owned components cannot become roots in the reverse
+                        // branch. Reject them before performing another probe.
+                        predicate_joins.push(format!(" WHERE NOT {flag}"));
+                    }
                 }
             } else {
                 let owner = browse_clause(context, &mut values, None, &child_kinds);
@@ -735,6 +741,7 @@ impl Store {
                     "name".to_owned(),
                     "description".to_owned(),
                     "serial".to_owned(),
+                    "dns_name".to_owned(),
                 ];
                 searchable.extend(
                     definitions
@@ -1286,6 +1293,11 @@ impl Store {
             current_addresses,
             relations_next,
             network_next: None,
+            identity: if read.relations_cursor.is_none() {
+                tx.host_identity(context, target, asset.kind)?
+            } else {
+                Vec::new()
+            },
         };
         if read.relations_cursor.is_none() {
             tx.read_network_page(context, target, asset.kind, working, None, &mut detail)?;
@@ -1536,6 +1548,13 @@ impl Store {
             }
             tx.check_relationship(context, &selection, &existing)?;
             if request.remove {
+                if existing.kind == wire::RelationKind::RunsOn as i32 {
+                    let guest = parse_target(existing.from.as_ref())?;
+                    if number(&tx.asset(guest)?, "kind")? == wire::AssetKind::VirtualMachine as u64
+                    {
+                        tx.require_no_pending_operations(guest)?;
+                    }
+                }
                 if existing.kind == wire::RelationKind::ReleaseOf as i32
                     && tx.release_is_installed(parse_target(existing.from.as_ref())?)?
                 {
@@ -1775,7 +1794,7 @@ impl Tx<'_> {
             }
         }
     }
-    fn workspace_remove(
+    pub(super) fn workspace_remove(
         &mut self,
         context: &Context,
         target: AssetRef,
@@ -1788,10 +1807,7 @@ impl Tx<'_> {
         let key = asset_key(target);
         // Existing operation/retirement code owns uncertain effects and identity fences.
         self.require_no_account_references(target)?;
-        let pending = self.query("MATCH (n:OmRow) WHERE n.parent='operations' AND n.class=$class AND n.asset=$asset AND n.incarnation=$incarnation RETURN properties(n) AS p LIMIT 1",params([("class", int(Class::Pending as u64)?), ("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string()))]))?;
-        if !pending.is_empty() {
-            return Err(Error::UnsafeTransition);
-        }
+        self.require_no_pending_operations(target)?;
         let linked = self.query("MATCH (n:OmRow) WHERE n.parent='relations' AND (n.asset=$asset OR n.to_asset=$asset) RETURN properties(n) AS p LIMIT 1",params([("asset", text(target.asset.to_string()))]))?;
         if !linked.is_empty() {
             return Err(Error::Conflict);
@@ -1829,7 +1845,7 @@ impl Tx<'_> {
             self.delete(&group_key)?;
         }
         self.retire_current_facts(target)?;
-        let mappings = self.query("MATCH (n:OmRow {asset:$asset}) WHERE n.parent='csv-mappings' AND n.incarnation=$incarnation RETURN properties(n) AS p LIMIT 2049", params([("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string()))]))?;
+        let mappings = self.query("MATCH (n:OmRow {asset:$asset}) WHERE n.parent='csv-mappings' AND n.incarnation=$incarnation AND n.class=$class RETURN properties(n) AS p LIMIT 2049", params([("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string())), ("class", Value::Int(Class::Inventory as i64))]))?;
         if mappings.len() > MAX_CHILDREN {
             return Err(Error::Limit);
         }
@@ -1903,6 +1919,7 @@ pub(super) fn validate_column(name: &str, definitions: &[api::Definition]) -> Re
         "name",
         "description",
         "serial",
+        "dns_name",
         "virtualization_role",
         "vlan_tag",
         "cidr",

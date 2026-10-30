@@ -9,7 +9,7 @@ repository.workspace = true
 
 [features]
 default = ["std"]
-std = ["dep:coordinode-embed", "dep:coordinode-core", "dep:omloom-contracts", "dep:sha2", "dep:prost", "dep:csv", "dep:ipnet"]
+std = ["dep:coordinode-embed", "dep:coordinode-core", "dep:omloom-contracts", "dep:sha2", "dep:prost", "dep:csv", "dep:ipnet", "dep:serde", "dep:serde_json", "dep:structured-email-address", "dep:structured-public-domains", "dep:phonenumber", "dep:idna", "dep:url"]
 diagnostics = ["std"]
 
 [dependencies]
@@ -20,6 +20,13 @@ sha2 = { version = "0.10", optional = true }
 prost = { workspace = true, optional = true }
 csv = { version = "1.4", optional = true }
 ipnet = { version = "2.12", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+structured-email-address = { version = "0.0.22", default-features = false, features = ["alloc"], optional = true }
+structured-public-domains = { version = "0.0.44", default-features = false, features = ["alloc"], optional = true }
+phonenumber = { version = "0.3.10", optional = true }
+idna = { version = "1.1", optional = true }
+url = { version = "2.5", optional = true }
 
 [dev-dependencies]
 coordinode-storage = { git = "https://github.com/structured-world/coordinode", rev = "1862962a3da20e5e57d7ab5126e69bd5817d7c61" }
