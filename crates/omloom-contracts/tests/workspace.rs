@@ -83,3 +83,68 @@ fn repeated_empty_messages_cannot_amplify_small_frames() {
     ));
     assert_eq!(budget.used(), 0);
 }
+
+// Packed scalar references count individually before allocation, not once per buffer.
+#[test]
+fn requirements_bound_nodes_and_packed_members_before_decoding() {
+    let budget = MemoryBudget::new(16 * 1_048_576);
+    for (nodes, members) in [(65, 0), (1, 65)] {
+        let node = api::RequirementNode {
+            expression: Some(api::requirement_node::Expression::Group(
+                api::RequirementGroup {
+                    kind: api::RequirementGroupKind::All as i32,
+                    members: vec![0; members],
+                    minimum: 0,
+                },
+            )),
+        };
+        let bytes = api::Request {
+            command: Some(api::request::Command::EvaluateRequirements(
+                api::EvaluateRequirements {
+                    nodes: vec![node; nodes],
+                    ..Default::default()
+                },
+            )),
+            working: None,
+        }
+        .encode_to_vec();
+        assert!(matches!(
+            decode_workspace(&bytes, Limits::default(), &budget),
+            Err(Error::Limit)
+        ));
+        assert_eq!(budget.used(), 0);
+    }
+}
+
+#[test]
+fn requirements_share_member_limits_across_packed_and_unpacked_segments() {
+    // Splitting one repeated field across wire encodings cannot reset its allocation bound.
+    fn message(tag: u32, body: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        prost::encoding::encode_key(tag, prost::encoding::WireType::LengthDelimited, &mut out);
+        prost::encoding::encode_varint(body.len() as u64, &mut out);
+        out.extend_from_slice(body);
+        out
+    }
+    let budget = MemoryBudget::new(16 * 1_048_576);
+    for (unpacked, extra) in [(true, 32), (true, 33), (false, 33)] {
+        let mut group = vec![0x08, 1];
+        group.extend(message(2, &[0; 32]));
+        if unpacked {
+            for _ in 0..extra {
+                group.extend([0x10, 0]);
+            }
+        } else {
+            group.extend(message(2, &vec![0; extra]));
+        }
+        let bytes = message(33, &message(2, &message(2, &group)));
+        let result = decode_workspace(&bytes, Limits::default(), &budget);
+        if extra == 32 {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(Error::Limit)));
+        }
+        drop(result);
+        assert_eq!(budget.used(), 0);
+    }
+}

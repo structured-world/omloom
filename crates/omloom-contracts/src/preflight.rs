@@ -141,7 +141,9 @@ impl Work {
                 .find(|f| f.tag == tag)
                 .ok_or(Error::UnknownField)?;
             let mask = 1u64.checked_shl(tag).ok_or(Error::Wire)?;
-            if shape.max_count != 0 {
+            if shape.max_count != 0
+                && !(shape.repeated && matches!(shape.kind, Kind::Varint(_)) && key & 7 == 2)
+            {
                 let count = &mut counts[tag as usize];
                 if *count == shape.max_count {
                     return Err(Error::Limit);
@@ -184,6 +186,13 @@ impl Work {
                             let mut packed = body;
                             while !packed.is_empty() {
                                 self.field()?;
+                                if shape.max_count != 0 {
+                                    let count = &mut counts[tag as usize];
+                                    if *count == shape.max_count {
+                                        return Err(Error::Limit);
+                                    }
+                                    *count += 1;
+                                }
                                 if varint(&mut packed)? > max {
                                     return Err(Error::Wire);
                                 }

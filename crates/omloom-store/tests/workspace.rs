@@ -26,6 +26,8 @@ mod host_import;
 mod host_network;
 #[path = "workspace/projections.rs"]
 mod projections;
+#[path = "workspace/requirements.rs"]
+mod requirements;
 #[path = "workspace/responsibility.rs"]
 mod responsibility;
 #[path = "workspace/software.rs"]

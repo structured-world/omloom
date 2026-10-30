@@ -3306,6 +3306,233 @@ export interface Mutation {
 export interface Empty {
 }
 /**
+ * @generated from protobuf message omloom.workspace.v1.FieldRequirement
+ */
+export interface FieldRequirement {
+    /**
+     * Caller-selected exact resource whose recorded fact is needed, not a grant.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef target = 1
+     */
+    target?: AssetRef;
+    /**
+     * User's desired value and field name; clear and hypotheses are not expectations.
+     * Numeric measurements require equal lower/upper bounds and an explicit unit.
+     *
+     * @generated from protobuf field: omloom.v1.Field expected = 2
+     */
+    expected?: Field;
+    /**
+     * Typed comparison selected by the caller, never executable expression text.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.RequirementComparison comparison = 3
+     */
+    comparison: RequirementComparison;
+    /**
+     * Whether to inspect accepted configuration or actual dated source claims.
+     * Accepted configuration never certifies observed availability.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.RequirementLayer layer = 4
+     */
+    layer: RequirementLayer;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.RequirementGroup
+ */
+export interface RequirementGroup {
+    /**
+     * User-selected logical combination. This query does not certify consensus.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.RequirementGroupKind kind = 1
+     */
+    kind: RequirementGroupKind;
+    /**
+     * Indices into EvaluateRequirements.nodes, at most 64 references per group.
+     *
+     * @generated from protobuf field: repeated uint32 members = 2
+     */
+    members: number[];
+    /**
+     * Required only for AT_LEAST; count distinct scoped subjects, not source rows.
+     * Direct field subjects can vote; nested logical groups have unknown voter identity.
+     *
+     * @generated from protobuf field: uint32 minimum = 3
+     */
+    minimum: number;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.RequirementNode
+ */
+export interface RequirementNode {
+    /**
+     * One bounded predicate or group. Groups are a flat indexed graph, not recursive wire messages.
+     *
+     * @generated from protobuf oneof: expression
+     */
+    expression: {
+        oneofKind: "field";
+        /**
+         * @generated from protobuf field: omloom.workspace.v1.FieldRequirement field = 1
+         */
+        field: FieldRequirement;
+    } | {
+        oneofKind: "group";
+        /**
+         * @generated from protobuf field: omloom.workspace.v1.RequirementGroup group = 2
+         */
+        group: RequirementGroup;
+    } | {
+        oneofKind: undefined;
+    };
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.EvaluateRequirements
+ */
+export interface EvaluateRequirements {
+    /**
+     * Resource whose selected requirements are being inspected in the working context.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef anchor = 1
+     */
+    anchor?: AssetRef;
+    /**
+     * Caller-supplied desired conditions, at most 64 nodes and 256 total edges.
+     * Actual evidence, authority and completeness are always loaded by the server.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.RequirementNode nodes = 2
+     */
+    nodes: RequirementNode[];
+    /**
+     * Selected method/root index. Unselected alternatives do not affect this result.
+     *
+     * @generated from protobuf field: uint32 root = 3
+     */
+    root: number;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.RequirementEvidence
+ */
+export interface RequirementEvidence {
+    /**
+     * Permitted source or authority reference, never a credential or release token.
+     *
+     * @generated from protobuf field: string source = 1
+     */
+    source: string;
+    /**
+     * Source/content revision; absent means it was not supplied by that source.
+     *
+     * @generated from protobuf field: optional string revision = 2
+     */
+    revision?: string;
+    /**
+     * Original observation time in Unix milliseconds, absent for accepted intent.
+     *
+     * @generated from protobuf field: optional uint64 observed_at_ms = 3
+     */
+    observedAtMs?: bigint;
+    /**
+     * Original expiry in Unix milliseconds, absent for current accepted intent.
+     *
+     * @generated from protobuf field: optional uint64 valid_until_ms = 4
+     */
+    validUntilMs?: bigint;
+    /**
+     * Original source scan identity when no comparable source revision is supplied.
+     *
+     * @generated from protobuf field: optional string scan_id = 5
+     */
+    scanId?: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.RequirementResult
+ */
+export interface RequirementResult {
+    /**
+     * Original requested node index; no hidden dependency identities are added.
+     *
+     * @generated from protobuf field: uint32 node = 1
+     */
+    node: number;
+    /**
+     * Server-derived semantic key over the condition and scoped subject, independent of current values.
+     *
+     * @generated from protobuf field: string semantic_key = 2
+     */
+    semanticKey: string;
+    /**
+     * Predicate evidence result, never an authorization decision or effect receipt.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.RequirementState state = 3
+     */
+    state: RequirementState;
+    /**
+     * Stable reason; protected/missing subjects have the same restricted response.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.RequirementReason reason = 4
+     */
+    reason: RequirementReason;
+    /**
+     * Disclosed subject only when current object and requested field rights allow it.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef target = 5
+     */
+    target?: AssetRef;
+    /**
+     * Disclosed field name; absent for groups and restricted requirements.
+     *
+     * @generated from protobuf field: optional string field = 6
+     */
+    field?: string;
+    /**
+     * Only currently permitted next steps; reading never submits a request.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.RequirementResolution resolutions = 7
+     */
+    resolutions: RequirementResolution[];
+    /**
+     * At most 32 permitted current source bases, without raw source payloads.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.RequirementEvidence evidence = 8
+     */
+    evidence: RequirementEvidence[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.RequirementEvaluation
+ */
+export interface RequirementEvaluation {
+    /**
+     * Current consistent inventory basis. Evaluations are transient and are not saved.
+     *
+     * @generated from protobuf field: uint64 revision = 1
+     */
+    revision: bigint;
+    /**
+     * Observation of time for evaluating the supplied validity windows, Unix milliseconds.
+     *
+     * @generated from protobuf field: uint64 evaluated_at_ms = 2
+     */
+    evaluatedAtMs: bigint;
+    /**
+     * Overall selected-condition result, never safe-to-execute or an authority grant.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.RequirementState state = 3
+     */
+    state: RequirementState;
+    /**
+     * Overall reason; a cycle cannot become a partially successful graph.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.RequirementReason reason = 4
+     */
+    reason: RequirementReason;
+    /**
+     * Only nodes reached from the selected root; no facts for unselected methods.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.RequirementResult results = 5
+     */
+    results: RequirementResult[];
+}
+/**
  * @generated from protobuf message omloom.workspace.v1.Request
  */
 export interface Request {
@@ -3571,6 +3798,14 @@ export interface Request {
          */
         prepareVmPlacement: PrepareVmPlacement;
     } | {
+        oneofKind: "evaluateRequirements";
+        /**
+         * Evaluate desired conditions against permitted current facts without writes or probes.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.EvaluateRequirements evaluate_requirements = 33
+         */
+        evaluateRequirements: EvaluateRequirements;
+    } | {
         oneofKind: undefined;
     };
 }
@@ -3751,6 +3986,14 @@ export interface Reply {
          * @generated from protobuf field: omloom.workspace.v1.VmPlacementReview vm_placement_review = 21
          */
         vmPlacementReview: VmPlacementReview;
+    } | {
+        oneofKind: "requirementEvaluation";
+        /**
+         * Shared read-only prerequisite explanations, not operation admission.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.RequirementEvaluation requirement_evaluation = 22
+         */
+        requirementEvaluation: RequirementEvaluation;
     } | {
         oneofKind: undefined;
     };
@@ -4288,6 +4531,180 @@ export enum AddressMeaning {
      * @generated from protobuf enum value: ADDRESS_MEANING_DESTINATION = 2;
      */
     DESTINATION = 2
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.RequirementComparison
+ */
+export enum RequirementComparison {
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_COMPARISON_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_COMPARISON_EQUAL = 1;
+     */
+    EQUAL = 1,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_COMPARISON_MINIMUM = 2;
+     */
+    MINIMUM = 2,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_COMPARISON_MAXIMUM = 3;
+     */
+    MAXIMUM = 3
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.RequirementLayer
+ */
+export enum RequirementLayer {
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_LAYER_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_LAYER_ACCEPTED = 1;
+     */
+    ACCEPTED = 1,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_LAYER_OBSERVED = 2;
+     */
+    OBSERVED = 2
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.RequirementGroupKind
+ */
+export enum RequirementGroupKind {
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_GROUP_KIND_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_GROUP_KIND_ALL = 1;
+     */
+    ALL = 1,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_GROUP_KIND_ANY = 2;
+     */
+    ANY = 2,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_GROUP_KIND_AT_LEAST = 3;
+     */
+    AT_LEAST = 3
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.RequirementState
+ */
+export enum RequirementState {
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_STATE_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_STATE_SATISFIED = 1;
+     */
+    SATISFIED = 1,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_STATE_FAILED = 2;
+     */
+    FAILED = 2,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_STATE_UNKNOWN = 3;
+     */
+    UNKNOWN = 3
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.RequirementReason
+ */
+export enum RequirementReason {
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_REASON_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_REASON_MATCH = 1;
+     */
+    MATCH = 1,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_REASON_MISMATCH = 2;
+     */
+    MISMATCH = 2,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_REASON_MISSING = 3;
+     */
+    MISSING = 3,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_REASON_STALE = 4;
+     */
+    STALE = 4,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_REASON_CONFLICT = 5;
+     */
+    CONFLICT = 5,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_REASON_RESTRICTED = 6;
+     */
+    RESTRICTED = 6,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_REASON_UNSUPPORTED = 7;
+     */
+    UNSUPPORTED = 7,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_REASON_UNCONFIGURED = 8;
+     */
+    UNCONFIGURED = 8,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_REASON_AUTHORITY_UNAVAILABLE = 9;
+     */
+    AUTHORITY_UNAVAILABLE = 9,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_REASON_OWNER_ACTION_REQUIRED = 10;
+     */
+    OWNER_ACTION_REQUIRED = 10,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_REASON_INCOMPLETE = 11;
+     */
+    INCOMPLETE = 11,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_REASON_SCOPE_MISMATCH = 12;
+     */
+    SCOPE_MISMATCH = 12,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_REASON_VANTAGE_MISMATCH = 13;
+     */
+    VANTAGE_MISMATCH = 13,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_REASON_UNQUALIFIED = 14;
+     */
+    UNQUALIFIED = 14,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_REASON_WRONG_EVIDENCE = 15;
+     */
+    WRONG_EVIDENCE = 15,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_REASON_CYCLE = 16;
+     */
+    CYCLE = 16
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.RequirementResolution
+ */
+export enum RequirementResolution {
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_RESOLUTION_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_RESOLUTION_RECORD_FACT = 1;
+     */
+    RECORD_FACT = 1,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_RESOLUTION_REVIEW_SOURCE = 2;
+     */
+    REVIEW_SOURCE = 2,
+    /**
+     * @generated from protobuf enum value: REQUIREMENT_RESOLUTION_OWNER_ACTION = 3;
+     */
+    OWNER_ACTION = 3
 }
 // @generated message type with reflection information, may provide speed optimized methods
 class Predicate$Type extends MessageType<Predicate> {
@@ -5767,6 +6184,113 @@ class Empty$Type extends MessageType<Empty> {
  */
 export const Empty = new Empty$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class FieldRequirement$Type extends MessageType<FieldRequirement> {
+    constructor() {
+        super("omloom.workspace.v1.FieldRequirement", [
+            { no: 1, name: "target", kind: "message", T: () => AssetRef },
+            { no: 2, name: "expected", kind: "message", T: () => Field },
+            { no: 3, name: "comparison", kind: "enum", T: () => ["omloom.workspace.v1.RequirementComparison", RequirementComparison, "REQUIREMENT_COMPARISON_"] },
+            { no: 4, name: "layer", kind: "enum", T: () => ["omloom.workspace.v1.RequirementLayer", RequirementLayer, "REQUIREMENT_LAYER_"] }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.FieldRequirement
+ */
+export const FieldRequirement = new FieldRequirement$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class RequirementGroup$Type extends MessageType<RequirementGroup> {
+    constructor() {
+        super("omloom.workspace.v1.RequirementGroup", [
+            { no: 1, name: "kind", kind: "enum", T: () => ["omloom.workspace.v1.RequirementGroupKind", RequirementGroupKind, "REQUIREMENT_GROUP_KIND_"] },
+            { no: 2, name: "members", kind: "scalar", repeat: 1 /*RepeatType.PACKED*/, T: 13 /*ScalarType.UINT32*/ },
+            { no: 3, name: "minimum", kind: "scalar", T: 13 /*ScalarType.UINT32*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.RequirementGroup
+ */
+export const RequirementGroup = new RequirementGroup$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class RequirementNode$Type extends MessageType<RequirementNode> {
+    constructor() {
+        super("omloom.workspace.v1.RequirementNode", [
+            { no: 1, name: "field", kind: "message", oneof: "expression", T: () => FieldRequirement },
+            { no: 2, name: "group", kind: "message", oneof: "expression", T: () => RequirementGroup }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.RequirementNode
+ */
+export const RequirementNode = new RequirementNode$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class EvaluateRequirements$Type extends MessageType<EvaluateRequirements> {
+    constructor() {
+        super("omloom.workspace.v1.EvaluateRequirements", [
+            { no: 1, name: "anchor", kind: "message", T: () => AssetRef },
+            { no: 2, name: "nodes", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => RequirementNode },
+            { no: 3, name: "root", kind: "scalar", T: 13 /*ScalarType.UINT32*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.EvaluateRequirements
+ */
+export const EvaluateRequirements = new EvaluateRequirements$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class RequirementEvidence$Type extends MessageType<RequirementEvidence> {
+    constructor() {
+        super("omloom.workspace.v1.RequirementEvidence", [
+            { no: 1, name: "source", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "revision", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "observed_at_ms", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 4, name: "valid_until_ms", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 5, name: "scan_id", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.RequirementEvidence
+ */
+export const RequirementEvidence = new RequirementEvidence$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class RequirementResult$Type extends MessageType<RequirementResult> {
+    constructor() {
+        super("omloom.workspace.v1.RequirementResult", [
+            { no: 1, name: "node", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 2, name: "semantic_key", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "state", kind: "enum", T: () => ["omloom.workspace.v1.RequirementState", RequirementState, "REQUIREMENT_STATE_"] },
+            { no: 4, name: "reason", kind: "enum", T: () => ["omloom.workspace.v1.RequirementReason", RequirementReason, "REQUIREMENT_REASON_"] },
+            { no: 5, name: "target", kind: "message", T: () => AssetRef },
+            { no: 6, name: "field", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 7, name: "resolutions", kind: "enum", repeat: 1 /*RepeatType.PACKED*/, T: () => ["omloom.workspace.v1.RequirementResolution", RequirementResolution, "REQUIREMENT_RESOLUTION_"] },
+            { no: 8, name: "evidence", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => RequirementEvidence }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.RequirementResult
+ */
+export const RequirementResult = new RequirementResult$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class RequirementEvaluation$Type extends MessageType<RequirementEvaluation> {
+    constructor() {
+        super("omloom.workspace.v1.RequirementEvaluation", [
+            { no: 1, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 2, name: "evaluated_at_ms", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 3, name: "state", kind: "enum", T: () => ["omloom.workspace.v1.RequirementState", RequirementState, "REQUIREMENT_STATE_"] },
+            { no: 4, name: "reason", kind: "enum", T: () => ["omloom.workspace.v1.RequirementReason", RequirementReason, "REQUIREMENT_REASON_"] },
+            { no: 5, name: "results", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => RequirementResult }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.RequirementEvaluation
+ */
+export const RequirementEvaluation = new RequirementEvaluation$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class Request$Type extends MessageType<Request> {
     constructor() {
         super("omloom.workspace.v1.Request", [
@@ -5801,7 +6325,8 @@ class Request$Type extends MessageType<Request> {
             { no: 29, name: "correct_identity", kind: "message", oneof: "command", T: () => IdentityCorrection },
             { no: 30, name: "find_identity_candidates", kind: "message", oneof: "command", T: () => FindIdentityCandidates },
             { no: 31, name: "resolve_identity", kind: "message", oneof: "command", T: () => ResolveIdentity },
-            { no: 32, name: "prepare_vm_placement", kind: "message", oneof: "command", T: () => PrepareVmPlacement }
+            { no: 32, name: "prepare_vm_placement", kind: "message", oneof: "command", T: () => PrepareVmPlacement },
+            { no: 33, name: "evaluate_requirements", kind: "message", oneof: "command", T: () => EvaluateRequirements }
         ]);
     }
 }
@@ -5833,7 +6358,8 @@ class Reply$Type extends MessageType<Reply> {
             { no: 18, name: "identity_corrected", kind: "message", oneof: "result", T: () => IdentityCorrectionApplied },
             { no: 19, name: "identity_candidates", kind: "message", oneof: "result", T: () => IdentityCandidates },
             { no: 20, name: "resolved_identity", kind: "message", oneof: "result", T: () => ResolvedIdentity },
-            { no: 21, name: "vm_placement_review", kind: "message", oneof: "result", T: () => VmPlacementReview }
+            { no: 21, name: "vm_placement_review", kind: "message", oneof: "result", T: () => VmPlacementReview },
+            { no: 22, name: "requirement_evaluation", kind: "message", oneof: "result", T: () => RequirementEvaluation }
         ]);
     }
 }

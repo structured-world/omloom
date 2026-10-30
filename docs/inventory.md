@@ -94,6 +94,37 @@ supplied value.
 Ordinary text and bay counts can also be entered directly in an import. Preview
 and ordinary field validation apply before accepting imported claims.
 
+### Recorded requirements
+
+Open a device's **Check recorded requirements** section to compare a selected
+equipment fact with a required value or measurement bound. Choose accepted
+configuration or dated observations explicitly. A missing observation is unknown,
+not a failed device. Incomplete model alternatives and recognition confidence
+cannot certify compatibility. Independent measured bounds can answer their own
+specific condition without identifying a model.
+
+Account cards can inspect the recorded delegation capability. An owner-only
+account explains the need for owner intervention and, when permitted, points to
+the existing owner-action request. Checking does not submit that request, reveal
+a secret or grant account access.
+
+The `evaluate_requirements` workspace query supports a selected root in a bounded
+flat graph of field predicates and `all`, `any` or fixed-threshold groups. It
+reads exact resource incarnations under the current storage session. Thresholds
+count distinct scoped field subjects. A nested logical group has unknown voter
+identity and cannot manufacture another vote. This inventory query does not certify
+a provider's consensus membership. Limits are 64 nodes, 256 edges and 32 levels, with at most
+32 current source claims for a field. Oversized work fails explicitly instead
+of returning a partially successful check. Unselected branches do not read facts.
+
+Results include stable condition keys, current inventory revision, permitted
+source revisions/scans and validity windows. Protected and unavailable subjects
+share the same non-disclosing response. Reads do not create plans, requests,
+snapshots, history or access timestamps. A satisfied condition is neither an
+authorization grant nor an operation admission, live reachability test or
+physical-fit certificate. Production authentication and provider qualification
+remain separate from this fixture-based workspace.
+
 ### Ownership and responsibility
 
 Open a resource's **Ownership and responsibility** card to inspect or edit its

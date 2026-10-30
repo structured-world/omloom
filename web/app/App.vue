@@ -8,6 +8,7 @@ import HostIdentityCompare from './HostIdentityCompare.vue';
 import VmPlacement from './VmPlacement.vue';
 import ResponsibilityPanel from './ResponsibilityPanel.vue';
 import AccountPanel from './AccountPanel.vue';
+import RequirementsPanel from './RequirementsPanel.vue';
 import { softwareFields } from './software-fields';
 import { equipmentFields } from './equipment-fields';
 import { ref, computed, watch, onMounted, nextTick } from 'vue';
@@ -376,6 +377,7 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <section v-if="[K.DEVICE,K.VIRTUAL_MACHINE,K.SOFTWARE_INSTALLATION,K.INTERFACE].includes(detail.item.kind)" aria-label="Identity candidates"><button :disabled="findingCandidates" @click="findIdentityCandidates">Find possible duplicates in enclosing selection</button><p v-if="findingCandidates" role="status">Checking indexed source claims…</p><template v-if="identityCandidates"><p v-if="!identityCandidates.length">No comparable candidates are available in this selection. Missing evidence does not prove that there are no duplicates.</p><ul><li v-for="candidate in identityCandidates" :key="key(candidate.target)">{{ label(candidate.kind) }} · {{ display(candidate.fields.find(v=>v.name==='name')) }} <button @click="compareCandidate(candidate)">Compare with candidate</button></li></ul></template></section>
 <button v-if="detail.item.kind === K.VIRTUAL_MACHINE && identity?.writable && detail.item.target" @click="placementVm=detail.item.target">Change hypervisor after migration</button>
 <HostIdentityEvidence :observations="detail.identity" />
+<RequirementsPanel v-if="detail.item.target&&!loading&&[K.DEVICE,K.PROVIDER_ACCOUNT].includes(detail.item.kind)" :key="key(detail.item.target)+'/'+detail.item.revision" :target="detail.item.target" :kind="detail.item.kind" :working="working" />
 <ResponsibilityPanel v-if="detail.item&&!loading" :key="key(detail.item.target)+'/'+detail.item.revision" :item="detail.item" :working="working" @changed="saved()" @open="open" />
 <AccountPanel v-if="detail.item?.kind===K.PROVIDER_ACCOUNT&&!loading" :key="key(detail.item.target)+'/'+detail.item.revision" :item="detail.item" :working="working" @changed="saved()" @open="open" @share="editor='view'" />
 <p v-if="detail.networkNext || networkCursor" class="hint">Showing one bounded evidence page. Observation counts and filters apply to this page.</p>
