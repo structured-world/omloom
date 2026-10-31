@@ -315,6 +315,11 @@ fn requirements_observation_expiry_and_field_rights_preserve_unknown() -> TestRe
     let before = store.usage()?;
     let result = evaluate(&store, &actor, &target, vec![node.clone()], 0)?;
     assert_eq!(result.reason, api::RequirementReason::Stale as i32);
+    assert!(
+        !result.results[0]
+            .resolutions
+            .contains(&(api::RequirementResolution::RecordFact as i32))
+    );
     assert_eq!(result.results[0].evidence[0].scan_id, scan);
     assert_eq!(result.results[0].evidence[0].valid_until_ms, Some(99));
     let mut limited = actor;

@@ -507,17 +507,17 @@ impl Tx<'_> {
         }
         response.target = condition.target.clone();
         response.field = Some(expected.name.clone());
-        if context.field(target, kind, &expected.name, true) {
-            response
-                .resolutions
-                .push(api::RequirementResolution::RecordFact as i32);
-        }
         let layer =
             match api::RequirementLayer::try_from(condition.layer).map_err(|_| Error::Invalid)? {
                 api::RequirementLayer::Accepted => "intent",
                 api::RequirementLayer::Observed => "observed",
                 _ => return Err(Error::Invalid),
             };
+        if layer == "intent" && context.field(target, kind, &expected.name, true) {
+            response
+                .resolutions
+                .push(api::RequirementResolution::RecordFact as i32);
+        }
         if kind == wire::AssetKind::ProviderAccount as i32 && expected.name == "delegation" {
             if layer != "intent" {
                 return Ok(core::Decision::unknown(core::Reason::Unconfigured));
