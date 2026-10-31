@@ -682,25 +682,54 @@ pub(super) fn relation_projection(p: &Properties) -> Result<wire::Relation> {
 }
 
 impl Tx<'_> {
-    pub(super) fn require_unclaimed_physical_relation(&self,relation:&wire::Relation)->Result<()> {
-        for endpoint in [relation.from.as_ref(),relation.to.as_ref()].into_iter().flatten() {
-            let target=AssetRef::try_from(endpoint).map_err(|_|Error::Invalid)?;
-            let identity=format!("{}/{}",target.asset,target.incarnation);
-            if let Some(allocation)=self.get(&format!("allocation/{identity}"))? && allocation.get("claim").and_then(Value::as_str)==Some(relation.relation_id.as_str()) {return Err(Error::Conflict);}
-            if relation.kind==wire::RelationKind::Contains as i32 && relation.to.as_ref()==Some(endpoint) && self.get(&format!("position/{identity}"))?.is_some() {return Err(Error::Conflict);}
+    pub(super) fn require_structural_relation_edit(&self, relation: &wire::Relation) -> Result<()> {
+        for endpoint in [relation.from.as_ref(), relation.to.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            let target = AssetRef::try_from(endpoint).map_err(|_| Error::Invalid)?;
+            let identity = format!("{}/{}", target.asset, target.incarnation);
+            if relation.kind == wire::RelationKind::Contains as i32
+                && relation.to.as_ref() == Some(endpoint)
+                && self.get(&format!("position/{identity}"))?.is_some()
+            {
+                return Err(Error::Conflict);
+            }
         }
         Ok(())
     }
-    pub(super) fn remove_binding_relation(&mut self,relation:&wire::Relation,actor:&str,now:u64)->Result<()> {
-        let id=omloom_contracts::ids::RelationId::parse(&relation.relation_id).map_err(|_|Error::Invalid)?;
-        let key=format!("relation/{id}");
-        let row=self.get(&key)?.ok_or(Error::Conflict)?;
-        if relation_projection(&row)?!=*relation {return Err(Error::Conflict);}
-        for query in ["MATCH (r:OmRow {key:$key})<-[e:OmRelationFrom]-() DELETE e","MATCH (r:OmRow {key:$key})-[e:OmRelationTo]->() DELETE e"] {
-            self.store.db.execute_in_transaction(self.id.ok_or(Error::Corrupt)?,query,params([("key",text(&key))]))?;
+    pub(super) fn remove_binding_relation(
+        &mut self,
+        relation: &wire::Relation,
+        actor: &str,
+        now: u64,
+    ) -> Result<()> {
+        let id = omloom_contracts::ids::RelationId::parse(&relation.relation_id)
+            .map_err(|_| Error::Invalid)?;
+        let key = format!("relation/{id}");
+        let row = self.get(&key)?.ok_or(Error::Conflict)?;
+        if relation_projection(&row)? != *relation {
+            return Err(Error::Conflict);
+        }
+        self.remove_physical_pose(&relation.relation_id)?;
+        for query in [
+            "MATCH (r:OmRow {key:$key})<-[e:OmRelationFrom]-() DELETE e",
+            "MATCH (r:OmRow {key:$key})-[e:OmRelationTo]->() DELETE e",
+        ] {
+            self.store.db.execute_in_transaction(
+                self.id.ok_or(Error::Corrupt)?,
+                query,
+                params([("key", text(&key))]),
+            )?;
         }
         self.delete(&key)?;
-        self.audit(&key,actor,"relation.removed",relation.revision.checked_add(1).ok_or(Error::Limit)?,now)?;
+        self.audit(
+            &key,
+            actor,
+            "relation.removed",
+            relation.revision.checked_add(1).ok_or(Error::Limit)?,
+            now,
+        )?;
         Ok(())
     }
     pub(super) fn save_typed_relation(
@@ -763,8 +792,13 @@ impl Tx<'_> {
             return Err(Error::Conflict);
         }
         if let Some(old) = &old {
-            let previous=relation_projection(old)?;
-            if previous.from!=relation.from || previous.to!=relation.to || previous.kind!=relation.kind {self.require_unclaimed_physical_relation(&previous)?;}
+            let previous = relation_projection(old)?;
+            if previous.from != relation.from
+                || previous.to != relation.to
+                || previous.kind != relation.kind
+            {
+                self.require_structural_relation_edit(&previous)?;
+            }
             self.check_software_relation_replacement(old, from, from_kind, to, kind, detached)?;
         }
         let placement = match kind {
@@ -773,13 +807,25 @@ impl Tx<'_> {
             _ => None,
         };
         if let Some((child, parent)) = placement {
-            if number(&self.asset(child)?,"kind")?==wire::AssetKind::PhysicalPosition as u64 {
-                let position=self.get(&format!("position/{}/{}",child.asset,child.incarnation))?.ok_or(Error::Incomplete)?;
-                if string(&position,"enclosure")?!=format!("{}/{}",parent.asset,parent.incarnation) {return Err(Error::Conflict);}
+            if number(&self.asset(child)?, "kind")? == wire::AssetKind::PhysicalPosition as u64 {
+                let position = self
+                    .get(&format!("position/{}/{}", child.asset, child.incarnation))?
+                    .ok_or(Error::Incomplete)?;
+                if string(&position, "enclosure")?
+                    != format!("{}/{}", parent.asset, parent.incarnation)
+                {
+                    return Err(Error::Conflict);
+                }
             }
             self.check_physical_parent(child, parent, &key)?;
         } else if kind == wire::RelationKind::RunsOn {
             self.check_placement_cycle(from, to, Some(&key))?;
+        }
+        if kind == wire::RelationKind::InstalledIn && to_kind == wire::AssetKind::PhysicalPosition {
+            let occupied=self.query("MATCH (p:OmRow {key:$position})<-[:OmRelationTo]-(r:OmRow) WHERE r.kind=$kind AND r.key<>$key RETURN properties(r) AS p LIMIT 1",params([("position",text(asset_key(to))),("kind",int(wire::RelationKind::InstalledIn as u64)?),("key",text(&key))]))?;
+            if !occupied.is_empty() {
+                return Err(Error::Conflict);
+            }
         }
         if kind == wire::RelationKind::Contains
             && from_kind == wire::AssetKind::Interface
@@ -803,6 +849,19 @@ impl Tx<'_> {
             return expected.ok_or(Error::Corrupt);
         }
         let revision = expected.unwrap_or(0).checked_add(1).ok_or(Error::Limit)?;
+        if let Some(prior) = &old {
+            let prior = relation_projection(prior)?;
+            if prior.from != relation.from || prior.to != relation.to || prior.kind != relation.kind
+            {
+                self.remove_physical_pose(&relation.relation_id)?;
+            }
+        }
+        if kind == wire::RelationKind::InstalledIn {
+            data.insert("actor".into(), text(actor));
+            if to_kind == wire::AssetKind::PhysicalPosition {
+                self.clear_position_empty_report(to)?;
+            }
+        }
         if kind == wire::RelationKind::RunsOn && from_kind == wire::AssetKind::VirtualMachine {
             self.require_no_pending_operations(from)?;
         }
@@ -959,7 +1018,7 @@ pub(super) fn compatible(
             (K::Device, K::Rack | K::Site | K::Location)
                 | (K::Rack, K::Site | K::Location)
                 | (K::Location, K::Site | K::Location)
-                | (K::PhysicalComponent, K::PhysicalPosition)
+                | (K::PhysicalComponent | K::Device, K::PhysicalPosition)
         ),
         R::Contains => matches!(
             (from, to),
@@ -977,7 +1036,10 @@ pub(super) fn compatible(
                 | (K::Service, K::SoftwareInstallation)
                 | (K::Service, K::ProviderAccount)
                 | (K::Workload, K::Container | K::Service)
-                | (K::Device | K::Rack | K::Port | K::PhysicalComponent, K::PhysicalPosition)
+                | (
+                    K::Device | K::Rack | K::Port | K::PhysicalComponent,
+                    K::PhysicalPosition
+                )
                 | (K::Port, K::Interface)
                 | (
                     K::Container,

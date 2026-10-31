@@ -36,7 +36,10 @@ fn writable_fields(
         &["name", "description", "dns_name"]
     } else if kind == K::SoftwareInstallation {
         &["name", "description", "virtualization_role"]
-    } else if matches!(kind, K::Device | K::Rack | K::Port | K::Cable | K::PhysicalComponent) {
+    } else if matches!(
+        kind,
+        K::Device | K::Rack | K::Port | K::Cable | K::PhysicalComponent
+    ) {
         &["name", "description", "serial"]
     } else {
         &["name", "description"]
@@ -46,7 +49,7 @@ fn writable_fields(
         .filter(|name| context.field(target, kind as i32, name, true))
         .map(|s| s.to_string())
         .collect();
-    if matches!(kind,K::Device|K::PhysicalComponent) {
+    if matches!(kind, K::Device | K::PhysicalComponent) {
         fields.extend(
             omloom_contracts::equipment::FIELDS
                 .iter()
@@ -178,8 +181,10 @@ pub(super) fn attachment(
         (K::Service, K::ProviderAccount) => Some((R::Contains, false)),
         (K::Device, K::Port) => Some((R::HasPort, false)),
         (K::PhysicalComponent, K::Port) => Some((R::HasPort, false)),
-        (K::Device | K::Rack | K::Port | K::PhysicalComponent, K::PhysicalPosition) => Some((R::Contains, false)),
-        (K::PhysicalPosition, K::PhysicalComponent) => Some((R::InstalledIn, true)),
+        (K::Device | K::Rack | K::Port | K::PhysicalComponent, K::PhysicalPosition) => {
+            Some((R::Contains, false))
+        }
+        (K::PhysicalPosition, K::PhysicalComponent | K::Device) => Some((R::InstalledIn, true)),
         (K::Port, K::Interface) => Some((R::Contains, false)),
         (K::Device, K::VirtualMachine | K::Service) | (K::VirtualMachine, K::Service) => {
             Some((R::RunsOn, true))

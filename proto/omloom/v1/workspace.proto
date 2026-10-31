@@ -1524,12 +1524,12 @@ message PhysicalVolume {
 message PhysicalDefinition {
   // Existing resource incarnation whose current physical facts are being refined.
   omloom.v1.AssetRef target = 1;
-  // User-selected external envelope or usable enclosure volume, absent if unknown.
+  // Usable enclosure volume, absent if unknown. Device/component dimensions
+  // belong to their canonical width/height/depth equipment claims instead.
   optional PhysicalVolume volume = 2;
   // Source/instruction reference supplied by the operator, max 512 bytes; no secrets.
   string basis = 3;
-  // Optional sourced mass in grams. Missing is unknown and must not be summed as zero.
-  optional uint64 mass_g = 4;
+  reserved 4;
   // Optional permitted supported mass in grams, independently of actual equipment mass.
   optional uint64 max_mass_g = 5;
   // Optional design power requirement in milliwatts, not a measured load.
@@ -1673,6 +1673,9 @@ message PhysicalSave {
 message PhysicalRead {
   // Existing enclosure whose permitted physical projection is requested.
   omloom.v1.AssetRef enclosure = 1;
+  // Explicit next-level installed-component projection. False reads only the
+  // selected resource's facts, without traversing its children.
+  bool occupants = 2;
 }
 message PhysicalPlanKey {
   // Exact saved plan identity returned by its save command, not a capability.
@@ -1722,12 +1725,16 @@ message PhysicalOccupancy {
   // Current installed placement, independent of the reservation's expiry.
   PhysicalPlacement placement = 1;
   // Attribution of the manual installation, not proof of live service or wiring.
-  string reported_by = 2;
+  optional string reported_by = 2;
   // Exact accepted physical binding revision used to invalidate old evidence.
   uint64 revision = 3;
   // Exact current installed binding, disclosed only with relationship access on
   // both endpoints. Absence supplies no permission to guess its identity/revision.
   optional omloom.v1.Relation binding = 4;
+  // Geometry report revision, absent when this binding has no reported placement envelope.
+  optional uint64 pose_revision = 5;
+  // Geometry reporter, independent of the installed binding's source/actor.
+  optional string pose_reported_by = 6;
 }
 message Physical {
   // Exactly one physical query or command; no caller-supplied effective grants.

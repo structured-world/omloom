@@ -3587,7 +3587,8 @@ export interface PhysicalDefinition {
      */
     target?: AssetRef;
     /**
-     * User-selected external envelope or usable enclosure volume, absent if unknown.
+     * Usable enclosure volume, absent if unknown. Device/component dimensions
+     * belong to their canonical width/height/depth equipment claims instead.
      *
      * @generated from protobuf field: optional omloom.workspace.v1.PhysicalVolume volume = 2
      */
@@ -3598,12 +3599,6 @@ export interface PhysicalDefinition {
      * @generated from protobuf field: string basis = 3
      */
     basis: string;
-    /**
-     * Optional sourced mass in grams. Missing is unknown and must not be summed as zero.
-     *
-     * @generated from protobuf field: optional uint64 mass_g = 4
-     */
-    massG?: bigint;
     /**
      * Optional permitted supported mass in grams, independently of actual equipment mass.
      *
@@ -3931,6 +3926,13 @@ export interface PhysicalRead {
      * @generated from protobuf field: omloom.v1.AssetRef enclosure = 1
      */
     enclosure?: AssetRef;
+    /**
+     * Explicit next-level installed-component projection. False reads only the
+     * selected resource's facts, without traversing its children.
+     *
+     * @generated from protobuf field: bool occupants = 2
+     */
+    occupants: boolean;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.PhysicalPlanKey
@@ -4064,9 +4066,9 @@ export interface PhysicalOccupancy {
     /**
      * Attribution of the manual installation, not proof of live service or wiring.
      *
-     * @generated from protobuf field: string reported_by = 2
+     * @generated from protobuf field: optional string reported_by = 2
      */
-    reportedBy: string;
+    reportedBy?: string;
     /**
      * Exact accepted physical binding revision used to invalidate old evidence.
      *
@@ -4080,6 +4082,18 @@ export interface PhysicalOccupancy {
      * @generated from protobuf field: optional omloom.v1.Relation binding = 4
      */
     binding?: Relation;
+    /**
+     * Geometry report revision, absent when this binding has no reported placement envelope.
+     *
+     * @generated from protobuf field: optional uint64 pose_revision = 5
+     */
+    poseRevision?: bigint;
+    /**
+     * Geometry reporter, independent of the installed binding's source/actor.
+     *
+     * @generated from protobuf field: optional string pose_reported_by = 6
+     */
+    poseReportedBy?: string;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Physical
@@ -7150,7 +7164,6 @@ class PhysicalDefinition$Type extends MessageType<PhysicalDefinition> {
             { no: 1, name: "target", kind: "message", T: () => AssetRef },
             { no: 2, name: "volume", kind: "message", T: () => PhysicalVolume },
             { no: 3, name: "basis", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 4, name: "mass_g", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 5, name: "max_mass_g", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 6, name: "demand_mw", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 7, name: "capacity_mw", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
@@ -7313,7 +7326,8 @@ export const PhysicalSave = new PhysicalSave$Type();
 class PhysicalRead$Type extends MessageType<PhysicalRead> {
     constructor() {
         super("omloom.workspace.v1.PhysicalRead", [
-            { no: 1, name: "enclosure", kind: "message", T: () => AssetRef }
+            { no: 1, name: "enclosure", kind: "message", T: () => AssetRef },
+            { no: 2, name: "occupants", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
         ]);
     }
 }
@@ -7396,9 +7410,11 @@ class PhysicalOccupancy$Type extends MessageType<PhysicalOccupancy> {
     constructor() {
         super("omloom.workspace.v1.PhysicalOccupancy", [
             { no: 1, name: "placement", kind: "message", T: () => PhysicalPlacement },
-            { no: 2, name: "reported_by", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "reported_by", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 3, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
-            { no: 4, name: "binding", kind: "message", T: () => Relation }
+            { no: 4, name: "binding", kind: "message", T: () => Relation },
+            { no: 5, name: "pose_revision", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 6, name: "pose_reported_by", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
         ]);
     }
 }

@@ -21,29 +21,45 @@ impl Tx<'_> {
     ) -> Result<api::PhysicalPlan> {
         let key = key(request)?;
         let row = self.get(&key)?.ok_or(Error::Missing)?;
-        if string(&row,"action")? != "physical" { return Err(Error::Invalid); }
+        if string(&row, "action")? != "physical" {
+            return Err(Error::Invalid);
+        }
         if string(&row, "actor")? != context.actor {
             return Err(Error::Denied);
         }
         if request.revision != 0 && number(&row, "revision")? != request.revision {
             return Err(Error::Conflict);
         }
-        let state = i32::try_from(number(&row,"state")?).map_err(|_| Error::Corrupt)?;
-        let terminal = matches!(api::PhysicalPlanState::try_from(state),Ok(api::PhysicalPlanState::Completed|api::PhysicalPlanState::Cancelled));
+        let state = i32::try_from(number(&row, "state")?).map_err(|_| Error::Corrupt)?;
+        let terminal = matches!(
+            api::PhysicalPlanState::try_from(state),
+            Ok(api::PhysicalPlanState::Completed | api::PhysicalPlanState::Cancelled)
+        );
         let count = number(&row, "count")?;
         if count > 64 {
             return Err(Error::Corrupt);
         }
         let mut steps = Vec::with_capacity(count as usize);
         for i in 0..count {
-            let p = self.get(&format!("{key}/{i}"))?.ok_or(if terminal { Error::Expired } else { Error::Corrupt })?;
-            let step=read_step(&p)?;
+            let p = self.get(&format!("{key}/{i}"))?.ok_or(if terminal {
+                Error::Expired
+            } else {
+                Error::Corrupt
+            })?;
+            let step = read_step(&p)?;
             match step.action.as_ref().ok_or(Error::Corrupt)? {
-                api::physical_step::Action::Placement(p)=>{
-                    self.physical_access(context,parse_target(p.item.as_ref())?,working,write)?;
-                    self.physical_access(context,parse_target(p.enclosure.as_ref())?,working,write)?;
-                },
-                api::physical_step::Action::Replacement(r)=>self.replacement_access(context,r,working,write)?,
+                api::physical_step::Action::Placement(p) => {
+                    self.physical_access(context, parse_target(p.item.as_ref())?, working, write)?;
+                    self.physical_access(
+                        context,
+                        parse_target(p.enclosure.as_ref())?,
+                        working,
+                        write,
+                    )?;
+                }
+                api::physical_step::Action::Replacement(r) => {
+                    self.replacement_access(context, r, working, write)?
+                }
             }
             steps.push(step);
         }
@@ -82,17 +98,28 @@ impl Tx<'_> {
         } else {
             row.remove("until");
         }
-        let terminal_detail = matches!(state,api::PhysicalPlanState::Completed|api::PhysicalPlanState::Cancelled)
-            && plan.steps.iter().all(|step|matches!(api::PhysicalStepState::try_from(step.state),Ok(api::PhysicalStepState::Recorded|api::PhysicalStepState::NotPerformed)));
-        let class = if terminal_detail { Class::Detail } else { Class::Inventory };
+        let terminal_detail = matches!(
+            state,
+            api::PhysicalPlanState::Completed | api::PhysicalPlanState::Cancelled
+        ) && plan.steps.iter().all(|step| {
+            matches!(
+                api::PhysicalStepState::try_from(step.state),
+                Ok(api::PhysicalStepState::Recorded | api::PhysicalStepState::NotPerformed)
+            )
+        });
+        let class = if terminal_detail {
+            Class::Detail
+        } else {
+            Class::Inventory
+        };
         if terminal_detail {
-            row.insert("at".into(),int(now)?);
+            row.insert("at".into(), int(now)?);
             for index in 0..plan.steps.len() {
                 let child_key = format!("{key}/{index}");
                 let mut child = self.get(&child_key)?.ok_or(Error::Corrupt)?;
                 operations::strip_envelope(&mut child);
-                child.insert("at".into(),int(now)?);
-                self.put(&child_key,&key,Class::Detail,child)?;
+                child.insert("at".into(), int(now)?);
+                self.put(&child_key, &key, Class::Detail, child)?;
             }
         }
         self.put(&key, "plans", class, row)?;
@@ -107,9 +134,7 @@ impl Tx<'_> {
         now: u64,
         until: u64,
     ) -> Result<api::PhysicalPlan> {
-        if key.revision == 0
-            || until <= now
-        {
+        if key.revision == 0 || until <= now {
             return Err(Error::Invalid);
         }
         int(until)?;
@@ -117,8 +142,8 @@ impl Tx<'_> {
         if plan.state != api::PhysicalPlanState::Draft as i32 {
             return Err(Error::Conflict);
         }
-        self.reserve_replacement_steps(context,&plan,working,&key.id,until)?;
-        let mut enclosures = BTreeMap::<String, Vec<Volume>>::new();
+        self.reserve_replacement_steps(context, &plan, working, &key.id)?;
+        let mut enclosures = BTreeMap::<String, current::PhysicalUse>::new();
         let mut rows_read = 0;
         for p in placements(&plan) {
             let item = parse_target(p.item.as_ref())?;
@@ -132,35 +157,22 @@ impl Tx<'_> {
             ) {
                 return Err(Error::Denied);
             }
-            self.lock_physical_part(item,&key.id,Some(until))?;
-            if self.get(&format!("allocation/{}",network::identity(item)))?.is_some() && !replacement_steps(&plan).any(|r|r.previous.as_ref()==p.item.as_ref()) {return Err(Error::Conflict);}
+            self.lock_physical_part(item, &key.id)?;
+            if !self.installed_bindings(item)?.is_empty()
+                && !replacement_steps(&plan).any(|r| r.previous.as_ref() == p.item.as_ref())
+            {
+                return Err(Error::Conflict);
+            }
             let enclosure_key = network::identity(enclosure);
             if !enclosures.contains_key(&enclosure_key) {
-                let parent = format!("allocation/{enclosure_key}");
-                let rows = self.query(
-                    "MATCH (n:OmRow {parent:$parent}) RETURN properties(n) AS p LIMIT 2049",
-                    params([("parent", text(parent))]),
-                )?;
-                rows_read += rows.len();
-                if rows_read > 2048 {
-                    return Err(Error::Limit);
-                }
-                let mut occupied = Vec::with_capacity(rows.len());
-                for row in rows {
-                    // Installed and unresolved allocations are never freed by a clock alone.
-                    if let Some(v) = read_volume(&row)? {
-                        occupied.push(volume(&v)?);
-                    } else {
-                        return Err(Error::Corrupt);
-                    }
-                }
+                let occupied = self.physical_use(enclosure, &plan, 2048 - rows_read)?;
+                rows_read += occupied.inspected;
                 enclosures.insert(enclosure_key.clone(), occupied);
             }
             let definition = self
                 .physical_definition(enclosure)?
                 .ok_or(Error::Incomplete)?;
-            let item_definition = self.physical_definition(item)?.ok_or(Error::Incomplete)?;
-            let item_volume = item_definition.volume.as_ref().ok_or(Error::Incomplete)?;
+            let item_volume = self.equipment_envelope(item)?.ok_or(Error::Incomplete)?;
             let requested = p.volume.as_ref().ok_or(Error::Invalid)?;
             for (actual, proposed) in [
                 (&item_volume.x, &requested.x),
@@ -168,7 +180,7 @@ impl Tx<'_> {
                 (&item_volume.z, &requested.z),
             ] {
                 if actual.as_ref().ok_or(Error::Incomplete)?.length_um
-                    != proposed.as_ref().ok_or(Error::Invalid)?.length_um
+                    > proposed.as_ref().ok_or(Error::Invalid)?.length_um
                 {
                     return Err(Error::Conflict);
                 }
@@ -176,65 +188,56 @@ impl Tx<'_> {
             let envelope = definition.volume.as_ref().map(volume).transpose()?;
             let proposed = volume(p.volume.as_ref().ok_or(Error::Invalid)?)?;
             let occupied = enclosures.get_mut(&enclosure_key).ok_or(Error::Corrupt)?;
-            if crate::physical::placement(envelope, Some(proposed), occupied)
+            if crate::physical::placement(envelope, Some(proposed), &occupied.volumes)
                 != crate::requirements::Decision::PASS
             {
                 return Err(Error::Conflict);
             }
-            occupied.push(proposed);
+            occupied.volumes.push(proposed);
+            occupied.items.insert(item);
         }
         // Availability permits only the result, never hidden occupants or their demands.
         for enclosure_key in enclosures.keys() {
             let enclosure = reference(enclosure_key)?;
-            let definition = self.physical_definition(enclosure)?.ok_or(Error::Incomplete)?;
-            let limits=[definition.max_mass_g,definition.capacity_mw,definition.cooling_capacity_mw];
-            if limits.iter().all(Option::is_none) { continue; }
-            let parent=format!("allocation/{enclosure_key}");
-            let rows=self.query("MATCH (n:OmRow {parent:$parent}) RETURN properties(n) AS p LIMIT 2049",params([("parent",text(parent))]))?;
-            if rows.len()>2048 { return Err(Error::Limit); }
-            let mut demands=[Some(0_u64);3];
-            let mut add=|item:AssetRef|->Result<()> {
-                let item=self.physical_definition(item)?.ok_or(Error::Incomplete)?;
-                for (total,value) in demands.iter_mut().zip([item.mass_g,item.demand_mw,item.cooling_mw]) {
-                    *total=match (*total,value) {
-                        (Some(total),Some(value))=>Some(total.checked_add(value).ok_or(Error::Limit)?),
-                        _=>None,
-                    };
-                }
-                Ok(())
-            };
-            for row in &rows { add(reference(&string(row,"item")?)?)?; }
-            for placement in placements(&plan) {
-                if parse_target(placement.enclosure.as_ref())?==enclosure { add(parse_target(placement.item.as_ref())?)?; }
+            let definition = self
+                .physical_definition(enclosure)?
+                .ok_or(Error::Incomplete)?;
+            let limits = [
+                definition.max_mass_g,
+                definition.capacity_mw,
+                definition.cooling_capacity_mw,
+            ];
+            if limits.iter().all(Option::is_none) {
+                continue;
             }
-            for (limit,demand) in limits.into_iter().zip(demands) {
-                if let Some(limit)=limit {
-                    let demand=demand.ok_or(Error::Incomplete)?;
-                    if demand>limit { return Err(Error::Conflict); }
+            let demands =
+                self.physical_loads(&enclosures.get(enclosure_key).ok_or(Error::Corrupt)?.items)?;
+            for (limit, demand) in limits.into_iter().zip(demands) {
+                if let Some(limit) = limit {
+                    let demand = demand.ok_or(Error::Incomplete)?;
+                    if demand > limit {
+                        return Err(Error::Conflict);
+                    }
                 }
             }
         }
-        for (index,p) in placement_steps(&plan) {
-            let item = parse_target(p.item.as_ref())?;
+        for (index, p) in placement_steps(&plan) {
             let enclosure = parse_target(p.enclosure.as_ref())?;
-            let mut row = props([
-                ("item", text(network::identity(item))),
-                ("enclosure", text(network::identity(enclosure))),
-                ("owner", text(&key.id)),
-                ("state", int(api::PhysicalPlanState::Reserved as u64)?),
-                ("until", int(until)?),
-            ]);
-            write_volume(&mut row, p.volume.as_ref().ok_or(Error::Invalid)?)?;
             self.put(
-                &reservations::reservation_key(&key.id,index),
-                &format!("allocation/{}", network::identity(enclosure)),
+                &reservations::reservation_key(&key.id, index),
+                &format!("physical-reservations/{}", network::identity(enclosure)),
                 Class::Pending,
-                row,
+                props([("claim", text(format!("plan/{}/{index}", key.id)))]),
             )?;
         }
-        for (index,step) in plan.steps.iter_mut().enumerate() {
-            step.state=api::PhysicalStepState::Reserved as i32;
-            self.put(&format!("plan/{}/{index}",key.id),&format!("plan/{}",key.id),Class::Inventory,step_row(step)?)?;
+        for (index, step) in plan.steps.iter_mut().enumerate() {
+            step.state = api::PhysicalStepState::Reserved as i32;
+            self.put(
+                &format!("plan/{}/{index}", key.id),
+                &format!("plan/{}", key.id),
+                Class::Inventory,
+                step_row(step)?,
+            )?;
         }
         plan.reserved_until_ms = Some(until);
         self.physical_state(context, &mut plan, api::PhysicalPlanState::Reserved, now)?;
@@ -254,14 +257,19 @@ impl Tx<'_> {
         if plan.state == api::PhysicalPlanState::Cancelled as i32 {
             return Ok(plan);
         }
-        if plan.state==api::PhysicalPlanState::Completed as i32 {
+        if plan.state == api::PhysicalPlanState::Completed as i32 {
             return Err(Error::UnsafeTransition);
         }
         // Cancelling future intent never silently releases unresolved reserved work.
-        if plan.state==api::PhysicalPlanState::Draft as i32 {
-            for (index,step) in plan.steps.iter_mut().enumerate() {
-                step.state=api::PhysicalStepState::NotPerformed as i32;
-                self.put(&format!("plan/{}/{index}",key.id),&format!("plan/{}",key.id),Class::Inventory,step_row(step)?)?;
+        if plan.state == api::PhysicalPlanState::Draft as i32 {
+            for (index, step) in plan.steps.iter_mut().enumerate() {
+                step.state = api::PhysicalStepState::NotPerformed as i32;
+                self.put(
+                    &format!("plan/{}/{index}", key.id),
+                    &format!("plan/{}", key.id),
+                    Class::Inventory,
+                    step_row(step)?,
+                )?;
             }
         }
         self.physical_state(context, &mut plan, api::PhysicalPlanState::Cancelled, now)?;

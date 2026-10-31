@@ -32,7 +32,6 @@ const PHYSICAL_NUMBERS: &[&str] = &[
     "y_length",
     "z_start",
     "z_length",
-    "mass_g",
     "max_mass_g",
     "demand_mw",
     "capacity_mw",

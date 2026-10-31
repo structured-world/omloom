@@ -2,14 +2,15 @@
 import { computed, ref } from 'vue';
 import { call, input, key, model, AssetKind as K, type AssetRef } from './api';
 import PlacementSearch from './PlacementSearch.vue';
-import { millimetres } from './physical-units';
-const props = defineProps<{target:AssetRef;kind:number;working:model.WorkingContext}>();
+import { millimetres,upperMicrometres } from './physical-units';
+const props = defineProps<{target:AssetRef;kind:number;working:model.WorkingContext;inactive?:boolean}>();
+const emit=defineEmits<{changed:[]}>();
 const opened=ref(false),busy=ref(false),error=ref(''),notice=ref('');
 const view=ref(model.PhysicalView.create());
 const plans=ref<model.PhysicalPlanSummary[]>([]),next=ref<string>();
 const plan=ref<model.PhysicalPlan>(),name=ref(''),deadline=ref(''),discrepancy=ref('');
 const planItems=ref<model.Item[]>([]);
-const equipment=ref<model.Item>(),definition=ref<model.PhysicalDefinition>();
+const equipment=ref<model.Item>(),equipmentVolume=ref<model.PhysicalVolume>();
 const mode=ref<'placement'|'replacement'>(props.kind===K.RACK?'placement':'replacement');
 const predecessor=ref(''),removePart=ref(false),reseat=ref(false),moving=ref(false),source=ref<AssetRef>();
 const sourceView=ref<model.PhysicalView>();
@@ -31,21 +32,24 @@ const label=(target:AssetRef|undefined)=>{
 async function invoke(action:model.Physical['action']) {
   const response=await call({oneofKind:'physical',physical:{action}},working());
   if(response.oneofKind!=='physical')throw Error('Physical planning is unavailable.');
+  if((action.oneofKind==='save'||action.oneofKind==='reserve'||action.oneofKind==='complete'||action.oneofKind==='cancel')&&response.physical.revision!==view.value.revision)changed=true;
   view.value.revision=response.physical.revision;
   if(response.physical.plan)planItems.value=response.physical.items;
   return response.physical;
 }
+let changed=false;
 async function run(action:()=>Promise<void>) {
-  if(busy.value)return;
+  if(busy.value||props.inactive)return;
+  changed=false;
   busy.value=true;error.value='';notice.value='';
-  try{await action();}catch(e){error.value=String(e);}finally{busy.value=false;}
+  try{await action();}catch(e){error.value=String(e);}finally{busy.value=false;if(changed)emit('changed');}
 }
 async function summaries(after?:string) {
   const reply=await invoke({oneofKind:'list',list:{after,limit:25}});
   plans.value=reply.plans;next.value=reply.next;
 }
 async function refresh() {
-  const reply=await invoke({oneofKind:'read',read:{enclosure:props.target}});
+  const reply=await invoke({oneofKind:'read',read:{enclosure:props.target,occupants:true}});
   view.value=reply;
 }
 async function open() {
@@ -60,17 +64,27 @@ async function load(saved:model.PhysicalPlanSummary) {
 }
 let selection=0;
 async function choose(item?:model.Item) {
-  const generation=++selection;equipment.value=undefined;definition.value=undefined;
+  const generation=++selection;equipment.value=undefined;equipmentVolume.value=undefined;
   if(!item?.target)return;
   await run(async()=>{
-    const reply=await invoke({oneofKind:'read',read:{enclosure:item.target}});
-    if(generation===selection){equipment.value=item;definition.value=reply.definitions[0];}
+    const reply=await invoke({oneofKind:'read',read:{enclosure:item.target,occupants:false}});
+    if(generation!==selection)return;
+    equipment.value=item;
+    const fields=reply.items.find(candidate=>key(candidate.target)===key(item.target))?.fields;
+    const upper=(name:string)=>{
+      const field=fields?.find(field=>field.name===name);
+      if(field?.value.oneofKind!=='equipment'||field.value.equipment.assertion.oneofKind!=='quantity')return undefined;
+      const value=upperMicrometres(field.value.equipment.assertion.quantity);
+      return value===undefined||value===0n?undefined:{startUm:0n,lengthUm:value};
+    };
+    const x=upper('width'),y=upper('height'),z=upper('depth');
+    if(x&&y&&z)equipmentVolume.value={x,y,z};
   });
 }
 async function chooseSource(item?:model.Item) {
   source.value=undefined;sourceView.value=undefined;predecessor.value='';
   if(!item?.target)return;
-  await run(async()=>{sourceView.value=await invoke({oneofKind:'read',read:{enclosure:item.target}});source.value=item.target;});
+  await run(async()=>{sourceView.value=await invoke({oneofKind:'read',read:{enclosure:item.target,occupants:true}});source.value=item.target;});
 }
 function addReplacement() {
   error.value='';
@@ -92,7 +106,7 @@ function addReplacement() {
 function add() {
   error.value='';
   try{
-    const v=definition.value?.volume,rack=envelope.value;
+    const v=equipmentVolume.value,rack=envelope.value;
     if(!equipment.value?.target||!v?.x||!v.y||!v.z||!rack?.x||!rack.y||!rack.z)throw Error('Known equipment and enclosure dimensions are required.');
     if(!/^[1-9][0-9]{0,2}(\.5)?$/.test(unit.value))throw Error('Enter a rack position in whole or half rack units, starting at 1.');
     const halves=BigInt(unit.value.split('.')[0]!)*2n+(unit.value.endsWith('.5')?1n:0n);
@@ -152,10 +166,10 @@ const replacementRows=computed(()=>plan.value?.steps.flatMap((step,index)=>step.
 const local=computed(()=>placementRows.value.filter(row=>key(row.p.enclosure)===key(props.target)).map(row=>row.p));
 </script>
 <template>
-<details class="physical-planner" @toggle="($event.target as HTMLDetailsElement).open&&open()">
+<details class="physical-planner" :inert="inactive" @toggle="($event.target as HTMLDetailsElement).open&&open()">
 <summary>Plan installation from enclosing scope</summary>
 <p>Choose equipment from the enclosing selection. A draft changes no actual placement. Reservations and reported installation are separate actions.</p>
-<p v-if="busy" role="status">Updating physical plan…</p><p v-if="error" role="alert">{{error}}</p><p v-if="notice" role="status">{{notice}}</p>
+<p v-if="busy||notice" role="status">{{busy?'Updating physical plan…':notice}}</p><p v-if="error" role="alert">{{error}}</p>
 <template v-if="opened">
 <section aria-label="Saved physical plans"><h3>My plans</h3>
 <button type="button" :disabled="busy" @click="plan=undefined;name='';selected=[]">New installation plan</button>
@@ -177,11 +191,11 @@ const local=computed(()=>placementRows.value.filter(row=>key(row.p.enclosure)===
 <div class="placement-controls"><button v-if="kind===K.RACK" type="button" :aria-pressed="mode==='placement'" @click="mode='placement'">Plan rack placement</button><button type="button" :aria-pressed="mode==='replacement'" @click="mode='replacement'">Replace, remove or move a part</button></div>
 <template v-if="mode==='placement'">
 <PlacementSearch kind="equipment" :roots="working().roots" @select="choose"/>
-<p v-if="equipment">Selected: {{itemName(equipment)}}. {{definition?.volume?'Dimensions available.':'Dimensions are unknown.'}}</p>
+<p v-if="equipment">Selected: {{itemName(equipment)}}. {{equipmentVolume?'Accepted upper-bound dimensions available.':'Accepted dimension bounds are unknown or unavailable.'}}</p>
 <div class="placement-controls"><label>Starting U<input v-model="unit" inputmode="decimal" maxlength="5"/></label>
 <label>Side<select v-model="side"><option value="front">Front</option><option value="rear">Rear</option></select></label>
 <label>Horizontal position<select v-model="lane"><option value="left">Left</option><option value="right">Right</option></select></label></div>
-<button type="button" :disabled="!definition?.volume" @click="add">Add planned placement</button>
+<button type="button" :disabled="!equipmentVolume" @click="add">Add planned placement</button>
 </template>
 <template v-else>
 <label class="outcome"><input v-model="moving" type="checkbox" @change="sourceView=undefined;source=undefined;predecessor=''"/>Move an established part from another enclosure</label>

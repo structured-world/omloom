@@ -61,16 +61,16 @@ test('physical dimensions save and reload on desktop and phone',async({browser})
       try{
         await page.goto(server.url);
         await create(page,`Measured rack ${width}`,'RACK');
-        await page.getByText('Physical dimensions and source',{exact:true}).click();
+        await page.getByText('Usable enclosure space and physical constraints',{exact:true}).click();
         await page.getByRole('textbox',{name:'Measurement or specification source',exact:true}).fill('Measured inner mounting envelope');
-        await page.getByRole('checkbox',{name:'Dimensions are known',exact:true}).check();
+        await page.getByRole('checkbox',{name:'Usable enclosure dimensions are known',exact:true}).check();
         await page.getByRole('textbox',{name:'Width (mm)',exact:true}).fill('482.600');
         await page.getByRole('textbox',{name:'Height (mm)',exact:true}).fill('1866.900');
         await page.getByRole('textbox',{name:'Depth (mm)',exact:true}).fill('1000.125');
         await page.getByRole('button',{name:'Save physical facts',exact:true}).click();
         await expect(page.getByRole('status').filter({has:page.getByRole('button',{name:'Dismiss notice',exact:true})})).toHaveText('Physical facts saved.×');
         await page.reload();
-        await page.getByText('Physical dimensions and source',{exact:true}).click();
+        await page.getByText('Usable enclosure space and physical constraints',{exact:true}).click();
         await expect(page.getByRole('textbox',{name:'Width (mm)',exact:true})).toHaveValue('482.6');
         await expect(page.getByRole('textbox',{name:'Height (mm)',exact:true})).toHaveValue('1866.9');
         await expect(page.getByRole('textbox',{name:'Depth (mm)',exact:true})).toHaveValue('1000.125');
@@ -92,10 +92,13 @@ test('physical plan reserves then records installation on desktop and phone',asy
         const equipment=await create(page,`Planned equipment ${width}`);
         const rack=await create(page,`Installation rack ${width}`,'RACK');
         const reference=t=>({assetId:t.asset_id,incarnation:t.incarnation});
-        for(const [target,lengths] of [[reference(equipment),[440000n,44450n,500000n]],[reference(rack),[482600n,1866900n,1000000n]]]){
-          const [x,y,z]=lengths.map(lengthUm=>({startUm:0n,lengthUm}));
-          await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target,basis:'Measured test fixture dimensions',volume:{x,y,z}})}}})});
-        }
+        const equipmentTarget=reference(equipment);
+        const existing=await rpc({oneofKind:'read',read:m.Read.create({target:equipmentTarget})});
+        expect(existing.oneofKind).toBe('detail');
+        const changes=[['width',440000n],['height',44450n],['depth',500000n]].map(([name,value])=>({name,value:{oneofKind:'equipment',equipment:{basis:'Measured test fixture equipment',assertion:{oneofKind:'quantity',quantity:{lower:value,upper:value,unit:'mm',scale:3}}}}}));
+        await rpc({oneofKind:'write',write:m.Write.create({target:equipmentTarget,expected:existing.detail.item.revision,kind:existing.detail.item.kind,changes})});
+        const [x,y,z]=[482600n,1866900n,1000000n].map(lengthUm=>({startUm:0n,lengthUm}));
+        await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target:reference(rack),basis:'Measured test fixture usable space',volume:{x,y,z}})}}})});
         await page.reload();
         await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
         const planner=page.locator('.physical-planner');
@@ -106,7 +109,7 @@ test('physical plan reserves then records installation on desktop and phone',asy
         await planner.getByRole('button',{name:'Add planned placement',exact:true}).click();
         await planner.getByRole('button',{name:'Save installation plan',exact:true}).click();
         await expect(planner.getByRole('status')).toHaveText('Plan saved. Nothing is reserved or installed.');
-        expect((await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'read',read:{enclosure:reference(rack)}}})})).physical.occupancy).toEqual([]);
+        expect((await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'read',read:{enclosure:reference(rack),occupants:true}}})})).physical.occupancy).toEqual([]);
         await page.reload();
         await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
         await planner.getByRole('button',{name:`Installation ${width} · draft`,exact:true}).click();
@@ -117,10 +120,17 @@ test('physical plan reserves then records installation on desktop and phone',asy
         await planner.getByLabel('Installation discrepancies',{exact:true}).fill('Installed manually; cable connectivity not checked.');
         await planner.getByRole('button',{name:'Record selected installation',exact:true}).click();
         await expect(planner.getByRole('status')).toHaveText('Reported installation recorded. Live health has not been asserted.');
-        const read=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'read',read:{enclosure:reference(rack)}}})});
+        const read=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'read',read:{enclosure:reference(rack),occupants:true}}})});
         expect(read.physical.occupancy.map(o=>o.placement.item)).toEqual([reference(equipment)]);
         await expect(planner.getByRole('img',{name:'Rack physical placement',exact:true})).toBeVisible();
+        await expect(page.getByRole('region',{name:'Resource details'}).getByRole('button',{name:`installed in · Planned equipment ${width}`,exact:true})).toBeVisible();
         expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+        // A physical command must refresh the enclosing context before another editor writes.
+        await page.getByRole('button',{name:'Edit resource',exact:true}).click();
+        const editor=page.getByRole('dialog');
+        await editor.getByLabel('Description',{exact:true}).fill('Installed equipment confirmed; service health remains unknown.');
+        await editor.getByRole('button',{name:'Save resource',exact:true}).click();
+        await expect(editor).toBeHidden();
       }finally{await page.close();}
     }
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
@@ -1448,9 +1458,12 @@ test('description edits persist for every resource kind on desktop and phone', a
     const targets = new Map();
     const object = async kind => (await rpc({ oneofKind: 'write', write: m.Write.create({ kind, changes: [{ name: 'name', value: { oneofKind: 'text', text: `Description ${m.AssetKind[kind]}` } }] }) })).mutation.targets[0];
     for (const kind of Object.values(m.AssetKind).filter(value => typeof value === 'number' && value !== m.AssetKind.UNSPECIFIED)) {
-      if ([m.AssetKind.IP_ADDRESS, m.AssetKind.PREFIX, m.AssetKind.VLAN, m.AssetKind.ADDRESS_GROUP, m.AssetKind.ADDRESS_REFERENCE].includes(kind)) continue;
+      if ([m.AssetKind.IP_ADDRESS, m.AssetKind.PREFIX, m.AssetKind.VLAN, m.AssetKind.ADDRESS_GROUP, m.AssetKind.ADDRESS_REFERENCE,m.AssetKind.PHYSICAL_POSITION].includes(kind)) continue;
       targets.set(kind, await object(kind));
     }
+    // Structural positions are created through their actual owner, not as unscoped assets.
+    const position=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'position',position:{owner:targets.get(m.AssetKind.DEVICE),structuralKey:'description/slot',name:'Description structural position',componentKind:m.PhysicalComponentKind.UNSPECIFIED}}})});
+    targets.set(m.AssetKind.PHYSICAL_POSITION,position.physical.positions[0].target);
     for (const kind of [m.AssetKind.IP_ADDRESS, m.AssetKind.PREFIX, m.AssetKind.VLAN]) {
       const allocation = kind === m.AssetKind.VLAN
         ? { link: targets.get(m.AssetKind.L2_DOMAIN), vlanId: 42, sharing: m.SharedUse.EXCLUSIVE }

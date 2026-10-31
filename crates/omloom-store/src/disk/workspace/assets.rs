@@ -1480,7 +1480,7 @@ impl Tx<'_> {
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<AssetRef> {
-        if write.target.is_none() && write.kind==wire::AssetKind::PhysicalPosition as i32 {
+        if write.target.is_none() && write.kind == wire::AssetKind::PhysicalPosition as i32 {
             return Err(Error::Invalid);
         }
         if write.kind == wire::AssetKind::AddressReference as i32 {
@@ -1567,8 +1567,8 @@ impl Store {
                 {
                     return Err(Error::Conflict);
                 }
-                tx.require_unclaimed_physical_relation(&existing)?;
-                tx.remove_binding_relation(&existing,&context.actor,now)?;
+                tx.require_structural_relation_edit(&existing)?;
+                tx.remove_binding_relation(&existing, &context.actor, now)?;
                 return Ok(mutation(tx.commit()?, Vec::new()));
             }
         }

@@ -67,17 +67,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                     16
                 } else if (message.name() == "EvaluateRequirements" && field.name() == "nodes")
                     || (message.name() == "RequirementGroup" && field.name() == "members")
-                    || (message.name() == "PhysicalPlan" && field.name()=="steps")
+                    || (message.name() == "PhysicalPlan" && field.name() == "steps")
                     || (message.name() == "PhysicalView" && field.name() == "definitions")
-                    || (message.name() == "PhysicalCompletion" && matches!(field.name(),"completed_steps"|"not_performed_steps"))
+                    || (message.name() == "PhysicalCompletion"
+                        && matches!(field.name(), "completed_steps" | "not_performed_steps"))
                 {
                     64
-                } else if message.name() == "PhysicalView" && field.name() == "occupancy"
-                {
+                } else if message.name() == "PhysicalView" && field.name() == "occupancy" {
                     128
-                } else if message.name() == "PhysicalView" && matches!(field.name(),"plans"|"positions") {
+                } else if message.name() == "PhysicalView"
+                    && matches!(field.name(), "plans" | "positions")
+                {
                     25
-                } else if message.name() == "PhysicalView" && field.name()=="items" {
+                } else if message.name() == "PhysicalView" && field.name() == "items" {
                     256
                 } else {
                     0
