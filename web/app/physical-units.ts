@@ -1,0 +1,17 @@
+// Preserve micrometre precision through user entry; canvas rounding never supplies admission data.
+export function millimetres(um: bigint): string {
+  const sign=um<0n?'-':'';
+  const magnitude=um<0n?-um:um;
+  const integer = magnitude / 1000n;
+  const fraction = (magnitude % 1000n).toString().padStart(3, '0').replace(/0+$/, '');
+  return sign+(fraction ? `${integer}.${fraction}` : integer.toString());
+}
+export function micrometres(mm: string): bigint {
+  if (!/^(0|[1-9][0-9]{0,12})(\.[0-9]{1,3})?$/.test(mm)) {
+    throw Error('Enter a positive measurement in millimetres with at most three decimal places.');
+  }
+  const [integer, fraction] = mm.split('.');
+  const value = BigInt(integer!) * 1000n + BigInt((fraction === undefined ? '' : fraction).padEnd(3, '0'));
+  if (value <= 0n) throw Error('A measurement must be greater than zero. Leave unknown dimensions unset.');
+  return value;
+}

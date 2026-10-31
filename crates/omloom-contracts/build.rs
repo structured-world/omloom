@@ -67,8 +67,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                     16
                 } else if (message.name() == "EvaluateRequirements" && field.name() == "nodes")
                     || (message.name() == "RequirementGroup" && field.name() == "members")
+                    || (message.name() == "PhysicalPlan" && matches!(field.name(),"placements"|"replacements"))
+                    || (message.name() == "PhysicalView" && field.name() == "definitions")
+                    || (message.name() == "PhysicalCompletion" && field.name()=="completed_replacements")
                 {
                     64
+                } else if (message.name() == "PhysicalCompletion" && field.name() == "installed")
+                    || (message.name() == "PhysicalView" && field.name() == "occupancy")
+                {
+                    128
+                } else if message.name() == "PhysicalView" && matches!(field.name(),"plans"|"positions") {
+                    25
+                } else if message.name() == "PhysicalView" && field.name()=="items" {
+                    256
                 } else {
                     0
                 }

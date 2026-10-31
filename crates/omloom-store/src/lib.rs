@@ -6,6 +6,7 @@
 
 extern crate alloc;
 
+pub mod physical;
 pub mod requirements;
 
 /// Independently bounded data classes. Recovery checkpoints never expire with detail.

@@ -9,6 +9,9 @@ import VmPlacement from './VmPlacement.vue';
 import ResponsibilityPanel from './ResponsibilityPanel.vue';
 import AccountPanel from './AccountPanel.vue';
 import RequirementsPanel from './RequirementsPanel.vue';
+import PhysicalFacts from './PhysicalFacts.vue';
+import PhysicalPlanner from './PhysicalPlanner.vue';
+import PhysicalPositions from './PhysicalPositions.vue';
 import { softwareFields } from './software-fields';
 import { equipmentFields } from './equipment-fields';
 import { ref, computed, watch, onMounted, nextTick } from 'vue';
@@ -378,6 +381,9 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <button v-if="detail.item.kind === K.VIRTUAL_MACHINE && identity?.writable && detail.item.target" @click="placementVm=detail.item.target">Change hypervisor after migration</button>
 <HostIdentityEvidence :observations="detail.identity" />
 <RequirementsPanel v-if="detail.item.target&&!loading&&[K.DEVICE,K.PROVIDER_ACCOUNT].includes(detail.item.kind)" :key="key(detail.item.target)+'/'+detail.item.revision" :target="detail.item.target" :kind="detail.item.kind" :working="working" />
+<PhysicalFacts v-if="detail.item.target&&!loading&&[K.RACK,K.DEVICE,K.PORT,K.CABLE,K.LOCATION,K.PHYSICAL_COMPONENT,K.PHYSICAL_POSITION].includes(detail.item.kind)" :key="key(detail.item.target)+'/'+detail.item.revision" :target="detail.item.target" :working="working" @saved="notice='Physical facts saved.'; load()" />
+<PhysicalPlanner v-if="detail.item.target&&!loading&&detail.item.kind===K.RACK" :key="'plan/'+key(detail.item.target)" :target="detail.item.target" :working="working" />
+<PhysicalPositions v-if="detail.item.target&&!loading&&[K.RACK,K.DEVICE,K.PORT,K.PHYSICAL_COMPONENT].includes(detail.item.kind)" :key="'positions/'+key(detail.item.target)" :target="detail.item.target" :working="working" @open="open" @changed="notice='Physical position saved.'; load()" />
 <ResponsibilityPanel v-if="detail.item&&!loading" :key="key(detail.item.target)+'/'+detail.item.revision" :item="detail.item" :working="working" @changed="saved()" @open="open" />
 <AccountPanel v-if="detail.item?.kind===K.PROVIDER_ACCOUNT&&!loading" :key="key(detail.item.target)+'/'+detail.item.revision" :item="detail.item" :working="working" @changed="saved()" @open="open" @share="editor='view'" />
 <p v-if="detail.networkNext || networkCursor" class="hint">Showing one bounded evidence page. Observation counts and filters apply to this page.</p>

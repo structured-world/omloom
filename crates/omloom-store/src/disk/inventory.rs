@@ -932,6 +932,7 @@ pub(super) fn compatible(
             (K::Device, K::Rack | K::Site | K::Location)
                 | (K::Rack, K::Site | K::Location)
                 | (K::Location, K::Site | K::Location)
+                | (K::PhysicalComponent, K::PhysicalPosition)
         ),
         R::Contains => matches!(
             (from, to),
@@ -949,12 +950,13 @@ pub(super) fn compatible(
                 | (K::Service, K::SoftwareInstallation)
                 | (K::Service, K::ProviderAccount)
                 | (K::Workload, K::Container | K::Service)
+                | (K::Device | K::Rack | K::Port | K::PhysicalComponent, K::PhysicalPosition)
                 | (
                     K::Container,
                     K::Service | K::Interface | K::SoftwareInstallation
                 )
         ),
-        R::HasPort => matches!((from, to), (K::Device, K::Port)),
+        R::HasPort => matches!((from, to), (K::Device | K::PhysicalComponent, K::Port)),
         R::Carries => matches!((from, to), (K::Port, K::Interface)),
         R::ConnectedTo => matches!((from, to), (K::Port, K::Cable) | (K::Cable, K::Port)),
         R::AssignedTo => matches!((from, to), (K::IpAddress, K::Interface)),

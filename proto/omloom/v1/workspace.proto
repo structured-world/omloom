@@ -1505,6 +1505,259 @@ message RequirementEvaluation {
   repeated RequirementResult results = 5;
 }
 
+// Half-open physical extent in integer micrometres in its owner's coordinates.
+message PhysicalExtent {
+  // User-supplied signed origin, allowing documented external service clearance.
+  sint64 start_um = 1;
+  // Positive physical length; zero is invalid, not an unknown measurement.
+  uint64 length_um = 2;
+}
+message PhysicalVolume {
+  // Horizontal extent in the owning enclosure's coordinate system.
+  PhysicalExtent x = 1;
+  // Vertical extent; one rack unit is exactly 44450 micrometres.
+  PhysicalExtent y = 2;
+  // Front-to-rear extent; opposite faces share the same coordinates.
+  PhysicalExtent z = 3;
+}
+// Current explicit private/unmatched physical facts, not a second model catalogue.
+message PhysicalDefinition {
+  // Existing resource incarnation whose current physical facts are being refined.
+  omloom.v1.AssetRef target = 1;
+  // User-selected external envelope or usable enclosure volume, absent if unknown.
+  optional PhysicalVolume volume = 2;
+  // Source/instruction reference supplied by the operator, max 512 bytes; no secrets.
+  string basis = 3;
+  // Optional sourced mass in grams. Missing is unknown and must not be summed as zero.
+  optional uint64 mass_g = 4;
+  // Optional permitted supported mass in grams, independently of actual equipment mass.
+  optional uint64 max_mass_g = 5;
+  // Optional design power requirement in milliwatts, not a measured load.
+  optional uint64 demand_mw = 6;
+  // Optional design power budget in milliwatts, not proof of independent feeds.
+  optional uint64 capacity_mw = 7;
+  // Optional design cooling demand in milliwatts, independent of power measurements.
+  optional uint64 cooling_mw = 8;
+  // Optional qualified cooling capacity in milliwatts; missing is unknown.
+  optional uint64 cooling_capacity_mw = 9;
+  // Explicit rail/attachment standard, max 128 bytes; missing means unqualified fit.
+  optional string mounting = 10;
+}
+message PhysicalDefinitionEdit {
+  // User-supplied current definition, validated under resource/field permissions.
+  PhysicalDefinition definition = 1;
+}
+enum PhysicalComponentKind {
+  PHYSICAL_COMPONENT_KIND_UNSPECIFIED = 0;
+  PHYSICAL_COMPONENT_KIND_CHASSIS = 1;
+  PHYSICAL_COMPONENT_KIND_TRANSCEIVER = 2;
+  PHYSICAL_COMPONENT_KIND_DISK = 3;
+  PHYSICAL_COMPONENT_KIND_POWER_SUPPLY = 4;
+  PHYSICAL_COMPONENT_KIND_NETWORK_ADAPTER = 5;
+  PHYSICAL_COMPONENT_KIND_LINE_CARD = 6;
+  PHYSICAL_COMPONENT_KIND_DOCK = 7;
+  PHYSICAL_COMPONENT_KIND_ASSEMBLY = 8;
+}
+message PhysicalPositionEdit {
+  // Selected actual owner; replacing that owner creates new structural positions.
+  omloom.v1.AssetRef owner = 1;
+  // User/source-qualified immutable structural token, 1-128 ASCII token bytes.
+  // Labels, serials and enumeration indices alone do not establish this key.
+  string structural_key = 2;
+  // User-visible bounded label, independent of structural identity.
+  string name = 3;
+  // Kind of removable part admitted by this position, unspecified means unknown.
+  PhysicalComponentKind component_kind = 4;
+  // Exact current position revision for an edit; absent means explicit creation.
+  optional uint64 expected = 5;
+}
+message PhysicalPosition {
+  // Server-generated stable position identity, scoped structurally by its owner.
+  omloom.v1.AssetRef target = 1;
+  // Current actual owning incarnation, not the presently removable occupant.
+  omloom.v1.AssetRef owner = 2;
+  // Immutable structural identity within the actual owning incarnation.
+  string structural_key = 3;
+  // Current declared part class; it does not prove electrical/media compatibility.
+  PhysicalComponentKind component_kind = 4;
+  // Accepted position revision for a reviewed mutation.
+  uint64 revision = 5;
+}
+message PhysicalPositionQuery {
+  // Explicit actual owner whose permitted direct positions are requested.
+  omloom.v1.AssetRef owner = 1;
+  // Previous keyset continuation, absent on the first page; never an authority grant.
+  optional string after = 2;
+  // Requested page size, zero selects 25 and values above 25 are rejected.
+  uint32 limit = 3;
+}
+message PhysicalPlacement {
+  // Existing adopted part/device incarnation, not a model identifier or future serial.
+  omloom.v1.AssetRef item = 1;
+  // Existing receiving rack/enclosure incarnation; parent authority is checked separately.
+  omloom.v1.AssetRef enclosure = 2;
+  // Proposed position/envelope in receiving enclosure coordinates. Admission
+  // checks dimensions against the item's current sourced definition; this input
+  // cannot shrink actual equipment to make it fit. Unknown dimensions stay unvalidated.
+  PhysicalVolume volume = 3;
+}
+message PhysicalReplacement {
+  // Selected surviving position or actual enclosure for a chassis replacement.
+  omloom.v1.AssetRef position = 1;
+  // Previously established part; absence leaves the predecessor unresolved,
+  // never implicitly asserts that the position is empty.
+  optional omloom.v1.AssetRef previous = 2;
+  // Explicit new adopted part; absence records removal. Equal previous/replacement
+  // records a same-part reseat, preserving the part's identity.
+  optional omloom.v1.AssetRef replacement = 3;
+  // Exact ordinary InstalledIn relation reviewed for previous, required with previous.
+  optional string previous_binding = 4;
+  // Revision of that binding, never a serial/name/time-based identity guess.
+  optional uint64 previous_revision = 5;
+  // Explicit old position when moving an established part or staging a chassis
+  // elsewhere; omission selects the same position as the destination.
+  optional omloom.v1.AssetRef source_position = 6;
+  // Server-derived attributed completion, never accepted as input to a saved draft.
+  bool completed = 7;
+}
+enum PhysicalPlanState {
+  PHYSICAL_PLAN_STATE_UNSPECIFIED = 0;
+  PHYSICAL_PLAN_STATE_DRAFT = 1;
+  PHYSICAL_PLAN_STATE_RESERVED = 2;
+  PHYSICAL_PLAN_STATE_PARTIAL = 3;
+  PHYSICAL_PLAN_STATE_COMPLETED = 4;
+  PHYSICAL_PLAN_STATE_CANCELLED = 5;
+}
+message PhysicalPlan {
+  // Server-assigned identity on explicit save; omitted for a new transient preview.
+  optional string id = 1;
+  // User label, max 160 UTF-8 bytes. It does not name an executable command.
+  string name = 2;
+  // Explicit proposed placements, at most 64; unsaved editing reserves nothing.
+  repeated PhysicalPlacement placements = 3;
+  // Server-derived current lifecycle; callers cannot assert accepted completion.
+  PhysicalPlanState state = 4;
+  // Server-derived saved revision, used for conditional plan changes.
+  uint64 revision = 5;
+  // Server-admitted reservation deadline in Unix milliseconds, absent for drafts.
+  optional uint64 reserved_until_ms = 6;
+  // Reviewed transitions in this same plan/lifecycle. Placements plus replacements
+  // are bounded to 64; no implicit cable attachment, credential or grant transfer.
+  repeated PhysicalReplacement replacements = 7;
+}
+message PhysicalPreview {
+  // User-supplied proposed plan; state, revision and deadline are not authority.
+  PhysicalPlan plan = 1;
+}
+message PhysicalSave {
+  // Proposed current draft; existing plans must include their last reviewed revision.
+  PhysicalPlan plan = 1;
+}
+message PhysicalRead {
+  // Existing enclosure whose permitted physical projection is requested.
+  omloom.v1.AssetRef enclosure = 1;
+}
+message PhysicalPlanKey {
+  // Exact saved plan identity returned by its save command, not a capability.
+  string id = 1;
+  // Last reviewed plan revision; changes require a new review.
+  uint64 revision = 2;
+}
+message PhysicalPlanList {
+  // Opaque last plan key from the previous page, not an access capability.
+  optional string after = 1;
+  // Requested summary count, at most 25. Omission uses the fixed first-page size.
+  uint32 limit = 2;
+}
+message PhysicalPlanSummary {
+  // Server-assigned saved plan UUID; names never identify a plan.
+  string id = 1;
+  // Owner-visible current plan label; resource access is independently rechecked.
+  string name = 2;
+  // Current conditional edit basis, not execution or installation evidence.
+  uint64 revision = 3;
+  // Derived current plan lifecycle, independent of actual installed occupancy.
+  PhysicalPlanState state = 4;
+}
+message PhysicalReserve {
+  // Existing saved draft and revision to admit against current capacity.
+  PhysicalPlanKey plan = 1;
+  // Requested finite deadline, Unix milliseconds, bounded by the host policy.
+  uint64 until_ms = 2;
+}
+message PhysicalCompletion {
+  // Admitted plan and revision under which the operator performed manual work.
+  PhysicalPlanKey plan = 1;
+  // Explicit selected installed items, at most 64; omitted items remain unresolved.
+  repeated omloom.v1.AssetRef installed = 2;
+  // Operator's concise discrepancy report, max 2048 bytes; never machine verification.
+  optional string discrepancy = 3;
+  // Explicit zero-based replacement indexes whose physical work was completed.
+  // Unselected transitions remain unresolved in this same plan.
+  repeated uint32 completed_replacements = 4;
+  // User explicitly records externally performed actual work, even if a planned
+  // safe installation could not be admitted. This grants no executor authority
+  // and never marks compatibility, cable connectivity or service health verified.
+  bool actual_state = 5;
+}
+message PhysicalOccupancy {
+  // Current installed placement, independent of the reservation's expiry.
+  PhysicalPlacement placement = 1;
+  // Attribution of the manual installation, not proof of live service or wiring.
+  string reported_by = 2;
+  // Exact accepted physical binding revision used to invalidate old evidence.
+  uint64 revision = 3;
+}
+message Physical {
+  // Exactly one physical query or command; no caller-supplied effective grants.
+  oneof action {
+    // Inspect one selected enclosure without writes or reservation admission.
+    PhysicalRead read = 1;
+    // Conditionally refine current physical facts, not installed component state.
+    PhysicalDefinitionEdit define = 2;
+    // Check a transient proposal against current authoritative constraints.
+    PhysicalPreview preview = 3;
+    // Explicitly save a bounded current plan without reserving or installing it.
+    PhysicalSave save = 4;
+    // Load the saved plan under current rights, without creating a snapshot.
+    PhysicalPlanKey load = 5;
+    // Atomically reserve current physical capacity, without claiming installation.
+    PhysicalReserve reserve = 6;
+    // Record attributed actual installation and preserve unresolved allocations.
+    PhysicalCompletion complete = 7;
+    // Cancel future work while preserving installed occupancy and unresolved effects.
+    PhysicalPlanKey cancel = 8;
+    // Retrieve only the caller's saved plan summaries with bounded stable pagination.
+    PhysicalPlanList list = 9;
+    // Create/refine a structural position with its ordinary inventory ownership atomically.
+    PhysicalPositionEdit position = 10;
+    // Retrieve bounded direct positions without loading occupants or descendants.
+    PhysicalPositionQuery positions = 11;
+  }
+}
+message PhysicalView {
+  // Current application revision under which the projection was produced.
+  uint64 revision = 1;
+  // Permitted current definitions for this bounded selection only.
+  repeated PhysicalDefinition definitions = 2;
+  // Explicitly selected current plan or transient proposal, absent for enclosure reads.
+  optional PhysicalPlan plan = 3;
+  // Shared constraint result, never a grant, execution receipt or live health.
+  RequirementState state = 4;
+  // Machine-readable missing/conflicting basis without hidden occupant identities.
+  RequirementReason reason = 5;
+  // Only permitted current occupants of the selected enclosure, maximum 128.
+  repeated PhysicalOccupancy occupancy = 6;
+  // At most 25 owner-visible plan summaries, without child or occupancy hydration.
+  repeated PhysicalPlanSummary plans = 7;
+  // Continuation for the same owner; it supplies no resource or plan authority.
+  optional string next = 8;
+  // Currently permitted direct structural positions, at most 25 per query.
+  repeated PhysicalPosition positions = 9;
+  // Minimal permitted ordinary inventory labels for this selected response only.
+  repeated Item items = 10;
+}
+
 message Request {
   // Explicit working selector for resource details, prepared actions and every
   // inventory mutation/import. Query/export use Query roots/focus instead.
@@ -1576,6 +1829,8 @@ message Request {
     PrepareVmPlacement prepare_vm_placement = 32;
     // Evaluate desired conditions against permitted current facts without writes or probes.
     EvaluateRequirements evaluate_requirements = 33;
+    // Query or explicitly refine physical planning through the common store boundary.
+    Physical physical = 34;
   }
 }
 message Reply {
@@ -1625,5 +1880,7 @@ message Reply {
     VmPlacementReview vm_placement_review = 21;
     // Shared read-only prerequisite explanations, not operation admission.
     RequirementEvaluation requirement_evaluation = 22;
+    // Bounded physical facts and plan validation over the same inventory revision.
+    PhysicalView physical = 23;
   }
 }

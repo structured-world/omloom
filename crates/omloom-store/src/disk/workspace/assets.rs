@@ -35,6 +35,8 @@ fn ownership_groups(
         K::SoftwareRelease,
         K::Workload,
         K::Container,
+        K::PhysicalComponent,
+        K::PhysicalPosition,
     ];
     let mut groups = BTreeMap::<(i32, bool, i32), Vec<i32>>::new();
     for parent in kinds {
@@ -310,6 +312,8 @@ pub(super) fn kind_for_view(view: api::View) -> &'static [wire::AssetKind] {
         api::View::Overview => &[],
         api::View::Hardware => &[
             K::Device,
+            K::PhysicalComponent,
+            K::PhysicalPosition,
             K::Port,
             K::Cable,
             K::Rack,
@@ -1476,6 +1480,9 @@ impl Tx<'_> {
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<AssetRef> {
+        if write.target.is_none() && write.kind==wire::AssetKind::PhysicalPosition as i32 {
+            return Err(Error::Invalid);
+        }
         if write.kind == wire::AssetKind::AddressReference as i32 {
             if write.changes.is_empty() || write.changes.len() > MAX_FIELDS {
                 return Err(Error::Invalid);

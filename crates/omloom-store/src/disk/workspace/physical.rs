@@ -1,0 +1,391 @@
+//! Current physical definitions use scalar indexed inventory rows, not wire blobs.
+use super::*;
+use crate::physical::{Span, Volume};
+mod lifecycle;
+mod positions;
+mod replacements;
+
+fn volume(value: &api::PhysicalVolume) -> Result<Volume> {
+    fn axis(value: Option<&api::PhysicalExtent>) -> Result<Span> {
+        let value = value.ok_or(Error::Invalid)?;
+        Span::new(value.start_um, value.length_um).map_err(|_| Error::Invalid)
+    }
+    Ok(Volume {
+        x: axis(value.x.as_ref())?,
+        y: axis(value.y.as_ref())?,
+        z: axis(value.z.as_ref())?,
+    })
+}
+fn write_volume(data: &mut Properties, value: &api::PhysicalVolume) -> Result<()> {
+    volume(value)?;
+    for (name, axis) in [("x", &value.x), ("y", &value.y), ("z", &value.z)] {
+        let axis = axis.as_ref().ok_or(Error::Invalid)?;
+        data.insert(format!("{name}_start"), Value::Int(axis.start_um));
+        data.insert(format!("{name}_length"), int(axis.length_um)?);
+    }
+    Ok(())
+}
+fn read_volume(data: &Properties) -> Result<Option<api::PhysicalVolume>> {
+    if !data.contains_key("x_start") {
+        return Ok(None);
+    }
+    fn axis(data: &Properties, name: &str) -> Result<api::PhysicalExtent> {
+        Ok(api::PhysicalExtent {
+            start_um: data
+                .get(&format!("{name}_start"))
+                .and_then(Value::as_int)
+                .ok_or(Error::Corrupt)?,
+            length_um: number(data, &format!("{name}_length"))?,
+        })
+    }
+    let value = api::PhysicalVolume {
+        x: Some(axis(data, "x")?),
+        y: Some(axis(data, "y")?),
+        z: Some(axis(data, "z")?),
+    };
+    volume(&value).map_err(|_| Error::Corrupt)?;
+    Ok(Some(value))
+}
+fn definition_row(value: &api::PhysicalDefinition) -> Result<Properties> {
+    if value.basis.is_empty()
+        || value.basis.len() > 512
+        || value.basis.chars().any(char::is_control)
+        || value
+            .mounting
+            .as_ref()
+            .is_some_and(|s| s.is_empty() || s.len() > 128 || s.chars().any(char::is_control))
+    {
+        return Err(Error::Invalid);
+    }
+    let target = parse_target(value.target.as_ref())?;
+    let mut data = props([
+        ("asset", text(target.asset.to_string())),
+        ("incarnation", text(target.incarnation.to_string())),
+        ("basis", text(&value.basis)),
+    ]);
+    if let Some(v) = &value.volume {
+        write_volume(&mut data, v)?;
+    }
+    for (key, n) in [
+        ("mass_g", value.mass_g),
+        ("max_mass_g", value.max_mass_g),
+        ("demand_mw", value.demand_mw),
+        ("capacity_mw", value.capacity_mw),
+        ("cooling_mw", value.cooling_mw),
+        ("cooling_capacity_mw", value.cooling_capacity_mw),
+    ] {
+        if let Some(n) = n {
+            data.insert(key.into(), int(n)?);
+        }
+    }
+    if let Some(mounting) = &value.mounting {
+        data.insert("mounting".into(), text(mounting));
+    }
+    Ok(data)
+}
+fn definition(data: &Properties) -> Result<api::PhysicalDefinition> {
+    let optional = |key: &str| -> Result<Option<u64>> {
+        if data.contains_key(key) {
+            number(data, key).map(Some)
+        } else {
+            Ok(None)
+        }
+    };
+    Ok(api::PhysicalDefinition {
+        target: Some(target_wire(target(data)?)),
+        volume: read_volume(data)?,
+        basis: string(data, "basis")?,
+        mass_g: optional("mass_g")?,
+        max_mass_g: optional("max_mass_g")?,
+        demand_mw: optional("demand_mw")?,
+        capacity_mw: optional("capacity_mw")?,
+        cooling_mw: optional("cooling_mw")?,
+        cooling_capacity_mw: optional("cooling_capacity_mw")?,
+        mounting: data
+            .get("mounting")
+            .map(|_| string(data, "mounting"))
+            .transpose()?,
+    })
+}
+impl Tx<'_> {
+    fn physical_access(
+        &self,
+        context: &Context,
+        target: AssetRef,
+        working: &api::WorkingContext,
+        write: bool,
+    ) -> Result<()> {
+        self.selection(context, working, write)?
+            .contains(target, self)?;
+        let row = self.visible_asset(context, target)?;
+        let kind = number(&row, "kind")? as i32;
+        if !context.field(target, kind, "physical", false)
+            || (write && !context.field(target, kind, "physical", true))
+        {
+            return Err(Error::Denied);
+        }
+        Ok(())
+    }
+    fn physical_definition(&self, target: AssetRef) -> Result<Option<api::PhysicalDefinition>> {
+        self.get(&format!("physical/{}", network::identity(target)))?
+            .as_ref()
+            .map(definition)
+            .transpose()
+    }
+}
+impl Store {
+    pub(super) fn workspace_physical(
+        &self,
+        context: &Context,
+        request: api::Physical,
+        working: &api::WorkingContext,
+        now: u64,
+    ) -> Result<api::Reply> {
+        use api::physical::Action;
+        let mut tx = self.begin()?;
+        let mut view = api::PhysicalView {
+            revision: number(&tx.root, "revision")?,
+            state: api::RequirementState::Unknown as i32,
+            reason: api::RequirementReason::Missing as i32,
+            ..Default::default()
+        };
+        match request.action.ok_or(Error::Invalid)? {
+            Action::Position(value) => {
+                view.positions.push(tx.save_physical_position(context,value,working,now)?);
+            }
+            Action::Positions(value) => {
+                let (positions,next)=tx.physical_positions(context,value,working)?;
+                view.positions=positions;view.next=next;
+            }
+            Action::List(request) => {
+                let limit = if request.limit == 0 { 25 } else { request.limit };
+                if limit > 25 { return Err(Error::Limit); }
+                if request.after.as_ref().is_some_and(|s| s.len()>64) { return Err(Error::Invalid); }
+                let after = request.after.as_deref().unwrap_or("");
+                let rows = tx.query("MATCH (n:OmRow {parent:'plans'}) WHERE n.actor=$actor AND n.action='physical' AND n.key>$after RETURN properties(n) AS p ORDER BY n.key LIMIT $limit",params([("actor",text(&context.actor)),("after",text(after)),("limit",int(u64::from(limit)+1)?)]))?;
+                for row in rows.iter().take(limit as usize) {
+                    let key = string(row,"key")?;
+                    let id = key.strip_prefix("plan/").ok_or(Error::Corrupt)?;
+                    PlanId::parse(id).map_err(|_| Error::Corrupt)?;
+                    view.plans.push(api::PhysicalPlanSummary { id: id.into(),name: string(row,"name")?, revision: number(row,"revision")?,state: i32::try_from(number(row,"state")?).map_err(|_|Error::Corrupt)? });
+                }
+                if rows.len()>limit as usize { view.next = Some(string(&rows[limit as usize-1],"key")?); }
+            }
+            Action::Read(read) => {
+                let target = parse_target(read.enclosure.as_ref())?;
+                tx.physical_access(context, target, working, false)?;
+                if let Some(value) = tx.physical_definition(target)? {
+                    view.definitions.push(value);
+                }
+                let rows = tx.query(
+                    "MATCH (n:OmRow {parent:$parent}) RETURN properties(n) AS p LIMIT 129",
+                    params([(
+                        "parent",
+                        text(format!("allocation/{}", network::identity(target))),
+                    )]),
+                )?;
+                if rows.len() > 128 {
+                    return Err(Error::Limit);
+                }
+                for row in rows {
+                    if number(&row, "state")? != api::PhysicalPlanState::Completed as u64 {
+                        continue;
+                    }
+                    let item = lifecycle::reference(&string(&row, "item")?)?;
+                    match tx.physical_access(context, item, working, false) {
+                        Ok(()) => {}
+                        Err(Error::Denied | Error::Missing) => continue,
+                        Err(error) => return Err(error),
+                    }
+                    view.occupancy.push(api::PhysicalOccupancy {
+                        placement: Some(api::PhysicalPlacement {
+                            item: Some(target_wire(item)),
+                            enclosure: Some(target_wire(target)),
+                            volume: read_volume(&row)?,
+                        }),
+                        reported_by: string(&row, "actor")?,
+                        revision: number(&row, "revision")?,
+                    });
+                }
+            }
+            Action::Define(edit) => {
+                let value = edit.definition.ok_or(Error::Invalid)?;
+                let target = parse_target(value.target.as_ref())?;
+                tx.physical_access(context, target, working, true)?;
+                let data = definition_row(&value)?;
+                if tx.put(
+                    &format!("physical/{}", network::identity(target)),
+                    "physical",
+                    Class::Inventory,
+                    data,
+                )? {
+                    tx.audit(
+                        &network::identity(target),
+                        &context.actor,
+                        "physical-definition",
+                        view.revision.checked_add(1).ok_or(Error::Limit)?,
+                        now,
+                    )?;
+                }
+                view.definitions.push(value);
+            }
+            Action::Preview(preview) => {
+                let plan = preview.plan.ok_or(Error::Invalid)?;
+                tx.validate_physical_draft(context, &plan, working)?;
+                view.plan = Some(plan);
+            }
+            Action::Save(save) => {
+                let mut plan = save.plan.ok_or(Error::Invalid)?;
+                tx.validate_physical_draft(context, &plan, working)?;
+                for p in &plan.placements {
+                    tx.physical_access(context, parse_target(p.item.as_ref())?, working, true)?;
+                    tx.physical_access(
+                        context,
+                        parse_target(p.enclosure.as_ref())?,
+                        working,
+                        true,
+                    )?;
+                }
+                tx.check_replacements(context,&plan,working,true)?;
+                let id = match &plan.id {
+                    Some(id) => PlanId::parse(id).map_err(|_| Error::Invalid)?,
+                    None => PlanId::generate(),
+                };
+                let key = format!("plan/{id}");
+                let mut previous_count = 0;
+                let mut previous_replacements = 0;
+                if let Some(old) = tx.get(&key)? {
+                    if number(&old, "revision")? != plan.revision {
+                        return Err(Error::Conflict);
+                    }
+                    if string(&old, "actor")? != context.actor {
+                        return Err(Error::Denied);
+                    }
+                    let existing = tx.load_physical_plan(
+                        context,
+                        &api::PhysicalPlanKey {
+                            id: id.to_string(),
+                            revision: plan.revision,
+                        },
+                        working,
+                        true,
+                    )?;
+                    if existing.state != api::PhysicalPlanState::Draft as i32 {
+                        return Err(Error::Conflict);
+                    }
+                    previous_count = existing.placements.len();
+                    previous_replacements = existing.replacements.len();
+                    plan.state = api::PhysicalPlanState::Draft as i32;
+                    if existing == plan {
+                        view.plan = Some(existing);
+                        tx.physical_labels(context,&mut view)?;
+                        view.revision = tx.commit()?;
+                        return Ok(reply(api::reply::Result::Physical(view)));
+                    }
+                } else if plan.id.is_some() {
+                    return Err(Error::Missing);
+                }
+                plan.id = Some(id.to_string());
+                plan.state = api::PhysicalPlanState::Draft as i32;
+                plan.reserved_until_ms = None;
+                plan.revision = view.revision.checked_add(1).ok_or(Error::Limit)?;
+                tx.put(
+                    &key,
+                    "plans",
+                    Class::Inventory,
+                    props([
+                        ("name", text(&plan.name)),
+                        ("actor", text(&context.actor)),
+                        ("action", text("physical")),
+                        ("state", int(api::PhysicalPlanState::Draft as u64)?),
+                        ("revision", int(plan.revision)?),
+                        ("count", int(plan.placements.len() as u64)?),
+                        ("replacement_count",int(plan.replacements.len() as u64)?),
+                    ]),
+                )?;
+                for (i, p) in plan.placements.iter().enumerate() {
+                    let item = parse_target(p.item.as_ref())?;
+                    let enclosure = parse_target(p.enclosure.as_ref())?;
+                    let mut data = props([
+                        ("item", text(network::identity(item))),
+                        ("enclosure", text(network::identity(enclosure))),
+                    ]);
+                    write_volume(&mut data, p.volume.as_ref().ok_or(Error::Invalid)?)?;
+                    tx.put(&format!("{key}/{i}"), &key, Class::Inventory, data)?;
+                }
+                for i in plan.placements.len()..previous_count {
+                    tx.delete(&format!("{key}/{i}"))?;
+                }
+                for (i,replacement) in plan.replacements.iter().enumerate() {
+                    tx.put(&format!("{key}/replacement/{i}"),&key,Class::Inventory,replacements::replacement_row(replacement)?)?;
+                }
+                for i in plan.replacements.len()..previous_replacements {
+                    tx.delete(&format!("{key}/replacement/{i}"))?;
+                }
+                tx.audit(
+                    &id.to_string(),
+                    &context.actor,
+                    "save-plan",
+                    plan.revision,
+                    now,
+                )?;
+                view.plan = Some(plan);
+            }
+            Action::Load(key) => {
+                view.plan = Some(tx.load_physical_plan(context, &key, working, false)?);
+            }
+            Action::Reserve(value) => {
+                let key = value.plan.ok_or(Error::Invalid)?;
+                view.plan =
+                    Some(tx.reserve_physical(context, &key, working, now, value.until_ms)?);
+            }
+            Action::Complete(value) => {
+                view.plan = Some(tx.complete_physical(context, value, working, now)?);
+            }
+            Action::Cancel(key) => {
+                view.plan = Some(tx.cancel_physical(context, &key, working, now)?);
+            }
+        }
+        tx.physical_labels(context,&mut view)?;
+        view.revision = tx.commit()?;
+        Ok(reply(api::reply::Result::Physical(view)))
+    }
+}
+impl Tx<'_> {
+    fn validate_physical_draft(
+        &self,
+        context: &Context,
+        plan: &api::PhysicalPlan,
+        working: &api::WorkingContext,
+    ) -> Result<()> {
+        if plan.name.is_empty()
+            || plan.name.len() > 160
+            || plan.name.chars().any(char::is_control)
+            || (plan.placements.is_empty() && plan.replacements.is_empty())
+            || plan.placements.len() + plan.replacements.len() > 64
+        {
+            return Err(Error::Invalid);
+        }
+        if plan.reserved_until_ms.is_some()
+            || !matches!(
+                api::PhysicalPlanState::try_from(plan.state),
+                Ok(api::PhysicalPlanState::Unspecified | api::PhysicalPlanState::Draft)
+            )
+        {
+            return Err(Error::Invalid);
+        }
+        let mut items = BTreeSet::new();
+        for p in &plan.placements {
+            let item = parse_target(p.item.as_ref())?;
+            let enclosure = parse_target(p.enclosure.as_ref())?;
+            if item == enclosure || !items.insert(item) {
+                return Err(Error::Invalid);
+            }
+            self.physical_access(context, item, working, false)?;
+            self.physical_access(context, enclosure, working, false)?;
+            volume(p.volume.as_ref().ok_or(Error::Invalid)?)?;
+        }
+        self.check_replacements(context,plan,working,false)?;
+        Ok(())
+    }
+}
