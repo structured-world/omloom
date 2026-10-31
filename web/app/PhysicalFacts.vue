@@ -74,7 +74,7 @@ async function save() {
 <form v-if="opened" @submit.prevent="save">
   <fieldset :disabled="busy">
     <label>Measurement or specification source<input v-model="basis" required maxlength="512" /></label>
-    <label>Known physical class<select v-model="componentKind"><option v-for="kind in componentKinds" :key="kind" :value="kind">{{model.PhysicalComponentKind[kind]?.toLowerCase().replaceAll('_',' ')}}</option></select></label>
+    <label v-if="[AssetKind.DEVICE,AssetKind.PHYSICAL_COMPONENT].includes(kind)">Known physical class<select v-model="componentKind"><option v-for="kind in componentKinds" :key="kind" :value="kind">{{model.PhysicalComponentKind[kind]?.toLowerCase().replaceAll('_',' ')}}</option></select></label>
     <label class="check"><input v-model="known" type="checkbox" />Usable enclosure dimensions are known</label>
     <template v-if="known">
       <label>Width (mm)<input v-model="width" inputmode="decimal" required maxlength="17" /></label>

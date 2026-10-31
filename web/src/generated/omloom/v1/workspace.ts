@@ -3636,7 +3636,8 @@ export interface PhysicalDefinition {
      */
     mounting?: string;
     /**
-     * Sourced physical class; unspecified preserves unknown classification.
+     * Sourced device/component class; unspecified preserves unknown classification.
+     * Structural position classes belong to PhysicalPositionEdit, not this profile.
      * Labels, serials and position alone never establish the part's identity/class.
      *
      * @generated from protobuf field: omloom.workspace.v1.PhysicalComponentKind component_kind = 11

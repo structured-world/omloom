@@ -1542,7 +1542,8 @@ message PhysicalDefinition {
   optional uint64 cooling_capacity_mw = 9;
   // Explicit rail/attachment standard, max 128 bytes; missing means unqualified fit.
   optional string mounting = 10;
-  // Sourced physical class; unspecified preserves unknown classification.
+  // Sourced device/component class; unspecified preserves unknown classification.
+  // Structural position classes belong to PhysicalPositionEdit, not this profile.
   // Labels, serials and position alone never establish the part's identity/class.
   PhysicalComponentKind component_kind = 11;
 }

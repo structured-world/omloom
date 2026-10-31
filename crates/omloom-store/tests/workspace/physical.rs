@@ -783,6 +783,60 @@ fn structural_positions_are_scoped_current_and_not_populated_implicitly() -> Tes
     Ok(())
 }
 
+// The descriptor owns a position's accepted class; a physical profile cannot introduce another value.
+#[test]
+fn structural_position_class_has_one_owner() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let owner = create(&store, &actor, K::Device, "Chassis")?;
+    let position = position_fixture(
+        &store,
+        &actor,
+        owner,
+        "optic/1",
+        api::PhysicalComponentKind::Transceiver,
+    )?;
+    let mut profile = define(position);
+    profile.component_kind = api::PhysicalComponentKind::Disk as i32;
+    let before = store.usage()?;
+    assert!(matches!(
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Define(api::PhysicalDefinitionEdit {
+                definition: Some(profile)
+            })
+        ),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// A draft cannot reserve an attachment the canonical inventory relation rules would reject later.
+#[test]
+fn physical_draft_reuses_inventory_endpoint_compatibility() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    for (from, to) in [
+        (K::Service, K::Rack),
+        (K::Device, K::Interface),
+        (K::Port, K::Rack),
+    ] {
+        let item = create(&store, &actor, from, "Invalid placed resource")?;
+        let enclosure = create(&store, &actor, to, "Invalid enclosure")?;
+        let before = store.usage()?;
+        assert!(matches!(
+            draft(&store, &actor, item, enclosure),
+            Err(Error::Invalid)
+        ));
+        assert_eq!(store.usage()?, before);
+    }
+    Ok(())
+}
+
 // A hardware realization is a peer binding, not the owner of OS interface/configuration intent.
 #[test]
 fn physical_carriage_does_not_create_logical_endpoint_ownership() -> TestResult {
@@ -1289,7 +1343,9 @@ fn position_rename_preserves_reported_empty_state() -> TestResult {
     equipment_dimensions(&store, &actor, &incoming)?;
     for target in [&position, &incoming] {
         let mut definition = define(target.clone());
-        definition.component_kind = api::PhysicalComponentKind::Disk as i32;
+        if target == &incoming {
+            definition.component_kind = api::PhysicalComponentKind::Disk as i32;
+        }
         definition.mounting = Some("Declared disk bay standard".into());
         if target == &incoming {
             definition.volume = None;

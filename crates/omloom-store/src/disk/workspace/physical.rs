@@ -144,8 +144,10 @@ fn definition_row(value: &api::PhysicalDefinition) -> Result<Properties> {
         ("asset", text(target.asset.to_string())),
         ("incarnation", text(target.incarnation.to_string())),
         ("basis", text(&value.basis)),
-        ("vint", int(value.component_kind as u64)?),
     ]);
+    if value.component_kind != api::PhysicalComponentKind::Unspecified as i32 {
+        data.insert("vint".into(), int(value.component_kind as u64)?);
+    }
     if let Some(v) = &value.volume {
         write_volume(&mut data, v)?;
     }
@@ -166,7 +168,11 @@ fn definition_row(value: &api::PhysicalDefinition) -> Result<Properties> {
     Ok(data)
 }
 fn definition(data: &Properties) -> Result<api::PhysicalDefinition> {
-    let component_kind = i32::try_from(number(data, "vint")?).map_err(|_| Error::Corrupt)?;
+    let component_kind = if data.contains_key("vint") {
+        i32::try_from(number(data, "vint")?).map_err(|_| Error::Corrupt)?
+    } else {
+        api::PhysicalComponentKind::Unspecified as i32
+    };
     api::PhysicalComponentKind::try_from(component_kind).map_err(|_| Error::Corrupt)?;
     let optional = |key: &str| -> Result<Option<u64>> {
         if data.contains_key(key) {
@@ -198,7 +204,7 @@ impl Tx<'_> {
         target: AssetRef,
         working: &api::WorkingContext,
         write: bool,
-    ) -> Result<()> {
+    ) -> Result<wire::AssetKind> {
         self.selection(context, working, write)?
             .contains(target, self)?;
         let row = self.visible_asset(context, target)?;
@@ -208,7 +214,7 @@ impl Tx<'_> {
         {
             return Err(Error::Denied);
         }
-        Ok(())
+        wire::AssetKind::try_from(kind).map_err(|_| Error::Corrupt)
     }
     fn physical_definition(&self, target: AssetRef) -> Result<Option<api::PhysicalDefinition>> {
         self.get(&format!("physical/{}", network::identity(target)))?
@@ -286,7 +292,15 @@ impl Store {
             Action::Define(edit) => {
                 let value = edit.definition.ok_or(Error::Invalid)?;
                 let target = parse_target(value.target.as_ref())?;
-                tx.physical_access(context, target, working, true)?;
+                let kind = tx.physical_access(context, target, working, true)?;
+                if value.component_kind != api::PhysicalComponentKind::Unspecified as i32
+                    && !matches!(
+                        kind,
+                        wire::AssetKind::Device | wire::AssetKind::PhysicalComponent
+                    )
+                {
+                    return Err(Error::Invalid);
+                }
                 let data = definition_row(&value)?;
                 if tx.put(
                     &format!("physical/{}", network::identity(target)),
@@ -457,8 +471,11 @@ impl Tx<'_> {
             if item == enclosure || !items.insert(item) {
                 return Err(Error::Invalid);
             }
-            self.physical_access(context, item, working, false)?;
-            self.physical_access(context, enclosure, working, false)?;
+            let item_kind = self.physical_access(context, item, working, false)?;
+            let enclosure_kind = self.physical_access(context, enclosure, working, false)?;
+            if !inventory::compatible(item_kind, enclosure_kind, wire::RelationKind::InstalledIn) {
+                return Err(Error::Invalid);
+            }
             volume(p.volume.as_ref().ok_or(Error::Invalid)?)?;
         }
         self.check_replacements(context, plan, working, false)?;
