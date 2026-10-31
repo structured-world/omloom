@@ -39,7 +39,7 @@ fn reports_and_guarded_checks_have_distinct_meanings() -> Result<(), Invalid> {
         },
     ];
     let mut result = [Readiness::Waiting; 4];
-    assess(&steps, &mut result)?;
+    assess(&steps, &mut result, None)?;
     assert_eq!(
         result,
         [
@@ -50,7 +50,7 @@ fn reports_and_guarded_checks_have_distinct_meanings() -> Result<(), Invalid> {
         ]
     );
     steps[1].check = Some(Decision::FAIL);
-    assess(&steps, &mut result)?;
+    assess(&steps, &mut result, None)?;
     assert_eq!(
         result,
         [
@@ -61,7 +61,7 @@ fn reports_and_guarded_checks_have_distinct_meanings() -> Result<(), Invalid> {
         ]
     );
     steps[1].check = Some(Decision::PASS);
-    assess(&steps, &mut result)?;
+    assess(&steps, &mut result, None)?;
     assert_eq!(
         result,
         [
@@ -74,7 +74,7 @@ fn reports_and_guarded_checks_have_distinct_meanings() -> Result<(), Invalid> {
     // Declining an excluded branch differs from abandoning selected mandatory work.
     steps[3].outcome = Outcome::NotPerformed;
     steps[2].outcome = Outcome::NotPerformed;
-    assess(&steps, &mut result)?;
+    assess(&steps, &mut result, None)?;
     assert_eq!(result[3], Readiness::Unselected);
     assert_eq!(result[2], Readiness::Complete);
     Ok(())
@@ -106,7 +106,8 @@ fn malformed_graphs_are_rejected() {
                     check: None
                 }
             ],
-            &mut out
+            &mut out,
+            None
         ),
         Err(Invalid::Cycle)
     );
@@ -125,7 +126,8 @@ fn malformed_graphs_are_rejected() {
                     check: None
                 }
             ],
-            &mut out
+            &mut out,
+            None
         ),
         Err(Invalid::Dependency)
     );
@@ -144,7 +146,9 @@ fn full_length_chain_is_bounded() -> Result<(), Invalid> {
         check: None,
     });
     let mut out = [Readiness::Waiting; MAX_STEPS];
-    assess(&steps, &mut out)?;
+    let mut ancestors = [0u64; MAX_STEPS];
+    assess(&steps, &mut out, Some(&mut ancestors))?;
+    assert_eq!(ancestors[MAX_STEPS - 1], u64::MAX >> 1);
     assert_eq!(out, [Readiness::Complete; MAX_STEPS]);
     Ok(())
 }

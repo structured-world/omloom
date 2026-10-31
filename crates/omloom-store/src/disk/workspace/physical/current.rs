@@ -39,6 +39,10 @@ impl Tx<'_> {
         if !reservations.is_empty() {
             return Err(Error::Conflict);
         }
+        let intended=self.query("MATCH (n:OmRow {to_asset:$asset}) WHERE n.to_incarnation=$incarnation AND n.parent STARTS WITH 'cable-ends/' RETURN {key:n.key} AS p LIMIT 1",params([("asset",text(target.asset.to_string())),("incarnation",text(target.incarnation.to_string()))]))?;
+        if !intended.is_empty() {
+            return Err(Error::Conflict);
+        }
         Ok(())
     }
     pub(in crate::disk) fn remove_physical_pose(&mut self, binding: &str) -> Result<()> {

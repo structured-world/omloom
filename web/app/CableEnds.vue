@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import {ref} from 'vue';
-import {call,model,type AssetRef} from './api';
+import {call,model,key,input,type AssetRef} from './api';
+import MatingEditor from './MatingEditor.vue';
 const props=defineProps<{target:AssetRef;working:model.WorkingContext;inactive:boolean}>();
 const emit=defineEmits<{changed:[]}>();
 const view=ref(model.PhysicalView.create()),opened=ref(false),busy=ref(false),error=ref('');
 const editing=ref<model.PhysicalCableEnd>(),structural=ref(''),name=ref(''),basis=ref(''),connector=ref('');
+const mating=ref<model.PhysicalMating>();
+function label(port:AssetRef|undefined){const item=view.value.items.find(i=>key(i.target)===key(port));return item?input(item.fields.find(f=>f.name==='name')):undefined;}
 async function invoke(action:model.Physical['action']) {
   const result=await call({oneofKind:'physical',physical:{action}},{...props.working,expected:view.value.revision});
   if(result.oneofKind!=='physical')throw Error('Cable ends are unavailable.');
@@ -12,9 +15,9 @@ async function invoke(action:model.Physical['action']) {
   return result.physical;
 }
 async function load(after?:string){if(busy.value||props.inactive)return;busy.value=true;error.value='';try{view.value=await invoke({oneofKind:'cableEnds',cableEnds:{cable:props.target,after}});opened.value=true;}catch(e){error.value=String(e);}finally{busy.value=false;}}
-function edit(end?:model.PhysicalCableEnd){editing.value=end;structural.value=end?.key??'';name.value=end?.name??'';basis.value=end?.basis??'';connector.value=end?.connector??'';}
+function edit(end?:model.PhysicalCableEnd){editing.value=end;structural.value=end?.key??'';name.value=end?.name??'';basis.value=end?.basis??'';connector.value=end?.connector??'';mating.value=end?.mating===undefined?undefined:model.PhysicalMating.clone(end.mating);}
 async function save(){if(busy.value||props.inactive)return;busy.value=true;error.value='';try{
-  await invoke({oneofKind:'cableEnd',cableEnd:{cable:props.target,expected:editing.value?.revision,end:{key:structural.value,name:name.value,basis:basis.value,connector:connector.value===''?undefined:connector.value,revision:0n}}});
+  await invoke({oneofKind:'cableEnd',cableEnd:{cable:props.target,expected:editing.value?.revision,end:model.PhysicalCableEnd.create({key:structural.value,name:name.value,basis:basis.value,connector:connector.value===''?undefined:connector.value,mating:mating.value})}});
   edit();view.value=await invoke({oneofKind:'cableEnds',cableEnds:{cable:props.target}});emit('changed');
 }catch(e){error.value=String(e);}finally{busy.value=false;}}
 </script>
@@ -23,7 +26,7 @@ async function save(){if(busy.value||props.inactive)return;busy.value=true;error
 <button :disabled="busy||inactive" @click="load()">Inspect named cable ends</button>
 <template v-if="opened">
 <p>End identity belongs to this cable. A connector label does not establish an attachment, lane mapping or working link.</p>
-<ul><li v-for="end in view.cableEnds" :key="end.key"><strong>{{end.name}}</strong> · {{end.key}}<span v-if="end.connector"> · {{end.connector}}</span><p>Definition source: {{end.basis}}</p><button :disabled="busy||inactive" @click="edit(end)">Edit end: {{end.name}}</button></li></ul>
+<ul><li v-for="end in view.cableEnds" :key="end.key"><strong>{{end.name}}</strong> · {{end.key}}<span v-if="end.connector"> · {{end.connector}}</span><p>Definition source: {{end.basis}}</p><p v-if="end.attachment.oneofKind==='connected'">Reported attached: {{label(end.attachment.connected.port)??'Permitted physical port'}}. Service not verified.</p><p v-else-if="end.attachment.oneofKind==='loose'">Confirmed loose.</p><p v-else>Attachment unknown or unavailable.</p><p v-if="end.intendedPort">Intended destination: {{label(end.intendedPort)??'Permitted physical port'}}.</p><button :disabled="busy||inactive" @click="edit(end)">Edit end: {{end.name}}</button></li></ul>
 <p v-if="!view.cableEnds.length">No named ends have been recorded for this cable.</p>
 <nav aria-label="Cable-end pages"><button :disabled="busy||inactive" @click="load()">First end page</button><button v-if="view.next" :disabled="busy||inactive" @click="load(view.next)">Next end page</button></nav>
 <form @submit.prevent="save">
@@ -33,6 +36,7 @@ async function save(){if(busy.value||props.inactive)return;busy.value=true;error
 <label>End label<input v-model="name" required maxlength="128" :disabled="busy" /></label>
 <label>End definition source<input v-model="basis" required maxlength="512" :disabled="busy" /></label>
 <label>Connector designation, if known<input v-model="connector" maxlength="128" :disabled="busy" /></label>
+<MatingEditor v-model="mating"/>
 <button :disabled="busy">Save end definition</button><button v-if="editing" type="button" :disabled="busy" @click="edit()">Start a different end</button>
 </fieldset>
 </form>

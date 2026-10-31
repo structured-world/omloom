@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
 import { call, model, AssetKind as K, input, key, type AssetRef } from './api';
-const props = defineProps<{ kind: 'server' | 'hypervisor' | 'equipment' | 'component' | 'enclosure'; roots: AssetRef[] }>();
+const props = defineProps<{ kind: 'server' | 'hypervisor' | 'equipment' | 'component' | 'enclosure' | 'port'; roots: AssetRef[] }>();
 const emit = defineEmits<{ select: [item?: model.Item]; ready: [value: boolean] }>();
 const search = ref(''); const selected = ref<model.Item>(); const opened = ref(false);
 const page = ref(model.Page.create()); const loading = ref(false); const error = ref('');
@@ -12,6 +12,7 @@ const config = computed(() => ({
   equipment: {title:'Equipment',plural:'equipment',view:model.View.HARDWARE,kinds:[K.DEVICE]},
   component: {title:'Component',plural:'components',view:model.View.HARDWARE,kinds:[K.PHYSICAL_COMPONENT]},
   enclosure: {title:'Enclosure',plural:'enclosures',view:model.View.HARDWARE,kinds:[K.RACK,K.PHYSICAL_POSITION]},
+  port: {title:'Physical port',plural:'physical ports',view:model.View.HARDWARE,kinds:[K.PORT]},
 })[props.kind]);
 const title = computed(() => config.value.title);
 let generation = 0; let pending: ReturnType<typeof setTimeout> | undefined;

@@ -84,6 +84,56 @@ test('named cable ends preserve definitions on desktop and phone',async({browser
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
 });
 
+test('cable wiring reports preserve intent on desktop and phone',async({browser})=>{
+  // The same plan API records manual wiring, without treating it as verified service health.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-wiring-'));const server=await host(dir);
+  try{
+    for(const width of [1440,390]){
+      const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600});
+      try{
+        await page.goto(server.url);
+        const port=await create(page,`Fiber socket ${width}`,'PORT');
+        const {m,rpc}=await workspaceClient(server.url);
+        const target={assetId:port.asset_id,incarnation:port.incarnation};
+        const mating=role=>({profile:{issuer:'private:manual',key:'lc-duplex',basis:'Operator measured pair 1'},role});
+        await rpc({oneofKind:'physical',physical:{action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target,basis:'Measured socket',mating:mating(m.PhysicalMatingRole.SIDE_B)})}}}});
+        await create(page,`Fiber cable ${width}`,'CABLE');
+        const ends=page.getByRole('region',{name:'Cable ends',exact:true});
+        await ends.getByRole('button',{name:'Inspect named cable ends',exact:true}).click();
+        await ends.getByLabel('Structural end key',{exact:true}).fill('A');
+        await ends.getByLabel('End label',{exact:true}).fill('Near end');
+        await ends.getByLabel('End definition source',{exact:true}).fill('Operator-labelled cable');
+        await ends.getByLabel('A sourced mating contract is known',{exact:true}).check();
+        await ends.getByLabel('Contract issuer',{exact:true}).fill('private:manual');
+        await ends.getByLabel('Interface contract',{exact:true}).fill('lc-duplex');
+        await ends.getByLabel('Contract revision or source',{exact:true}).fill('Operator measured pair 1');
+        await ends.getByRole('combobox',{name:'Mating side',exact:true}).selectOption({label:'side a'},{timeout:5000});
+        await ends.getByRole('button',{name:'Save end definition',exact:true}).click();
+        await expect(ends.getByRole('button',{name:'Edit end: Near end',exact:true})).toBeEnabled();
+        await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
+        const planner=page.locator('.physical-planner');
+        await planner.getByLabel('Installation plan name',{exact:true}).fill('Connect fiber');
+        await planner.getByRole('combobox',{name:'Cable end',exact:true}).selectOption('A');
+        await planner.getByRole('combobox',{name:'Find port',exact:true}).fill(`Fiber socket ${width}`);
+        await planner.getByRole('option',{name:`Use port: Fiber socket ${width}`,exact:true}).click();
+        await planner.getByRole('combobox',{name:'Intended destination',exact:true}).selectOption(String(m.PhysicalWiringIntent.ADOPT_DESTINATION));
+        await planner.getByRole('button',{name:'Add cable-end transition',exact:true}).click();
+        await planner.getByRole('button',{name:'Save installation plan',exact:true}).click();
+        await expect(planner.getByRole('button',{name:'Check and reserve capacity',exact:true})).toBeVisible();
+        await planner.getByLabel('Reserve until',{exact:true}).fill('2030-01-01T12:00');
+        await planner.getByRole('button',{name:'Check and reserve capacity',exact:true}).click();
+        await planner.getByLabel('Cable-end outcome reported',{exact:true}).check();
+        await planner.getByRole('button',{name:'Record selected installation',exact:true}).click();
+        await expect(planner.getByRole('status')).toContainText('Reported installation recorded.');
+        await ends.getByRole('button',{name:'Inspect named cable ends',exact:true}).click();
+        await expect(ends).toContainText(`Reported attached: Fiber socket ${width}. Service not verified.`);
+        await expect(ends).toContainText(`Intended destination: Fiber socket ${width}.`);
+        expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+      }finally{await page.close();}
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('physical dimensions save and reload on desktop and phone',async({browser})=>{
   // The real form preserves exact units through the API and disk store, including phone navigation.
   const dir=await mkdtemp(join(tmpdir(),'omloom-physical-'));const server=await host(dir);

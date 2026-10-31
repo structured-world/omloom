@@ -3,6 +3,7 @@
 // tslint:disable
 import { ServiceType } from "@protobuf-ts/runtime-rpc";
 import { MessageType } from "@protobuf-ts/runtime";
+import { EquipmentReference } from "./contracts";
 import { Observation } from "./contracts";
 import { RelationKind } from "./contracts";
 import { EffectOutcome } from "./contracts";
@@ -3643,6 +3644,35 @@ export interface PhysicalDefinition {
      * @generated from protobuf field: omloom.workspace.v1.PhysicalComponentKind component_kind = 11
      */
     componentKind: PhysicalComponentKind;
+    /**
+     * Optional operator/source-declared mating contract for this actual connector.
+     * It proves only the named mechanical interface, not signal/power/service health.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.PhysicalMating mating = 12
+     */
+    mating?: PhysicalMating;
+}
+/**
+ * Complete compatibility declaration for a selected connector interface. Matching
+ * exact contracts with complementary roles qualifies that declared interface only;
+ * designation text and different contract revisions never imply compatibility.
+ *
+ * @generated from protobuf message omloom.workspace.v1.PhysicalMating
+ */
+export interface PhysicalMating {
+    /**
+     * User/source-supplied immutable contract reference. No acquisition, issuer
+     * authentication or manufacturer approval is inferred from these identifiers.
+     *
+     * @generated from protobuf field: omloom.v1.EquipmentReference profile = 1
+     */
+    profile?: EquipmentReference;
+    /**
+     * Declared side within this contract; UNSPECIFIED is invalid when present.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalMatingRole role = 2
+     */
+    role: PhysicalMatingRole;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.PhysicalDefinitionEdit
@@ -3911,6 +3941,15 @@ export interface PhysicalStep {
          * @generated from protobuf field: omloom.workspace.v1.PhysicalReplacement replacement = 3
          */
         replacement: PhysicalReplacement;
+    } | {
+        oneofKind: "wiring";
+        /**
+         * Manual wiring transition at one named cable end, sharing plan progress,
+         * prerequisite checks and reservation/reconciliation ownership.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PhysicalWiring wiring = 8
+         */
+        wiring: PhysicalWiring;
     } | {
         oneofKind: undefined;
     };
@@ -4305,11 +4344,174 @@ export interface PhysicalCableEnd {
      */
     connector?: string;
     /**
-     * Server-owned current definition revision, not connectivity evidence.
+     * Server-owned current end-record revision, not connectivity evidence.
      *
      * @generated from protobuf field: uint64 revision = 5
      */
     revision: bigint;
+    /**
+     * Server-derived current attachment knowledge. Absence means unknown or
+     * unavailable, never unplugged; mutation receipts may omit this projection.
+     *
+     * @generated from protobuf oneof: attachment
+     */
+    attachment: {
+        oneofKind: "connected";
+        /**
+         * Exact accepted binding, disclosed only with both endpoints' current rights.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PhysicalCableAttachment connected = 6
+         */
+        connected: PhysicalCableAttachment;
+    } | {
+        oneofKind: "loose";
+        /**
+         * Explicit attributed report of a loose end; not inferred from a missing scan.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.Empty loose = 7
+         */
+        loose: Empty;
+    } | {
+        oneofKind: undefined;
+    };
+    /**
+     * Independently accepted expected destination, retained while unplugged or
+     * uncertain. Omitted unless the caller can read this relationship and its port.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef intended_port = 8
+     */
+    intendedPort?: AssetRef;
+    /**
+     * Optional declared connector mating contract; a display label is insufficient.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.PhysicalMating mating = 9
+     */
+    mating?: PhysicalMating;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalCableAttachment
+ */
+export interface PhysicalCableAttachment {
+    /**
+     * Actual port incarnation supplied by the accepted inventory binding.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef port = 1
+     */
+    port?: AssetRef;
+    /**
+     * Server-generated current ConnectedTo relation UUID; not an end identity.
+     *
+     * @generated from protobuf field: string binding_id = 2
+     */
+    bindingId: string;
+    /**
+     * Exact current attachment revision, independent of the cable's lifetime.
+     *
+     * @generated from protobuf field: uint64 binding_revision = 3
+     */
+    bindingRevision: bigint;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalWiring
+ */
+export interface PhysicalWiring {
+    /**
+     * Selected retained cable incarnation, never inferred from its label or path.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef cable = 1
+     */
+    cable?: AssetRef;
+    /**
+     * Existing named end within this cable, 1-64 ASCII token bytes.
+     *
+     * @generated from protobuf field: string end_key = 2
+     */
+    endKey: string;
+    /**
+     * Exact current-state basis, or the output of an earlier wiring step at the
+     * same end. A step reference contributes a dependency to the common DAG.
+     *
+     * @generated from protobuf oneof: basis
+     */
+    basis: {
+        oneofKind: "expectedEndRevision";
+        /**
+         * User's reviewed current end revision; zero is invalid.
+         *
+         * @generated from protobuf field: uint64 expected_end_revision = 3
+         */
+        expectedEndRevision: bigint;
+    } | {
+        oneofKind: "afterStep";
+        /**
+         * User-selected earlier step index; its recorded result must exist first.
+         *
+         * @generated from protobuf field: uint32 after_step = 10
+         */
+        afterStep: number;
+    } | {
+        oneofKind: undefined;
+    };
+    /**
+     * Explicit disposition of accepted destination intent, independent of what
+     * physically happened. UNSPECIFIED is rejected; no automatic intent adoption.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalWiringIntent intent = 7
+     */
+    intent: PhysicalWiringIntent;
+    /**
+     * Server-captured previous accepted binding for this exact admitted step.
+     * It may be only possible occupancy, never proof of current signal/health.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.PhysicalCableAttachment previous = 8
+     */
+    previous?: PhysicalCableAttachment;
+    /**
+     * Server-captured previous intent needed for reviewed correction/recovery.
+     * These output fields do not let a caller overwrite the source basis.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef previous_intended_port = 9
+     */
+    previousIntendedPort?: AssetRef;
+    /**
+     * Server-recorded end revision produced by this effect. It permits dependent
+     * steps to continue after restart without replaying the physical work.
+     *
+     * @generated from protobuf field: optional uint64 result_revision = 11
+     */
+    resultRevision?: bigint;
+    /**
+     * Explicit proposed/reported attachment. No state can be inferred from omission.
+     *
+     * @generated from protobuf oneof: after
+     */
+    after: {
+        oneofKind: "port";
+        /**
+         * Actual destination physical port; normal scope and endpoint rights apply.
+         *
+         * @generated from protobuf field: omloom.v1.AssetRef port = 4
+         */
+        port: AssetRef;
+    } | {
+        oneofKind: "loose";
+        /**
+         * Operator confirms that this end is physically loose.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.Empty loose = 5
+         */
+        loose: Empty;
+    } | {
+        oneofKind: "unknown";
+        /**
+         * Operator cannot establish attachment; preserves uncertainty, not free capacity.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.Empty unknown = 6
+         */
+        unknown: Empty;
+    } | {
+        oneofKind: undefined;
+    };
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.PhysicalCableEndEdit
@@ -5614,6 +5816,27 @@ export enum RequirementResolution {
     OWNER_ACTION = 3
 }
 /**
+ * @generated from protobuf enum omloom.workspace.v1.PhysicalMatingRole
+ */
+export enum PhysicalMatingRole {
+    /**
+     * @generated from protobuf enum value: PHYSICAL_MATING_ROLE_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_MATING_ROLE_SIDE_A = 1;
+     */
+    SIDE_A = 1,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_MATING_ROLE_SIDE_B = 2;
+     */
+    SIDE_B = 2,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_MATING_ROLE_SELF_MATING = 3;
+     */
+    SELF_MATING = 3
+}
+/**
  * @generated from protobuf enum omloom.workspace.v1.PhysicalComponentKind
  */
 export enum PhysicalComponentKind {
@@ -5753,6 +5976,27 @@ export enum PhysicalPlanState {
      * @generated from protobuf enum value: PHYSICAL_PLAN_STATE_CANCELLED = 5;
      */
     CANCELLED = 5
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.PhysicalWiringIntent
+ */
+export enum PhysicalWiringIntent {
+    /**
+     * @generated from protobuf enum value: PHYSICAL_WIRING_INTENT_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_WIRING_INTENT_PRESERVE = 1;
+     */
+    PRESERVE = 1,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_WIRING_INTENT_ADOPT_DESTINATION = 2;
+     */
+    ADOPT_DESTINATION = 2,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_WIRING_INTENT_CLEAR_DESTINATION = 3;
+     */
+    CLEAR_DESTINATION = 3
 }
 // @generated message type with reflection information, may provide speed optimized methods
 class Predicate$Type extends MessageType<Predicate> {
@@ -7378,7 +7622,8 @@ class PhysicalDefinition$Type extends MessageType<PhysicalDefinition> {
             { no: 8, name: "cooling_mw", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 9, name: "cooling_capacity_mw", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 10, name: "mounting", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
-            { no: 11, name: "component_kind", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalComponentKind", PhysicalComponentKind, "PHYSICAL_COMPONENT_KIND_"] }
+            { no: 11, name: "component_kind", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalComponentKind", PhysicalComponentKind, "PHYSICAL_COMPONENT_KIND_"] },
+            { no: 12, name: "mating", kind: "message", T: () => PhysicalMating }
         ]);
     }
 }
@@ -7386,6 +7631,19 @@ class PhysicalDefinition$Type extends MessageType<PhysicalDefinition> {
  * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalDefinition
  */
 export const PhysicalDefinition = new PhysicalDefinition$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalMating$Type extends MessageType<PhysicalMating> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalMating", [
+            { no: 1, name: "profile", kind: "message", T: () => EquipmentReference },
+            { no: 2, name: "role", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalMatingRole", PhysicalMatingRole, "PHYSICAL_MATING_ROLE_"] }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalMating
+ */
+export const PhysicalMating = new PhysicalMating$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class PhysicalDefinitionEdit$Type extends MessageType<PhysicalDefinitionEdit> {
     constructor() {
@@ -7511,7 +7769,8 @@ class PhysicalStep$Type extends MessageType<PhysicalStep> {
             { no: 6, name: "checked_reason", kind: "enum", opt: true, T: () => ["omloom.workspace.v1.RequirementReason", RequirementReason, "REQUIREMENT_REASON_"] },
             { no: 7, name: "readiness", kind: "enum", T: () => ["omloom.workspace.v1.PlanReadiness", PlanReadiness, "PLAN_READINESS_"] },
             { no: 2, name: "placement", kind: "message", oneof: "action", T: () => PhysicalPlacement },
-            { no: 3, name: "replacement", kind: "message", oneof: "action", T: () => PhysicalReplacement }
+            { no: 3, name: "replacement", kind: "message", oneof: "action", T: () => PhysicalReplacement },
+            { no: 8, name: "wiring", kind: "message", oneof: "action", T: () => PhysicalWiring }
         ]);
     }
 }
@@ -7692,7 +7951,11 @@ class PhysicalCableEnd$Type extends MessageType<PhysicalCableEnd> {
             { no: 2, name: "name", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 3, name: "basis", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 4, name: "connector", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
-            { no: 5, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
+            { no: 5, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 6, name: "connected", kind: "message", oneof: "attachment", T: () => PhysicalCableAttachment },
+            { no: 7, name: "loose", kind: "message", oneof: "attachment", T: () => Empty },
+            { no: 8, name: "intended_port", kind: "message", T: () => AssetRef },
+            { no: 9, name: "mating", kind: "message", T: () => PhysicalMating }
         ]);
     }
 }
@@ -7700,6 +7963,42 @@ class PhysicalCableEnd$Type extends MessageType<PhysicalCableEnd> {
  * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalCableEnd
  */
 export const PhysicalCableEnd = new PhysicalCableEnd$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalCableAttachment$Type extends MessageType<PhysicalCableAttachment> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalCableAttachment", [
+            { no: 1, name: "port", kind: "message", T: () => AssetRef },
+            { no: 2, name: "binding_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "binding_revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalCableAttachment
+ */
+export const PhysicalCableAttachment = new PhysicalCableAttachment$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalWiring$Type extends MessageType<PhysicalWiring> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalWiring", [
+            { no: 1, name: "cable", kind: "message", T: () => AssetRef },
+            { no: 2, name: "end_key", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "expected_end_revision", kind: "scalar", oneof: "basis", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 10, name: "after_step", kind: "scalar", oneof: "basis", T: 13 /*ScalarType.UINT32*/ },
+            { no: 7, name: "intent", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalWiringIntent", PhysicalWiringIntent, "PHYSICAL_WIRING_INTENT_"] },
+            { no: 8, name: "previous", kind: "message", T: () => PhysicalCableAttachment },
+            { no: 9, name: "previous_intended_port", kind: "message", T: () => AssetRef },
+            { no: 11, name: "result_revision", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 4, name: "port", kind: "message", oneof: "after", T: () => AssetRef },
+            { no: 5, name: "loose", kind: "message", oneof: "after", T: () => Empty },
+            { no: 6, name: "unknown", kind: "message", oneof: "after", T: () => Empty }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalWiring
+ */
+export const PhysicalWiring = new PhysicalWiring$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class PhysicalCableEndEdit$Type extends MessageType<PhysicalCableEndEdit> {
     constructor() {

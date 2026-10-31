@@ -704,6 +704,15 @@ impl Tx<'_> {
         actor: &str,
         now: u64,
     ) -> Result<()> {
+        self.remove_binding_relation_retaining_end(relation, actor, now, None)
+    }
+    pub(super) fn remove_binding_relation_retaining_end(
+        &mut self,
+        relation: &wire::Relation,
+        actor: &str,
+        now: u64,
+        end: Option<&str>,
+    ) -> Result<()> {
         let id = omloom_contracts::ids::RelationId::parse(&relation.relation_id)
             .map_err(|_| Error::Invalid)?;
         let key = format!("relation/{id}");
@@ -712,6 +721,7 @@ impl Tx<'_> {
             return Err(Error::Conflict);
         }
         self.remove_physical_pose(&relation.relation_id)?;
+        self.invalidate_cable_attachment(relation, end, None)?;
         for query in [
             "MATCH (r:OmRow {key:$key})<-[e:OmRelationFrom]-() DELETE e",
             "MATCH (r:OmRow {key:$key})-[e:OmRelationTo]->() DELETE e",
@@ -739,7 +749,7 @@ impl Tx<'_> {
         actor: &str,
         now: u64,
     ) -> Result<u64> {
-        self.save_relation_inner(relation, expected, actor, now, false)
+        self.save_relation_inner(relation, expected, actor, now, false, None)
     }
     pub(super) fn save_rebound_relation(
         &mut self,
@@ -748,7 +758,17 @@ impl Tx<'_> {
         actor: &str,
         now: u64,
     ) -> Result<u64> {
-        self.save_relation_inner(relation, Some(expected), actor, now, true)
+        self.save_relation_inner(relation, Some(expected), actor, now, true, None)
+    }
+    pub(super) fn save_relation_retaining_end(
+        &mut self,
+        relation: &wire::Relation,
+        expected: Option<u64>,
+        actor: &str,
+        now: u64,
+        end: &str,
+    ) -> Result<u64> {
+        self.save_relation_inner(relation, expected, actor, now, true, Some(end))
     }
     fn save_relation_inner(
         &mut self,
@@ -757,6 +777,7 @@ impl Tx<'_> {
         actor: &str,
         now: u64,
         detached: bool,
+        retained_end: Option<&str>,
     ) -> Result<u64> {
         let from = AssetRef::try_from(relation.from.as_ref().ok_or(Error::Invalid)?)
             .map_err(|_| Error::Invalid)?;
@@ -776,6 +797,18 @@ impl Tx<'_> {
         let kind = wire::RelationKind::try_from(relation.kind).map_err(|_| Error::Invalid)?;
         if !compatible(from_kind, to_kind, kind) {
             return Err(Error::Invalid);
+        }
+        if kind == wire::RelationKind::ConnectedTo {
+            let port = if from_kind == wire::AssetKind::Port {
+                from
+            } else {
+                to
+            };
+            if let Some(binding) = self.cable_binding_at(port)?
+                && binding.relation_id != relation.relation_id
+            {
+                return Err(Error::Conflict);
+            }
         }
         self.check_software_relation(from, from_kind, kind, &relation.relation_id)?;
         if kind == wire::RelationKind::RunsOn
@@ -851,6 +884,14 @@ impl Tx<'_> {
         let revision = expected.unwrap_or(0).checked_add(1).ok_or(Error::Limit)?;
         if let Some(prior) = &old {
             let prior = relation_projection(prior)?;
+            let same = prior.from == relation.from
+                && prior.to == relation.to
+                && prior.kind == relation.kind;
+            self.invalidate_cable_attachment(
+                &prior,
+                retained_end,
+                if same { Some(revision) } else { None },
+            )?;
             if prior.from != relation.from || prior.to != relation.to || prior.kind != relation.kind
             {
                 self.remove_physical_pose(&relation.relation_id)?;

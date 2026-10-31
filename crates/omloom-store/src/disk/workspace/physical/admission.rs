@@ -22,13 +22,13 @@ impl From<Error> for Failure {
     }
 }
 impl Failure {
-    fn mismatch() -> Self {
+    pub(super) fn mismatch() -> Self {
         Self {
             error: Error::Conflict,
             decision: Some(Decision::FAIL),
         }
     }
-    fn basis(error: Error) -> Self {
+    pub(super) fn basis(error: Error) -> Self {
         if matches!(error, Error::Conflict) {
             Self {
                 error,
@@ -42,13 +42,23 @@ impl Failure {
 
 #[derive(Default)]
 pub(super) struct Claims {
-    parts: BTreeSet<AssetRef>,
+    pub(super) parts: BTreeSet<AssetRef>,
     positions: BTreeSet<AssetRef>,
+    pub(super) ends: BTreeSet<String>,
 }
 
 impl Tx<'_> {
     // The claims were checked in this same transaction; namespace CAS protects final admission.
     pub(super) fn acquire_physical_claims(&mut self, claims: Claims, owner: &str) -> Result<()> {
+        for key in claims.ends {
+            let parent = key.rsplit_once('/').ok_or(Error::Corrupt)?.0;
+            self.put(
+                &key,
+                parent,
+                Class::Pending,
+                props([("owner", text(owner))]),
+            )?;
+        }
         for (targets, prefix, parent) in [
             (claims.parts, "physical-lock", "physical-locks"),
             (claims.positions, "physical-slot", "physical-slots"),
@@ -71,6 +81,7 @@ impl Tx<'_> {
         working: &api::WorkingContext,
     ) -> core::result::Result<Claims, Failure> {
         let mut claims = self.check_replacement_capacity(context, plan, working)?;
+        self.assess_wiring(context, plan, working, &mut claims)?;
         let mut enclosures = BTreeMap::<AssetRef, current::PhysicalUse>::new();
         let mut rows_read = 0;
         for p in placements(plan) {

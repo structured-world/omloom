@@ -20,12 +20,16 @@ const assessmentText=computed(()=>{
 });
 const planItems=ref<model.Item[]>([]);
 const equipment=ref<model.Item>(),equipmentVolume=ref<model.PhysicalVolume>();
-const mode=ref<'placement'|'replacement'>(props.kind===K.RACK?'placement':'replacement');
+const mode=ref<'placement'|'replacement'|'wiring'>(props.kind===K.CABLE?'wiring':props.kind===K.RACK?'placement':'replacement');
+const cableEnds=ref<model.PhysicalCableEnd[]>([]),endsNext=ref<string>(),endKey=ref('');
+const wiringPort=ref<model.Item>(),wiringState=ref<'port'|'loose'|'unknown'>('port');
+const wiringIntent=ref(model.PhysicalWiringIntent.PRESERVE);
 const predecessor=ref(''),removePart=ref(false),reseat=ref(false),moving=ref(false),source=ref<AssetRef>();
 const sourceView=ref<model.PhysicalView>();
 const oldOccupancy=computed(()=>sourceView.value?.occupancy??view.value.occupancy);
 const actualReport=ref(false),notPerformed=ref<number[]>([]);
 const unit=ref('1'),side=ref('front'),lane=ref('left'),selected=ref<number[]>([]);
+const elevation=ref<SVGSVGElement>();
 const working=()=>model.WorkingContext.create({roots:props.working.roots,expected:view.value.revision});
 const editable=computed(()=>plan.value===undefined||plan.value.state===model.PhysicalPlanState.DRAFT);
 const reservable=computed(()=>plan.value?.state===model.PhysicalPlanState.DRAFT);
@@ -60,6 +64,23 @@ async function summaries(after?:string) {
 async function refresh() {
   const reply=await invoke({oneofKind:'read',read:{enclosure:props.target,occupants:true}});
   view.value=reply;
+  if(props.kind===K.CABLE)await loadEnds();
+}
+async function loadEnds(after?:string){const reply=await invoke({oneofKind:'cableEnds',cableEnds:{cable:props.target,after}});cableEnds.value=reply.cableEnds;endsNext.value=reply.next;}
+function addWiring(){
+  error.value='';
+  const end=cableEnds.value.find(e=>e.key===endKey.value);
+  if(!end){error.value='Choose a known end of this cable.';return;}
+  if(wiringState.value==='port'&&!wiringPort.value?.target){error.value='Choose the actual physical connector.';return;}
+  const steps=plan.value?.steps??[];
+  if(steps.length>=64){error.value='One plan supports at most 64 physical steps.';return;}
+  let prior:number|undefined;
+  for(let i=0;i<steps.length;i++){const action=steps[i]!.action;if(action.oneofKind==='wiring'&&key(action.wiring.cable)===key(props.target)&&action.wiring.endKey===end.key)prior=i;}
+  const wiring=model.PhysicalWiring.create({cable:props.target,endKey:end.key,intent:wiringIntent.value,
+    basis:prior===undefined?{oneofKind:'expectedEndRevision',expectedEndRevision:end.revision}:{oneofKind:'afterStep',afterStep:prior},
+    after:wiringState.value==='port'?{oneofKind:'port',port:wiringPort.value!.target!}:wiringState.value==='loose'?{oneofKind:'loose',loose:{}}:{oneofKind:'unknown',unknown:{}}});
+  plan.value=model.PhysicalPlan.create({...plan.value,name:name.value,state:model.PhysicalPlanState.DRAFT,steps:[...steps,model.PhysicalStep.create({action:{oneofKind:'wiring',wiring}})]});
+  if(wiringPort.value&&!planItems.value.some(i=>key(i.target)===key(wiringPort.value?.target)))planItems.value.push(wiringPort.value);
 }
 async function open() {
   if(opened.value)return;
@@ -165,14 +186,15 @@ async function complete() {
   });
 }
 async function recheck(){await run(async()=>{await refresh();const reply=await invoke({oneofKind:'complete',complete:model.PhysicalCompletion.create({plan:planKey()})});plan.value=reply.plan;notice.value='Postconditions rechecked. No physical work was repeated.';});}
-function subject(step:model.PhysicalStep){return step.action.oneofKind==='placement'?step.action.placement.item:step.action.oneofKind==='replacement'?step.action.replacement.replacement??step.action.replacement.previous:undefined;}
+function subject(step:model.PhysicalStep){return step.action.oneofKind==='placement'?step.action.placement.item:step.action.oneofKind==='replacement'?step.action.replacement.replacement??step.action.replacement.previous:step.action.oneofKind==='wiring'?step.action.wiring.cable:undefined;}
 function subjectKind(step:model.PhysicalStep){const target=subject(step);return planItems.value.find(i=>key(i.target)===key(target))?.kind;}
 function predecessors(index:number){return plan.value?.steps.slice(0,index).map(step=>({title:label(subject(step))===undefined?'Equipment name unavailable':label(subject(step))!,hasCheck:step.control?.check!==undefined}))??[];}
 function removeStep(index:number){
   if(!plan.value)return;
-  if(plan.value.steps.some(s=>s.control?.after.some(d=>d.step===index))){error.value='Change dependent step links before removing this step.';return;}
+  if(plan.value.steps.some(s=>s.control?.after.some(d=>d.step===index)||(s.action.oneofKind==='wiring'&&s.action.wiring.basis.oneofKind==='afterStep'&&s.action.wiring.basis.afterStep===index))){error.value='Change dependent step links before removing this step.';return;}
   plan.value.steps.splice(index,1);
   for(const step of plan.value.steps)for(const dependency of step.control?.after??[])if(dependency.step>index)dependency.step--;
+  for(const step of plan.value.steps)if(step.action.oneofKind==='wiring'&&step.action.wiring.basis.oneofKind==='afterStep'&&step.action.wiring.basis.afterStep>index)step.action.wiring.basis.afterStep--;
 }
 async function cancel() {
   await run(async()=>{const reply=await invoke({oneofKind:'cancel',cancel:planKey()});plan.value=reply.plan;notice.value='Remaining work stopped. Reported facts and unresolved reservations are preserved.';await summaries();});
@@ -186,6 +208,27 @@ function rect(p:model.PhysicalPlacement) {
   const v=p.volume;
   if(!v?.x||!v.y)return;
   return {x:Number(v.x.startUm)/1000,y:Number(v.y.startUm)/1000,width:Number(v.x.lengthUm)/1000,height:Number(v.y.lengthUm)/1000};
+}
+function dropEquipment(event:DragEvent){
+  if(!editable.value||!equipmentVolume.value||!elevation.value||event.dataTransfer?.getData('application/x-omloom-equipment')!==key(equipment.value?.target))return;
+  const svg=elevation.value,transform=svg.getScreenCTM();
+  if(!transform)return;
+  const point=new DOMPoint(event.clientX,event.clientY).matrixTransform(transform.inverse());
+  const drawingValue=drawing.value;if(!drawingValue)return;
+  const u=Math.floor((point.y-drawingValue.y)/44.45)+1;
+  if(u<1||u>999){error.value='Choose a position inside the known rack.';return;}
+  unit.value=String(u);
+  lane.value=point.x-drawingValue.x<drawingValue.width/2?'left':'right';
+  add();
+}
+function dragEquipment(event:DragEvent){if(event.dataTransfer&&equipment.value?.target){event.dataTransfer.effectAllowed='copy';event.dataTransfer.setData('application/x-omloom-equipment',key(equipment.value.target));}}
+function rackKeyboard(event:KeyboardEvent){
+  if(!editable.value)return;
+  if(event.key==='Enter'){event.preventDefault();add();return;}
+  if(event.key==='ArrowUp'||event.key==='ArrowDown'){
+    event.preventDefault();const current=Number(unit.value);if(!Number.isFinite(current))return;
+    unit.value=String(Math.min(999,Math.max(1,current+(event.key==='ArrowUp'?-1:1))));
+  }else if(event.key==='ArrowLeft'||event.key==='ArrowRight'){event.preventDefault();lane.value=event.key==='ArrowLeft'?'left':'right';}
 }
 const placementRows=computed(()=>plan.value?.steps.flatMap((step,index)=>step.action.oneofKind==='placement'?[{p:step.action.placement,index,state:step.state}]:[])??[]);
 const replacementRows=computed(()=>plan.value?.steps.flatMap((step,index)=>step.action.oneofKind==='replacement'?[{r:step.action.replacement,index,state:step.state}]:[])??[]);
@@ -206,7 +249,9 @@ const local=computed(()=>placementRows.value.filter(row=>key(row.p.enclosure)===
 <div class="plan-layout">
 <section v-if="drawing" aria-label="Rack elevation">
 <h3>Physical elevation</h3><p>Solid: reported installed. Dashed: proposed or reserved. Opposing sides can share U positions when depth permits.</p>
-<svg role="img" aria-label="Rack physical placement" :viewBox="`${drawing.x} ${drawing.y} ${drawing.width} ${drawing.height}`">
+<div class="placement-controls"><button type="button" :aria-pressed="side==='front'" @click="side='front'">Front elevation</button><button type="button" :aria-pressed="side==='rear'" @click="side='rear'">Rear elevation</button></div>
+<p>{{side==='front'?'Front':'Rear'}} placement context. Coordinates use the recorded enclosure origin. Arrow keys select U/side, Enter adds the selected equipment to the draft.</p>
+<svg ref="elevation" role="group" tabindex="0" aria-label="Rack physical placement" :viewBox="`${drawing.x} ${drawing.y} ${drawing.width} ${drawing.height}`" @dragover.prevent @drop.prevent="dropEquipment" @keydown="rackKeyboard">
 <rect :x="drawing.x" :y="drawing.y" :width="drawing.width" :height="drawing.height" class="rack"/>
 <template v-for="occupant in view.occupancy" :key="key(occupant.placement?.item)"><rect v-if="occupant.placement&&rect(occupant.placement)" v-bind="rect(occupant.placement)" class="installed"><title>Reported installation: <template v-if="label(occupant.placement.item)">{{label(occupant.placement.item)}}</template><template v-else>Equipment name unavailable</template></title></rect></template>
 <template v-for="placement in local" :key="key(placement.item)"><rect v-if="rect(placement)" v-bind="rect(placement)" class="proposed"><title>Planned placement: <template v-if="label(placement.item)">{{label(placement.item)}}</template><template v-else>Equipment name unavailable</template></title></rect></template>
@@ -215,16 +260,17 @@ const local=computed(()=>placementRows.value.filter(row=>key(row.p.enclosure)===
 <section aria-label="Installation plan editor">
 <form v-if="editable" @submit.prevent="save"><fieldset :disabled="busy">
 <label>Installation plan name<input v-model="name" required maxlength="160" /></label>
-<div class="placement-controls"><button v-if="kind===K.RACK" type="button" :aria-pressed="mode==='placement'" @click="mode='placement'">Plan rack placement</button><button type="button" :aria-pressed="mode==='replacement'" @click="mode='replacement'">Replace, remove or move a part</button></div>
+<div class="placement-controls"><button v-if="kind===K.RACK" type="button" :aria-pressed="mode==='placement'" @click="mode='placement'">Plan rack placement</button><button v-if="kind!==K.CABLE" type="button" :aria-pressed="mode==='replacement'" @click="mode='replacement'">Replace, remove or move a part</button></div>
 <template v-if="mode==='placement'">
 <PlacementSearch kind="equipment" :roots="working().roots" @select="choose"/>
 <p v-if="equipment">Selected: {{itemName(equipment)}}. {{equipmentVolume?'Accepted upper-bound dimensions available.':'Accepted dimension bounds are unknown or unavailable.'}}</p>
+<button v-if="equipmentVolume" type="button" draggable="true" @dragstart="dragEquipment" @click="add">Drag selected equipment onto elevation, or add at chosen coordinates</button>
 <div class="placement-controls"><label>Starting U<input v-model="unit" inputmode="decimal" maxlength="5"/></label>
 <label>Side<select v-model="side"><option value="front">Front</option><option value="rear">Rear</option></select></label>
 <label>Horizontal position<select v-model="lane"><option value="left">Left</option><option value="right">Right</option></select></label></div>
 <button type="button" :disabled="!equipmentVolume" @click="add">Add planned placement</button>
 </template>
-<template v-else>
+<template v-else-if="mode==='replacement'">
 <label class="outcome"><input v-model="moving" type="checkbox" @change="sourceView=undefined;source=undefined;predecessor=''"/>Move an established part from another enclosure</label>
 <PlacementSearch v-if="moving" kind="enclosure" :roots="working().roots" @select="chooseSource"/>
 <label>Known predecessor or moving part<select v-model="predecessor"><option value="">Predecessor unresolved, not a declaration of an empty position</option><option v-for="occupant in oldOccupancy" :key="key(occupant.placement?.item)" :value="key(occupant.placement?.item)"><template v-if="label(occupant.placement?.item)">{{label(occupant.placement?.item)}}</template><template v-else>Component name unavailable</template></option></select></label>
@@ -235,6 +281,15 @@ const local=computed(()=>placementRows.value.filter(row=>key(row.p.enclosure)===
 </template>
 <p>The position and retained logical intent survive. Cable attachments, physical evidence, credentials and grants are not transferred to the incoming part.</p>
 <button type="button" @click="addReplacement">Add reviewed physical transition</button>
+</template>
+<template v-else>
+<p>Cable work uses this enclosing selection and explicit endpoint choices. Unknown attachment retains possible occupancy; a confirmed loose end releases it. No service health is inferred.</p>
+<label>Cable end<select v-model="endKey"><option value="">Choose a named end</option><option v-for="end in cableEnds" :key="end.key" :value="end.key">{{end.name}} · {{end.key}}</option></select></label>
+<button v-if="endsNext" type="button" @click="run(()=>loadEnds(endsNext))">Next cable ends</button>
+<label>Reported or planned attachment<select v-model="wiringState"><option value="port">Physical port</option><option value="loose">Confirmed loose</option><option value="unknown">Unknown attachment</option></select></label>
+<PlacementSearch v-if="wiringState==='port'" kind="port" :roots="working().roots" @select="wiringPort=$event"/>
+<label>Intended destination<select v-model="wiringIntent"><option :value="model.PhysicalWiringIntent.PRESERVE">Preserve existing intent</option><option v-if="wiringState==='port'" :value="model.PhysicalWiringIntent.ADOPT_DESTINATION">Adopt selected port as intent</option><option :value="model.PhysicalWiringIntent.CLEAR_DESTINATION">Explicitly clear intent</option></select></label>
+<button type="button" @click="addWiring">Add cable-end transition</button>
 </template>
 <button type="button" :disabled="!plan?.steps.length" @click="preview">Check physical requirements</button>
 <button type="submit" :disabled="!plan?.steps.length">Save installation plan</button>
@@ -251,6 +306,7 @@ const local=computed(()=>placementRows.value.filter(row=>key(row.p.enclosure)===
 <label v-if="installable&&![model.PhysicalStepState.RECORDED,model.PhysicalStepState.NOT_PERFORMED].includes(step.state)"><input v-model="selected" type="checkbox" :value="index" :disabled="notPerformed.includes(index)||(!actualReport&&step.readiness!==model.PlanReadiness.READY)"/>Physical transition performed</label>
 </template>
 <small>{{model.PhysicalStepState[step.state]?.toLowerCase().replaceAll('_',' ')}}</small>
+<template v-if="step.action.oneofKind==='wiring'"><p>End {{step.action.wiring.endKey}}: {{step.action.wiring.after.oneofKind==='port'?'connect to '+(label(step.action.wiring.after.port)??'selected physical port'):step.action.wiring.after.oneofKind==='loose'?'confirmed loose':'attachment unknown'}}. Intent: {{model.PhysicalWiringIntent[step.action.wiring.intent]?.toLowerCase().replaceAll('_',' ')}}.</p><label v-if="installable&&![model.PhysicalStepState.RECORDED,model.PhysicalStepState.NOT_PERFORMED].includes(step.state)"><input v-model="selected" type="checkbox" :value="index" :disabled="notPerformed.includes(index)||(!actualReport&&step.readiness!==model.PlanReadiness.READY)"/>Cable-end outcome reported</label></template>
 <PlanStepControls :control="step.control" :index="index" :predecessors="predecessors(index)" :subject="subject(step)" :kind="subjectKind(step)" :working="working()" :editable="editable&&!busy" :readiness="step.readiness" :checked-state="step.checkedState" :checked-reason="step.checkedReason" @change="step.control=$event;step.readiness=model.PlanReadiness.UNSPECIFIED;step.checkedState=undefined;step.checkedReason=undefined"/>
 <label v-if="installable&&![model.PhysicalStepState.RECORDED,model.PhysicalStepState.NOT_PERFORMED].includes(step.state)"><input v-model="notPerformed" type="checkbox" :value="index" :disabled="selected.includes(index)"/>Confirmed not performed</label>
 <button v-if="editable" type="button" :disabled="busy" @click="removeStep(index)">Remove proposed step</button>

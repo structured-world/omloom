@@ -75,6 +75,15 @@ impl Tx<'_> {
                         ));
                     }
                 }
+                api::physical_step::Action::Wiring(w) => {
+                    keys.insert(wiring::hold_key(
+                        parse_target(w.cable.as_ref())?,
+                        &w.end_key,
+                    ));
+                    for target in wiring::targets(w)? {
+                        keys.insert(format!("physical-lock/{}", network::identity(target)));
+                    }
+                }
             }
         }
         for key in resolved.difference(&pending) {

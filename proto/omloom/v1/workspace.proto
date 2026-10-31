@@ -1546,6 +1546,25 @@ message PhysicalDefinition {
   // Structural position classes belong to PhysicalPositionEdit, not this profile.
   // Labels, serials and position alone never establish the part's identity/class.
   PhysicalComponentKind component_kind = 11;
+  // Optional operator/source-declared mating contract for this actual connector.
+  // It proves only the named mechanical interface, not signal/power/service health.
+  optional PhysicalMating mating = 12;
+}
+// Complete compatibility declaration for a selected connector interface. Matching
+// exact contracts with complementary roles qualifies that declared interface only;
+// designation text and different contract revisions never imply compatibility.
+message PhysicalMating {
+  // User/source-supplied immutable contract reference. No acquisition, issuer
+  // authentication or manufacturer approval is inferred from these identifiers.
+  omloom.v1.EquipmentReference profile = 1;
+  // Declared side within this contract; UNSPECIFIED is invalid when present.
+  PhysicalMatingRole role = 2;
+}
+enum PhysicalMatingRole {
+  PHYSICAL_MATING_ROLE_UNSPECIFIED = 0;
+  PHYSICAL_MATING_ROLE_SIDE_A = 1;
+  PHYSICAL_MATING_ROLE_SIDE_B = 2;
+  PHYSICAL_MATING_ROLE_SELF_MATING = 3;
 }
 message PhysicalDefinitionEdit {
   // User-supplied current definition, validated under resource/field permissions.
@@ -1675,6 +1694,9 @@ message PhysicalStep {
     PhysicalPlacement placement = 2;
     // Reviewed transition preserving unaffected identities and intent.
     PhysicalReplacement replacement = 3;
+    // Manual wiring transition at one named cable end, sharing plan progress,
+    // prerequisite checks and reservation/reconciliation ownership.
+    PhysicalWiring wiring = 8;
   }
 }
 enum PhysicalPlanState {
@@ -1815,8 +1837,70 @@ message PhysicalCableEnd {
   // Optional qualified connector designation, 1-128 UTF-8 bytes. This label
   // alone cannot establish medium, polarity, lane mapping or compatibility.
   optional string connector = 4;
-  // Server-owned current definition revision, not connectivity evidence.
+  // Server-owned current end-record revision, not connectivity evidence.
   uint64 revision = 5;
+  // Server-derived current attachment knowledge. Absence means unknown or
+  // unavailable, never unplugged; mutation receipts may omit this projection.
+  oneof attachment {
+    // Exact accepted binding, disclosed only with both endpoints' current rights.
+    PhysicalCableAttachment connected = 6;
+    // Explicit attributed report of a loose end; not inferred from a missing scan.
+    Empty loose = 7;
+  }
+  // Independently accepted expected destination, retained while unplugged or
+  // uncertain. Omitted unless the caller can read this relationship and its port.
+  optional omloom.v1.AssetRef intended_port = 8;
+  // Optional declared connector mating contract; a display label is insufficient.
+  optional PhysicalMating mating = 9;
+}
+message PhysicalCableAttachment {
+  // Actual port incarnation supplied by the accepted inventory binding.
+  omloom.v1.AssetRef port = 1;
+  // Server-generated current ConnectedTo relation UUID; not an end identity.
+  string binding_id = 2;
+  // Exact current attachment revision, independent of the cable's lifetime.
+  uint64 binding_revision = 3;
+}
+message PhysicalWiring {
+  // Selected retained cable incarnation, never inferred from its label or path.
+  omloom.v1.AssetRef cable = 1;
+  // Existing named end within this cable, 1-64 ASCII token bytes.
+  string end_key = 2;
+  // Exact current-state basis, or the output of an earlier wiring step at the
+  // same end. A step reference contributes a dependency to the common DAG.
+  oneof basis {
+    // User's reviewed current end revision; zero is invalid.
+    uint64 expected_end_revision = 3;
+    // User-selected earlier step index; its recorded result must exist first.
+    uint32 after_step = 10;
+  }
+  // Explicit disposition of accepted destination intent, independent of what
+  // physically happened. UNSPECIFIED is rejected; no automatic intent adoption.
+  PhysicalWiringIntent intent = 7;
+  // Server-captured previous accepted binding for this exact admitted step.
+  // It may be only possible occupancy, never proof of current signal/health.
+  optional PhysicalCableAttachment previous = 8;
+  // Server-captured previous intent needed for reviewed correction/recovery.
+  // These output fields do not let a caller overwrite the source basis.
+  optional omloom.v1.AssetRef previous_intended_port = 9;
+  // Server-recorded end revision produced by this effect. It permits dependent
+  // steps to continue after restart without replaying the physical work.
+  optional uint64 result_revision = 11;
+  // Explicit proposed/reported attachment. No state can be inferred from omission.
+  oneof after {
+    // Actual destination physical port; normal scope and endpoint rights apply.
+    omloom.v1.AssetRef port = 4;
+    // Operator confirms that this end is physically loose.
+    Empty loose = 5;
+    // Operator cannot establish attachment; preserves uncertainty, not free capacity.
+    Empty unknown = 6;
+  }
+}
+enum PhysicalWiringIntent {
+  PHYSICAL_WIRING_INTENT_UNSPECIFIED = 0;
+  PHYSICAL_WIRING_INTENT_PRESERVE = 1;
+  PHYSICAL_WIRING_INTENT_ADOPT_DESTINATION = 2;
+  PHYSICAL_WIRING_INTENT_CLEAR_DESTINATION = 3;
 }
 message PhysicalCableEndEdit {
   // Selected adopted cable incarnation; no device/port identity is inferred.

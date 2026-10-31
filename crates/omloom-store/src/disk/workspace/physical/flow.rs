@@ -2,13 +2,17 @@
 use super::*;
 use crate::plans as core;
 
-pub(super) fn readiness(steps: &[api::PhysicalStep]) -> Result<Vec<core::Readiness>> {
+pub(super) struct Analysis {
+    pub states: Vec<core::Readiness>,
+    pub ancestors: [u64; core::MAX_STEPS],
+}
+pub(super) fn analysis(steps: &[api::PhysicalStep]) -> Result<Analysis> {
     if steps.len() > core::MAX_STEPS {
         return Err(Error::Limit);
     }
     let mut edges = 0;
     let mut dependencies = Vec::with_capacity(steps.len());
-    for step in steps {
+    for (index, step) in steps.iter().enumerate() {
         let source = step
             .control
             .as_ref()
@@ -17,8 +21,42 @@ pub(super) fn readiness(steps: &[api::PhysicalStep]) -> Result<Vec<core::Readine
         if source.len() > core::MAX_EDGES - edges {
             return Err(Error::Limit);
         }
-        edges += source.len();
-        let mut after = Vec::with_capacity(source.len());
+        let mut derived = None;
+        if let Some(api::physical_step::Action::Wiring(wire)) = &step.action
+            && let Some(api::physical_wiring::Basis::AfterStep(previous)) = wire.basis
+        {
+            let previous = previous as usize;
+            if previous >= index {
+                return Err(Error::Invalid);
+            }
+            let Some(api::physical_step::Action::Wiring(prior)) = &steps[previous].action else {
+                return Err(Error::Invalid);
+            };
+            if prior.cable != wire.cable || prior.end_key != wire.end_key {
+                return Err(Error::Invalid);
+            }
+            for intervening in &steps[previous + 1..index] {
+                if let Some(api::physical_step::Action::Wiring(intervening)) = &intervening.action
+                    && intervening.cable == wire.cable
+                    && intervening.end_key == wire.end_key
+                {
+                    return Err(Error::Invalid);
+                }
+            }
+            derived = Some(previous);
+            for dependency in source {
+                if dependency.step as usize == previous {
+                    derived = None;
+                    break;
+                }
+            }
+        }
+        let count = source.len() + usize::from(derived.is_some());
+        if count > core::MAX_EDGES - edges {
+            return Err(Error::Limit);
+        }
+        edges += count;
+        let mut after = Vec::with_capacity(count);
         for dependency in source {
             let trigger =
                 match api::PlanTrigger::try_from(dependency.when).map_err(|_| Error::Invalid)? {
@@ -42,6 +80,12 @@ pub(super) fn readiness(steps: &[api::PhysicalStep]) -> Result<Vec<core::Readine
             after.push(core::Dependency {
                 step: dependency.step as usize,
                 trigger,
+            });
+        }
+        if let Some(step) = derived {
+            after.push(core::Dependency {
+                step,
+                trigger: core::Trigger::Reported,
             });
         }
         dependencies.push(after);
@@ -76,11 +120,15 @@ pub(super) fn readiness(steps: &[api::PhysicalStep]) -> Result<Vec<core::Readine
         });
     }
     let mut output = vec![core::Readiness::Waiting; steps.len()];
-    core::assess(&nodes, &mut output).map_err(|e| match e {
+    let mut ancestors = [0u64; core::MAX_STEPS];
+    core::assess(&nodes, &mut output, Some(&mut ancestors)).map_err(|e| match e {
         core::Invalid::Limit => Error::Limit,
         _ => Error::Invalid,
     })?;
-    Ok(output)
+    Ok(Analysis {
+        states: output,
+        ancestors,
+    })
 }
 
 impl Tx<'_> {
@@ -124,7 +172,7 @@ impl Tx<'_> {
                 step.checked_reason = Some(result.reason);
             }
         }
-        let states = readiness(&plan.steps)?;
+        let states = analysis(&plan.steps)?.states;
         for (step, state) in plan.steps.iter_mut().zip(states) {
             step.readiness = match state {
                 core::Readiness::Ready => api::PlanReadiness::Ready,

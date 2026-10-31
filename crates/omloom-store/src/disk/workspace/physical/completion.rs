@@ -134,6 +134,11 @@ impl Tx<'_> {
                             self.lock_physical_part(parse_target(Some(part))?, &key.id)?;
                         }
                     }
+                    api::physical_step::Action::Wiring(w) => {
+                        for target in wiring::targets(w)? {
+                            self.lock_physical_part(target, &key.id)?;
+                        }
+                    }
                 }
             }
         }
@@ -157,13 +162,39 @@ impl Tx<'_> {
         // Explicit hardware transitions precede placement realization in this atomic report.
         for replacements_first in [true, false] {
             for (&index, &done) in &selected {
-                let step = &mut plan.steps[index as usize];
-                let action = step.action.as_ref().ok_or(Error::Corrupt)?;
-                if matches!(action, api::physical_step::Action::Replacement(_))
-                    != replacements_first
+                if matches!(
+                    plan.steps[index as usize].action,
+                    Some(api::physical_step::Action::Replacement(_))
+                ) != replacements_first
                 {
                     continue;
                 }
+                let wiring_basis = match &plan.steps[index as usize].action {
+                    Some(api::physical_step::Action::Wiring(w))
+                        if done
+                            && plan.steps[index as usize].state
+                                != api::PhysicalStepState::Recorded as i32 =>
+                    {
+                        Some(match w.basis.as_ref().ok_or(Error::Corrupt)? {
+                            api::physical_wiring::Basis::ExpectedEndRevision(revision) => *revision,
+                            api::physical_wiring::Basis::AfterStep(prior) => {
+                                let prior =
+                                    plan.steps.get(*prior as usize).ok_or(Error::Corrupt)?;
+                                if prior.state != api::PhysicalStepState::Recorded as i32 {
+                                    return Err(Error::UnsafeTransition);
+                                }
+                                let Some(api::physical_step::Action::Wiring(prior)) = &prior.action
+                                else {
+                                    return Err(Error::Corrupt);
+                                };
+                                prior.result_revision.ok_or(Error::Corrupt)?
+                            }
+                        })
+                    }
+                    _ => None,
+                };
+                let step = &mut plan.steps[index as usize];
+                let action = step.action.as_mut().ok_or(Error::Corrupt)?;
                 let desired = if done {
                     api::PhysicalStepState::Recorded
                 } else {
@@ -190,6 +221,16 @@ impl Tx<'_> {
                                 now,
                             )?,
                         api::physical_step::Action::Replacement(_) => {}
+                        api::physical_step::Action::Wiring(w) => {
+                            self.record_wiring(
+                                context,
+                                w,
+                                wiring_basis.ok_or(Error::Corrupt)?,
+                                &key.id,
+                                working,
+                                now,
+                            )?;
+                        }
                     }
                 } else {
                     self.clear_physical_reservation(&key.id, index as usize)?;

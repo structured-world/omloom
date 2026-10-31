@@ -749,6 +749,34 @@ facets bound to the old placement; those become source-unavailable after its
 revision changes. Review their administrative source separately in the existing
 responsibility editor. The new host never silently becomes the owner.
 
+## Physical plans and cable ends
+
+Physical plans use the same accepted inventory, revision checks and requirement
+evaluation as ordinary resource work. Saving a draft does not reserve capacity
+or report installation. Reservation and attributed manual completion are separate
+commands. Completed effects survive cancellation of remaining work. A required
+postcondition can remain unknown after work is reported; an old observation is
+not automatically evidence of the new result.
+
+Named ends belong to a retained cable. Their definition, accepted destination
+intent and reported attachment are distinct. A confirmed loose end releases its
+physical binding while preserving intent unless explicitly cleared. An unknown
+attachment retains possible occupancy and cannot make that socket available to
+another cable. Replacing a component never transfers its cable attachment or
+service evidence to the replacement by position or name.
+
+Cable-end transitions are ordinary steps in a physical plan. Repeated work on
+the same end references the earlier step's recorded result. Conflicting socket
+claims require a preceding release through the shared dependency graph; a plan
+cannot promise a free socket to two ends at once. Retries and reads do not append
+connection histories. Endpoint visibility and relationship rights are checked
+before displaying or changing the attachment.
+
+An optional sourced mating contract identifies one exact declared interface and
+its complementary sides. Matching connector labels alone cannot establish fit;
+different contract revisions remain unqualified. The declaration checks only
+that interface, not signal compatibility, power safety or working service.
+
 ## Verification
 
 ```sh

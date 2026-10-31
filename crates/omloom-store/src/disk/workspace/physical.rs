@@ -4,6 +4,7 @@ use crate::physical::{Span, Volume};
 mod admission;
 mod cables;
 mod completion;
+mod connector;
 mod current;
 mod equipment;
 mod flow;
@@ -11,6 +12,7 @@ mod lifecycle;
 mod positions;
 mod replacements;
 mod reservations;
+mod wiring;
 
 fn placement_steps(
     plan: &api::PhysicalPlan,
@@ -55,6 +57,7 @@ fn step_row(step: &api::PhysicalStep) -> Result<Properties> {
             row.insert("action".into(), text("replacement"));
             row
         }
+        api::physical_step::Action::Wiring(w) => wiring::step_row(w)?,
     };
     row.insert(
         "state".into(),
@@ -85,6 +88,7 @@ fn read_step(row: &Properties) -> Result<api::PhysicalStep> {
         "replacement" => {
             api::physical_step::Action::Replacement(replacements::read_replacement(row)?)
         }
+        "wiring" => api::physical_step::Action::Wiring(wiring::read_step(row)?),
         _ => return Err(Error::Corrupt),
     };
     Ok(api::PhysicalStep {
@@ -183,6 +187,7 @@ fn definition_row(value: &api::PhysicalDefinition) -> Result<Properties> {
     if let Some(mounting) = &value.mounting {
         data.insert("mounting".into(), text(mounting));
     }
+    connector::store(&mut data, value.mating.as_ref())?;
     Ok(data)
 }
 fn definition(data: &Properties) -> Result<api::PhysicalDefinition> {
@@ -213,6 +218,7 @@ fn definition(data: &Properties) -> Result<api::PhysicalDefinition> {
             .get("mounting")
             .map(|_| string(data, "mounting"))
             .transpose()?,
+        mating: connector::read(data)?,
     })
 }
 impl Tx<'_> {
@@ -345,7 +351,8 @@ impl Store {
                 view.definitions.push(value);
             }
             Action::Preview(preview) => {
-                let plan = preview.plan.ok_or(Error::Invalid)?;
+                let mut plan = preview.plan.ok_or(Error::Invalid)?;
+                tx.prepare_wiring_plan(context, &mut plan, working)?;
                 tx.validate_physical_draft(context, &plan, working)?;
                 if let Some(id) = &plan.id {
                     tx.load_physical_plan(
@@ -370,6 +377,7 @@ impl Store {
             }
             Action::Save(save) => {
                 let mut plan = save.plan.ok_or(Error::Invalid)?;
+                tx.prepare_wiring_plan(context, &mut plan, working)?;
                 tx.validate_physical_draft(context, &plan, working)?;
                 tx.refresh_plan_control(context, &mut plan, working, now)?;
                 for p in placements(&plan) {
@@ -507,7 +515,7 @@ impl Tx<'_> {
             return Err(Error::Invalid);
         }
         let mut items = BTreeSet::new();
-        flow::readiness(&plan.steps)?;
+        flow::analysis(&plan.steps)?;
         let mut controls = 0usize;
         for step in &plan.steps {
             if let Some(control) = &step.control {

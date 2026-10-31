@@ -91,3 +91,23 @@ fn coordinate_and_capacity_boundaries_are_checked() -> Result<(), Invalid> {
     assert!(first.overlaps(Span::new(-1, 100)?));
     Ok(())
 }
+
+// Labels cannot establish fit: only an exact declaration with complementary sides can satisfy it.
+#[test]
+fn mating_contract_keeps_unknown_and_incompatible_distinct() -> Result<(), Invalid> {
+    let a = Mating::new("private:test", "pair", "revision-1", MatingRole::SideA)?;
+    let b = Mating::new("private:test", "pair", "revision-1", MatingRole::SideB)?;
+    let changed = Mating::new("private:test", "pair", "revision-2", MatingRole::SideB)?;
+    assert_eq!(mating(Some(a), Some(b)), Decision::PASS);
+    assert_eq!(mating(Some(a), Some(a)), Decision::FAIL);
+    assert_eq!(mating(Some(a), None), Decision::unknown(Reason::Missing));
+    assert_eq!(
+        mating(Some(a), Some(changed)),
+        Decision::unknown(Reason::Unconfigured)
+    );
+    assert!(matches!(
+        Mating::new("", "pair", "revision-1", MatingRole::SideA),
+        Err(Invalid::Empty)
+    ));
+    Ok(())
+}

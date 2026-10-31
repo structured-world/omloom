@@ -2,6 +2,58 @@
 //! Geometry proves only the supplied constraints, never authority or live health.
 use crate::requirements::{Decision, Reason};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MatingRole {
+    SideA,
+    SideB,
+    SelfMating,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct Mating<'a> {
+    issuer: &'a str,
+    key: &'a str,
+    basis: &'a str,
+    role: MatingRole,
+}
+impl<'a> Mating<'a> {
+    pub fn new(
+        issuer: &'a str,
+        key: &'a str,
+        basis: &'a str,
+        role: MatingRole,
+    ) -> Result<Self, Invalid> {
+        for value in [issuer, key, basis] {
+            if value.trim().is_empty() || value.chars().any(char::is_control) {
+                return Err(Invalid::Empty);
+            }
+            if value.len() > 160 {
+                return Err(Invalid::Limit);
+            }
+        }
+        Ok(Self {
+            issuer,
+            key,
+            basis,
+            role,
+        })
+    }
+}
+/// Compare complete declarations, not connector labels or inferred model similarity.
+pub fn mating(left: Option<Mating<'_>>, right: Option<Mating<'_>>) -> Decision {
+    let (Some(left), Some(right)) = (left, right) else {
+        return Decision::unknown(Reason::Missing);
+    };
+    if left.issuer != right.issuer || left.key != right.key || left.basis != right.basis {
+        return Decision::unknown(Reason::Unconfigured);
+    }
+    match (left.role, right.role) {
+        (MatingRole::SideA, MatingRole::SideB)
+        | (MatingRole::SideB, MatingRole::SideA)
+        | (MatingRole::SelfMating, MatingRole::SelfMating) => Decision::PASS,
+        _ => Decision::FAIL,
+    }
+}
+
 /// Micrometres. Signed coordinates permit an explicit clearance outside a chassis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Span {

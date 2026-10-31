@@ -60,6 +60,9 @@ impl Tx<'_> {
                 api::physical_step::Action::Replacement(r) => {
                     self.replacement_access(context, r, working, write)?
                 }
+                api::physical_step::Action::Wiring(w) => {
+                    self.wiring_access(context, w, working, write)?
+                }
             }
             steps.push(step);
         }

@@ -196,6 +196,27 @@ impl Tx<'_> {
                 targets.insert(parse_target(Some(item))?);
             }
         }
+        for step in view.plan.iter().flat_map(|p| &p.steps) {
+            if let Some(api::physical_step::Action::Wiring(w)) = &step.action {
+                targets.extend(wiring::targets(w)?);
+            }
+        }
+        for end in &view.cable_ends {
+            for port in [
+                end.intended_port.as_ref(),
+                match &end.attachment {
+                    Some(api::physical_cable_end::Attachment::Connected(binding)) => {
+                        binding.port.as_ref()
+                    }
+                    _ => None,
+                },
+            ]
+            .into_iter()
+            .flatten()
+            {
+                targets.insert(parse_target(Some(port))?);
+            }
+        }
         if targets.is_empty() {
             return Ok(());
         }

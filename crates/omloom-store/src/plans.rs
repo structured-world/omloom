@@ -44,9 +44,19 @@ pub enum Invalid {
 
 /// Validate every branch, then derive readiness in O(steps + dependencies).
 /// Caller-owned fixed bounds avoid allocation and recursion for untrusted graphs.
-pub fn assess(steps: &[Step<'_>], output: &mut [Readiness]) -> Result<(), Invalid> {
+pub fn assess(
+    steps: &[Step<'_>],
+    output: &mut [Readiness],
+    mut ancestors: Option<&mut [u64]>,
+) -> Result<(), Invalid> {
     if steps.is_empty() || steps.len() > MAX_STEPS || output.len() < steps.len() {
         return Err(Invalid::Limit);
+    }
+    if let Some(matrix) = &mut ancestors {
+        if matrix.len() < steps.len() {
+            return Err(Invalid::Limit);
+        }
+        matrix[..steps.len()].fill(0);
     }
     let mut indegree = [0u8; MAX_STEPS];
     let mut children = [0u64; MAX_STEPS];
@@ -87,6 +97,10 @@ pub fn assess(steps: &[Step<'_>], output: &mut [Readiness]) -> Result<(), Invali
         let mut waiting = false;
         let mut excluded = false;
         for dependency in step.after {
+            if let Some(matrix) = &mut ancestors {
+                let inherited = matrix[dependency.step];
+                matrix[index] |= inherited | (1u64 << dependency.step);
+            }
             if output[dependency.step] == Readiness::Unselected {
                 excluded = true;
                 continue;
