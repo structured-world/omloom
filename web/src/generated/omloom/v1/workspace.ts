@@ -4310,6 +4310,31 @@ export interface Physical {
          */
         cableEnds: PhysicalCableEnds;
     } | {
+        oneofKind: "offer";
+        /**
+         * Save or explicitly revoke a selected-region disclosure offer. This never
+         * grants resource, placement or external-operation authority.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PhysicalOfferEdit offer = 14
+         */
+        offer: PhysicalOfferEdit;
+    } | {
+        oneofKind: "availability";
+        /**
+         * Read only the selected offer's permitted availability, not its occupants.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PhysicalOfferRead availability = 15
+         */
+        availability: PhysicalOfferRead;
+    } | {
+        oneofKind: "offers";
+        /**
+         * List the current actor's offers for one already selected enclosure.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PhysicalOffers offers = 16
+         */
+        offers: PhysicalOffers;
+    } | {
         oneofKind: undefined;
     };
 }
@@ -4554,6 +4579,118 @@ export interface PhysicalCableEnds {
     after?: string;
 }
 /**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalOffer
+ */
+export interface PhysicalOffer {
+    /**
+     * Server-generated UUID, absent only when explicitly creating an offer.
+     *
+     * @generated from protobuf field: optional string id = 1
+     */
+    id?: string;
+    /**
+     * Actual enclosure incarnation supplying this offer, not a neighbor or model.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef enclosure = 2
+     */
+    enclosure?: AssetRef;
+    /**
+     * User-reviewed region in this enclosure's coordinates. It is the complete
+     * disclosed query granularity; recipients cannot probe smaller hidden regions.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalVolume region = 3
+     */
+    region?: PhysicalVolume;
+    /**
+     * Existing recipient identity selected by the publisher, max 128 UTF-8 bytes.
+     * The authenticated context must match this identity; possession of an ID
+     * or link alone supplies no authority. No SID identity is created here.
+     *
+     * @generated from protobuf field: string recipient = 4
+     */
+    recipient: string;
+    /**
+     * Publisher-supplied label, max 160 UTF-8 bytes, disclosed to this recipient.
+     *
+     * @generated from protobuf field: string name = 5
+     */
+    name: string;
+    /**
+     * Exact offer revision required for changing its region, recipient or state.
+     *
+     * @generated from protobuf field: uint64 revision = 6
+     */
+    revision: bigint;
+    /**
+     * Explicit current revocation; revocation stops new disclosure, not copies
+     * already obtained. Old restored state never qualifies current availability.
+     *
+     * @generated from protobuf field: bool revoked = 7
+     */
+    revoked: boolean;
+    /**
+     * Explicit additional permission to disclose the whole enclosure's mass
+     * admission result. Neither the limit nor individual loads are disclosed.
+     *
+     * @generated from protobuf field: bool mass = 8
+     */
+    mass: boolean;
+    /**
+     * Explicit additional permission to disclose the enclosure power result.
+     * This does not certify independent supplies or electrical safety.
+     *
+     * @generated from protobuf field: bool power = 9
+     */
+    power: boolean;
+    /**
+     * Explicit additional permission to disclose the enclosure cooling result.
+     * It describes declared capacity, not sensor readings or thermal certification.
+     *
+     * @generated from protobuf field: bool cooling = 10
+     */
+    cooling: boolean;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalOfferEdit
+ */
+export interface PhysicalOfferEdit {
+    /**
+     * Publisher's selected current profile. Current resource/field rights and
+     * exact revisions are rechecked before an atomic change.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalOffer offer = 1
+     */
+    offer?: PhysicalOffer;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalOfferRead
+ */
+export interface PhysicalOfferRead {
+    /**
+     * Server-generated offer UUID. It identifies a disclosure profile, not a grant.
+     *
+     * @generated from protobuf field: string id = 1
+     */
+    id: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalOffers
+ */
+export interface PhysicalOffers {
+    /**
+     * Existing selected enclosure for a publisher's own bounded offer list.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef enclosure = 1
+     */
+    enclosure?: AssetRef;
+    /**
+     * Last returned offer UUID, absent on the first page.
+     *
+     * @generated from protobuf field: optional string after = 2
+     */
+    after?: string;
+}
+/**
  * @generated from protobuf message omloom.workspace.v1.PhysicalView
  */
 export interface PhysicalView {
@@ -4613,6 +4750,8 @@ export interface PhysicalView {
     positions: PhysicalPosition[];
     /**
      * Minimal permitted ordinary inventory labels for this selected response only.
+     * Selected plan materials also include current permitted serial fields;
+     * neither a material snapshot nor denied neighboring inventory is returned.
      *
      * @generated from protobuf field: repeated omloom.workspace.v1.Item items = 10
      */
@@ -4624,6 +4763,13 @@ export interface PhysicalView {
      * @generated from protobuf field: repeated omloom.workspace.v1.PhysicalCableEnd cable_ends = 11
      */
     cableEnds: PhysicalCableEnd[];
+    /**
+     * Selected permitted region profiles, at most 25. A recipient availability
+     * response returns exactly its selected profile and no occupant projection.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.PhysicalOffer offers = 12
+     */
+    offers: PhysicalOffer[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Request
@@ -7935,7 +8081,10 @@ class Physical$Type extends MessageType<Physical> {
             { no: 10, name: "position", kind: "message", oneof: "action", T: () => PhysicalPositionEdit },
             { no: 11, name: "positions", kind: "message", oneof: "action", T: () => PhysicalPositionQuery },
             { no: 12, name: "cable_end", kind: "message", oneof: "action", T: () => PhysicalCableEndEdit },
-            { no: 13, name: "cable_ends", kind: "message", oneof: "action", T: () => PhysicalCableEnds }
+            { no: 13, name: "cable_ends", kind: "message", oneof: "action", T: () => PhysicalCableEnds },
+            { no: 14, name: "offer", kind: "message", oneof: "action", T: () => PhysicalOfferEdit },
+            { no: 15, name: "availability", kind: "message", oneof: "action", T: () => PhysicalOfferRead },
+            { no: 16, name: "offers", kind: "message", oneof: "action", T: () => PhysicalOffers }
         ]);
     }
 }
@@ -8027,6 +8176,64 @@ class PhysicalCableEnds$Type extends MessageType<PhysicalCableEnds> {
  */
 export const PhysicalCableEnds = new PhysicalCableEnds$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class PhysicalOffer$Type extends MessageType<PhysicalOffer> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalOffer", [
+            { no: 1, name: "id", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "enclosure", kind: "message", T: () => AssetRef },
+            { no: 3, name: "region", kind: "message", T: () => PhysicalVolume },
+            { no: 4, name: "recipient", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 5, name: "name", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 6, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 7, name: "revoked", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 8, name: "mass", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 9, name: "power", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 10, name: "cooling", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalOffer
+ */
+export const PhysicalOffer = new PhysicalOffer$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalOfferEdit$Type extends MessageType<PhysicalOfferEdit> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalOfferEdit", [
+            { no: 1, name: "offer", kind: "message", T: () => PhysicalOffer }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalOfferEdit
+ */
+export const PhysicalOfferEdit = new PhysicalOfferEdit$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalOfferRead$Type extends MessageType<PhysicalOfferRead> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalOfferRead", [
+            { no: 1, name: "id", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalOfferRead
+ */
+export const PhysicalOfferRead = new PhysicalOfferRead$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalOffers$Type extends MessageType<PhysicalOffers> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalOffers", [
+            { no: 1, name: "enclosure", kind: "message", T: () => AssetRef },
+            { no: 2, name: "after", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalOffers
+ */
+export const PhysicalOffers = new PhysicalOffers$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class PhysicalView$Type extends MessageType<PhysicalView> {
     constructor() {
         super("omloom.workspace.v1.PhysicalView", [
@@ -8040,7 +8247,8 @@ class PhysicalView$Type extends MessageType<PhysicalView> {
             { no: 8, name: "next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 9, name: "positions", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalPosition },
             { no: 10, name: "items", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Item },
-            { no: 11, name: "cable_ends", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalCableEnd }
+            { no: 11, name: "cable_ends", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalCableEnd },
+            { no: 12, name: "offers", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalOffer }
         ]);
     }
 }

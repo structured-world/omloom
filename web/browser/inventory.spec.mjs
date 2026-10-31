@@ -134,6 +134,41 @@ test('cable wiring reports preserve intent on desktop and phone',async({browser}
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
 });
 
+test('selected capacity offers can be inspected and revoked on desktop and phone',async({browser})=>{
+  // These are actual disclosure profiles, not another occupant list or a reservation promise.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-offers-'));const server=await host(dir);
+  try{
+    for(const width of [1440,390]){
+      const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600});
+      try{
+        await page.goto(server.url);const rack=await create(page,`Offer rack ${width}`,'RACK');
+        const {m,rpc}=await workspaceClient(server.url);
+        const axis=lengthUm=>({startUm:0n,lengthUm});
+        await rpc({oneofKind:'physical',physical:{action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target:{assetId:rack.asset_id,incarnation:rack.incarnation},basis:'Measured rack interior',volume:{x:axis(500000n),y:axis(2000000n),z:axis(1000000n)}})}}}});
+        await page.reload();await page.getByText('Offer selected capacity without occupant access',{exact:true}).click();
+        const panel=page.locator('.physical-offers');
+        await panel.getByLabel('Offer name',{exact:true}).fill(`Approved region ${width}`);
+        await panel.getByLabel('Recipient identity',{exact:true}).fill('fixture-operator');
+        await panel.getByRole('button',{name:'Use current usable enclosure region',exact:true}).click();
+        await expect(panel.getByLabel('Z length (mm)',{exact:true})).toHaveValue('1000');
+        await panel.getByRole('button',{name:'Save reviewed offer',exact:true}).click();
+        const edit=panel.getByRole('button',{name:`Edit offer: Approved region ${width}`,exact:true});await expect(edit).toBeEnabled();
+        const id=await panel.locator('code').textContent();expect(id).toMatch(/^[0-9a-f-]{36}$/);
+        await page.getByText('Inspect offered capacity',{exact:true}).click();
+        const access=page.locator('.availability-access');await access.getByLabel('Availability profile ID',{exact:true}).fill(id);
+        await access.getByRole('button',{name:'Check offered region',exact:true}).click();
+        await expect(access.getByRole('status')).toHaveText('Available within supplied constraints');
+        await edit.click();await panel.getByRole('button',{name:'Revoke this offer',exact:true}).click();
+        await expect(panel).toContainText('Profile revoked. New availability disclosure is stopped.');
+        await access.getByRole('button',{name:'Check offered region',exact:true}).click();
+        await expect(access.getByRole('alert')).toHaveText('This request is unavailable or outside your current permissions.');
+        await expect(access.getByRole('region',{name:'Offered availability'})).toHaveCount(0);
+        expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+      }finally{await page.close();}
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('physical dimensions save and reload on desktop and phone',async({browser})=>{
   // The real form preserves exact units through the API and disk store, including phone navigation.
   const dir=await mkdtemp(join(tmpdir(),'omloom-physical-'));const server=await host(dir);
@@ -178,6 +213,7 @@ test('physical plan reserves then records installation on desktop and phone',asy
         const existing=await rpc({oneofKind:'read',read:m.Read.create({target:equipmentTarget})});
         expect(existing.oneofKind).toBe('detail');
         const changes=[['width',440000n],['height',44450n],['depth',500000n]].map(([name,value])=>({name,value:{oneofKind:'equipment',equipment:{basis:'Measured test fixture equipment',assertion:{oneofKind:'quantity',quantity:{lower:value,upper:value,unit:'mm',scale:3}}}}}));
+        changes.push({name:'serial',value:{oneofKind:'text',text:`material-serial-${width}`}});
         await rpc({oneofKind:'write',write:m.Write.create({target:equipmentTarget,expected:existing.detail.item.revision,kind:existing.detail.item.kind,changes})});
         const [x,y,z]=[482600n,1866900n,1000000n].map(lengthUm=>({startUm:0n,lengthUm}));
         await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target:reference(rack),basis:'Measured test fixture usable space',volume:{x,y,z}})}}})});
@@ -188,7 +224,12 @@ test('physical plan reserves then records installation on desktop and phone',asy
         await planner.getByRole('combobox',{name:'Find equipment',exact:true}).fill(`Planned equipment ${width}`);
         await planner.getByRole('option',{name:`Use equipment: Planned equipment ${width}`,exact:true}).click();
         await expect(planner.getByRole('button',{name:'Add planned placement',exact:true})).toBeEnabled();
-        await planner.getByRole('button',{name:'Add planned placement',exact:true}).click();
+        if(width===1440){
+          const canvas=planner.getByRole('group',{name:'Rack physical placement',exact:true});
+          await canvas.press('ArrowDown');await expect(planner.getByLabel('Starting U',{exact:true})).toHaveValue('2');
+          await canvas.press('ArrowUp');await expect(planner.getByLabel('Starting U',{exact:true})).toHaveValue('1');
+          await canvas.press('Enter');
+        }else{await planner.getByRole('button',{name:'Add planned placement',exact:true}).click();}
         const beforePreview=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'list',list:{limit:25}}})});
         await planner.getByRole('button',{name:'Check physical requirements',exact:true}).click();
         await expect(planner.getByRole('status')).toHaveText('Declared physical constraints satisfied. Nothing was saved or reserved.');
@@ -197,6 +238,16 @@ test('physical plan reserves then records installation on desktop and phone',asy
         expect(afterPreview.physical.revision).toBe(beforePreview.physical.revision);
         await planner.getByRole('button',{name:'Save installation plan',exact:true}).click();
         await expect(planner.getByRole('status')).toHaveText('Plan saved. Nothing is reserved or installed.');
+        const bill=planner.getByRole('region',{name:'Bill of materials',exact:true});
+        await expect(bill.getByRole('listitem')).toHaveCount(1);
+        await expect(bill.getByRole('listitem')).toContainText(`serial material-serial-${width}`);
+        const downloadPromise=page.waitForEvent('download');
+        await bill.getByRole('button',{name:'Export authorized plan and materials',exact:true}).click();
+        const download=await downloadPromise;
+        const exported=JSON.parse(await readFile(await download.path(),'utf8'));
+        expect(exported.format).toBe('omloom.physical-plan.v1');
+        expect(exported.plan.steps).toHaveLength(1);
+        expect(exported.items.some(i=>i.target.assetId===equipment.asset_id&&i.fields.some(f=>f.name==='serial'&&f.text===`material-serial-${width}`))).toBe(true);
         expect((await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'read',read:{enclosure:reference(rack),occupants:true}}})})).physical.occupancy).toEqual([]);
         await page.reload();
         await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
@@ -210,7 +261,7 @@ test('physical plan reserves then records installation on desktop and phone',asy
         await expect(planner.getByRole('status')).toHaveText('Reported installation recorded. Live health has not been asserted.');
         const read=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'read',read:{enclosure:reference(rack),occupants:true}}})});
         expect(read.physical.occupancy.map(o=>o.placement.item)).toEqual([reference(equipment)]);
-        await expect(planner.getByRole('img',{name:'Rack physical placement',exact:true})).toBeVisible();
+        await expect(planner.getByRole('group',{name:'Rack physical placement',exact:true})).toBeVisible();
         await expect(page.getByRole('region',{name:'Resource details'}).getByRole('button',{name:`installed in · Planned equipment ${width}`,exact:true})).toBeVisible();
         expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
         // A physical command must refresh the enclosing context before another editor writes.

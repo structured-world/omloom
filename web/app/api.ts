@@ -12,6 +12,11 @@ export async function call(command: Request['command'], working?: WorkingContext
   const { response } = await transport.unary<Request, Reply>(method, Request.create({ command, working }), transport.mergeOptions({ timeout: 15_000 }));
   return response.result;
 }
+export function requestMessage(error:unknown):string {
+  if(!(error instanceof Error))return 'The request could not be completed.';
+  if('code' in error&&error.code==='PERMISSION_DENIED')return 'This request is unavailable or outside your current permissions.';
+  try{return decodeURIComponent(error.message);}catch{return error.message;}
+}
 export function text(name: string, value: string): Field { return { name, value: { oneofKind: 'text', text: value } }; }
 export function typedField(name: string, type: FieldType, value: string, clear = false): Field {
   if (clear) return { name, value: { oneofKind: 'clear', clear: NullValue.NULL_VALUE } };

@@ -2,6 +2,7 @@
 use super::*;
 use crate::physical::{Span, Volume};
 mod admission;
+mod availability;
 mod cables;
 mod completion;
 mod connector;
@@ -264,6 +265,19 @@ impl Store {
             ..Default::default()
         };
         match request.action.ok_or(Error::Invalid)? {
+            Action::Offer(value) => view
+                .offers
+                .push(tx.save_physical_offer(context, value, working, now)?),
+            Action::Offers(value) => {
+                let (offers, next) = tx.physical_offers(context, value, working)?;
+                view.offers = offers;
+                view.next = next;
+            }
+            Action::Availability(value) => {
+                let (offer, result) = tx.offered_availability(context, value)?;
+                view.offers.push(offer);
+                (view.state, view.reason) = requirements::wire_decision(result);
+            }
             Action::CableEnd(value) => view
                 .cable_ends
                 .push(tx.save_cable_end(context, value, working, now)?),

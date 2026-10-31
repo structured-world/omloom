@@ -233,6 +233,25 @@ function rackKeyboard(event:KeyboardEvent){
 const placementRows=computed(()=>plan.value?.steps.flatMap((step,index)=>step.action.oneofKind==='placement'?[{p:step.action.placement,index,state:step.state}]:[])??[]);
 const replacementRows=computed(()=>plan.value?.steps.flatMap((step,index)=>step.action.oneofKind==='replacement'?[{r:step.action.replacement,index,state:step.state}]:[])??[]);
 const local=computed(()=>placementRows.value.filter(row=>key(row.p.enclosure)===key(props.target)).map(row=>row.p));
+const bill=computed(()=>{
+  const items=new Map<string,{target:AssetRef;steps:model.PhysicalStep[]}>();
+  for(const step of plan.value?.steps??[]){
+    const targets:AssetRef[]=[];
+    if(step.action.oneofKind==='placement'&&step.action.placement.item)targets.push(step.action.placement.item);
+    if(step.action.oneofKind==='replacement'&&step.action.replacement.replacement)targets.push(step.action.replacement.replacement);
+    if(step.action.oneofKind==='wiring'&&step.action.wiring.cable)targets.push(step.action.wiring.cable);
+    for(const target of targets){let line=items.get(key(target));if(!line){line={target,steps:[]};items.set(key(target),line);}line.steps.push(step);}
+  }
+  return [...items.values()].map(line=>({...line,reported:line.steps.filter(s=>s.state===model.PhysicalStepState.RECORDED).length,reserved:line.steps.some(s=>s.state===model.PhysicalStepState.RESERVED)}));
+});
+function serial(target:AssetRef){return planItems.value.find(i=>key(i.target)===key(target))?.fields.find(f=>f.name==='serial');}
+async function exportPlan(){await run(async()=>{
+  const response=await invoke({oneofKind:'load',load:planKey()});
+  if(!response.plan)throw Error('The selected plan is unavailable.');
+  const data={format:'omloom.physical-plan.v1',plan:model.PhysicalPlan.toJson(response.plan),items:response.items.map(item=>model.Item.toJson(item))};
+  const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+  try{const link=document.createElement('a');link.href=url;link.download='physical-plan.json';link.click();}finally{URL.revokeObjectURL(url);}
+});}
 </script>
 <template>
 <details class="physical-planner" :inert="inactive" @toggle="($event.target as HTMLDetailsElement).open&&open()">
@@ -295,6 +314,9 @@ const local=computed(()=>placementRows.value.filter(row=>key(row.p.enclosure)===
 <button type="submit" :disabled="!plan?.steps.length">Save installation plan</button>
 </fieldset></form>
 <template v-if="plan"><h3>{{plan.name||name}} <small>{{state(plan.state)}}</small></h3>
+<section aria-label="Bill of materials"><h4>Selected serialized materials</h4><p>Each retained physical asset is counted once, including a component both moved and placed. Draft selection does not change stock or order equipment.</p>
+<ul><li v-for="line in bill" :key="key(line.target)"><strong>{{label(line.target)??'Equipment name unavailable'}}</strong> · quantity 1<span v-if="serial(line.target)"> · serial {{input(serial(line.target))}}</span><small>{{line.reported}} reported of {{line.steps.length}} related steps. {{line.reserved?'Reservation held.':''}}</small></li></ul>
+<button v-if="plan.id" type="button" :disabled="busy" @click="exportPlan">Export authorized plan and materials</button></section>
 <ol class="planned-items"><li v-for="(step,index) in plan.steps" :key="index">
 <template v-if="step.action.oneofKind==='placement'">
 <label v-if="installable&&![model.PhysicalStepState.RECORDED,model.PhysicalStepState.NOT_PERFORMED].includes(step.state)"><input v-model="selected" type="checkbox" :value="index" :disabled="notPerformed.includes(index)||(!actualReport&&step.readiness!==model.PlanReadiness.READY)"/>Actually installed: <span v-if="label(step.action.placement.item)">{{label(step.action.placement.item)}}</span><span v-else>Equipment name unavailable</span></label>

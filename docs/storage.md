@@ -22,6 +22,16 @@ the host must supply finite settings suitable for all of its namespaces.
 
 ## Layout and write contract
 
+Physical availability profiles store only a selected enclosure/incarnation,
+region, recipient, explicit constraint flags and current revision/revocation.
+At most 64 profiles belong to one enclosure, listed in pages of 25. Existing
+profiles may be edited; removal of the enclosure reclaims them. These are
+current disclosure configuration, independent of ordinary bounded audit detail.
+Availability is derived from authoritative bindings and reservation references;
+reads do not save occupancy snapshots or maintain a second capacity inventory.
+Plan material lists and exports likewise derive from current admitted steps and
+permitted inventory fields, with no persisted bill or per-open export copy.
+
 The schema stores directly indexed current rows. Asset identity and accepted
 revision are separate from intended fields, provider mappings, current source
 claims and freshness. Source fields use scoped keys; omitted partial fields

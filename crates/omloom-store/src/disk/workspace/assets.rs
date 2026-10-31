@@ -1834,6 +1834,7 @@ impl Tx<'_> {
             self.delete(&group_key)?;
         }
         self.retire_current_facts(target)?;
+        self.remove_physical_offers(target)?;
         self.delete(&format!("physical/{scope}"))?;
         if number(row, "kind")? == wire::AssetKind::Cable as u64 {
             self.remove_cable_ends(target)?;

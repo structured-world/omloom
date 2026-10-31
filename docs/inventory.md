@@ -777,6 +777,19 @@ its complementary sides. Matching connector labels alone cannot establish fit;
 different contract revisions remain unqualified. The declaration checks only
 that interface, not signal compatibility, power safety or working service.
 
+A plan's selected serialized materials are derived from its steps. Moving and
+placing the same retained component counts it once. The list separates related
+reported work from outstanding reservations and includes a serial only when
+that current field is permitted. Export reloads the authorized plan first; it
+does not order equipment, copy credentials or retain an inventory snapshot.
+
+An explicit availability profile selects an enclosure region, recipient and
+permitted capacity constraints. Its recipient also needs current availability
+permission; knowing a profile ID is insufficient. The response contains that
+region's result without occupant names, counts or silhouettes. Revocation stops
+new disclosure, and restored data cannot certify fresh availability. This is
+advisory information, separate from atomic reservation.
+
 ## Verification
 
 ```sh

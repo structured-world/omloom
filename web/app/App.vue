@@ -13,6 +13,8 @@ import PhysicalFacts from './PhysicalFacts.vue';
 import PhysicalPlanner from './PhysicalPlanner.vue';
 import PhysicalPositions from './PhysicalPositions.vue';
 import CableEnds from './CableEnds.vue';
+import AvailabilityAccess from './AvailabilityAccess.vue';
+import PhysicalOffers from './PhysicalOffers.vue';
 import { softwareFields } from './software-fields';
 import { equipmentFields } from './equipment-fields';
 import { ref, computed, watch, onMounted, nextTick } from 'vue';
@@ -354,6 +356,7 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <div class="saved-heading"><p class="nav-caption">SAVED VIEWS</p><button aria-label="Save current view" @click="editor = 'view'">+</button></div><input v-if="views.length" v-model="viewSearch" aria-label="Find saved views" placeholder="Find a saved view" maxlength="100"><button v-for="v in matchingViews" :key="v.id" class="saved-link" @click="useView(v)">{{ v.audiences.length ? '♧' : '◦' }} {{ v.name }}</button><p v-if="!views.length" class="sidebar-hint">Keep useful selections here.</p><p v-else-if="!matchingViews.length" class="sidebar-hint">No visible definitions match.</p>
 <div class="fixture"><span class="status-dot" />Local development<strong>{{ identity?.name ?? 'Connecting…' }}</strong><small>Fixture scope: {{ identity?.fixture }}</small></div></aside>
 <main><header class="topbar"><div class="breadcrumb">Workspace <span>/</span> {{ currentTitle }}</div><button @click="load" :disabled="loading">↻ Refresh</button></header>
+<AvailabilityAccess/>
 <div class="workspace-head"><div><h1>{{ currentTitle }}</h1></div><div class="actions workspace-actions" @keydown.esc="moreActions = false"><div id="workspace-secondary" class="secondary-actions" :class="{ open: moreActions }"><button class="phone-refresh" @click="load" :disabled="loading">Refresh inventory</button><button @click="exportCsv">Export CSV</button><button v-if="identity?.writable" @click="editor = 'import'">Import CSV</button><button v-if="identity?.writable" @click="moreActions = false; editor = 'host-import'">Import host report</button><button v-if="identity?.schemaAdmin" @click="editor = 'schema'">Company fields</button></div><button v-if="identity?.writable" class="primary" :disabled="loading" @click="create">+ Create resource</button><button class="phone-more" :aria-expanded="moreActions" aria-controls="workspace-secondary" @click="moreActions = !moreActions">More</button></div></div>
 <div class="scopebar"><span class="scope-label">SCOPE</span><template v-if="detail?.item"><strong>{{ detailName || detail.item.target?.assetId.slice(-8) }}</strong><button @click="closeDetail">Enclosing selection</button></template><button v-else-if="query.roots.length" @click="change({ scope: undefined, scopeInc: undefined })">{{ query.roots.length }} selected root{{ query.roots.length === 1 ? '' : 's' }} <span aria-hidden="true">×</span></button><span v-else>All permitted infrastructure</span><small>{{ detail?.item ? 'Local components and known facts' : 'Changing views preserves this scope.' }}</small></div>
 <CategoryNav :view="query.view" :kinds="query.kinds" @select="kinds => change({kind:kinds.length?kinds.map(String):undefined})" />
@@ -387,6 +390,7 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <PhysicalPositions v-if="detail.item.target&&!loading&&[K.RACK,K.DEVICE,K.PORT,K.PHYSICAL_COMPONENT].includes(detail.item.kind)" :key="'positions/'+key(detail.item.target)" :target="detail.item.target" :working="working" @open="open" @changed="notice='Physical position saved.'; load()" />
 <ResponsibilityPanel v-if="detail.item&&!loading" :key="key(detail.item.target)+'/'+detail.item.revision" :item="detail.item" :working="working" @changed="saved()" @open="open" />
 <CableEnds v-if="detail.item.target&&detail.item.kind===K.CABLE" :key="'ends/'+key(detail.item.target)" :target="detail.item.target" :working="working" :inactive="loading" @changed="notice='Cable-end definition saved.';load()" />
+<PhysicalOffers v-if="detail.item.target&&[K.RACK,K.PHYSICAL_POSITION,K.DEVICE].includes(detail.item.kind)" :key="'offers/'+key(detail.item.target)" :target="detail.item.target" :working="working" :inactive="loading" @changed="load"/>
 <AccountPanel v-if="detail.item?.kind===K.PROVIDER_ACCOUNT&&!loading" :key="key(detail.item.target)+'/'+detail.item.revision" :item="detail.item" :working="working" @changed="saved()" @open="open" @share="editor='view'" />
 <p v-if="detail.networkNext || networkCursor" class="hint">Showing one bounded evidence page. Observation counts and filters apply to this page.</p>
 <HostNetwork v-for="evidence in detail.hostNetwork" :key="evidence.sourceId" :evidence="evidence" @open="open" />

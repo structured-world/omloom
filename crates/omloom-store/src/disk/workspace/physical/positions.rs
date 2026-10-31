@@ -260,6 +260,27 @@ impl Tx<'_> {
                 fields,
             });
         }
+        if view.plan.is_some() {
+            let mut keys = Vec::with_capacity(view.items.len());
+            let mut owners = BTreeMap::new();
+            for (index, item) in view.items.iter().enumerate() {
+                let target = parse_target(item.target.as_ref())?;
+                if context.field(target, item.kind, "serial", false) {
+                    let key = asset_key(target);
+                    keys.push(text(format!("{key}/intent/serial")));
+                    owners.insert(key, index);
+                }
+            }
+            if !keys.is_empty() {
+                let rows=self.query("UNWIND $keys AS key MATCH (f:OmRow {key:key}) RETURN properties(f) AS p LIMIT 256",params([("keys",Value::Array(keys))]))?;
+                for row in rows {
+                    let owner = string(&row, "parent")?;
+                    if let Some(&index) = owners.get(&owner) {
+                        view.items[index].fields.push(inventory::read_field(&row)?);
+                    }
+                }
+            }
+        }
         Ok(())
     }
 }

@@ -40,6 +40,17 @@ impl Failure {
     }
 }
 
+fn require_mounting(
+    required: Option<&str>,
+    actual: Option<&str>,
+) -> core::result::Result<(), Failure> {
+    match (required, actual) {
+        (Some(required), Some(actual)) if required == actual => Ok(()),
+        (Some(_), Some(_)) => Err(Failure::mismatch()),
+        _ => Err(Error::Incomplete.into()),
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Claims {
     pub(super) parts: BTreeSet<AssetRef>,
@@ -82,6 +93,7 @@ impl Tx<'_> {
     ) -> core::result::Result<Claims, Failure> {
         let mut claims = self.check_replacement_capacity(context, plan, working)?;
         self.assess_wiring(context, plan, working, &mut claims)?;
+        let mounting = self.placement_mountings(plan)?;
         let mut enclosures = BTreeMap::<AssetRef, current::PhysicalUse>::new();
         let mut rows_read = 0;
         for p in placements(plan) {
@@ -110,6 +122,12 @@ impl Tx<'_> {
             let definition = self
                 .physical_definition(enclosure)?
                 .ok_or(Error::Incomplete)?;
+            if mounting.contains_key(&enclosure) || mounting.contains_key(&item) {
+                require_mounting(
+                    mounting.get(&enclosure).map(String::as_str),
+                    mounting.get(&item).map(String::as_str),
+                )?;
+            }
             let item_volume = self
                 .equipment_envelope(context, item)?
                 .ok_or(Error::Incomplete)?;
@@ -180,6 +198,35 @@ impl Tx<'_> {
             self.check_physical_lock("physical-slot", *position, plan.id.as_deref())?;
         }
         Ok(claims)
+    }
+
+    fn placement_mountings(&self, plan: &api::PhysicalPlan) -> Result<BTreeMap<AssetRef, String>> {
+        if plan.steps.len() > 64 {
+            return Err(Error::Limit);
+        }
+        let mut selected = BTreeSet::new();
+        for placement in placements(plan) {
+            selected.insert(parse_target(placement.item.as_ref())?);
+            selected.insert(parse_target(placement.enclosure.as_ref())?);
+        }
+        if selected.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let keys = selected
+            .iter()
+            .map(|target| text(format!("physical/{}", network::identity(*target))))
+            .collect();
+        let rows=self.query("UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN {asset:n.asset,incarnation:n.incarnation,mounting:n.mounting} AS p LIMIT 128",params([("keys",Value::Array(keys))]))?;
+        let mut values = BTreeMap::new();
+        for row in rows {
+            match row.get("mounting") {
+                Some(Value::Null) | None => {}
+                Some(value) => {
+                    values.insert(target(&row)?, value.as_str().ok_or(Error::Corrupt)?.into());
+                }
+            }
+        }
+        Ok(values)
     }
 
     fn check_physical_lock(
@@ -262,11 +309,7 @@ impl Tx<'_> {
                         return Err(Failure::mismatch());
                     }
                 }
-                match (&target.mounting, &item.mounting) {
-                    (Some(required), Some(actual)) if required == actual => {}
-                    (Some(_), Some(_)) => return Err(Failure::mismatch()),
-                    _ => return Err(Error::Incomplete.into()),
-                }
+                require_mounting(target.mounting.as_deref(), item.mounting.as_deref())?;
                 let target_volume = target
                     .volume
                     .as_ref()

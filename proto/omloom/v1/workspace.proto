@@ -1824,6 +1824,13 @@ message Physical {
     PhysicalCableEndEdit cable_end = 12;
     // Read only the selected cable's named ends, without tracing its neighbors.
     PhysicalCableEnds cable_ends = 13;
+    // Save or explicitly revoke a selected-region disclosure offer. This never
+    // grants resource, placement or external-operation authority.
+    PhysicalOfferEdit offer = 14;
+    // Read only the selected offer's permitted availability, not its occupants.
+    PhysicalOfferRead availability = 15;
+    // List the current actor's offers for one already selected enclosure.
+    PhysicalOffers offers = 16;
   }
 }
 message PhysicalCableEnd {
@@ -1916,6 +1923,50 @@ message PhysicalCableEnds {
   // Last returned structural token within this cable, absent for the first page.
   optional string after = 2;
 }
+message PhysicalOffer {
+  // Server-generated UUID, absent only when explicitly creating an offer.
+  optional string id = 1;
+  // Actual enclosure incarnation supplying this offer, not a neighbor or model.
+  omloom.v1.AssetRef enclosure = 2;
+  // User-reviewed region in this enclosure's coordinates. It is the complete
+  // disclosed query granularity; recipients cannot probe smaller hidden regions.
+  PhysicalVolume region = 3;
+  // Existing recipient identity selected by the publisher, max 128 UTF-8 bytes.
+  // The authenticated context must match this identity; possession of an ID
+  // or link alone supplies no authority. No SID identity is created here.
+  string recipient = 4;
+  // Publisher-supplied label, max 160 UTF-8 bytes, disclosed to this recipient.
+  string name = 5;
+  // Exact offer revision required for changing its region, recipient or state.
+  uint64 revision = 6;
+  // Explicit current revocation; revocation stops new disclosure, not copies
+  // already obtained. Old restored state never qualifies current availability.
+  bool revoked = 7;
+  // Explicit additional permission to disclose the whole enclosure's mass
+  // admission result. Neither the limit nor individual loads are disclosed.
+  bool mass = 8;
+  // Explicit additional permission to disclose the enclosure power result.
+  // This does not certify independent supplies or electrical safety.
+  bool power = 9;
+  // Explicit additional permission to disclose the enclosure cooling result.
+  // It describes declared capacity, not sensor readings or thermal certification.
+  bool cooling = 10;
+}
+message PhysicalOfferEdit {
+  // Publisher's selected current profile. Current resource/field rights and
+  // exact revisions are rechecked before an atomic change.
+  PhysicalOffer offer = 1;
+}
+message PhysicalOfferRead {
+  // Server-generated offer UUID. It identifies a disclosure profile, not a grant.
+  string id = 1;
+}
+message PhysicalOffers {
+  // Existing selected enclosure for a publisher's own bounded offer list.
+  omloom.v1.AssetRef enclosure = 1;
+  // Last returned offer UUID, absent on the first page.
+  optional string after = 2;
+}
 message PhysicalView {
   // Current application revision under which the projection was produced.
   uint64 revision = 1;
@@ -1936,10 +1987,15 @@ message PhysicalView {
   // Currently permitted direct structural positions, at most 25 per query.
   repeated PhysicalPosition positions = 9;
   // Minimal permitted ordinary inventory labels for this selected response only.
+  // Selected plan materials also include current permitted serial fields;
+  // neither a material snapshot nor denied neighboring inventory is returned.
   repeated Item items = 10;
   // At most 25 named ends belonging to the selected cable; no attached devices
   // or neighboring cable paths are implicitly loaded or disclosed.
   repeated PhysicalCableEnd cable_ends = 11;
+  // Selected permitted region profiles, at most 25. A recipient availability
+  // response returns exactly its selected profile and no occupant projection.
+  repeated PhysicalOffer offers = 12;
 }
 
 message Request {
