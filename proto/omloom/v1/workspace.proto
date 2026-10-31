@@ -1377,6 +1377,134 @@ message Mutation {
   uint64 affected = 3;
 }
 message Empty {}
+enum RequirementComparison {
+  REQUIREMENT_COMPARISON_UNSPECIFIED = 0;
+  REQUIREMENT_COMPARISON_EQUAL = 1;
+  REQUIREMENT_COMPARISON_MINIMUM = 2;
+  REQUIREMENT_COMPARISON_MAXIMUM = 3;
+}
+enum RequirementLayer {
+  REQUIREMENT_LAYER_UNSPECIFIED = 0;
+  REQUIREMENT_LAYER_ACCEPTED = 1;
+  REQUIREMENT_LAYER_OBSERVED = 2;
+}
+enum RequirementGroupKind {
+  REQUIREMENT_GROUP_KIND_UNSPECIFIED = 0;
+  REQUIREMENT_GROUP_KIND_ALL = 1;
+  REQUIREMENT_GROUP_KIND_ANY = 2;
+  REQUIREMENT_GROUP_KIND_AT_LEAST = 3;
+}
+message FieldRequirement {
+  // Caller-selected exact resource whose recorded fact is needed, not a grant.
+  omloom.v1.AssetRef target = 1;
+  // User's desired value and field name; clear and hypotheses are not expectations.
+  // Numeric measurements require equal lower/upper bounds and an explicit unit.
+  omloom.v1.Field expected = 2;
+  // Typed comparison selected by the caller, never executable expression text.
+  RequirementComparison comparison = 3;
+  // Whether to inspect accepted configuration or actual dated source claims.
+  // Accepted configuration never certifies observed availability.
+  RequirementLayer layer = 4;
+}
+message RequirementGroup {
+  // User-selected logical combination. This query does not certify consensus.
+  RequirementGroupKind kind = 1;
+  // Indices into EvaluateRequirements.nodes, at most 64 references per group.
+  repeated uint32 members = 2;
+  // Required only for AT_LEAST; count distinct scoped subjects, not source rows.
+  // Direct field subjects can vote; nested logical groups have unknown voter identity.
+  uint32 minimum = 3;
+}
+message RequirementNode {
+  // One bounded predicate or group. Groups are a flat indexed graph, not recursive wire messages.
+  oneof expression {
+    FieldRequirement field = 1;
+    RequirementGroup group = 2;
+  }
+}
+message EvaluateRequirements {
+  // Resource whose selected requirements are being inspected in the working context.
+  omloom.v1.AssetRef anchor = 1;
+  // Caller-supplied desired conditions, at most 64 nodes and 256 total edges.
+  // Actual evidence, authority and completeness are always loaded by the server.
+  repeated RequirementNode nodes = 2;
+  // Selected method/root index. Unselected alternatives do not affect this result.
+  uint32 root = 3;
+}
+enum RequirementState {
+  REQUIREMENT_STATE_UNSPECIFIED = 0;
+  REQUIREMENT_STATE_SATISFIED = 1;
+  REQUIREMENT_STATE_FAILED = 2;
+  REQUIREMENT_STATE_UNKNOWN = 3;
+}
+enum RequirementReason {
+  REQUIREMENT_REASON_UNSPECIFIED = 0;
+  REQUIREMENT_REASON_MATCH = 1;
+  REQUIREMENT_REASON_MISMATCH = 2;
+  REQUIREMENT_REASON_MISSING = 3;
+  REQUIREMENT_REASON_STALE = 4;
+  REQUIREMENT_REASON_CONFLICT = 5;
+  REQUIREMENT_REASON_RESTRICTED = 6;
+  REQUIREMENT_REASON_UNSUPPORTED = 7;
+  REQUIREMENT_REASON_UNCONFIGURED = 8;
+  REQUIREMENT_REASON_AUTHORITY_UNAVAILABLE = 9;
+  REQUIREMENT_REASON_OWNER_ACTION_REQUIRED = 10;
+  REQUIREMENT_REASON_INCOMPLETE = 11;
+  REQUIREMENT_REASON_SCOPE_MISMATCH = 12;
+  REQUIREMENT_REASON_VANTAGE_MISMATCH = 13;
+  REQUIREMENT_REASON_UNQUALIFIED = 14;
+  REQUIREMENT_REASON_WRONG_EVIDENCE = 15;
+  REQUIREMENT_REASON_CYCLE = 16;
+}
+enum RequirementResolution {
+  REQUIREMENT_RESOLUTION_UNSPECIFIED = 0;
+  REQUIREMENT_RESOLUTION_RECORD_FACT = 1;
+  REQUIREMENT_RESOLUTION_REVIEW_SOURCE = 2;
+  REQUIREMENT_RESOLUTION_OWNER_ACTION = 3;
+}
+message RequirementEvidence {
+  // Permitted source or authority reference, never a credential or release token.
+  string source = 1;
+  // Source/content revision; absent means it was not supplied by that source.
+  optional string revision = 2;
+  // Original observation time in Unix milliseconds, absent for accepted intent.
+  optional uint64 observed_at_ms = 3;
+  // Original expiry in Unix milliseconds, absent for current accepted intent.
+  optional uint64 valid_until_ms = 4;
+  // Original source scan identity when no comparable source revision is supplied.
+  optional string scan_id = 5;
+}
+message RequirementResult {
+  // Original requested node index; no hidden dependency identities are added.
+  uint32 node = 1;
+  // Server-derived semantic key over the condition and scoped subject, independent of current values.
+  string semantic_key = 2;
+  // Predicate evidence result, never an authorization decision or effect receipt.
+  RequirementState state = 3;
+  // Stable reason; protected/missing subjects have the same restricted response.
+  RequirementReason reason = 4;
+  // Disclosed subject only when current object and requested field rights allow it.
+  optional omloom.v1.AssetRef target = 5;
+  // Disclosed field name; absent for groups and restricted requirements.
+  optional string field = 6;
+  // Only currently permitted next steps; reading never submits a request.
+  repeated RequirementResolution resolutions = 7;
+  // At most 32 permitted current source bases, without raw source payloads.
+  repeated RequirementEvidence evidence = 8;
+}
+message RequirementEvaluation {
+  // Current consistent inventory basis. Evaluations are transient and are not saved.
+  uint64 revision = 1;
+  // Observation of time for evaluating the supplied validity windows, Unix milliseconds.
+  uint64 evaluated_at_ms = 2;
+  // Overall selected-condition result, never safe-to-execute or an authority grant.
+  RequirementState state = 3;
+  // Overall reason; a cycle cannot become a partially successful graph.
+  RequirementReason reason = 4;
+  // Only nodes reached from the selected root; no facts for unselected methods.
+  repeated RequirementResult results = 5;
+}
+
 message Request {
   // Explicit working selector for resource details, prepared actions and every
   // inventory mutation/import. Query/export use Query roots/focus instead.
@@ -1446,6 +1574,8 @@ message Request {
     ResolveIdentity resolve_identity = 31;
     // Review current/proposed VM placement without invoking an external effect.
     PrepareVmPlacement prepare_vm_placement = 32;
+    // Evaluate desired conditions against permitted current facts without writes or probes.
+    EvaluateRequirements evaluate_requirements = 33;
   }
 }
 message Reply {
@@ -1493,5 +1623,7 @@ message Reply {
     ResolvedIdentity resolved_identity = 20;
     // Current authorized placement and the independently reviewed destination.
     VmPlacementReview vm_placement_review = 21;
+    // Shared read-only prerequisite explanations, not operation admission.
+    RequirementEvaluation requirement_evaluation = 22;
   }
 }

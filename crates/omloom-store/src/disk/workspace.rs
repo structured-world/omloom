@@ -18,6 +18,7 @@ mod interface_facts;
 mod network;
 pub(super) mod network_facts;
 mod projection;
+mod requirements;
 mod responsibility;
 mod software;
 mod source_layout;
@@ -336,6 +337,12 @@ impl Store {
                 context,
                 value,
                 working.as_ref().ok_or(Error::Invalid)?,
+            ),
+            C::EvaluateRequirements(value) => self.workspace_requirements(
+                context,
+                value,
+                working.as_ref().ok_or(Error::Invalid)?,
+                now,
             ),
             C::Export(export) => self.workspace_export(context, export),
             C::Network(network) => self.workspace_network(

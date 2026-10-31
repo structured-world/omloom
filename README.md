@@ -36,6 +36,8 @@ as current inventory, independently of discovery or execution adapters.
 Devices can retain [partial equipment knowledge](docs/inventory.md#partly-identified-equipment),
 including bounded quantities, model alternatives and supported exclusions,
 then be refined without changing their identity.
+The workspace can [check recorded requirements](docs/inventory.md#recorded-requirements)
+against permitted current facts, preserving missing, stale and conflicting evidence.
 
 ## License
 

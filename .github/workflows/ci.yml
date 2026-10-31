@@ -8,6 +8,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
 jobs:
   contracts:
     name: Contracts, storage and inventory (Rust, Vue, Chromium)
@@ -20,14 +24,21 @@ jobs:
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2
         with:
           args: --offline --include-fragments --no-progress README.md CONTRIBUTING.md SECURITY.md docs/contracts.md docs/storage.md docs/inventory.md
+      - run: corepack enable
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          cache: yarn
+          cache-dependency-path: yarn.lock
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
           components: rustfmt, clippy
           targets: thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          cache-bin: 'false'
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
         with:
           version: "36.2"
@@ -36,10 +47,14 @@ jobs:
         with:
           tool: nextest
           fallback: none
-      - run: corepack enable
       - run: yarn install --immutable
       - run: yarn playwright install --with-deps chromium
       - run: sh scripts/check-contracts.sh
+      - name: Report disk usage
+        if: always()
+        run: |
+          df -h .
+          if [ -d target ]; then du -sh target; fi
   native-observation:
     name: Native observation (${{ matrix.os }})
     strategy:
@@ -55,6 +70,10 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          cache-bin: 'false'
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
         with:
           version: "36.2"
@@ -66,4 +85,4 @@ jobs:
       - run: cargo build --locked -p omloom-observe
       - run: cargo clippy --locked -p omloom-observe --all-targets -- -D warnings
       - run: cargo nextest run --locked -p omloom-observe
-      - run: cargo clean
+      - run: cargo clean -p omloom-observe

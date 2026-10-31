@@ -42,12 +42,90 @@ async function workspaceClient(url) {
   const built = buildSync({ stdin: { contents: 'export * from "./web/src/generated/omloom/v1/workspace"; export {AssetKind, RelationKind, EffectOutcome, OperationState} from "./web/src/generated/omloom/v1/contracts";', resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node' });
   const m = await import('data:text/javascript;base64,' + Buffer.from(built.outputFiles[0].contents).toString('base64'));
   const transport = new GrpcWebFetchTransport({ baseUrl: url, format: 'binary' });
-  async function rpc(command, focus) {
+  async function revision() {
     const q = await transport.unary(m.Workspace.methods[0], m.Request.create({ command: { oneofKind: 'query', query: m.Query.create({ limit: 1 }) } }), transport.mergeOptions());
-    return (await transport.unary(m.Workspace.methods[0], m.Request.create({ command, working: { expected: q.response.result.page.revision, focus } }), transport.mergeOptions())).response.result;
+    return q.response.result.page.revision;
   }
-  return { m, rpc };
+  async function rpc(command, focus) {
+    return (await transport.unary(m.Workspace.methods[0], m.Request.create({ command, working: { expected: await revision(), focus } }), transport.mergeOptions())).response.result;
+  }
+  return { m, rpc, revision };
 }
+
+test('requirements explain current and incomplete equipment on desktop and phone',async({browser})=>{
+  // The real UI queries the disk-backed common evaluator; checks never create a plan or effect.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-requirements-'));const server=await host(dir);
+  try{
+    for(const width of [1440,390]){
+      const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600});
+      try{
+        await page.goto(server.url);
+        const created=await create(page,`Requirements ${width}`);
+        const target={assetId:created.asset_id,incarnation:created.incarnation};
+        const {m,rpc,revision}=await workspaceClient(server.url);
+        const detail=(await rpc({oneofKind:'read',read:m.Read.create({target})})).detail;
+        await rpc({oneofKind:'write',write:m.Write.create({target,kind:m.AssetKind.DEVICE,expected:detail.item.revision,changes:[
+          {name:'drive_bays',value:{oneofKind:'integer',integer:12n}},
+          {name:'width',value:{oneofKind:'equipment',equipment:{basis:'Measured enclosure',assertion:{oneofKind:'quantity',quantity:{lower:440n,upper:440n,unit:'mm',scale:0}}}}},
+          {name:'model',value:{oneofKind:'equipment',equipment:{basis:'Visible shape, exact model unconfirmed',assertion:{oneofKind:'alternatives',alternatives:{candidates:[{value:'Model A',scorePpm:950000}],exhaustive:false,domain:'Rack models'}}}}}
+        ]})});
+        const beforeRequirementRevision=await revision();
+        await page.reload();
+        await page.getByText('Check recorded requirements',{exact:true}).click();
+        await page.getByRole('combobox',{name:'Required fact',exact:true}).selectOption('drive_bays',{timeout:5000});
+        await page.getByRole('combobox',{name:'Required comparison',exact:true}).selectOption(String(m.RequirementComparison.MINIMUM),{timeout:5000});
+        await page.getByRole('textbox',{name:'Required value (count)',exact:true}).fill('12',{timeout:5000});
+        await page.getByRole('button',{name:'Check requirement',exact:true}).click();
+        const result=page.getByRole('region',{name:'Requirement result'});
+        await expect(result.getByRole('heading',{name:'Recorded evidence matches',exact:true})).toBeVisible();
+        await page.getByRole('textbox',{name:'Required value (count)',exact:true}).fill('13',{timeout:5000});
+        await expect(result).toBeHidden();
+        await page.getByRole('button',{name:'Check requirement',exact:true}).click();
+        await expect(result.getByRole('heading',{name:'Requirement not satisfied',exact:true})).toBeVisible();
+        await page.getByRole('combobox',{name:'Evidence layer',exact:true}).selectOption(String(m.RequirementLayer.OBSERVED),{timeout:5000});
+        await page.getByRole('button',{name:'Check requirement',exact:true}).click();
+        await expect(result.getByRole('heading',{name:'Requirement not established',exact:true})).toBeVisible();
+        await page.getByRole('combobox',{name:'Evidence layer',exact:true}).selectOption(String(m.RequirementLayer.ACCEPTED));
+        await page.getByRole('combobox',{name:'Required fact',exact:true}).selectOption('model');
+        await page.getByRole('textbox',{name:'Required value',exact:true}).fill('Model A');
+        await page.getByRole('button',{name:'Check requirement',exact:true}).click();
+        await expect(result.getByRole('heading',{name:'Requirement not established',exact:true})).toBeVisible();
+        await expect(result.getByText('incomplete',{exact:true})).toBeVisible();
+        await page.getByRole('combobox',{name:'Required fact',exact:true}).selectOption('width');
+        await expect(page.getByRole('button',{name:'Check requirement',exact:true})).toBeDisabled();
+        await page.getByRole('combobox',{name:'Required comparison',exact:true}).selectOption(String(m.RequirementComparison.MAXIMUM));
+        await page.getByRole('textbox',{name:'Required value (mm)',exact:true}).fill('450');
+        await page.getByRole('button',{name:'Check requirement',exact:true}).click();
+        await expect(result.getByRole('heading',{name:'Recorded evidence matches',exact:true})).toBeVisible();
+        if(width===390)await page.screenshot({path:'test-results/requirements-phone.png',fullPage:true});
+        expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+        expect(await revision()).toBe(beforeRequirementRevision);
+        expect((await rpc({oneofKind:'read',read:m.Read.create({target})})).detail.item.revision).toBe(detail.item.revision+1n);
+        await page.goto(server.url);
+        await create(page,`Requirement account ${width}`,'PROVIDER_ACCOUNT');
+        await page.getByRole('button',{name:'Edit account metadata',exact:true}).click();
+        const dialog=page.getByRole('dialog');
+        await dialog.getByLabel('Provider namespace',{exact:true}).fill('registrar.example');
+        await dialog.getByLabel('Provider account identity',{exact:true}).fill(`requirement-${width}`);
+        await dialog.getByLabel('Account kind',{exact:true}).selectOption(String(m.ExternalAccountKind.ADMINISTRATION));
+        await dialog.getByLabel('Provider delegation',{exact:true}).selectOption(String(m.AccountDelegation.OWNER_ONLY));
+        await dialog.getByRole('button',{name:'Save account metadata',exact:true}).click();
+        await expect(dialog).toBeHidden();
+        const beforeAccountRevision=await revision();
+        await page.getByText('Check recorded requirements',{exact:true}).click();
+        await page.getByRole('combobox',{name:'Required fact',exact:true}).selectOption('delegation');
+        await page.getByRole('combobox',{name:'Required value',exact:true}).selectOption('ACCOUNT_DELEGATION_SCOPED');
+        await page.getByRole('button',{name:'Check requirement',exact:true}).click();
+        await expect(result.getByRole('heading',{name:'Requirement not satisfied',exact:true})).toBeVisible();
+        await expect(result.getByText('owner action required',{exact:true})).toBeVisible();
+        await expect(page.getByRole('button',{name:'Request owner action',exact:true})).toHaveCount(0);
+        await expect(result.getByText(/It requires a visible managed resource\./)).toBeVisible();
+        expect(await revision()).toBe(beforeAccountRevision);
+        expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+      }finally{await page.close();}
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
 
 test('partial equipment is created and refined on desktop and phone without changing identity', async ({browser})=>{
   // Real disk/API/UI: uncertain models and visible quantities remain current
