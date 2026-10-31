@@ -3651,6 +3651,55 @@ export interface PhysicalDefinition {
      * @generated from protobuf field: optional omloom.workspace.v1.PhysicalMating mating = 12
      */
     mating?: PhysicalMating;
+    /**
+     * Optional operator/source-declared equipment service/connector margins in
+     * its enclosing coordinate frame. Missing is unqualified, not measured zero.
+     * Admission checks declared margins without saving expanded occupancy copies.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.PhysicalClearance clearance = 13
+     */
+    clearance?: PhysicalClearance;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalClearance
+ */
+export interface PhysicalClearance {
+    /**
+     * User/source-required space before the equipment's X face, in micrometres.
+     *
+     * @generated from protobuf field: uint64 before_x_um = 1
+     */
+    beforeXUm: bigint;
+    /**
+     * User/source-required space after the equipment's X face, in micrometres.
+     *
+     * @generated from protobuf field: uint64 after_x_um = 2
+     */
+    afterXUm: bigint;
+    /**
+     * User/source-required space before the equipment's Y face, in micrometres.
+     *
+     * @generated from protobuf field: uint64 before_y_um = 3
+     */
+    beforeYUm: bigint;
+    /**
+     * User/source-required space after the equipment's Y face, in micrometres.
+     *
+     * @generated from protobuf field: uint64 after_y_um = 4
+     */
+    afterYUm: bigint;
+    /**
+     * User/source-required space before the equipment's Z face, in micrometres.
+     *
+     * @generated from protobuf field: uint64 before_z_um = 5
+     */
+    beforeZUm: bigint;
+    /**
+     * User/source-required space after the equipment's Z face, in micrometres.
+     *
+     * @generated from protobuf field: uint64 after_z_um = 6
+     */
+    afterZUm: bigint;
 }
 /**
  * Complete compatibility declaration for a selected connector interface. Matching
@@ -7769,7 +7818,8 @@ class PhysicalDefinition$Type extends MessageType<PhysicalDefinition> {
             { no: 9, name: "cooling_capacity_mw", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 10, name: "mounting", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 11, name: "component_kind", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalComponentKind", PhysicalComponentKind, "PHYSICAL_COMPONENT_KIND_"] },
-            { no: 12, name: "mating", kind: "message", T: () => PhysicalMating }
+            { no: 12, name: "mating", kind: "message", T: () => PhysicalMating },
+            { no: 13, name: "clearance", kind: "message", T: () => PhysicalClearance }
         ]);
     }
 }
@@ -7777,6 +7827,23 @@ class PhysicalDefinition$Type extends MessageType<PhysicalDefinition> {
  * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalDefinition
  */
 export const PhysicalDefinition = new PhysicalDefinition$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalClearance$Type extends MessageType<PhysicalClearance> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalClearance", [
+            { no: 1, name: "before_x_um", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 2, name: "after_x_um", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 3, name: "before_y_um", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 4, name: "after_y_um", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 5, name: "before_z_um", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 6, name: "after_z_um", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalClearance
+ */
+export const PhysicalClearance = new PhysicalClearance$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class PhysicalMating$Type extends MessageType<PhysicalMating> {
     constructor() {

@@ -5,7 +5,7 @@ pub(super) fn pose_key(binding: &str) -> String {
     format!("physical-pose/{binding}")
 }
 pub(super) struct PhysicalUse {
-    pub volumes: Vec<Volume>,
+    pub volumes: Vec<crate::physical::Region>,
     pub items: BTreeSet<AssetRef>,
     pub inspected: usize,
 }
@@ -130,15 +130,14 @@ impl Tx<'_> {
             for row in self.query("UNWIND $keys AS key MATCH (p:OmRow {key:key}) RETURN properties(p) AS p LIMIT 2048",params([("keys",Value::Array(keys))]))? {poses.insert(string(&row,"key")?,row);}
         }
         let mut output = PhysicalUse {
-            volumes: Vec::with_capacity(bindings.len() + pending.len()),
+            volumes: Vec::new(),
             items: BTreeSet::new(),
             inspected,
         };
+        let mut bodies = Vec::with_capacity(bindings.len() + pending.len());
         for (id, item) in bindings {
             let pose = poses.get(&pose_key(&id)).ok_or(Error::Incomplete)?;
-            output
-                .volumes
-                .push(volume(&read_volume(pose)?.ok_or(Error::Corrupt)?)?);
+            bodies.push((item, volume(&read_volume(pose)?.ok_or(Error::Corrupt)?)?));
             output.items.insert(item);
         }
         for reservation in pending {
@@ -154,11 +153,14 @@ impl Tx<'_> {
             if parse_target(placement.enclosure.as_ref())? != enclosure {
                 return Err(Error::Corrupt);
             }
-            output
-                .volumes
-                .push(volume(placement.volume.as_ref().ok_or(Error::Corrupt)?)?);
-            output.items.insert(parse_target(placement.item.as_ref())?);
+            let item = parse_target(placement.item.as_ref())?;
+            bodies.push((
+                item,
+                volume(placement.volume.as_ref().ok_or(Error::Corrupt)?)?,
+            ));
+            output.items.insert(item);
         }
+        output.volumes = self.current_regions(&bodies, &output.items)?;
         Ok(output)
     }
     pub(super) fn store_physical_pose(

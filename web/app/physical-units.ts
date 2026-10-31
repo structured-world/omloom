@@ -6,15 +6,17 @@ export function millimetres(um: bigint): string {
   const fraction = (magnitude % 1000n).toString().padStart(3, '0').replace(/0+$/, '');
   return sign+(fraction ? `${integer}.${fraction}` : integer.toString());
 }
-export function micrometres(mm: string): bigint {
+function measurement(mm: string,positive:boolean): bigint {
   if (!/^(0|[1-9][0-9]{0,12})(\.[0-9]{1,3})?$/.test(mm)) {
-    throw Error('Enter a positive measurement in millimetres with at most three decimal places.');
+    throw Error(positive?'Enter a positive measurement in millimetres with at most three decimal places.':'Enter a nonnegative measurement in millimetres with at most three decimal places.');
   }
   const [integer, fraction] = mm.split('.');
   const value = BigInt(integer!) * 1000n + BigInt((fraction === undefined ? '' : fraction).padEnd(3, '0'));
-  if (value <= 0n) throw Error('A measurement must be greater than zero. Leave unknown dimensions unset.');
+  if (positive&&value === 0n) throw Error('A measurement must be greater than zero. Leave unknown dimensions unset.');
   return value;
 }
+export function micrometres(mm:string):bigint{return measurement(mm,true);}
+export function nonnegativeMicrometres(mm:string):bigint{return measurement(mm,false);}
 // A one-sided lower bound cannot reserve a safe maximum envelope.
 export function upperMicrometres(quantity:{upper?:bigint;unit:string;scale:number}):bigint|undefined {
   if(quantity.upper===undefined||quantity.unit!=='mm')return undefined;

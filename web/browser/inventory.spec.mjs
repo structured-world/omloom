@@ -192,6 +192,22 @@ test('physical dimensions save and reload on desktop and phone',async({browser})
         await expect(page.getByRole('textbox',{name:'Height (mm)',exact:true})).toHaveValue('1866.9');
         await expect(page.getByRole('textbox',{name:'Depth (mm)',exact:true})).toHaveValue('1000.125');
         await expect(page.getByRole('textbox',{name:'Measurement or specification source',exact:true})).toHaveValue('Measured inner mounting envelope');
+        await create(page,`Equipment requiring connector access ${width}`);
+        await page.getByText('Usable enclosure space and physical constraints',{exact:true}).click();
+        await page.getByRole('textbox',{name:'Measurement or specification source',exact:true}).fill('Measured connector access requirement');
+        await page.getByText('Equipment service and connector clearance',{exact:true}).click();
+        await page.getByRole('checkbox',{name:'Required clearance measurements are known',exact:true}).check();
+        for(const face of ['Before X','After X','Before Y','After Y','Before Z','After Z']){
+          await page.getByRole('textbox',{name:`${face} clearance (mm)`,exact:true}).fill(face==='After Z'?'1.125':'0');
+        }
+        await page.getByRole('button',{name:'Save physical facts',exact:true}).click();
+        await expect(page.getByRole('status').filter({has:page.getByRole('button',{name:'Dismiss notice',exact:true})})).toHaveText('Physical facts saved.×');
+        await page.reload();
+        await page.getByText('Usable enclosure space and physical constraints',{exact:true}).click();
+        await page.getByText('Equipment service and connector clearance',{exact:true}).click();
+        await expect(page.getByRole('checkbox',{name:'Required clearance measurements are known',exact:true})).toBeChecked();
+        await expect(page.getByRole('textbox',{name:'After Z clearance (mm)',exact:true})).toHaveValue('1.125');
+        await expect(page.getByRole('textbox',{name:'Before X clearance (mm)',exact:true})).toHaveValue('0');
       }finally{await page.close();}
     }
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}

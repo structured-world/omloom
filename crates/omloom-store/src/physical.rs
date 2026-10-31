@@ -112,6 +112,20 @@ impl Volume {
         self.x.contains(other.x) && self.y.contains(other.y) && self.z.contains(other.z)
     }
 }
+/// Material and its declared service space are distinct: service spaces may overlap each other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Region {
+    body: Volume,
+    service: Volume,
+}
+impl Region {
+    pub fn new(body: Volume, service: Volume) -> Result<Self, Invalid> {
+        if !service.contains(body) {
+            return Err(Invalid::Reversed);
+        }
+        Ok(Self { body, service })
+    }
+}
 /// A sourced interval, retaining uncertainty instead of averaging it away.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Quantity {
@@ -159,8 +173,8 @@ pub fn capacity(capacity: Option<Quantity>, demand: Option<Quantity>) -> Decisio
 /// The storage owner supplies authoritative occupants, including hidden ones.
 pub fn placement(
     enclosure: Option<Volume>,
-    candidate: Option<Volume>,
-    occupied: &[Volume],
+    candidate: Option<Region>,
+    occupied: &[Region],
 ) -> Decision {
     if occupied.len() > 2048 {
         return Decision::unknown(Reason::Unsupported);
@@ -168,11 +182,11 @@ pub fn placement(
     let (Some(enclosure), Some(candidate)) = (enclosure, candidate) else {
         return Decision::unknown(Reason::Missing);
     };
-    if !enclosure.contains(candidate) {
+    if !enclosure.contains(candidate.service) {
         return Decision::FAIL;
     }
     for volume in occupied {
-        if candidate.overlaps(*volume) {
+        if candidate.body.overlaps(volume.service) || candidate.service.overlaps(volume.body) {
             return Decision::FAIL;
         }
     }

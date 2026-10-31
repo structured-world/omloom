@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { micrometres, millimetres, upperMicrometres } from '../app/physical-units.ts';
+import { micrometres, nonnegativeMicrometres, millimetres, upperMicrometres } from '../app/physical-units.ts';
 
 test('physical entry preserves exact decimal units without floating point rounding', () => {
   // A rendered millimetre value round-trips to the authoritative micrometre integer.
@@ -20,6 +20,14 @@ test('physical offsets retain the sign for submillimetre clearances', () => {
   // Clearance envelopes may start outside the chassis; their offset is never a dimension input.
   assert.equal(millimetres(-125n),'-0.125');
   assert.equal(millimetres(-1125n),'-1.125');
+});
+test('a declared clearance may be zero but never absent, negative or rounded',()=>{
+  // Explicit zero margins differ from missing measurements; ordinary body dimensions remain positive.
+  assert.equal(nonnegativeMicrometres('0'),0n);
+  assert.equal(nonnegativeMicrometres('0.000'),0n);
+  assert.equal(nonnegativeMicrometres('0.001'),1n);
+  for(const input of ['','-1','1.0001','01',' 0','1e3'])assert.throws(()=>nonnegativeMicrometres(input));
+  assert.throws(()=>micrometres('0'));
 });
 test('equipment envelope uses the known upper bound and rounds outward',()=>{
   // A range or submicrometre remainder cannot silently shrink a future reservation.

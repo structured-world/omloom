@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { call, model, AssetKind, type AssetRef } from './api';
-import { millimetres, micrometres } from './physical-units';
+import { millimetres, micrometres, nonnegativeMicrometres } from './physical-units';
 import MatingEditor from './MatingEditor.vue';
 const props = defineProps<{target: AssetRef; kind:number; working: model.WorkingContext}>();
 const emit = defineEmits<{saved: [];equipment:[]}>();
@@ -18,6 +18,13 @@ const known = ref(false);
 const maxMass=ref(''),demand=ref(''),capacity=ref(''),cooling=ref(''),coolingCapacity=ref(''),mounting=ref('');
 const componentKind=ref(model.PhysicalComponentKind.UNSPECIFIED);
 const mating=ref<model.PhysicalMating>();
+const clearanceKnown=ref(false);
+const margins=ref<Record<keyof model.PhysicalClearance,string>>({beforeXUm:'',afterXUm:'',beforeYUm:'',afterYUm:'',beforeZUm:'',afterZUm:''});
+const faces:{key:keyof model.PhysicalClearance;label:string}[]=[
+  {key:'beforeXUm',label:'Before X'},{key:'afterXUm',label:'After X'},
+  {key:'beforeYUm',label:'Before Y'},{key:'afterYUm',label:'After Y'},
+  {key:'beforeZUm',label:'Before Z'},{key:'afterZUm',label:'After Z'},
+];
 const componentKinds=Object.values(model.PhysicalComponentKind).filter((v):v is number=>typeof v==='number');
 async function load() {
   if (opened.value || busy.value) return;
@@ -28,6 +35,8 @@ async function load() {
     revision.value = response.physical.revision;
     current.value = response.physical.definitions[0];
     mating.value=current.value?.mating===undefined?undefined:model.PhysicalMating.clone(current.value.mating);
+    clearanceKnown.value=current.value?.clearance!==undefined;
+    for(const face of faces)margins.value[face.key]=current.value?.clearance===undefined?'':millimetres(current.value.clearance[face.key]);
     basis.value = current.value?.basis ?? '';
     const number=(value:bigint|undefined)=>value===undefined?'':value.toString();
     maxMass.value=number(current.value?.maxMassG);
@@ -60,6 +69,7 @@ async function save() {
     };
     const definition = model.PhysicalDefinition.create({...current.value,target:props.target,basis:basis.value,volume,componentKind:componentKind.value,maxMassG:quantity(maxMass.value),demandMw:quantity(demand.value),capacityMw:quantity(capacity.value),coolingMw:quantity(cooling.value),coolingCapacityMw:quantity(coolingCapacity.value),mounting:mounting.value===''?undefined:mounting.value});
     definition.mating=mating.value;
+    definition.clearance=clearanceKnown.value?model.PhysicalClearance.create(Object.fromEntries(faces.map(face=>[face.key,nonnegativeMicrometres(margins.value[face.key])]))):undefined;
     const response = await call({oneofKind:'physical',physical:model.Physical.create({action:{oneofKind:'define',define:{definition}}})},{...props.working,expected:revision.value});
     if (response.oneofKind !== 'physical') throw Error('Physical facts were not saved.');
     current.value = response.physical.definitions[0];
@@ -94,6 +104,11 @@ async function save() {
       <label>Equipment heat load (mW)<input v-model="cooling" inputmode="numeric" maxlength="19"/></label>
       <label>Enclosure cooling capacity (mW)<input v-model="coolingCapacity" inputmode="numeric" maxlength="19"/></label>
       <label>Mounting specification<input v-model="mounting" maxlength="128"/></label>
+    </details>
+    <details v-if="[AssetKind.DEVICE,AssetKind.PHYSICAL_COMPONENT].includes(kind)"><summary>Equipment service and connector clearance</summary>
+      <p>Declare all six margins in the enclosing coordinate frame, including explicit zeros. These are selected equipment requirements, not proof of an outside aisle or cable route.</p>
+      <label class="check"><input v-model="clearanceKnown" type="checkbox"/>Required clearance measurements are known</label>
+      <template v-if="clearanceKnown"><label v-for="face in faces" :key="face.key">{{face.label}} clearance (mm)<input v-model="margins[face.key]" inputmode="decimal" required maxlength="17"/></label></template>
     </details>
     <button type="submit">Save physical facts</button>
     <MatingEditor v-if="kind===AssetKind.PORT" v-model="mating"/>

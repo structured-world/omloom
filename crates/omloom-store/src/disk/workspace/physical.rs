@@ -4,6 +4,7 @@ use crate::physical::{Span, Volume};
 mod admission;
 mod availability;
 mod cables;
+mod clearance;
 mod completion;
 mod connector;
 mod current;
@@ -189,6 +190,7 @@ fn definition_row(value: &api::PhysicalDefinition) -> Result<Properties> {
         data.insert("mounting".into(), text(mounting));
     }
     connector::store(&mut data, value.mating.as_ref())?;
+    clearance::write(&mut data, value.clearance.as_ref())?;
     Ok(data)
 }
 fn definition(data: &Properties) -> Result<api::PhysicalDefinition> {
@@ -220,6 +222,7 @@ fn definition(data: &Properties) -> Result<api::PhysicalDefinition> {
             .map(|_| string(data, "mounting"))
             .transpose()?,
         mating: connector::read(data)?,
+        clearance: clearance::read(data)?,
     })
 }
 impl Tx<'_> {

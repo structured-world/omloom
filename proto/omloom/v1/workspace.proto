@@ -1549,6 +1549,24 @@ message PhysicalDefinition {
   // Optional operator/source-declared mating contract for this actual connector.
   // It proves only the named mechanical interface, not signal/power/service health.
   optional PhysicalMating mating = 12;
+  // Optional operator/source-declared equipment service/connector margins in
+  // its enclosing coordinate frame. Missing is unqualified, not measured zero.
+  // Admission checks declared margins without saving expanded occupancy copies.
+  optional PhysicalClearance clearance = 13;
+}
+message PhysicalClearance {
+  // User/source-required space before the equipment's X face, in micrometres.
+  uint64 before_x_um = 1;
+  // User/source-required space after the equipment's X face, in micrometres.
+  uint64 after_x_um = 2;
+  // User/source-required space before the equipment's Y face, in micrometres.
+  uint64 before_y_um = 3;
+  // User/source-required space after the equipment's Y face, in micrometres.
+  uint64 after_y_um = 4;
+  // User/source-required space before the equipment's Z face, in micrometres.
+  uint64 before_z_um = 5;
+  // User/source-required space after the equipment's Z face, in micrometres.
+  uint64 after_z_um = 6;
 }
 // Complete compatibility declaration for a selected connector interface. Matching
 // exact contracts with complementary roles qualifies that declared interface only;

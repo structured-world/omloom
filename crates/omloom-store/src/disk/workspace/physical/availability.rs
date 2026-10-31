@@ -199,7 +199,13 @@ impl Tx<'_> {
             let occupied = self.physical_use(enclosure, &api::PhysicalPlan::default(), 2048)?;
             let state = crate::physical::placement(
                 definition.volume.as_ref().map(volume).transpose()?,
-                offer.region.as_ref().map(volume).transpose()?,
+                offer
+                    .region
+                    .as_ref()
+                    .map(volume)
+                    .transpose()?
+                    .map(|v| clearance::region(v, None))
+                    .transpose()?,
                 &occupied.volumes,
             );
             if state.state != State::Satisfied {

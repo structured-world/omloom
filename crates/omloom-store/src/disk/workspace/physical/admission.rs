@@ -93,7 +93,7 @@ impl Tx<'_> {
     ) -> core::result::Result<Claims, Failure> {
         let mut claims = self.check_replacement_capacity(context, plan, working)?;
         self.assess_wiring(context, plan, working, &mut claims)?;
-        let mounting = self.placement_mountings(plan)?;
+        let profiles = self.placement_profiles(plan)?;
         let mut enclosures = BTreeMap::<AssetRef, current::PhysicalUse>::new();
         let mut rows_read = 0;
         for p in placements(plan) {
@@ -122,11 +122,14 @@ impl Tx<'_> {
             let definition = self
                 .physical_definition(enclosure)?
                 .ok_or(Error::Incomplete)?;
-            if mounting.contains_key(&enclosure) || mounting.contains_key(&item) {
-                require_mounting(
-                    mounting.get(&enclosure).map(String::as_str),
-                    mounting.get(&item).map(String::as_str),
-                )?;
+            let mounting = |target: &AssetRef| {
+                profiles
+                    .get(target)
+                    .and_then(|row| row.get("mounting"))
+                    .and_then(Value::as_str)
+            };
+            if mounting(&enclosure).is_some() || mounting(&item).is_some() {
+                require_mounting(mounting(&enclosure), mounting(&item))?;
             }
             let item_volume = self
                 .equipment_envelope(context, item)?
@@ -145,13 +148,19 @@ impl Tx<'_> {
             }
             let envelope = definition.volume.as_ref().map(volume).transpose()?;
             let proposed = volume(requested)?;
+            let margins = profiles
+                .get(&item)
+                .map(clearance::read)
+                .transpose()?
+                .flatten();
+            let region = clearance::region(proposed, margins.as_ref())?;
             let occupied = enclosures.get_mut(&enclosure).ok_or(Error::Corrupt)?;
-            match crate::physical::placement(envelope, Some(proposed), &occupied.volumes).state {
+            match crate::physical::placement(envelope, Some(region), &occupied.volumes).state {
                 crate::requirements::State::Satisfied => {}
                 crate::requirements::State::Failed => return Err(Failure::mismatch()),
                 crate::requirements::State::Unknown => return Err(Error::Incomplete.into()),
             }
-            occupied.volumes.push(proposed);
+            occupied.volumes.push(region);
             occupied.items.insert(item);
         }
         // Constraint disclosure never includes hidden occupants or their individual demands.
@@ -200,7 +209,10 @@ impl Tx<'_> {
         Ok(claims)
     }
 
-    fn placement_mountings(&self, plan: &api::PhysicalPlan) -> Result<BTreeMap<AssetRef, String>> {
+    fn placement_profiles(
+        &self,
+        plan: &api::PhysicalPlan,
+    ) -> Result<BTreeMap<AssetRef, Properties>> {
         if plan.steps.len() > 64 {
             return Err(Error::Limit);
         }
@@ -216,15 +228,10 @@ impl Tx<'_> {
             .iter()
             .map(|target| text(format!("physical/{}", network::identity(*target))))
             .collect();
-        let rows=self.query("UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN {asset:n.asset,incarnation:n.incarnation,mounting:n.mounting} AS p LIMIT 128",params([("keys",Value::Array(keys))]))?;
+        let rows=self.query("UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN {asset:n.asset,incarnation:n.incarnation,mounting:n.mounting,counts:n.counts} AS p LIMIT 128",params([("keys",Value::Array(keys))]))?;
         let mut values = BTreeMap::new();
         for row in rows {
-            match row.get("mounting") {
-                Some(Value::Null) | None => {}
-                Some(value) => {
-                    values.insert(target(&row)?, value.as_str().ok_or(Error::Corrupt)?.into());
-                }
-            }
+            values.insert(target(&row)?, row);
         }
         Ok(values)
     }

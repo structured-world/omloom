@@ -5,6 +5,8 @@ use std::collections::BTreeSet;
 mod availability;
 #[path = "physical/cables.rs"]
 mod cables;
+#[path = "physical/clearance.rs"]
+mod clearance;
 #[path = "physical/materials.rs"]
 mod materials;
 #[path = "physical/mounting.rs"]

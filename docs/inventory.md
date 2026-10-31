@@ -777,6 +777,13 @@ its complementary sides. Matching connector labels alone cannot establish fit;
 different contract revisions remain unqualified. The declaration checks only
 that interface, not signal compatibility, power safety or working service.
 
+Equipment may also declare six service/connector margins in its enclosing
+coordinate frame. A missing declaration is unqualified, while explicit zero is
+a supplied measurement. Admission checks material bodies against neighboring
+declared service spaces and the candidate's service space against other bodies.
+Empty service spaces may overlap each other. An interior envelope does not
+certify an outside maintenance aisle or a cable route.
+
 A plan's selected serialized materials are derived from its steps. Moving and
 placing the same retained component counts it once. The list separates related
 reported work from outstanding reservations and includes a serial only when

@@ -29,6 +29,9 @@ profiles may be edited; removal of the enclosure reclaims them. These are
 current disclosure configuration, independent of ordinary bounded audit detail.
 Availability is derived from authoritative bindings and reservation references;
 reads do not save occupancy snapshots or maintain a second capacity inventory.
+Declared physical clearance retains six current integer margins in the existing
+typed array column. Expanded service regions are derived in bounded batches
+for admission and selected availability, without another geometry inventory.
 Plan material lists and exports likewise derive from current admitted steps and
 permitted inventory fields, with no persisted bill or per-open export copy.
 
