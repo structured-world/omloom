@@ -22,6 +22,25 @@ fn binding_id(row: &Properties) -> Result<String> {
     Ok(id.into())
 }
 impl Tx<'_> {
+    pub(in crate::disk) fn require_no_physical_reservations(&self, target: AssetRef) -> Result<()> {
+        let identity = network::identity(target);
+        for key in [
+            format!("physical-lock/{identity}"),
+            format!("physical-slot/{identity}"),
+        ] {
+            if self.get(&key)?.is_some() {
+                return Err(Error::Conflict);
+            }
+        }
+        let reservations = self.query(
+            "MATCH (n:OmRow {parent:$parent}) RETURN properties(n) AS p LIMIT 1",
+            params([("parent", text(format!("physical-reservations/{identity}")))]),
+        )?;
+        if !reservations.is_empty() {
+            return Err(Error::Conflict);
+        }
+        Ok(())
+    }
     pub(in crate::disk) fn remove_physical_pose(&mut self, binding: &str) -> Result<()> {
         self.delete(&pose_key(binding))
     }

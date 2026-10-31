@@ -126,6 +126,77 @@ fn physical_definition_is_current_bounded_and_durable() -> TestResult {
     Ok(())
 }
 
+// Removing an unlinked resource must reclaim its current physical facts, not leave an unreachable row.
+#[test]
+fn resource_removal_reclaims_its_current_physical_profile() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let item = create(&store, &actor, K::Device, "Unlinked chassis")?;
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(define(item.clone())),
+        }),
+    )?;
+    let before = store.usage()?;
+    call(
+        &store,
+        &actor,
+        Command::Bulk(api::Bulk {
+            targets: vec![item],
+            expected: before.revision,
+            remove: true,
+            ..Default::default()
+        }),
+    )?;
+    assert_eq!(
+        store.usage()?.rows[omloom_store::Class::Inventory as usize],
+        before.rows[omloom_store::Class::Inventory as usize] - 3,
+        "Asset, name and physical profile are one removal lifecycle"
+    );
+    Ok(())
+}
+
+// Pending reservations cannot become unreconcilable through ordinary asset removal.
+#[test]
+fn pending_physical_reservation_protects_both_spare_and_enclosure_removal() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let rack = create(&store, &actor, K::Rack, "Reserved rack")?;
+    let item = create(&store, &actor, K::Device, "Reserved spare")?;
+    equipment_dimensions(&store, &actor, &item)?;
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(define(rack.clone())),
+        }),
+    )?;
+    let plan = draft(&store, &actor, item.clone(), rack.clone())?;
+    reserve(&store, &actor, plan)?;
+    for target in [item, rack] {
+        let before = store.usage()?;
+        assert!(matches!(
+            call(
+                &store,
+                &actor,
+                Command::Bulk(api::Bulk {
+                    targets: vec![target],
+                    expected: before.revision,
+                    remove: true,
+                    ..Default::default()
+                })
+            ),
+            Err(Error::Conflict)
+        ));
+        assert_eq!(store.usage()?, before);
+    }
+    Ok(())
+}
+
 // A physical-field denial protects both predicate inputs and mutation, independently of names.
 #[test]
 fn physical_field_denial_precedes_decoding_and_writes() -> TestResult {
@@ -213,7 +284,7 @@ fn equipment_internal_space_does_not_shrink_its_required_external_envelope() -> 
             length_um: 1,
         }),
     };
-    interior.volume = Some(small.clone());
+    interior.volume = Some(small);
     physical(
         &store,
         &actor,
@@ -987,7 +1058,6 @@ fn two_known_parts_swap_positions_without_changing_their_identities() -> TestRes
             replacement: Some(item.clone()),
             previous_binding: Some(old.relation_id),
             previous_revision: Some(old.revision),
-            ..Default::default()
         });
     }
     let plan = replacement_plan(&store, &actor, changes)?;

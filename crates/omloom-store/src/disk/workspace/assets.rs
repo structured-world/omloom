@@ -1796,6 +1796,7 @@ impl Tx<'_> {
         // Existing operation/retirement code owns uncertain effects and identity fences.
         self.require_no_account_references(target)?;
         self.require_no_pending_operations(target)?;
+        self.require_no_physical_reservations(target)?;
         let linked = self.query("MATCH (n:OmRow) WHERE n.parent='relations' AND (n.asset=$asset OR n.to_asset=$asset) RETURN properties(n) AS p LIMIT 1",params([("asset", text(target.asset.to_string()))]))?;
         if !linked.is_empty() {
             return Err(Error::Conflict);
@@ -1833,6 +1834,7 @@ impl Tx<'_> {
             self.delete(&group_key)?;
         }
         self.retire_current_facts(target)?;
+        self.delete(&format!("physical/{scope}"))?;
         let mappings = self.query("MATCH (n:OmRow {asset:$asset}) WHERE n.parent='csv-mappings' AND n.incarnation=$incarnation AND n.class=$class RETURN properties(n) AS p LIMIT 2049", params([("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string())), ("class", Value::Int(Class::Inventory as i64))]))?;
         if mappings.len() > MAX_CHILDREN {
             return Err(Error::Limit);
