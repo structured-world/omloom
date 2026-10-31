@@ -107,6 +107,12 @@ test('physical plan reserves then records installation on desktop and phone',asy
         await planner.getByRole('option',{name:`Use equipment: Planned equipment ${width}`,exact:true}).click();
         await expect(planner.getByRole('button',{name:'Add planned placement',exact:true})).toBeEnabled();
         await planner.getByRole('button',{name:'Add planned placement',exact:true}).click();
+        const beforePreview=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'list',list:{limit:25}}})});
+        await planner.getByRole('button',{name:'Check physical requirements',exact:true}).click();
+        await expect(planner.getByRole('status')).toHaveText('Declared physical constraints satisfied. Nothing was saved or reserved.');
+        const afterPreview=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'list',list:{limit:25}}})});
+        expect(afterPreview.physical.plans).toEqual(beforePreview.physical.plans);
+        expect(afterPreview.physical.revision).toBe(beforePreview.physical.revision);
         await planner.getByRole('button',{name:'Save installation plan',exact:true}).click();
         await expect(planner.getByRole('status')).toHaveText('Plan saved. Nothing is reserved or installed.');
         expect((await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'read',read:{enclosure:reference(rack),occupants:true}}})})).physical.occupancy).toEqual([]);

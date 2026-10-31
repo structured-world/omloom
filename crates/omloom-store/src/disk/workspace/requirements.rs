@@ -123,7 +123,7 @@ fn compare(
     };
     Ok(k::compare(claim(actual), predicate))
 }
-fn wire_decision(decision: core::Decision) -> (i32, i32) {
+pub(super) fn wire_decision(decision: core::Decision) -> (i32, i32) {
     use crate::requirements::{Reason as C, State};
     use api::{RequirementReason as R, RequirementState as S};
     let state = match decision.state {

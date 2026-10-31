@@ -849,6 +849,227 @@ fn installation_does_not_rewrite_an_unchanged_position_descriptor() -> TestResul
     Ok(())
 }
 
+// Preview must inspect the same constraints as admission without saving a draft or taking locks.
+#[test]
+fn physical_preview_checks_fit_and_unknowns_without_writes() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let rack = create(&store, &actor, K::Rack, "Preview rack")?;
+    let item = create(&store, &actor, K::Device, "Preview equipment")?;
+    equipment_dimensions(&store, &actor, &item)?;
+    let mut plan = draft(&store, &actor, item, rack.clone())?;
+    plan.id = None;
+    plan.revision = 0;
+    let before = store.usage()?;
+    let unknown = physical(
+        &store,
+        &actor,
+        api::physical::Action::Preview(api::PhysicalPreview {
+            plan: Some(plan.clone()),
+        }),
+    )?;
+    assert_eq!(unknown.state, api::RequirementState::Unknown as i32);
+    assert_eq!(store.usage()?, before);
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(define(rack)),
+        }),
+    )?;
+    let before = store.usage()?;
+    let mut reader = actor.clone();
+    for grant in &mut reader.grants {
+        grant.write = Fields::Selected(Vec::new());
+    }
+    let fits = physical(
+        &store,
+        &reader,
+        api::physical::Action::Preview(api::PhysicalPreview {
+            plan: Some(plan.clone()),
+        }),
+    )?;
+    assert_eq!(fits.state, api::RequirementState::Satisfied as i32);
+    assert_eq!(fits.reason, api::RequirementReason::Match as i32);
+    assert_eq!(store.usage()?, before);
+    for grant in &mut reader.grants {
+        grant.read = Fields::Selected(vec![
+            "name".into(),
+            "physical".into(),
+            "physical_availability".into(),
+            "relations".into(),
+        ]);
+    }
+    let restricted = physical(
+        &store,
+        &reader,
+        api::physical::Action::Preview(api::PhysicalPreview {
+            plan: Some(plan.clone()),
+        }),
+    )?;
+    assert_eq!(
+        restricted.state,
+        api::RequirementState::Unknown as i32,
+        "Fit cannot be used to infer denied equipment dimensions"
+    );
+    assert_eq!(restricted.reason, api::RequirementReason::Restricted as i32);
+    assert_eq!(store.usage()?, before);
+    if let Some(api::physical_step::Action::Placement(p)) = plan.steps[0].action.as_mut() {
+        p.volume
+            .as_mut()
+            .ok_or(Error::Corrupt)?
+            .y
+            .as_mut()
+            .ok_or(Error::Corrupt)?
+            .start_um = 2_000_000;
+    }
+    let outside = physical(
+        &store,
+        &actor,
+        api::physical::Action::Preview(api::PhysicalPreview { plan: Some(plan) }),
+    )?;
+    assert_eq!(outside.state, api::RequirementState::Failed as i32);
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// A stale predecessor is missing current proof, not evidence that hardware cannot fit.
+#[test]
+fn physical_preview_distinguishes_stale_binding_from_incompatibility() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let owner = create(&store, &actor, K::Device, "Chassis")?;
+    let position = position_fixture(
+        &store,
+        &actor,
+        owner,
+        "slot/1",
+        api::PhysicalComponentKind::Disk,
+    )?;
+    let item = create(&store, &actor, K::PhysicalComponent, "Disk")?;
+    install_component(&store, &actor, position.clone(), item.clone())?;
+    let previous = binding(&store, &item)?;
+    let plan = replacement_plan(
+        &store,
+        &actor,
+        vec![api::PhysicalReplacement {
+            position: Some(position),
+            previous: Some(item),
+            previous_binding: Some(previous.relation_id),
+            previous_revision: Some(previous.revision + 1),
+            ..Default::default()
+        }],
+    )?;
+    let before = store.usage()?;
+    let view = physical(
+        &store,
+        &actor,
+        api::physical::Action::Preview(api::PhysicalPreview { plan: Some(plan) }),
+    )?;
+    assert_eq!(view.state, api::RequirementState::Unknown as i32);
+    assert_eq!(view.reason, api::RequirementReason::Stale as i32);
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// A rack is not one slot: a replacement must include its reviewed region and share one binding.
+#[test]
+fn whole_chassis_replacement_requires_explicit_rack_placement() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let rack = create(&store, &actor, K::Rack, "Rack")?;
+    let old = create(&store, &actor, K::Device, "Old switch")?;
+    let new = create(&store, &actor, K::Device, "New switch")?;
+    for target in [&rack, &old, &new] {
+        let mut definition = define(target.clone());
+        definition.mounting = Some("Qualified rack attachment".into());
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Define(api::PhysicalDefinitionEdit {
+                definition: Some(definition),
+            }),
+        )?;
+    }
+    equipment_dimensions(&store, &actor, &old)?;
+    equipment_dimensions(&store, &actor, &new)?;
+    let initial = draft(&store, &actor, old.clone(), rack.clone())?;
+    report_steps(&store, &actor, &initial, vec![0])?;
+    let previous = binding(&store, &old)?;
+    let mut plan = replacement_plan(
+        &store,
+        &actor,
+        vec![api::PhysicalReplacement {
+            position: Some(rack.clone()),
+            previous: Some(old.clone()),
+            replacement: Some(new.clone()),
+            previous_binding: Some(previous.relation_id),
+            previous_revision: Some(previous.revision),
+            ..Default::default()
+        }],
+    )?;
+    let before = store.usage()?;
+    let preview = physical(
+        &store,
+        &actor,
+        api::physical::Action::Preview(api::PhysicalPreview {
+            plan: Some(plan.clone()),
+        }),
+    )?;
+    assert_eq!(preview.state, api::RequirementState::Unknown as i32);
+    assert!(matches!(
+        reserve(&store, &actor, plan.clone()),
+        Err(Error::Incomplete)
+    ));
+    assert_eq!(store.usage()?, before);
+    plan.steps.push(api::PhysicalStep {
+        action: Some(api::physical_step::Action::Placement(
+            api::PhysicalPlacement {
+                item: Some(new.clone()),
+                enclosure: Some(rack.clone()),
+                volume: Some(volume()),
+            },
+        )),
+        ..Default::default()
+    });
+    let saved = physical(
+        &store,
+        &actor,
+        api::physical::Action::Save(api::PhysicalSave { plan: Some(plan) }),
+    )?
+    .plan
+    .ok_or(Error::Corrupt)?;
+    let admitted = reserve(&store, &actor, saved)?.plan.ok_or(Error::Corrupt)?;
+    let completed = report_steps(&store, &actor, &admitted, vec![0, 1])?;
+    assert_eq!(completed.state, api::PhysicalPlanState::Completed as i32);
+    let view = physical(
+        &store,
+        &actor,
+        api::physical::Action::Read(api::PhysicalRead {
+            enclosure: Some(rack),
+            occupants: true,
+        }),
+    )?;
+    assert_eq!(view.occupancy.len(), 1);
+    assert_eq!(
+        view.occupancy[0]
+            .placement
+            .as_ref()
+            .and_then(|p| p.item.as_ref()),
+        Some(&new)
+    );
+    assert!(
+        store
+            .relations(AssetRef::try_from(&old).map_err(|_| Error::Invalid)?, 32)?
+            .iter()
+            .all(|r| r.kind != wire::RelationKind::InstalledIn as i32)
+    );
+    Ok(())
+}
+
 // A draft cannot reserve an attachment the canonical inventory relation rules would reject later.
 #[test]
 fn physical_draft_reuses_inventory_endpoint_compatibility() -> TestResult {

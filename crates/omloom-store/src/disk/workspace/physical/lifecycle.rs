@@ -142,85 +142,10 @@ impl Tx<'_> {
         if plan.state != api::PhysicalPlanState::Draft as i32 {
             return Err(Error::Conflict);
         }
-        self.reserve_replacement_steps(context, &plan, working, &key.id)?;
-        let mut enclosures = BTreeMap::<String, current::PhysicalUse>::new();
-        let mut rows_read = 0;
-        for p in placements(&plan) {
-            let item = parse_target(p.item.as_ref())?;
-            let enclosure = parse_target(p.enclosure.as_ref())?;
-            let row = self.visible_asset(context, enclosure)?;
-            if !context.field(
-                enclosure,
-                number(&row, "kind")? as i32,
-                "physical_availability",
-                false,
-            ) {
-                return Err(Error::Denied);
-            }
-            self.lock_physical_part(item, &key.id)?;
-            if !self.installed_bindings(item)?.is_empty()
-                && !replacement_steps(&plan).any(|r| r.previous.as_ref() == p.item.as_ref())
-            {
-                return Err(Error::Conflict);
-            }
-            let enclosure_key = network::identity(enclosure);
-            if !enclosures.contains_key(&enclosure_key) {
-                let occupied = self.physical_use(enclosure, &plan, 2048 - rows_read)?;
-                rows_read += occupied.inspected;
-                enclosures.insert(enclosure_key.clone(), occupied);
-            }
-            let definition = self
-                .physical_definition(enclosure)?
-                .ok_or(Error::Incomplete)?;
-            let item_volume = self.equipment_envelope(item)?.ok_or(Error::Incomplete)?;
-            let requested = p.volume.as_ref().ok_or(Error::Invalid)?;
-            for (actual, proposed) in [
-                (&item_volume.x, &requested.x),
-                (&item_volume.y, &requested.y),
-                (&item_volume.z, &requested.z),
-            ] {
-                if actual.as_ref().ok_or(Error::Incomplete)?.length_um
-                    > proposed.as_ref().ok_or(Error::Invalid)?.length_um
-                {
-                    return Err(Error::Conflict);
-                }
-            }
-            let envelope = definition.volume.as_ref().map(volume).transpose()?;
-            let proposed = volume(p.volume.as_ref().ok_or(Error::Invalid)?)?;
-            let occupied = enclosures.get_mut(&enclosure_key).ok_or(Error::Corrupt)?;
-            if crate::physical::placement(envelope, Some(proposed), &occupied.volumes)
-                != crate::requirements::Decision::PASS
-            {
-                return Err(Error::Conflict);
-            }
-            occupied.volumes.push(proposed);
-            occupied.items.insert(item);
-        }
-        // Availability permits only the result, never hidden occupants or their demands.
-        for enclosure_key in enclosures.keys() {
-            let enclosure = reference(enclosure_key)?;
-            let definition = self
-                .physical_definition(enclosure)?
-                .ok_or(Error::Incomplete)?;
-            let limits = [
-                definition.max_mass_g,
-                definition.capacity_mw,
-                definition.cooling_capacity_mw,
-            ];
-            if limits.iter().all(Option::is_none) {
-                continue;
-            }
-            let demands =
-                self.physical_loads(&enclosures.get(enclosure_key).ok_or(Error::Corrupt)?.items)?;
-            for (limit, demand) in limits.into_iter().zip(demands) {
-                if let Some(limit) = limit {
-                    let demand = demand.ok_or(Error::Incomplete)?;
-                    if demand > limit {
-                        return Err(Error::Conflict);
-                    }
-                }
-            }
-        }
+        let claims = self
+            .assess_physical(context, &plan, working)
+            .map_err(|failure| failure.error)?;
+        self.acquire_physical_claims(claims, &key.id)?;
         for (index, p) in placement_steps(&plan) {
             let enclosure = parse_target(p.enclosure.as_ref())?;
             self.put(

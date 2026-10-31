@@ -27,7 +27,18 @@ fn upper(row: Option<&Properties>, scale: u32) -> Result<Option<u64>> {
     Ok(Some(value))
 }
 impl Tx<'_> {
-    pub(super) fn equipment_envelope(&self, item: AssetRef) -> Result<Option<api::PhysicalVolume>> {
+    pub(super) fn equipment_envelope(
+        &self,
+        context: &Context,
+        item: AssetRef,
+    ) -> Result<Option<api::PhysicalVolume>> {
+        let root = self.visible_asset(context, item)?;
+        let kind = i32::try_from(number(&root, "kind")?).map_err(|_| Error::Corrupt)?;
+        for name in ["width", "height", "depth"] {
+            if !context.field(item, kind, name, false) {
+                return Err(Error::Denied);
+            }
+        }
         let prefix = format!("{}/intent/", asset_key(item));
         let keys = ["width", "height", "depth"].map(|name| text(format!("{prefix}{name}")));
         let rows = self.query(
@@ -63,14 +74,24 @@ impl Tx<'_> {
             z: axis(z),
         }))
     }
-    pub(super) fn physical_loads(&self, items: &BTreeSet<AssetRef>) -> Result<[Option<u64>; 3]> {
+    pub(super) fn physical_loads(
+        &self,
+        items: &BTreeSet<AssetRef>,
+        needed: [bool; 3],
+    ) -> Result<[Option<u64>; 3]> {
         if items.len() > 2048 {
             return Err(Error::Limit);
         }
-        let mut keys = Vec::with_capacity(items.len() * 2);
+        let mut keys = Vec::with_capacity(
+            items.len() * (usize::from(needed[0]) + usize::from(needed[1] || needed[2])),
+        );
         for item in items {
-            keys.push(text(format!("physical/{}", network::identity(*item))));
-            keys.push(text(format!("{}/intent/weight", asset_key(*item))));
+            if needed[1] || needed[2] {
+                keys.push(text(format!("physical/{}", network::identity(*item))));
+            }
+            if needed[0] {
+                keys.push(text(format!("{}/intent/weight", asset_key(*item))));
+            }
         }
         let mut rows = BTreeMap::new();
         if !keys.is_empty() {
@@ -78,21 +99,33 @@ impl Tx<'_> {
                 rows.insert(string(&row,"key")?,row);
             }
         }
-        let mut total = [Some(0_u64); 3];
+        let mut total = needed.map(|needed| if needed { Some(0_u64) } else { None });
         for item in items {
             let profile = rows.get(&format!("physical/{}", network::identity(*item)));
-            let weight = upper(rows.get(&format!("{}/intent/weight", asset_key(*item))), 0)?;
+            let weight = if needed[0] {
+                upper(rows.get(&format!("{}/intent/weight", asset_key(*item))), 0)?
+            } else {
+                None
+            };
             let quantity = |key: &str| {
                 profile
                     .filter(|row| row.contains_key(key))
                     .map(|row| number(row, key))
                     .transpose()
             };
-            for (sum, value) in
-                total
-                    .iter_mut()
-                    .zip([weight, quantity("demand_mw")?, quantity("cooling_mw")?])
-            {
+            for (sum, value) in total.iter_mut().zip([
+                weight,
+                if needed[1] {
+                    quantity("demand_mw")?
+                } else {
+                    None
+                },
+                if needed[2] {
+                    quantity("cooling_mw")?
+                } else {
+                    None
+                },
+            ]) {
                 *sum = match (*sum, value) {
                     (Some(a), Some(b)) => Some(a.checked_add(b).ok_or(Error::Limit)?),
                     _ => None,

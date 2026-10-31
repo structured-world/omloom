@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { call, input, key, model, AssetKind as K, type AssetRef } from './api';
 import PlacementSearch from './PlacementSearch.vue';
 import { millimetres,upperMicrometres } from './physical-units';
@@ -9,6 +9,14 @@ const opened=ref(false),busy=ref(false),error=ref(''),notice=ref('');
 const view=ref(model.PhysicalView.create());
 const plans=ref<model.PhysicalPlanSummary[]>([]),next=ref<string>();
 const plan=ref<model.PhysicalPlan>(),name=ref(''),deadline=ref(''),discrepancy=ref('');
+const assessment=ref<{state:number;reason:number;revision:bigint}>();
+watch([plan,name],()=>{assessment.value=undefined;},{deep:true});
+const assessmentText=computed(()=>{
+  if(!assessment.value)return '';
+  if(assessment.value.state===model.RequirementState.SATISFIED)return 'Declared physical constraints satisfied. Nothing was saved or reserved.';
+  if(assessment.value.state===model.RequirementState.FAILED)return 'Declared physical constraints fail. Nothing was saved or reserved.';
+  return `Physical result unknown: ${model.RequirementReason[assessment.value.reason]?.toLowerCase().replaceAll('_',' ')}. Nothing was saved or reserved.`;
+});
 const planItems=ref<model.Item[]>([]);
 const equipment=ref<model.Item>(),equipmentVolume=ref<model.PhysicalVolume>();
 const mode=ref<'placement'|'replacement'>(props.kind===K.RACK?'placement':'replacement');
@@ -129,6 +137,13 @@ async function save() {
     plan.value=reply.plan;notice.value='Plan saved. Nothing is reserved or installed.';await summaries();
   });
 }
+async function preview() {
+  await run(async()=>{
+    if(!plan.value)throw Error('Add at least one physical transition.');
+    const reply=await invoke({oneofKind:'preview',preview:{plan:{...plan.value,name:name.value}}});
+    assessment.value={state:reply.state,reason:reply.reason,revision:reply.revision};
+  });
+}
 function planKey():model.PhysicalPlanKey {
   if(!plan.value?.id)throw Error('Save this plan before changing its lifecycle.');
   return {id:plan.value.id,revision:plan.value.revision};
@@ -169,7 +184,8 @@ const local=computed(()=>placementRows.value.filter(row=>key(row.p.enclosure)===
 <details class="physical-planner" :inert="inactive" @toggle="($event.target as HTMLDetailsElement).open&&open()">
 <summary>Plan installation from enclosing scope</summary>
 <p>Choose equipment from the enclosing selection. A draft changes no actual placement. Reservations and reported installation are separate actions.</p>
-<p v-if="busy||notice" role="status">{{busy?'Updating physical plan…':notice}}</p><p v-if="error" role="alert">{{error}}</p>
+<p v-if="busy||notice||assessment" role="status">{{busy?'Updating physical plan…':notice?notice:assessmentText}}</p><p v-if="error" role="alert">{{error}}</p>
+<p v-if="assessment">Checked at inventory revision {{assessment.revision.toString()}}. Reservation checks the current state again; this is not authority or proof of installation.</p>
 <template v-if="opened">
 <section aria-label="Saved physical plans"><h3>My plans</h3>
 <button type="button" :disabled="busy" @click="plan=undefined;name='';selected=[]">New installation plan</button>
@@ -209,6 +225,7 @@ const local=computed(()=>placementRows.value.filter(row=>key(row.p.enclosure)===
 <p>The position and retained logical intent survive. Cable attachments, physical evidence, credentials and grants are not transferred to the incoming part.</p>
 <button type="button" @click="addReplacement">Add reviewed physical transition</button>
 </template>
+<button type="button" :disabled="!plan?.steps.length" @click="preview">Check physical requirements</button>
 <button type="submit" :disabled="!plan?.steps.length">Save installation plan</button>
 </fieldset></form>
 <template v-if="plan"><h3>{{plan.name||name}} <small>{{state(plan.state)}}</small></h3>

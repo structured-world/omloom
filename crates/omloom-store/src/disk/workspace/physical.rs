@@ -1,6 +1,7 @@
 //! Current physical definitions use scalar indexed inventory rows, not wire blobs.
 use super::*;
 use crate::physical::{Span, Volume};
+mod admission;
 mod completion;
 mod current;
 mod equipment;
@@ -321,6 +322,25 @@ impl Store {
             Action::Preview(preview) => {
                 let plan = preview.plan.ok_or(Error::Invalid)?;
                 tx.validate_physical_draft(context, &plan, working)?;
+                if let Some(id) = &plan.id {
+                    tx.load_physical_plan(
+                        context,
+                        &api::PhysicalPlanKey {
+                            id: id.clone(),
+                            revision: plan.revision,
+                        },
+                        working,
+                        false,
+                    )?;
+                }
+                let decision = match tx.assess_physical(context, &plan, working) {
+                    Ok(_) => crate::requirements::Decision::PASS,
+                    Err(failure) => match failure.decision {
+                        Some(decision) => decision,
+                        None => return Err(failure.error),
+                    },
+                };
+                (view.state, view.reason) = requirements::wire_decision(decision);
                 view.plan = Some(plan);
             }
             Action::Save(save) => {
