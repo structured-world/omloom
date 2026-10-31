@@ -1835,6 +1835,9 @@ impl Tx<'_> {
         }
         self.retire_current_facts(target)?;
         self.delete(&format!("physical/{scope}"))?;
+        if number(row, "kind")? == wire::AssetKind::Cable as u64 {
+            self.remove_cable_ends(target)?;
+        }
         let mappings = self.query("MATCH (n:OmRow {asset:$asset}) WHERE n.parent='csv-mappings' AND n.incarnation=$incarnation AND n.class=$class RETURN properties(n) AS p LIMIT 2049", params([("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string())), ("class", Value::Int(Class::Inventory as i64))]))?;
         if mappings.len() > MAX_CHILDREN {
             return Err(Error::Limit);

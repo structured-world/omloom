@@ -12,6 +12,7 @@ import RequirementsPanel from './RequirementsPanel.vue';
 import PhysicalFacts from './PhysicalFacts.vue';
 import PhysicalPlanner from './PhysicalPlanner.vue';
 import PhysicalPositions from './PhysicalPositions.vue';
+import CableEnds from './CableEnds.vue';
 import { softwareFields } from './software-fields';
 import { equipmentFields } from './equipment-fields';
 import { ref, computed, watch, onMounted, nextTick } from 'vue';
@@ -385,6 +386,7 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <PhysicalPlanner v-if="detail.item.target&&[K.RACK,K.PHYSICAL_POSITION].includes(detail.item.kind)" :key="'plan/'+key(detail.item.target)" :target="detail.item.target" :kind="detail.item.kind" :working="working" :inactive="loading" @changed="load" />
 <PhysicalPositions v-if="detail.item.target&&!loading&&[K.RACK,K.DEVICE,K.PORT,K.PHYSICAL_COMPONENT].includes(detail.item.kind)" :key="'positions/'+key(detail.item.target)" :target="detail.item.target" :working="working" @open="open" @changed="notice='Physical position saved.'; load()" />
 <ResponsibilityPanel v-if="detail.item&&!loading" :key="key(detail.item.target)+'/'+detail.item.revision" :item="detail.item" :working="working" @changed="saved()" @open="open" />
+<CableEnds v-if="detail.item.target&&detail.item.kind===K.CABLE" :key="'ends/'+key(detail.item.target)" :target="detail.item.target" :working="working" :inactive="loading" @changed="notice='Cable-end definition saved.';load()" />
 <AccountPanel v-if="detail.item?.kind===K.PROVIDER_ACCOUNT&&!loading" :key="key(detail.item.target)+'/'+detail.item.revision" :item="detail.item" :working="working" @changed="saved()" @open="open" @share="editor='view'" />
 <p v-if="detail.networkNext || networkCursor" class="hint">Showing one bounded evidence page. Observation counts and filters apply to this page.</p>
 <HostNetwork v-for="evidence in detail.hostNetwork" :key="evidence.sourceId" :evidence="evidence" @open="open" />

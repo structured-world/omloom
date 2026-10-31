@@ -1,6 +1,8 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 use std::collections::BTreeSet;
+#[path = "physical/cables.rs"]
+mod cables;
 
 fn volume() -> api::PhysicalVolume {
     let extent = |length| {

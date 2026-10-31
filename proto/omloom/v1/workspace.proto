@@ -1798,7 +1798,39 @@ message Physical {
     PhysicalPositionEdit position = 10;
     // Retrieve bounded direct positions without loading occupants or descendants.
     PhysicalPositionQuery positions = 11;
+    // Create/refine one of at most 64 named cable ends; no attachment or unplugging.
+    PhysicalCableEndEdit cable_end = 12;
+    // Read only the selected cable's named ends, without tracing its neighbors.
+    PhysicalCableEnds cable_ends = 13;
   }
+}
+message PhysicalCableEnd {
+  // Stable operator/source-qualified token within the exact cable incarnation,
+  // 1-64 ASCII token bytes. Labels or connector types do not establish identity.
+  string key = 1;
+  // Current operator label, 1-128 UTF-8 bytes, independent of structural identity.
+  string name = 2;
+  // Operator-supplied source/measurement reference, 1-512 UTF-8 bytes; no secrets.
+  string basis = 3;
+  // Optional qualified connector designation, 1-128 UTF-8 bytes. This label
+  // alone cannot establish medium, polarity, lane mapping or compatibility.
+  optional string connector = 4;
+  // Server-owned current definition revision, not connectivity evidence.
+  uint64 revision = 5;
+}
+message PhysicalCableEndEdit {
+  // Selected adopted cable incarnation; no device/port identity is inferred.
+  omloom.v1.AssetRef cable = 1;
+  // User's proposed end definition. Its output revision grants no authority.
+  PhysicalCableEnd end = 2;
+  // Last reviewed definition revision; absent means explicit creation.
+  optional uint64 expected = 3;
+}
+message PhysicalCableEnds {
+  // Exact selected cable, checked under the existing working context and rights.
+  omloom.v1.AssetRef cable = 1;
+  // Last returned structural token within this cable, absent for the first page.
+  optional string after = 2;
 }
 message PhysicalView {
   // Current application revision under which the projection was produced.
@@ -1821,6 +1853,9 @@ message PhysicalView {
   repeated PhysicalPosition positions = 9;
   // Minimal permitted ordinary inventory labels for this selected response only.
   repeated Item items = 10;
+  // At most 25 named ends belonging to the selected cable; no attached devices
+  // or neighboring cable paths are implicitly loaded or disclosed.
+  repeated PhysicalCableEnd cable_ends = 11;
 }
 
 message Request {

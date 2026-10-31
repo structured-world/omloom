@@ -2,6 +2,7 @@
 use super::*;
 use crate::physical::{Span, Volume};
 mod admission;
+mod cables;
 mod completion;
 mod current;
 mod equipment;
@@ -257,6 +258,14 @@ impl Store {
             ..Default::default()
         };
         match request.action.ok_or(Error::Invalid)? {
+            Action::CableEnd(value) => view
+                .cable_ends
+                .push(tx.save_cable_end(context, value, working, now)?),
+            Action::CableEnds(value) => {
+                let (ends, next) = tx.cable_ends(context, value, working)?;
+                view.cable_ends = ends;
+                view.next = next;
+            }
             Action::Position(value) => {
                 view.positions
                     .push(tx.save_physical_position(context, value, working, now)?);

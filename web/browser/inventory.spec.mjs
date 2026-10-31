@@ -52,6 +52,38 @@ async function workspaceClient(url) {
   return { m, rpc, revision };
 }
 
+test('named cable ends preserve definitions on desktop and phone',async({browser})=>{
+  // Ends belong to the retained cable, not the optic that may later be replaced.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-cable-ends-'));const server=await host(dir);
+  try{
+    for(const width of [1440,390]){
+      const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600});
+      try{
+        await page.goto(server.url);await create(page,`Retained cable ${width}`,'CABLE');
+        const panel=page.getByRole('region',{name:'Cable ends',exact:true});
+        await panel.getByRole('button',{name:'Inspect named cable ends',exact:true}).click();
+        for(const key of ['A','B']){
+          await panel.getByRole('textbox',{name:'Structural end key',exact:true}).fill(key);
+          await panel.getByRole('textbox',{name:'End label',exact:true}).fill(`End ${key}`);
+          await panel.getByRole('textbox',{name:'End definition source',exact:true}).fill('Labels read from the retained cable');
+          await panel.getByRole('textbox',{name:'Connector designation, if known',exact:true}).fill('LC/UPC duplex');
+          await panel.getByRole('button',{name:'Save end definition',exact:true}).click();
+          await expect(panel.getByRole('button',{name:`Edit end: End ${key}`,exact:true})).toBeEnabled();
+        }
+        await page.reload();await panel.getByRole('button',{name:'Inspect named cable ends',exact:true}).click();
+        await expect(panel.locator('li')).toHaveCount(2);
+        await panel.getByRole('button',{name:'Edit end: End A',exact:true}).click();
+        await expect(panel.getByRole('textbox',{name:'Structural end key',exact:true})).toBeDisabled();
+        await panel.getByRole('textbox',{name:'End label',exact:true}).fill('Rack-facing end');
+        await panel.getByRole('button',{name:'Save end definition',exact:true}).click();
+        await expect(panel.getByRole('button',{name:'Edit end: Rack-facing end',exact:true})).toBeEnabled();
+        await expect(panel.locator('li')).toHaveCount(2);
+        expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+      }finally{await page.close();}
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('physical dimensions save and reload on desktop and phone',async({browser})=>{
   // The real form preserves exact units through the API and disk store, including phone navigation.
   const dir=await mkdtemp(join(tmpdir(),'omloom-physical-'));const server=await host(dir);

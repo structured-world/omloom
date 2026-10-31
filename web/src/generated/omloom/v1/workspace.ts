@@ -4255,8 +4255,101 @@ export interface Physical {
          */
         positions: PhysicalPositionQuery;
     } | {
+        oneofKind: "cableEnd";
+        /**
+         * Create/refine one of at most 64 named cable ends; no attachment or unplugging.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PhysicalCableEndEdit cable_end = 12
+         */
+        cableEnd: PhysicalCableEndEdit;
+    } | {
+        oneofKind: "cableEnds";
+        /**
+         * Read only the selected cable's named ends, without tracing its neighbors.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PhysicalCableEnds cable_ends = 13
+         */
+        cableEnds: PhysicalCableEnds;
+    } | {
         oneofKind: undefined;
     };
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalCableEnd
+ */
+export interface PhysicalCableEnd {
+    /**
+     * Stable operator/source-qualified token within the exact cable incarnation,
+     * 1-64 ASCII token bytes. Labels or connector types do not establish identity.
+     *
+     * @generated from protobuf field: string key = 1
+     */
+    key: string;
+    /**
+     * Current operator label, 1-128 UTF-8 bytes, independent of structural identity.
+     *
+     * @generated from protobuf field: string name = 2
+     */
+    name: string;
+    /**
+     * Operator-supplied source/measurement reference, 1-512 UTF-8 bytes; no secrets.
+     *
+     * @generated from protobuf field: string basis = 3
+     */
+    basis: string;
+    /**
+     * Optional qualified connector designation, 1-128 UTF-8 bytes. This label
+     * alone cannot establish medium, polarity, lane mapping or compatibility.
+     *
+     * @generated from protobuf field: optional string connector = 4
+     */
+    connector?: string;
+    /**
+     * Server-owned current definition revision, not connectivity evidence.
+     *
+     * @generated from protobuf field: uint64 revision = 5
+     */
+    revision: bigint;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalCableEndEdit
+ */
+export interface PhysicalCableEndEdit {
+    /**
+     * Selected adopted cable incarnation; no device/port identity is inferred.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef cable = 1
+     */
+    cable?: AssetRef;
+    /**
+     * User's proposed end definition. Its output revision grants no authority.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalCableEnd end = 2
+     */
+    end?: PhysicalCableEnd;
+    /**
+     * Last reviewed definition revision; absent means explicit creation.
+     *
+     * @generated from protobuf field: optional uint64 expected = 3
+     */
+    expected?: bigint;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalCableEnds
+ */
+export interface PhysicalCableEnds {
+    /**
+     * Exact selected cable, checked under the existing working context and rights.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef cable = 1
+     */
+    cable?: AssetRef;
+    /**
+     * Last returned structural token within this cable, absent for the first page.
+     *
+     * @generated from protobuf field: optional string after = 2
+     */
+    after?: string;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.PhysicalView
@@ -4322,6 +4415,13 @@ export interface PhysicalView {
      * @generated from protobuf field: repeated omloom.workspace.v1.Item items = 10
      */
     items: Item[];
+    /**
+     * At most 25 named ends belonging to the selected cable; no attached devices
+     * or neighboring cable paths are implicitly loaded or disclosed.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.PhysicalCableEnd cable_ends = 11
+     */
+    cableEnds: PhysicalCableEnd[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Request
@@ -7574,7 +7674,9 @@ class Physical$Type extends MessageType<Physical> {
             { no: 8, name: "cancel", kind: "message", oneof: "action", T: () => PhysicalPlanKey },
             { no: 9, name: "list", kind: "message", oneof: "action", T: () => PhysicalPlanList },
             { no: 10, name: "position", kind: "message", oneof: "action", T: () => PhysicalPositionEdit },
-            { no: 11, name: "positions", kind: "message", oneof: "action", T: () => PhysicalPositionQuery }
+            { no: 11, name: "positions", kind: "message", oneof: "action", T: () => PhysicalPositionQuery },
+            { no: 12, name: "cable_end", kind: "message", oneof: "action", T: () => PhysicalCableEndEdit },
+            { no: 13, name: "cable_ends", kind: "message", oneof: "action", T: () => PhysicalCableEnds }
         ]);
     }
 }
@@ -7582,6 +7684,49 @@ class Physical$Type extends MessageType<Physical> {
  * @generated MessageType for protobuf message omloom.workspace.v1.Physical
  */
 export const Physical = new Physical$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalCableEnd$Type extends MessageType<PhysicalCableEnd> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalCableEnd", [
+            { no: 1, name: "key", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "name", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "basis", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "connector", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 5, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalCableEnd
+ */
+export const PhysicalCableEnd = new PhysicalCableEnd$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalCableEndEdit$Type extends MessageType<PhysicalCableEndEdit> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalCableEndEdit", [
+            { no: 1, name: "cable", kind: "message", T: () => AssetRef },
+            { no: 2, name: "end", kind: "message", T: () => PhysicalCableEnd },
+            { no: 3, name: "expected", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalCableEndEdit
+ */
+export const PhysicalCableEndEdit = new PhysicalCableEndEdit$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalCableEnds$Type extends MessageType<PhysicalCableEnds> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalCableEnds", [
+            { no: 1, name: "cable", kind: "message", T: () => AssetRef },
+            { no: 2, name: "after", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalCableEnds
+ */
+export const PhysicalCableEnds = new PhysicalCableEnds$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class PhysicalView$Type extends MessageType<PhysicalView> {
     constructor() {
@@ -7595,7 +7740,8 @@ class PhysicalView$Type extends MessageType<PhysicalView> {
             { no: 7, name: "plans", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalPlanSummary },
             { no: 8, name: "next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 9, name: "positions", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalPosition },
-            { no: 10, name: "items", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Item }
+            { no: 10, name: "items", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Item },
+            { no: 11, name: "cable_ends", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalCableEnd }
         ]);
     }
 }
