@@ -466,3 +466,18 @@ fn requirements_observations_cannot_manufacture_accepted_intent() {
     source.requirement.kind = EvidenceKind::Observation;
     assert_eq!(fact(wanted, source, 100).reason, Reason::WrongEvidence);
 }
+
+#[test]
+fn requirements_incomplete_unselected_groups_do_not_block_selected_facts() {
+    // An unfinished alternative is not a prerequisite of the chosen method.
+    for other in [
+        group(Group::All, &[], membership(true)),
+        group(Group::AtLeast(2), &[0], membership(true)),
+    ] {
+        let nodes = [leaf("chosen", Decision::PASS), other];
+        let mut results = [Decision::unknown(Reason::NotSelected); MAX_NODES];
+        assert_eq!(evaluate(&nodes, 0, &mut results), Ok(Decision::PASS));
+        assert_eq!(results[1].reason, Reason::NotSelected);
+        assert_eq!(evaluate(&nodes, 1, &mut results), Err(Error::Invalid));
+    }
+}

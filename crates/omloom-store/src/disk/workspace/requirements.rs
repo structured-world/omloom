@@ -164,6 +164,18 @@ fn subject(target: &wire::AssetRef) -> core::Subject<'_> {
 fn reference_identity(value: &wire::EquipmentReference) -> (&str, &str, &str) {
     (&value.issuer, &value.key, &value.basis)
 }
+fn group_mode(group: &api::RequirementGroup) -> Result<core::Group> {
+    match api::RequirementGroupKind::try_from(group.kind).map_err(|_| Error::Invalid)? {
+        api::RequirementGroupKind::All if group.minimum == 0 => Ok(core::Group::All),
+        api::RequirementGroupKind::Any if group.minimum == 0 => Ok(core::Group::Any),
+        api::RequirementGroupKind::AtLeast
+            if group.minimum != 0 && (group.minimum as usize) <= group.members.len() =>
+        {
+            Ok(core::Group::AtLeast(group.minimum as usize))
+        }
+        _ => Err(Error::Invalid),
+    }
+}
 fn semantic_keys(nodes: &[api::RequirementNode]) -> Result<Vec<String>> {
     let mut digests = [None; core::MAX_NODES];
     for (index, node) in nodes.iter().enumerate() {
@@ -350,17 +362,7 @@ impl Store {
                     subject(condition.target.as_ref().ok_or(Error::Invalid)?),
                     core::Expression::Fact(decisions[index]),
                 ),
-                api::requirement_node::Expression::Group(group) => {
-                    let mode = match api::RequirementGroupKind::try_from(group.kind)
-                        .map_err(|_| Error::Invalid)?
-                    {
-                        api::RequirementGroupKind::All if group.minimum == 0 => core::Group::All,
-                        api::RequirementGroupKind::Any if group.minimum == 0 => core::Group::Any,
-                        api::RequirementGroupKind::AtLeast => {
-                            core::Group::AtLeast(group.minimum as usize)
-                        }
-                        _ => return Err(Error::Invalid),
-                    };
+                api::requirement_node::Expression::Group(_) => {
                     (
                         core::Subject {
                             namespace: "requirement",
@@ -369,7 +371,8 @@ impl Store {
                             network: core::NetworkScope::NotApplicable,
                         },
                         core::Expression::Group {
-                            mode,
+                            // The first pass discovers reachability without choosing a method.
+                            mode: core::Group::All,
                             members: &members[index],
                             membership: core::Membership {
                                 complete: true,
@@ -404,6 +407,18 @@ impl Store {
         let shape =
             core::evaluate(&nodes, request.root as usize, &mut results).map_err(map_error)?;
         if shape.reason != core::Reason::Cycle {
+            // Validate all selected group semantics before loading any field evidence.
+            for (index, node) in nodes.iter_mut().enumerate() {
+                if results[index].reason == core::Reason::NotSelected {
+                    continue;
+                }
+                if let Some(api::requirement_node::Expression::Group(group)) =
+                    &request.nodes[index].expression
+                    && let core::Expression::Group { mode, .. } = &mut node.expression
+                {
+                    *mode = group_mode(group)?;
+                }
+            }
             for (index, node) in nodes.iter_mut().enumerate() {
                 if results[index].reason == core::Reason::NotSelected {
                     continue;

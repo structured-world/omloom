@@ -296,22 +296,12 @@ pub fn evaluate(
     }
     let mut edges = 0;
     for node in nodes {
-        if let Expression::Group {
-            mode,
-            members,
-            membership,
-        } = node.expression
-        {
+        if let Expression::Group { members, .. } = node.expression {
             if members.len() > MAX_EDGES - edges {
                 return Err(Error::Limit);
             }
             edges += members.len();
-            if members.is_empty() || members.iter().any(|&child| child >= nodes.len()) {
-                return Err(Error::Invalid);
-            }
-            if let Group::AtLeast(k) = mode
-                && (k == 0 || (membership.complete && k > members.len()))
-            {
+            if members.iter().any(|&child| child >= nodes.len()) {
                 return Err(Error::Invalid);
             }
         }
@@ -325,6 +315,24 @@ pub fn evaluate(
     while depth != 0 {
         let frame = &mut stack[depth - 1];
         let node = nodes[frame.node];
+        // Global representation bounds remain checked above; unfinished alternatives
+        // need semantic validation only when they become selected prerequisites.
+        if frame.child == 0
+            && let Expression::Group {
+                mode,
+                members,
+                membership,
+            } = node.expression
+        {
+            if members.is_empty() {
+                return Err(Error::Invalid);
+            }
+            if let Group::AtLeast(k) = mode
+                && (k == 0 || (membership.complete && k > members.len()))
+            {
+                return Err(Error::Invalid);
+            }
+        }
         if let Expression::Group { members, .. } = node.expression
             && frame.child < members.len()
         {

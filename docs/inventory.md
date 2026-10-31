@@ -115,7 +115,8 @@ count distinct scoped field subjects. A nested logical group has unknown voter
 identity and cannot manufacture another vote. This inventory query does not certify
 a provider's consensus membership. Limits are 64 nodes, 256 edges and 32 levels, with at most
 32 current source claims for a field. Oversized work fails explicitly instead
-of returning a partially successful check. Unselected branches do not read facts.
+of returning a partially successful check. Unselected branches do not read facts
+or require completed group semantics. Global wire, reference and work bounds still apply.
 
 Results include stable condition keys, current inventory revision, permitted
 source revisions/scans and validity windows. Protected and unavailable subjects

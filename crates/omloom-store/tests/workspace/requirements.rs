@@ -476,3 +476,44 @@ fn requirements_wrapping_one_resource_cannot_manufacture_two_voters() -> TestRes
     assert_eq!(result.reason, api::RequirementReason::Incomplete as i32);
     Ok(())
 }
+
+#[test]
+fn requirements_api_defers_unselected_group_semantics() -> TestResult {
+    // Both the wire adapter and common core must ignore unfinished alternative methods.
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let target = create(&store, &actor, K::Device, "Selected method")?;
+    let selected = condition(
+        &target,
+        "name",
+        wire::field::Value::Text("Selected method".into()),
+    );
+    let before = store.usage()?;
+    for (kind, members, minimum) in [
+        (api::RequirementGroupKind::All, vec![], 0),
+        (api::RequirementGroupKind::AtLeast, vec![0], 2),
+        (api::RequirementGroupKind::Any, vec![0], 1),
+        (api::RequirementGroupKind::Unspecified, vec![0], 0),
+    ] {
+        let other = api::RequirementNode {
+            expression: Some(api::requirement_node::Expression::Group(
+                api::RequirementGroup {
+                    kind: kind as i32,
+                    members,
+                    minimum,
+                },
+            )),
+        };
+        let nodes = vec![selected.clone(), other];
+        let result = evaluate(&store, &actor, &target, nodes.clone(), 0)?;
+        assert_eq!(result.state, api::RequirementState::Satisfied as i32);
+        assert_eq!(result.results.len(), 1);
+        assert!(matches!(
+            evaluate(&store, &actor, &target, nodes, 1),
+            Err(Error::Invalid)
+        ));
+    }
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
