@@ -243,10 +243,10 @@ impl Tx<'_> {
                     return Err(Error::Invalid);
                 }
             }
-            if let Some(item) = &replacement.replacement {
-                if !parts.insert(parse_target(Some(item))?) {
-                    return Err(Error::Invalid);
-                }
+            if let Some(item) = &replacement.replacement
+                && !parts.insert(parse_target(Some(item))?)
+            {
+                return Err(Error::Invalid);
             }
             let position_kind =
                 wire::AssetKind::try_from(number(&self.asset(position)?, "kind")? as i32)

@@ -12,19 +12,19 @@ impl Tx<'_> {
         &mut self,
         context: &Context,
         placement: &api::PhysicalPlacement,
-        plan: &str,
+        report: &api::PhysicalCompletion,
         index: usize,
         working: &api::WorkingContext,
         now: u64,
-        actual: bool,
     ) -> Result<()> {
+        let plan = report.plan.as_ref().ok_or(Error::Invalid)?.id.as_str();
         let item = parse_target(placement.item.as_ref())?;
         let enclosure = parse_target(placement.enclosure.as_ref())?;
         self.physical_access(context, item, working, true)?;
         self.physical_access(context, enclosure, working, true)?;
         self.require_no_pending_operations(item)?;
         let reservation = self.get(&reservations::reservation_key(plan, index))?;
-        if reservation.is_none() && !actual {
+        if reservation.is_none() && !report.actual_state {
             return Err(Error::Conflict);
         }
         if let Some(row) = &reservation
@@ -72,14 +72,14 @@ impl Tx<'_> {
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<api::PhysicalPlan> {
-        let key = value.plan.ok_or(Error::Invalid)?;
+        let key = value.plan.as_ref().ok_or(Error::Invalid)?;
         if key.revision == 0
             || value.completed_steps.len() + value.not_performed_steps.len() > 64
             || value.discrepancy.as_ref().is_some_and(|s| s.len() > 2048)
         {
             return Err(Error::Invalid);
         }
-        let mut plan = self.load_physical_plan(context, &key, working, true)?;
+        let mut plan = self.load_physical_plan(context, key, working, true)?;
         let state = api::PhysicalPlanState::try_from(plan.state).map_err(|_| Error::Corrupt)?;
         if !matches!(
             state,
@@ -165,11 +165,10 @@ impl Tx<'_> {
                             .record_physical_placement(
                                 context,
                                 p,
-                                &key.id,
+                                &value,
                                 index as usize,
                                 working,
                                 now,
-                                value.actual_state,
                             )?,
                         api::physical_step::Action::Replacement(_) => {}
                     }
