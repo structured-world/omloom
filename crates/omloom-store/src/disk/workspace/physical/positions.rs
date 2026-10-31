@@ -12,6 +12,28 @@ fn position(row:&Properties,owner:AssetRef)->Result<api::PhysicalPosition> {
     Ok(api::PhysicalPosition {target:Some(target_wire(target(row)?)),owner:Some(target_wire(owner)),structural_key:string(row,"basis")?,component_kind:kind,revision:number(row,"revision")?})
 }
 impl Tx<'_> {
+    pub(super) fn physical_binding_projection(&self,context:&Context,view:&mut api::PhysicalView)->Result<()> {
+        let mut kinds=BTreeMap::new();
+        for item in &view.items {kinds.insert(parse_target(item.target.as_ref())?,item.kind);}
+        let mut keys=Vec::with_capacity(view.occupancy.len());let mut indexes=BTreeMap::new();
+        for (index,occupant) in view.occupancy.iter().enumerate() {
+            let placement=occupant.placement.as_ref().ok_or(Error::Corrupt)?;
+            let item=parse_target(placement.item.as_ref())?;let enclosure=parse_target(placement.enclosure.as_ref())?;
+            let (Some(item_kind),Some(enclosure_kind))=(kinds.get(&item),kinds.get(&enclosure))else{continue;};
+            if context.field(item,*item_kind,"relations",false)&&context.field(enclosure,*enclosure_kind,"relations",false) {keys.push(text(format!("allocation/{}",network::identity(item))));indexes.insert((item,enclosure),index);}
+        }
+        if keys.is_empty() {return Ok(());}
+        let expected=keys.len();
+        let rows=self.query("UNWIND $keys AS key MATCH (p:OmRow {key:key}) WITH p, 'relation/'+p.claim AS binding_key MATCH (r:OmRow {key:binding_key}) RETURN properties(r) AS p LIMIT 128",params([("keys",Value::Array(keys))]))?;
+        if rows.len()!=expected {return Err(Error::Corrupt);}
+        for row in rows {
+            let binding=inventory::relation_projection(&row)?;
+            let endpoints=(parse_target(binding.from.as_ref())?,parse_target(binding.to.as_ref())?);
+            let index=indexes.get(&endpoints).copied().ok_or(Error::Corrupt)?;
+            view.occupancy[index].binding=Some(binding);
+        }
+        Ok(())
+    }
     pub(super) fn save_physical_position(&mut self,context:&Context,value:api::PhysicalPositionEdit,working:&api::WorkingContext,now:u64)->Result<api::PhysicalPosition> {
         let owner=parse_target(value.owner.as_ref())?;
         self.physical_access(context,owner,working,true)?;
@@ -70,11 +92,11 @@ impl Tx<'_> {
             targets.insert(parse_target(position.target.as_ref())?);
             targets.insert(parse_target(position.owner.as_ref())?);
         }
-        for placement in view.plan.iter().flat_map(|p|p.placements.iter()).chain(view.occupancy.iter().filter_map(|o|o.placement.as_ref())) {
+        for placement in view.plan.iter().flat_map(placements).chain(view.occupancy.iter().filter_map(|o|o.placement.as_ref())) {
             targets.insert(parse_target(placement.item.as_ref())?);
             targets.insert(parse_target(placement.enclosure.as_ref())?);
         }
-        for replacement in view.plan.iter().flat_map(|p|p.replacements.iter()) {
+        for replacement in view.plan.iter().flat_map(replacement_steps) {
             for item in [replacement.position.as_ref(),replacement.source_position.as_ref(),replacement.previous.as_ref(),replacement.replacement.as_ref()].into_iter().flatten() {
                 targets.insert(parse_target(Some(item))?);
             }

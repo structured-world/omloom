@@ -15,6 +15,8 @@ const height = ref('');
 const depth = ref('');
 const known = ref(false);
 const mass=ref(''),maxMass=ref(''),demand=ref(''),capacity=ref(''),cooling=ref(''),coolingCapacity=ref(''),mounting=ref('');
+const componentKind=ref(model.PhysicalComponentKind.UNSPECIFIED);
+const componentKinds=Object.values(model.PhysicalComponentKind).filter((v):v is number=>typeof v==='number');
 async function load() {
   if (opened.value || busy.value) return;
   busy.value = true; error.value = '';
@@ -29,6 +31,7 @@ async function load() {
     demand.value=number(current.value?.demandMw);capacity.value=number(current.value?.capacityMw);
     cooling.value=number(current.value?.coolingMw);coolingCapacity.value=number(current.value?.coolingCapacityMw);
     mounting.value=current.value?.mounting??'';
+    componentKind.value=current.value===undefined?model.PhysicalComponentKind.UNSPECIFIED:current.value.componentKind;
     const v = current.value?.volume;
     known.value = v !== undefined;
     if (v?.x && v.y && v.z) {
@@ -52,7 +55,7 @@ async function save() {
       const parsed=BigInt(value);if(parsed>9223372036854775807n)throw Error('The physical quantity exceeds the supported range.');
       return parsed;
     };
-    const definition = model.PhysicalDefinition.create({...current.value,target:props.target,basis:basis.value,volume,massG:quantity(mass.value),maxMassG:quantity(maxMass.value),demandMw:quantity(demand.value),capacityMw:quantity(capacity.value),coolingMw:quantity(cooling.value),coolingCapacityMw:quantity(coolingCapacity.value),mounting:mounting.value===''?undefined:mounting.value});
+    const definition = model.PhysicalDefinition.create({...current.value,target:props.target,basis:basis.value,volume,componentKind:componentKind.value,massG:quantity(mass.value),maxMassG:quantity(maxMass.value),demandMw:quantity(demand.value),capacityMw:quantity(capacity.value),coolingMw:quantity(cooling.value),coolingCapacityMw:quantity(coolingCapacity.value),mounting:mounting.value===''?undefined:mounting.value});
     const response = await call({oneofKind:'physical',physical:model.Physical.create({action:{oneofKind:'define',define:{definition}}})},{...props.working,expected:revision.value});
     if (response.oneofKind !== 'physical') throw Error('Physical facts were not saved.');
     current.value = response.physical.definitions[0];
@@ -70,6 +73,7 @@ async function save() {
 <form v-if="opened" @submit.prevent="save">
   <fieldset :disabled="busy">
     <label>Measurement or specification source<input v-model="basis" required maxlength="512" /></label>
+    <label>Known physical class<select v-model="componentKind"><option v-for="kind in componentKinds" :key="kind" :value="kind">{{model.PhysicalComponentKind[kind]?.toLowerCase().replaceAll('_',' ')}}</option></select></label>
     <label class="check"><input v-model="known" type="checkbox" />Dimensions are known</label>
     <template v-if="known">
       <label>Width (mm)<input v-model="width" inputmode="decimal" required maxlength="17" /></label>

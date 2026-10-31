@@ -4,6 +4,42 @@ use crate::physical::{Span, Volume};
 mod lifecycle;
 mod positions;
 mod replacements;
+mod completion;
+mod reservations;
+
+fn placement_steps(plan:&api::PhysicalPlan)->impl Iterator<Item=(usize,&api::PhysicalPlacement)> {
+    plan.steps.iter().enumerate().filter_map(|(index,step)|match &step.action {Some(api::physical_step::Action::Placement(value))=>Some((index,value)),_=>None})
+}
+
+fn placements(plan:&api::PhysicalPlan)->impl Iterator<Item=&api::PhysicalPlacement> {
+    placement_steps(plan).map(|(_,p)|p)
+}
+fn replacement_steps(plan:&api::PhysicalPlan)->impl Iterator<Item=&api::PhysicalReplacement> {
+    plan.steps.iter().filter_map(|step|match &step.action {Some(api::physical_step::Action::Replacement(value))=>Some(value),_=>None})
+}
+fn step_row(step:&api::PhysicalStep)->Result<Properties> {
+    let mut row=match step.action.as_ref().ok_or(Error::Invalid)? {
+        api::physical_step::Action::Placement(p)=>{
+            let mut row=props([("action",text("placement")),("item",text(network::identity(parse_target(p.item.as_ref())?))),("enclosure",text(network::identity(parse_target(p.enclosure.as_ref())?)))]);
+            write_volume(&mut row,p.volume.as_ref().ok_or(Error::Invalid)?)?;row
+        },
+        api::physical_step::Action::Replacement(r)=>{
+            let mut row=replacements::replacement_row(r)?;row.insert("action".into(),text("replacement"));row
+        },
+    };
+    row.insert("state".into(),int(u64::try_from(step.state).map_err(|_|Error::Invalid)?)?);
+    Ok(row)
+}
+fn read_step(row:&Properties)->Result<api::PhysicalStep> {
+    let state=i32::try_from(number(row,"state")?).map_err(|_|Error::Corrupt)?;
+    if api::PhysicalStepState::try_from(state).map_err(|_|Error::Corrupt)?==api::PhysicalStepState::Unspecified {return Err(Error::Corrupt);}
+    let action=match string(row,"action")?.as_str() {
+        "placement"=>api::physical_step::Action::Placement(api::PhysicalPlacement { item:Some(target_wire(lifecycle::reference(&string(row,"item")?)?)),enclosure:Some(target_wire(lifecycle::reference(&string(row,"enclosure")?)?)),volume:read_volume(row)? }),
+        "replacement"=>api::physical_step::Action::Replacement(replacements::read_replacement(row)?),
+        _=>return Err(Error::Corrupt),
+    };
+    Ok(api::PhysicalStep {state,action:Some(action)})
+}
 
 fn volume(value: &api::PhysicalVolume) -> Result<Volume> {
     fn axis(value: Option<&api::PhysicalExtent>) -> Result<Span> {
@@ -47,6 +83,7 @@ fn read_volume(data: &Properties) -> Result<Option<api::PhysicalVolume>> {
     Ok(Some(value))
 }
 fn definition_row(value: &api::PhysicalDefinition) -> Result<Properties> {
+    api::PhysicalComponentKind::try_from(value.component_kind).map_err(|_|Error::Invalid)?;
     if value.basis.is_empty()
         || value.basis.len() > 512
         || value.basis.chars().any(char::is_control)
@@ -62,6 +99,7 @@ fn definition_row(value: &api::PhysicalDefinition) -> Result<Properties> {
         ("asset", text(target.asset.to_string())),
         ("incarnation", text(target.incarnation.to_string())),
         ("basis", text(&value.basis)),
+        ("vint",int(value.component_kind as u64)?),
     ]);
     if let Some(v) = &value.volume {
         write_volume(&mut data, v)?;
@@ -84,6 +122,8 @@ fn definition_row(value: &api::PhysicalDefinition) -> Result<Properties> {
     Ok(data)
 }
 fn definition(data: &Properties) -> Result<api::PhysicalDefinition> {
+    let component_kind=i32::try_from(number(data,"vint")?).map_err(|_|Error::Corrupt)?;
+    api::PhysicalComponentKind::try_from(component_kind).map_err(|_|Error::Corrupt)?;
     let optional = |key: &str| -> Result<Option<u64>> {
         if data.contains_key(key) {
             number(data, key).map(Some)
@@ -95,6 +135,7 @@ fn definition(data: &Properties) -> Result<api::PhysicalDefinition> {
         target: Some(target_wire(target(data)?)),
         volume: read_volume(data)?,
         basis: string(data, "basis")?,
+        component_kind,
         mass_g: optional("mass_g")?,
         max_mass_g: optional("max_mass_g")?,
         demand_mw: optional("demand_mw")?,
@@ -205,6 +246,7 @@ impl Store {
                         }),
                         reported_by: string(&row, "actor")?,
                         revision: number(&row, "revision")?,
+                        binding: None,
                     });
                 }
             }
@@ -237,7 +279,7 @@ impl Store {
             Action::Save(save) => {
                 let mut plan = save.plan.ok_or(Error::Invalid)?;
                 tx.validate_physical_draft(context, &plan, working)?;
-                for p in &plan.placements {
+                for p in placements(&plan) {
                     tx.physical_access(context, parse_target(p.item.as_ref())?, working, true)?;
                     tx.physical_access(
                         context,
@@ -253,7 +295,7 @@ impl Store {
                 };
                 let key = format!("plan/{id}");
                 let mut previous_count = 0;
-                let mut previous_replacements = 0;
+                for step in &mut plan.steps {step.state=api::PhysicalStepState::Planned as i32;}
                 if let Some(old) = tx.get(&key)? {
                     if number(&old, "revision")? != plan.revision {
                         return Err(Error::Conflict);
@@ -273,8 +315,7 @@ impl Store {
                     if existing.state != api::PhysicalPlanState::Draft as i32 {
                         return Err(Error::Conflict);
                     }
-                    previous_count = existing.placements.len();
-                    previous_replacements = existing.replacements.len();
+                    previous_count = existing.steps.len();
                     plan.state = api::PhysicalPlanState::Draft as i32;
                     if existing == plan {
                         view.plan = Some(existing);
@@ -299,28 +340,14 @@ impl Store {
                         ("action", text("physical")),
                         ("state", int(api::PhysicalPlanState::Draft as u64)?),
                         ("revision", int(plan.revision)?),
-                        ("count", int(plan.placements.len() as u64)?),
-                        ("replacement_count",int(plan.replacements.len() as u64)?),
+                        ("count", int(plan.steps.len() as u64)?),
                     ]),
                 )?;
-                for (i, p) in plan.placements.iter().enumerate() {
-                    let item = parse_target(p.item.as_ref())?;
-                    let enclosure = parse_target(p.enclosure.as_ref())?;
-                    let mut data = props([
-                        ("item", text(network::identity(item))),
-                        ("enclosure", text(network::identity(enclosure))),
-                    ]);
-                    write_volume(&mut data, p.volume.as_ref().ok_or(Error::Invalid)?)?;
-                    tx.put(&format!("{key}/{i}"), &key, Class::Inventory, data)?;
+                for (i, step) in plan.steps.iter().enumerate() {
+                    tx.put(&format!("{key}/{i}"), &key, Class::Inventory, step_row(step)?)?;
                 }
-                for i in plan.placements.len()..previous_count {
+                for i in plan.steps.len()..previous_count {
                     tx.delete(&format!("{key}/{i}"))?;
-                }
-                for (i,replacement) in plan.replacements.iter().enumerate() {
-                    tx.put(&format!("{key}/replacement/{i}"),&key,Class::Inventory,replacements::replacement_row(replacement)?)?;
-                }
-                for i in plan.replacements.len()..previous_replacements {
-                    tx.delete(&format!("{key}/replacement/{i}"))?;
                 }
                 tx.audit(
                     &id.to_string(),
@@ -340,13 +367,14 @@ impl Store {
                     Some(tx.reserve_physical(context, &key, working, now, value.until_ms)?);
             }
             Action::Complete(value) => {
-                view.plan = Some(tx.complete_physical(context, value, working, now)?);
+                view.plan = Some(tx.complete_physical_steps(context, value, working, now)?);
             }
             Action::Cancel(key) => {
                 view.plan = Some(tx.cancel_physical(context, &key, working, now)?);
             }
         }
         tx.physical_labels(context,&mut view)?;
+        tx.physical_binding_projection(context,&mut view)?;
         view.revision = tx.commit()?;
         Ok(reply(api::reply::Result::Physical(view)))
     }
@@ -361,8 +389,8 @@ impl Tx<'_> {
         if plan.name.is_empty()
             || plan.name.len() > 160
             || plan.name.chars().any(char::is_control)
-            || (plan.placements.is_empty() && plan.replacements.is_empty())
-            || plan.placements.len() + plan.replacements.len() > 64
+            || plan.steps.is_empty()
+            || plan.steps.len() > 64
         {
             return Err(Error::Invalid);
         }
@@ -375,7 +403,10 @@ impl Tx<'_> {
             return Err(Error::Invalid);
         }
         let mut items = BTreeSet::new();
-        for p in &plan.placements {
+        for step in &plan.steps {
+            if !matches!(api::PhysicalStepState::try_from(step.state),Ok(api::PhysicalStepState::Unspecified|api::PhysicalStepState::Planned)) || step.action.is_none() {return Err(Error::Invalid);}
+        }
+        for p in placements(plan) {
             let item = parse_target(p.item.as_ref())?;
             let enclosure = parse_target(p.enclosure.as_ref())?;
             if item == enclosure || !items.insert(item) {

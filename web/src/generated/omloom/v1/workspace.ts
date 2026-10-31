@@ -3640,6 +3640,13 @@ export interface PhysicalDefinition {
      * @generated from protobuf field: optional string mounting = 10
      */
     mounting?: string;
+    /**
+     * Sourced physical class; unspecified preserves unknown classification.
+     * Labels, serials and position alone never establish the part's identity/class.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalComponentKind component_kind = 11
+     */
+    componentKind: PhysicalComponentKind;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.PhysicalDefinitionEdit
@@ -3814,12 +3821,42 @@ export interface PhysicalReplacement {
      * @generated from protobuf field: optional omloom.v1.AssetRef source_position = 6
      */
     sourcePosition?: AssetRef;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalStep
+ */
+export interface PhysicalStep {
     /**
-     * Server-derived attributed completion, never accepted as input to a saved draft.
+     * Server-derived progress. New drafts may omit it or specify PLANNED only.
+     * RECORDED is an attributed report, never verified connectivity or health.
      *
-     * @generated from protobuf field: bool completed = 7
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalStepState state = 1
      */
-    completed: boolean;
+    state: PhysicalStepState;
+    /**
+     * Exactly one transition in the shared plan and reservation lifecycle.
+     *
+     * @generated from protobuf oneof: action
+     */
+    action: {
+        oneofKind: "placement";
+        /**
+         * Proposed geometry for a selected part in a selected enclosure.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PhysicalPlacement placement = 2
+         */
+        placement: PhysicalPlacement;
+    } | {
+        oneofKind: "replacement";
+        /**
+         * Reviewed transition preserving unaffected identities and intent.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PhysicalReplacement replacement = 3
+         */
+        replacement: PhysicalReplacement;
+    } | {
+        oneofKind: undefined;
+    };
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.PhysicalPlan
@@ -3838,11 +3875,11 @@ export interface PhysicalPlan {
      */
     name: string;
     /**
-     * Explicit proposed placements, at most 64; unsaved editing reserves nothing.
+     * Ordered physical transitions, at most 64; unsaved editing reserves nothing.
      *
-     * @generated from protobuf field: repeated omloom.workspace.v1.PhysicalPlacement placements = 3
+     * @generated from protobuf field: repeated omloom.workspace.v1.PhysicalStep steps = 3
      */
-    placements: PhysicalPlacement[];
+    steps: PhysicalStep[];
     /**
      * Server-derived current lifecycle; callers cannot assert accepted completion.
      *
@@ -3861,13 +3898,6 @@ export interface PhysicalPlan {
      * @generated from protobuf field: optional uint64 reserved_until_ms = 6
      */
     reservedUntilMs?: bigint;
-    /**
-     * Reviewed transitions in this same plan/lifecycle. Placements plus replacements
-     * are bounded to 64; no implicit cable attachment, credential or grant transfer.
-     *
-     * @generated from protobuf field: repeated omloom.workspace.v1.PhysicalReplacement replacements = 7
-     */
-    replacements: PhysicalReplacement[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.PhysicalPreview
@@ -3993,11 +4023,12 @@ export interface PhysicalCompletion {
      */
     plan?: PhysicalPlanKey;
     /**
-     * Explicit selected installed items, at most 64; omitted items remain unresolved.
+     * Selected zero-based step indexes actually completed, at most 64. Unselected
+     * work remains unresolved; deadline and missing observation never complete it.
      *
-     * @generated from protobuf field: repeated omloom.v1.AssetRef installed = 2
+     * @generated from protobuf field: repeated uint32 completed_steps = 2
      */
-    installed: AssetRef[];
+    completedSteps: number[];
     /**
      * Operator's concise discrepancy report, max 2048 bytes; never machine verification.
      *
@@ -4005,12 +4036,12 @@ export interface PhysicalCompletion {
      */
     discrepancy?: string;
     /**
-     * Explicit zero-based replacement indexes whose physical work was completed.
-     * Unselected transitions remain unresolved in this same plan.
+     * Explicitly confirmed steps not performed. Only their future reservation is
+     * released; installed occupancy and unresolved effects are preserved.
      *
-     * @generated from protobuf field: repeated uint32 completed_replacements = 4
+     * @generated from protobuf field: repeated uint32 not_performed_steps = 4
      */
-    completedReplacements: number[];
+    notPerformedSteps: number[];
     /**
      * User explicitly records externally performed actual work, even if a planned
      * safe installation could not be admitted. This grants no executor authority
@@ -4042,6 +4073,13 @@ export interface PhysicalOccupancy {
      * @generated from protobuf field: uint64 revision = 3
      */
     revision: bigint;
+    /**
+     * Exact current installed binding, disclosed only with relationship access on
+     * both endpoints. Absence supplies no permission to guess its identity/revision.
+     *
+     * @generated from protobuf field: optional omloom.v1.Relation binding = 4
+     */
+    binding?: Relation;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Physical
@@ -5439,6 +5477,31 @@ export enum PhysicalComponentKind {
      * @generated from protobuf enum value: PHYSICAL_COMPONENT_KIND_ASSEMBLY = 8;
      */
     ASSEMBLY = 8
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.PhysicalStepState
+ */
+export enum PhysicalStepState {
+    /**
+     * @generated from protobuf enum value: PHYSICAL_STEP_STATE_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_STEP_STATE_PLANNED = 1;
+     */
+    PLANNED = 1,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_STEP_STATE_RESERVED = 2;
+     */
+    RESERVED = 2,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_STEP_STATE_RECORDED = 3;
+     */
+    RECORDED = 3,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_STEP_STATE_NOT_PERFORMED = 4;
+     */
+    NOT_PERFORMED = 4
 }
 /**
  * @generated from protobuf enum omloom.workspace.v1.PhysicalPlanState
@@ -7093,7 +7156,8 @@ class PhysicalDefinition$Type extends MessageType<PhysicalDefinition> {
             { no: 7, name: "capacity_mw", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 8, name: "cooling_mw", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 9, name: "cooling_capacity_mw", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
-            { no: 10, name: "mounting", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 10, name: "mounting", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 11, name: "component_kind", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalComponentKind", PhysicalComponentKind, "PHYSICAL_COMPONENT_KIND_"] }
         ]);
     }
 }
@@ -7182,8 +7246,7 @@ class PhysicalReplacement$Type extends MessageType<PhysicalReplacement> {
             { no: 3, name: "replacement", kind: "message", T: () => AssetRef },
             { no: 4, name: "previous_binding", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 5, name: "previous_revision", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
-            { no: 6, name: "source_position", kind: "message", T: () => AssetRef },
-            { no: 7, name: "completed", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+            { no: 6, name: "source_position", kind: "message", T: () => AssetRef }
         ]);
     }
 }
@@ -7192,16 +7255,29 @@ class PhysicalReplacement$Type extends MessageType<PhysicalReplacement> {
  */
 export const PhysicalReplacement = new PhysicalReplacement$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class PhysicalStep$Type extends MessageType<PhysicalStep> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalStep", [
+            { no: 1, name: "state", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalStepState", PhysicalStepState, "PHYSICAL_STEP_STATE_"] },
+            { no: 2, name: "placement", kind: "message", oneof: "action", T: () => PhysicalPlacement },
+            { no: 3, name: "replacement", kind: "message", oneof: "action", T: () => PhysicalReplacement }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalStep
+ */
+export const PhysicalStep = new PhysicalStep$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class PhysicalPlan$Type extends MessageType<PhysicalPlan> {
     constructor() {
         super("omloom.workspace.v1.PhysicalPlan", [
             { no: 1, name: "id", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 2, name: "name", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 3, name: "placements", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalPlacement },
+            { no: 3, name: "steps", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalStep },
             { no: 4, name: "state", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalPlanState", PhysicalPlanState, "PHYSICAL_PLAN_STATE_"] },
             { no: 5, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
-            { no: 6, name: "reserved_until_ms", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
-            { no: 7, name: "replacements", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalReplacement }
+            { no: 6, name: "reserved_until_ms", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
         ]);
     }
 }
@@ -7304,9 +7380,9 @@ class PhysicalCompletion$Type extends MessageType<PhysicalCompletion> {
     constructor() {
         super("omloom.workspace.v1.PhysicalCompletion", [
             { no: 1, name: "plan", kind: "message", T: () => PhysicalPlanKey },
-            { no: 2, name: "installed", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AssetRef },
+            { no: 2, name: "completed_steps", kind: "scalar", repeat: 1 /*RepeatType.PACKED*/, T: 13 /*ScalarType.UINT32*/ },
             { no: 3, name: "discrepancy", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
-            { no: 4, name: "completed_replacements", kind: "scalar", repeat: 1 /*RepeatType.PACKED*/, T: 13 /*ScalarType.UINT32*/ },
+            { no: 4, name: "not_performed_steps", kind: "scalar", repeat: 1 /*RepeatType.PACKED*/, T: 13 /*ScalarType.UINT32*/ },
             { no: 5, name: "actual_state", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
         ]);
     }
@@ -7321,7 +7397,8 @@ class PhysicalOccupancy$Type extends MessageType<PhysicalOccupancy> {
         super("omloom.workspace.v1.PhysicalOccupancy", [
             { no: 1, name: "placement", kind: "message", T: () => PhysicalPlacement },
             { no: 2, name: "reported_by", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 3, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
+            { no: 3, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 4, name: "binding", kind: "message", T: () => Relation }
         ]);
     }
 }

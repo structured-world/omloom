@@ -1542,6 +1542,9 @@ message PhysicalDefinition {
   optional uint64 cooling_capacity_mw = 9;
   // Explicit rail/attachment standard, max 128 bytes; missing means unqualified fit.
   optional string mounting = 10;
+  // Sourced physical class; unspecified preserves unknown classification.
+  // Labels, serials and position alone never establish the part's identity/class.
+  PhysicalComponentKind component_kind = 11;
 }
 message PhysicalDefinitionEdit {
   // User-supplied current definition, validated under resource/field permissions.
@@ -1617,8 +1620,25 @@ message PhysicalReplacement {
   // Explicit old position when moving an established part or staging a chassis
   // elsewhere; omission selects the same position as the destination.
   optional omloom.v1.AssetRef source_position = 6;
-  // Server-derived attributed completion, never accepted as input to a saved draft.
-  bool completed = 7;
+}
+enum PhysicalStepState {
+  PHYSICAL_STEP_STATE_UNSPECIFIED = 0;
+  PHYSICAL_STEP_STATE_PLANNED = 1;
+  PHYSICAL_STEP_STATE_RESERVED = 2;
+  PHYSICAL_STEP_STATE_RECORDED = 3;
+  PHYSICAL_STEP_STATE_NOT_PERFORMED = 4;
+}
+message PhysicalStep {
+  // Server-derived progress. New drafts may omit it or specify PLANNED only.
+  // RECORDED is an attributed report, never verified connectivity or health.
+  PhysicalStepState state = 1;
+  // Exactly one transition in the shared plan and reservation lifecycle.
+  oneof action {
+    // Proposed geometry for a selected part in a selected enclosure.
+    PhysicalPlacement placement = 2;
+    // Reviewed transition preserving unaffected identities and intent.
+    PhysicalReplacement replacement = 3;
+  }
 }
 enum PhysicalPlanState {
   PHYSICAL_PLAN_STATE_UNSPECIFIED = 0;
@@ -1633,17 +1653,14 @@ message PhysicalPlan {
   optional string id = 1;
   // User label, max 160 UTF-8 bytes. It does not name an executable command.
   string name = 2;
-  // Explicit proposed placements, at most 64; unsaved editing reserves nothing.
-  repeated PhysicalPlacement placements = 3;
+  // Ordered physical transitions, at most 64; unsaved editing reserves nothing.
+  repeated PhysicalStep steps = 3;
   // Server-derived current lifecycle; callers cannot assert accepted completion.
   PhysicalPlanState state = 4;
   // Server-derived saved revision, used for conditional plan changes.
   uint64 revision = 5;
   // Server-admitted reservation deadline in Unix milliseconds, absent for drafts.
   optional uint64 reserved_until_ms = 6;
-  // Reviewed transitions in this same plan/lifecycle. Placements plus replacements
-  // are bounded to 64; no implicit cable attachment, credential or grant transfer.
-  repeated PhysicalReplacement replacements = 7;
 }
 message PhysicalPreview {
   // User-supplied proposed plan; state, revision and deadline are not authority.
@@ -1688,13 +1705,14 @@ message PhysicalReserve {
 message PhysicalCompletion {
   // Admitted plan and revision under which the operator performed manual work.
   PhysicalPlanKey plan = 1;
-  // Explicit selected installed items, at most 64; omitted items remain unresolved.
-  repeated omloom.v1.AssetRef installed = 2;
+  // Selected zero-based step indexes actually completed, at most 64. Unselected
+  // work remains unresolved; deadline and missing observation never complete it.
+  repeated uint32 completed_steps = 2;
   // Operator's concise discrepancy report, max 2048 bytes; never machine verification.
   optional string discrepancy = 3;
-  // Explicit zero-based replacement indexes whose physical work was completed.
-  // Unselected transitions remain unresolved in this same plan.
-  repeated uint32 completed_replacements = 4;
+  // Explicitly confirmed steps not performed. Only their future reservation is
+  // released; installed occupancy and unresolved effects are preserved.
+  repeated uint32 not_performed_steps = 4;
   // User explicitly records externally performed actual work, even if a planned
   // safe installation could not be admitted. This grants no executor authority
   // and never marks compatibility, cable connectivity or service health verified.
@@ -1707,6 +1725,9 @@ message PhysicalOccupancy {
   string reported_by = 2;
   // Exact accepted physical binding revision used to invalidate old evidence.
   uint64 revision = 3;
+  // Exact current installed binding, disclosed only with relationship access on
+  // both endpoints. Absence supplies no permission to guess its identity/revision.
+  optional omloom.v1.Relation binding = 4;
 }
 message Physical {
   // Exactly one physical query or command; no caller-supplied effective grants.

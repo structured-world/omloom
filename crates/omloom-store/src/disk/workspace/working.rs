@@ -180,6 +180,7 @@ pub(super) fn attachment(
         (K::PhysicalComponent, K::Port) => Some((R::HasPort, false)),
         (K::Device | K::Rack | K::Port | K::PhysicalComponent, K::PhysicalPosition) => Some((R::Contains, false)),
         (K::PhysicalPosition, K::PhysicalComponent) => Some((R::InstalledIn, true)),
+        (K::Port, K::Interface) => Some((R::Contains, false)),
         (K::Device, K::VirtualMachine | K::Service) | (K::VirtualMachine, K::Service) => {
             Some((R::RunsOn, true))
         }

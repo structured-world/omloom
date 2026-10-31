@@ -1567,27 +1567,8 @@ impl Store {
                 {
                     return Err(Error::Conflict);
                 }
-                let key = format!("relation/{id}");
-                // Each relation owns one edge in each direction. Delete those
-                // exact attachments before removing their metadata row.
-                for query in [
-                    "MATCH (r:OmRow {key:$key})<-[e:OmRelationFrom]-() DELETE e",
-                    "MATCH (r:OmRow {key:$key})-[e:OmRelationTo]->() DELETE e",
-                ] {
-                    self.db.execute_in_transaction(
-                        tx.id.ok_or(Error::Corrupt)?,
-                        query,
-                        params([("key", text(&key))]),
-                    )?;
-                }
-                tx.delete(&key)?;
-                tx.audit(
-                    &key,
-                    &context.actor,
-                    "relation.removed",
-                    relation.revision.checked_add(1).ok_or(Error::Limit)?,
-                    now,
-                )?;
+                tx.require_unclaimed_physical_relation(&existing)?;
+                tx.remove_binding_relation(&existing,&context.actor,now)?;
                 return Ok(mutation(tx.commit()?, Vec::new()));
             }
         }

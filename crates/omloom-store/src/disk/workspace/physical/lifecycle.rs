@@ -31,35 +31,26 @@ impl Tx<'_> {
         let state = i32::try_from(number(&row,"state")?).map_err(|_| Error::Corrupt)?;
         let terminal = matches!(api::PhysicalPlanState::try_from(state),Ok(api::PhysicalPlanState::Completed|api::PhysicalPlanState::Cancelled));
         let count = number(&row, "count")?;
-        let replacement_count=number(&row,"replacement_count")?;
-        if count > 64 || replacement_count>64 || count+replacement_count>64 {
+        if count > 64 {
             return Err(Error::Corrupt);
         }
-        let mut placements = Vec::with_capacity(count as usize);
+        let mut steps = Vec::with_capacity(count as usize);
         for i in 0..count {
             let p = self.get(&format!("{key}/{i}"))?.ok_or(if terminal { Error::Expired } else { Error::Corrupt })?;
-            let item = reference(&string(&p, "item")?)?;
-            let enclosure = reference(&string(&p, "enclosure")?)?;
-            self.physical_access(context, item, working, write)?;
-            self.physical_access(context, enclosure, working, write)?;
-            placements.push(api::PhysicalPlacement {
-                item: Some(target_wire(item)),
-                enclosure: Some(target_wire(enclosure)),
-                volume: read_volume(&p)?,
-            });
-        }
-        let mut replacements=Vec::with_capacity(replacement_count as usize);
-        for i in 0..replacement_count {
-            let row=self.get(&format!("{key}/replacement/{i}"))?.ok_or(if terminal {Error::Expired}else{Error::Corrupt})?;
-            let replacement=super::replacements::read_replacement(&row)?;
-            self.replacement_access(context,&replacement,working,write)?;
-            replacements.push(replacement);
+            let step=read_step(&p)?;
+            match step.action.as_ref().ok_or(Error::Corrupt)? {
+                api::physical_step::Action::Placement(p)=>{
+                    self.physical_access(context,parse_target(p.item.as_ref())?,working,write)?;
+                    self.physical_access(context,parse_target(p.enclosure.as_ref())?,working,write)?;
+                },
+                api::physical_step::Action::Replacement(r)=>self.replacement_access(context,r,working,write)?,
+            }
+            steps.push(step);
         }
         Ok(api::PhysicalPlan {
             id: Some(request.id.clone()),
             name: string(&row, "name")?,
-            placements,
-            replacements,
+            steps,
             state,
             revision: number(&row, "revision")?,
             reserved_until_ms: if row.contains_key("until") {
@@ -69,7 +60,7 @@ impl Tx<'_> {
             },
         })
     }
-    fn physical_state(
+    pub(super) fn physical_state(
         &mut self,
         context: &Context,
         plan: &mut api::PhysicalPlan,
@@ -79,7 +70,6 @@ impl Tx<'_> {
         let id = plan.id.as_ref().ok_or(Error::Corrupt)?;
         let key = format!("plan/{id}");
         let mut row = self.get(&key)?.ok_or(Error::Corrupt)?;
-        let previous_state = plan.state;
         operations::strip_envelope(&mut row);
         plan.state = state as i32;
         plan.revision = number(&self.root, "revision")?
@@ -92,21 +82,14 @@ impl Tx<'_> {
         } else {
             row.remove("until");
         }
-        let terminal_detail = state == api::PhysicalPlanState::Completed
-            || (state == api::PhysicalPlanState::Cancelled && previous_state == api::PhysicalPlanState::Draft as i32);
+        let terminal_detail = matches!(state,api::PhysicalPlanState::Completed|api::PhysicalPlanState::Cancelled)
+            && plan.steps.iter().all(|step|matches!(api::PhysicalStepState::try_from(step.state),Ok(api::PhysicalStepState::Recorded|api::PhysicalStepState::NotPerformed)));
         let class = if terminal_detail { Class::Detail } else { Class::Inventory };
         if terminal_detail {
             row.insert("at".into(),int(now)?);
-            for index in 0..plan.placements.len() {
+            for index in 0..plan.steps.len() {
                 let child_key = format!("{key}/{index}");
                 let mut child = self.get(&child_key)?.ok_or(Error::Corrupt)?;
-                operations::strip_envelope(&mut child);
-                child.insert("at".into(),int(now)?);
-                self.put(&child_key,&key,Class::Detail,child)?;
-            }
-            for index in 0..plan.replacements.len() {
-                let child_key=format!("{key}/replacement/{index}");
-                let mut child=self.get(&child_key)?.ok_or(Error::Corrupt)?;
                 operations::strip_envelope(&mut child);
                 child.insert("at".into(),int(now)?);
                 self.put(&child_key,&key,Class::Detail,child)?;
@@ -126,17 +109,18 @@ impl Tx<'_> {
     ) -> Result<api::PhysicalPlan> {
         if key.revision == 0
             || until <= now
-            || until.checked_sub(now).ok_or(Error::Invalid)? > 86_400_000
         {
             return Err(Error::Invalid);
         }
+        int(until)?;
         let mut plan = self.load_physical_plan(context, key, working, true)?;
         if plan.state != api::PhysicalPlanState::Draft as i32 {
             return Err(Error::Conflict);
         }
+        self.reserve_replacement_steps(context,&plan,working,&key.id,until)?;
         let mut enclosures = BTreeMap::<String, Vec<Volume>>::new();
         let mut rows_read = 0;
-        for p in &plan.placements {
+        for p in placements(&plan) {
             let item = parse_target(p.item.as_ref())?;
             let enclosure = parse_target(p.enclosure.as_ref())?;
             let row = self.visible_asset(context, enclosure)?;
@@ -148,13 +132,8 @@ impl Tx<'_> {
             ) {
                 return Err(Error::Denied);
             }
-            self.require_no_pending_operations(item)?;
-            if self
-                .get(&format!("allocation/{}", network::identity(item)))?
-                .is_some()
-            {
-                return Err(Error::Conflict);
-            }
+            self.lock_physical_part(item,&key.id,Some(until))?;
+            if self.get(&format!("allocation/{}",network::identity(item)))?.is_some() && !replacement_steps(&plan).any(|r|r.previous.as_ref()==p.item.as_ref()) {return Err(Error::Conflict);}
             let enclosure_key = network::identity(enclosure);
             if !enclosures.contains_key(&enclosure_key) {
                 let parent = format!("allocation/{enclosure_key}");
@@ -225,7 +204,7 @@ impl Tx<'_> {
                 Ok(())
             };
             for row in &rows { add(reference(&string(row,"item")?)?)?; }
-            for placement in &plan.placements {
+            for placement in placements(&plan) {
                 if parse_target(placement.enclosure.as_ref())?==enclosure { add(parse_target(placement.item.as_ref())?)?; }
             }
             for (limit,demand) in limits.into_iter().zip(demands) {
@@ -235,7 +214,7 @@ impl Tx<'_> {
                 }
             }
         }
-        for p in &plan.placements {
+        for (index,p) in placement_steps(&plan) {
             let item = parse_target(p.item.as_ref())?;
             let enclosure = parse_target(p.enclosure.as_ref())?;
             let mut row = props([
@@ -247,114 +226,18 @@ impl Tx<'_> {
             ]);
             write_volume(&mut row, p.volume.as_ref().ok_or(Error::Invalid)?)?;
             self.put(
-                &format!("allocation/{}", network::identity(item)),
+                &reservations::reservation_key(&key.id,index),
                 &format!("allocation/{}", network::identity(enclosure)),
                 Class::Pending,
                 row,
             )?;
         }
+        for (index,step) in plan.steps.iter_mut().enumerate() {
+            step.state=api::PhysicalStepState::Reserved as i32;
+            self.put(&format!("plan/{}/{index}",key.id),&format!("plan/{}",key.id),Class::Inventory,step_row(step)?)?;
+        }
         plan.reserved_until_ms = Some(until);
         self.physical_state(context, &mut plan, api::PhysicalPlanState::Reserved, now)?;
-        Ok(plan)
-    }
-    pub(super) fn complete_physical(
-        &mut self,
-        context: &Context,
-        value: api::PhysicalCompletion,
-        working: &api::WorkingContext,
-        now: u64,
-    ) -> Result<api::PhysicalPlan> {
-        let key = value.plan.ok_or(Error::Invalid)?;
-        let mut plan = self.load_physical_plan(context, &key, working, true)?;
-        if key.revision == 0
-            || !matches!(
-                api::PhysicalPlanState::try_from(plan.state),
-                Ok(api::PhysicalPlanState::Reserved | api::PhysicalPlanState::Partial)
-            )
-            || value.installed.len() > 64
-            || value.discrepancy.as_ref().is_some_and(|s| s.len() > 2048)
-        {
-            return Err(Error::Invalid);
-        }
-        let mut seen = BTreeSet::new();
-        for value in &value.installed {
-            let item = parse_target(Some(value))?;
-            if !seen.insert(item) {
-                return Err(Error::Invalid);
-            }
-            let p = plan
-                .placements
-                .iter()
-                .find(|p| p.item.as_ref() == Some(value))
-                .ok_or(Error::Invalid)?;
-            let enclosure = parse_target(p.enclosure.as_ref())?;
-            let allocation_key = format!("allocation/{}", network::identity(item));
-            let mut row = self.get(&allocation_key)?.ok_or(Error::Conflict)?;
-            if string(&row, "owner")? != key.id {
-                return Err(Error::Conflict);
-            }
-            if number(&row, "state")? != api::PhysicalPlanState::Completed as u64 {
-                let relation = wire::Relation {
-                    relation_id: RelationId::generate().to_string(),
-                    from: Some(target_wire(item)),
-                    to: Some(target_wire(enclosure)),
-                    kind: wire::RelationKind::InstalledIn as i32,
-                    revision: 0,
-                    authority_id: self.workspace_authority()?,
-                };
-                let selection = self.selection(context, working, true)?;
-                self.check_relationship(context, &selection, &relation)?;
-                self.save_typed_relation(&relation, None, &context.actor, now)?;
-                row.insert("claim".into(), text(relation.relation_id));
-            }
-            operations::strip_envelope(&mut row);
-            row.remove("until");
-            row.insert("actor".into(), text(&context.actor));
-            row.insert(
-                "state".into(),
-                int(api::PhysicalPlanState::Completed as u64)?,
-            );
-            row.insert(
-                "revision".into(),
-                int(number(&self.root, "revision")?
-                    .checked_add(1)
-                    .ok_or(Error::Limit)?)?,
-            );
-            self.put(
-                &allocation_key,
-                &format!("allocation/{}", network::identity(enclosure)),
-                Class::Inventory,
-                row,
-            )?;
-        }
-        let mut done = true;
-        for p in &plan.placements {
-            let item = parse_target(p.item.as_ref())?;
-            let row = self
-                .get(&format!("allocation/{}", network::identity(item)))?
-                .ok_or(Error::Corrupt)?;
-            if number(&row, "state")? != api::PhysicalPlanState::Completed as u64 {
-                done = false;
-            }
-        }
-        if let Some(discrepancy) = value.discrepancy {
-            let mut row = self
-                .get(&format!("plan/{}", key.id))?
-                .ok_or(Error::Corrupt)?;
-            operations::strip_envelope(&mut row);
-            row.insert("description".into(), text(discrepancy));
-            self.put(&format!("plan/{}", key.id), "plans", Class::Inventory, row)?;
-        }
-        self.physical_state(
-            context,
-            &mut plan,
-            if done {
-                api::PhysicalPlanState::Completed
-            } else {
-                api::PhysicalPlanState::Partial
-            },
-            now,
-        )?;
         Ok(plan)
     }
     pub(super) fn cancel_physical(
@@ -371,9 +254,15 @@ impl Tx<'_> {
         if plan.state == api::PhysicalPlanState::Cancelled as i32 {
             return Ok(plan);
         }
-        // A cancellation cannot assert that reserved real-world work did not happen.
-        if plan.state != api::PhysicalPlanState::Draft as i32 {
+        if plan.state==api::PhysicalPlanState::Completed as i32 {
             return Err(Error::UnsafeTransition);
+        }
+        // Cancelling future intent never silently releases unresolved reserved work.
+        if plan.state==api::PhysicalPlanState::Draft as i32 {
+            for (index,step) in plan.steps.iter_mut().enumerate() {
+                step.state=api::PhysicalStepState::NotPerformed as i32;
+                self.put(&format!("plan/{}/{index}",key.id),&format!("plan/{}",key.id),Class::Inventory,step_row(step)?)?;
+            }
         }
         self.physical_state(context, &mut plan, api::PhysicalPlanState::Cancelled, now)?;
         Ok(plan)

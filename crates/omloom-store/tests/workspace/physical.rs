@@ -130,11 +130,11 @@ fn read_only_actor_cannot_save_physical_draft() -> TestResult {
     reader.grants[0].writable = false;
     let plan = api::PhysicalPlan {
         name: "Proposed placement".into(),
-        placements: vec![api::PhysicalPlacement {
+        steps: vec![api::PhysicalStep { action:Some(api::physical_step::Action::Placement(api::PhysicalPlacement {
             item: Some(item),
             enclosure: Some(rack),
             volume: Some(volume()),
-        }],
+        })),..Default::default()}],
         ..Default::default()
     };
     let before = store.usage()?;
@@ -169,11 +169,11 @@ fn draft(
         api::physical::Action::Save(api::PhysicalSave {
             plan: Some(api::PhysicalPlan {
                 name: "Install server".into(),
-                placements: vec![api::PhysicalPlacement {
+                steps: vec![api::PhysicalStep {action:Some(api::physical_step::Action::Placement(api::PhysicalPlacement {
                     item: Some(item),
                     enclosure: Some(rack),
                     volume: Some(volume()),
-                }],
+                })),..Default::default()}],
                 ..Default::default()
             }),
         }),
@@ -268,7 +268,7 @@ fn completion_preserves_actual_occupancy_and_reuses_inventory_containment() -> T
                 id: reserved.id.ok_or(Error::Corrupt)?,
                 revision: reserved.revision,
             }),
-            installed: vec![item.clone()],
+            completed_steps: vec![0],
             discrepancy: None,
             ..Default::default()
         }),
@@ -392,13 +392,134 @@ fn structural_positions_are_scoped_current_and_not_populated_implicitly() -> Tes
 
 // A hardware realization is a peer binding, not the owner of OS interface/configuration intent.
 #[test]
-fn logical_interface_does_not_become_a_child_of_its_hardware_port() -> TestResult {
+fn physical_carriage_does_not_create_logical_endpoint_ownership() -> TestResult {
     let dir=tempfile::tempdir()?;let store=Store::open(dir.path(),policy())?;let actor=operator();
     let port=create(&store,&actor,K::Port,"Current physical connector")?;
     let interface=create(&store,&actor,K::Interface,"Surviving logical interface")?;
     call(&store,&actor,Command::Relation(api::Relationship {relation:Some(wire::Relation {from:Some(port.clone()),to:Some(interface),kind:wire::RelationKind::Carries as i32,..Default::default()}),remove:false}))?;
     let Reply::Page(page)=call(&store,&actor,Command::Query(api::Query {view:api::View::Network as i32,focus:Some(port),level_only:true,columns:vec!["name".into()],limit:25,..Default::default()}))? else { return Err("expected page".into()); };
     assert_eq!(page.total,0,"Removing a hardware realization must not remove or scope-own logical configuration");
+    Ok(())
+}
+
+// Dedicated management/console endpoints can explicitly belong to a surviving physical port.
+#[test]
+fn explicit_port_containment_owns_a_dedicated_logical_endpoint() -> TestResult {
+    let dir=tempfile::tempdir()?;let store=Store::open(dir.path(),policy())?;let actor=operator();
+    let port=create(&store,&actor,K::Port,"Dedicated console port")?;
+    let interface=create(&store,&actor,K::Interface,"Port-bound console channel")?;
+    call(&store,&actor,Command::Relation(api::Relationship {relation:Some(wire::Relation {from:Some(port.clone()),to:Some(interface.clone()),kind:wire::RelationKind::Contains as i32,..Default::default()}),remove:false}))?;
+    let Reply::Page(page)=call(&store,&actor,Command::Query(api::Query {view:api::View::Network as i32,focus:Some(port),level_only:true,columns:vec!["name".into()],limit:25,..Default::default()}))? else {return Err("expected page".into());};
+    assert_eq!(page.items.iter().map(|item|item.target.clone()).collect::<Vec<_>>(),vec![Some(interface)]);
+    Ok(())
+}
+
+fn replacement_plan(store:&Store,actor:&Context,replacements:Vec<api::PhysicalReplacement>)->Result<api::PhysicalPlan,Error> {
+    physical(store,actor,api::physical::Action::Save(api::PhysicalSave {plan:Some(api::PhysicalPlan {name:"Reviewed physical transition".into(),steps:replacements.into_iter().map(|r|api::PhysicalStep {action:Some(api::physical_step::Action::Replacement(r)),..Default::default()}).collect(),..Default::default()})}))?.plan.ok_or(Error::Corrupt)
+}
+fn report_steps(store:&Store,actor:&Context,plan:&api::PhysicalPlan,indexes:Vec<u32>)->Result<api::PhysicalPlan,Error> {
+    physical(store,actor,api::physical::Action::Complete(api::PhysicalCompletion {plan:Some(api::PhysicalPlanKey {id:plan.id.clone().ok_or(Error::Corrupt)?,revision:plan.revision}),completed_steps:indexes,actual_state:true,..Default::default()}))?.plan.ok_or(Error::Corrupt)
+}
+fn position_fixture(store:&Store,actor:&Context,owner:wire::AssetRef,key:&str,kind:api::PhysicalComponentKind)->Result<wire::AssetRef,Error> {
+    physical(store,actor,api::physical::Action::Position(api::PhysicalPositionEdit {owner:Some(owner),structural_key:key.into(),name:key.into(),component_kind:kind as i32,expected:None}))?.positions.into_iter().next().and_then(|p|p.target).ok_or(Error::Corrupt)
+}
+fn binding(store:&Store,item:&wire::AssetRef)->Result<wire::Relation,Error> {
+    store.relations(AssetRef::try_from(item).map_err(|_|Error::Invalid)?,32)?.into_iter().find(|r|r.kind==wire::RelationKind::InstalledIn as i32).ok_or(Error::Corrupt)
+}
+fn install_component(store:&Store,actor:&Context,position:wire::AssetRef,item:wire::AssetRef)->Result<api::PhysicalPlan,Error> {
+    let plan=replacement_plan(store,actor,vec![api::PhysicalReplacement {position:Some(position),replacement:Some(item),..Default::default()}])?;
+    report_steps(store,actor,&plan,vec![0])
+}
+
+// One typed transition preserves position identity across optics, disks, PSUs, NICs and line cards.
+#[test]
+fn component_replacement_preserves_position_and_does_not_merge_part_identity() -> TestResult {
+    for kind in [api::PhysicalComponentKind::Transceiver,api::PhysicalComponentKind::Disk,api::PhysicalComponentKind::PowerSupply,api::PhysicalComponentKind::NetworkAdapter,api::PhysicalComponentKind::LineCard] {
+        let dir=tempfile::tempdir()?;let store=Store::open(dir.path(),policy())?;let actor=operator();
+        let owner=create(&store,&actor,K::Device,"Owning chassis")?;
+        let position=position_fixture(&store,&actor,owner,"slot/1",kind)?;
+        let old=create(&store,&actor,K::PhysicalComponent,"Old independently identified part")?;
+        let new=create(&store,&actor,K::PhysicalComponent,"New independently identified part")?;
+        install_component(&store,&actor,position.clone(),old.clone())?;
+        let previous=binding(&store,&old)?;
+        let plan=replacement_plan(&store,&actor,vec![api::PhysicalReplacement {position:Some(position.clone()),previous:Some(old.clone()),replacement:Some(new.clone()),previous_binding:Some(previous.relation_id),previous_revision:Some(previous.revision),..Default::default()}])?;
+        let done=report_steps(&store,&actor,&plan,vec![0])?;
+        assert_eq!(done.state,api::PhysicalPlanState::Completed as i32);
+        assert_eq!(binding(&store,&new)?.to,Some(position));
+        assert!(matches!(binding(&store,&old),Err(Error::Corrupt)));
+        assert_eq!(store.asset(AssetRef::try_from(&old)?)?.target,Some(old.clone()),"Removal does not dispose of the old adopted spare");
+        assert_ne!(old,new);
+    }
+    Ok(())
+}
+
+// An atomic swap detaches both old bindings before realizing either new one; partial swaps conflict.
+#[test]
+fn two_known_parts_swap_positions_without_changing_their_identities() -> TestResult {
+    let dir=tempfile::tempdir()?;let store=Store::open(dir.path(),policy())?;let actor=operator();
+    let owner=create(&store,&actor,K::Device,"Modular chassis")?;
+    let a=position_fixture(&store,&actor,owner.clone(),"optic/1",api::PhysicalComponentKind::Transceiver)?;
+    let b=position_fixture(&store,&actor,owner,"optic/2",api::PhysicalComponentKind::Transceiver)?;
+    let first=create(&store,&actor,K::PhysicalComponent,"First optic")?;
+    let second=create(&store,&actor,K::PhysicalComponent,"Second optic")?;
+    install_component(&store,&actor,a.clone(),first.clone())?;install_component(&store,&actor,b.clone(),second.clone())?;
+    let mut changes=Vec::new();
+    for (item,source,destination) in [(&first,&a,&b),(&second,&b,&a)] {
+        let old=binding(&store,item)?;
+        changes.push(api::PhysicalReplacement {position:Some(destination.clone()),source_position:Some(source.clone()),previous:Some(item.clone()),replacement:Some(item.clone()),previous_binding:Some(old.relation_id),previous_revision:Some(old.revision),..Default::default()});
+    }
+    let plan=replacement_plan(&store,&actor,changes)?;
+    let before=store.usage()?;
+    assert!(matches!(report_steps(&store,&actor,&plan,vec![0]),Err(Error::Conflict)));
+    assert_eq!(store.usage()?,before);
+    report_steps(&store,&actor,&plan,vec![0,1])?;
+    assert_eq!(binding(&store,&first)?.to,Some(b));assert_eq!(binding(&store,&second)?.to,Some(a));
+    Ok(())
+}
+
+// Direct graph edits cannot remove a current physical binding while leaving authoritative occupancy behind.
+#[test]
+fn generic_relation_removal_cannot_bypass_physical_reconciliation() -> TestResult {
+    let dir=tempfile::tempdir()?;let store=Store::open(dir.path(),policy())?;let actor=operator();
+    let owner=create(&store,&actor,K::Device,"Chassis")?;
+    let position=position_fixture(&store,&actor,owner,"disk/1",api::PhysicalComponentKind::Disk)?;
+    let item=create(&store,&actor,K::PhysicalComponent,"Drive")?;
+    install_component(&store,&actor,position,item.clone())?;
+    let current=binding(&store,&item)?;
+    let before=store.usage()?;
+    assert!(matches!(call(&store,&actor,Command::Relation(api::Relationship {relation:Some(current),remove:true})),Err(Error::Conflict)));
+    assert_eq!(store.usage()?,before);
+    Ok(())
+}
+
+// Rebinding the same relation ID cannot bypass the reviewed physical transition or leave stale occupancy.
+#[test]
+fn generic_relation_rebinding_cannot_move_an_installed_component() -> TestResult {
+    let dir=tempfile::tempdir()?;let store=Store::open(dir.path(),policy())?;let actor=operator();
+    let owner=create(&store,&actor,K::Device,"Chassis")?;
+    let position=position_fixture(&store,&actor,owner.clone(),"disk/1",api::PhysicalComponentKind::Disk)?;
+    let other=position_fixture(&store,&actor,owner,"disk/2",api::PhysicalComponentKind::Disk)?;
+    let item=create(&store,&actor,K::PhysicalComponent,"Drive")?;
+    install_component(&store,&actor,position,item.clone())?;
+    let mut current=binding(&store,&item)?;current.to=Some(other);
+    let before=store.usage()?;
+    assert!(matches!(call(&store,&actor,Command::Relation(api::Relationship {relation:Some(current),remove:false})),Err(Error::Conflict)));
+    assert_eq!(store.usage()?,before);
+    Ok(())
+}
+
+// A slot's structural identity cannot migrate to a different chassis through an ordinary edge edit.
+#[test]
+fn generic_relation_cannot_reparent_a_structural_position() -> TestResult {
+    let dir=tempfile::tempdir()?;let store=Store::open(dir.path(),policy())?;let actor=operator();
+    let owner=create(&store,&actor,K::Device,"Original chassis")?;
+    let other=create(&store,&actor,K::Device,"Other chassis")?;
+    let position=position_fixture(&store,&actor,owner,"slot/1",api::PhysicalComponentKind::LineCard)?;
+    let mut parent=store.relations(AssetRef::try_from(&position)?,32)?.into_iter().find(|r|r.kind==wire::RelationKind::Contains as i32).ok_or("parent binding")?;
+    parent.from=Some(other);
+    let before=store.usage()?;
+    assert!(matches!(call(&store,&actor,Command::Relation(api::Relationship {relation:Some(parent),remove:false})),Err(Error::Conflict)));
+    assert_eq!(store.usage()?,before);
     Ok(())
 }
 
