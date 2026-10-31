@@ -80,6 +80,7 @@ impl Tx<'_> {
             return Err(Error::Invalid);
         }
         let mut plan = self.load_physical_plan(context, key, working, true)?;
+        self.refresh_plan_control(context, &mut plan, working, now)?;
         let state = api::PhysicalPlanState::try_from(plan.state).map_err(|_| Error::Corrupt)?;
         if !matches!(
             state,
@@ -97,6 +98,24 @@ impl Tx<'_> {
         ] {
             for index in indexes {
                 if *index as usize >= plan.steps.len() || selected.insert(*index, done).is_some() {
+                    return Err(Error::Invalid);
+                }
+            }
+        }
+        for (&index, &done) in &selected {
+            let step = &plan.steps[index as usize];
+            if done
+                && step.state != api::PhysicalStepState::Recorded as i32
+                && step.readiness != api::PlanReadiness::Ready as i32
+            {
+                if !value.actual_state {
+                    return Err(Error::UnsafeTransition);
+                }
+                if value
+                    .discrepancy
+                    .as_ref()
+                    .is_none_or(|s| s.trim().is_empty())
+                {
                     return Err(Error::Invalid);
                 }
             }
@@ -195,15 +214,19 @@ impl Tx<'_> {
                 changed = true;
             }
         }
-        if !changed {
-            return Ok(plan);
-        }
+        self.refresh_plan_control(context, &mut plan, working, now)?;
         self.release_resolved_physical_locks(&plan)?;
         let terminal = plan.steps.iter().all(|step| {
             matches!(
                 api::PhysicalStepState::try_from(step.state),
                 Ok(api::PhysicalStepState::Recorded | api::PhysicalStepState::NotPerformed)
-            )
+            ) && (step.state != api::PhysicalStepState::Recorded as i32
+                || step
+                    .control
+                    .as_ref()
+                    .and_then(|c| c.check.as_ref())
+                    .is_none()
+                || step.checked_state == Some(api::RequirementState::Satisfied as i32))
         });
         let next = if terminal {
             plan.reserved_until_ms = None;
@@ -211,6 +234,10 @@ impl Tx<'_> {
                 .steps
                 .iter()
                 .any(|s| s.state == api::PhysicalStepState::Recorded as i32)
+                && plan.steps.iter().all(|s| {
+                    s.state == api::PhysicalStepState::Recorded as i32
+                        || s.readiness == api::PlanReadiness::Unselected as i32
+                })
             {
                 api::PhysicalPlanState::Completed
             } else {
@@ -219,6 +246,9 @@ impl Tx<'_> {
         } else {
             api::PhysicalPlanState::Partial
         };
+        if !changed && plan.state == next as i32 {
+            return Ok(plan);
+        }
         self.physical_state(context, &mut plan, next, now)?;
         Ok(plan)
     }

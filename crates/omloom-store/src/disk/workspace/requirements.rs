@@ -286,6 +286,53 @@ impl Store {
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<api::Reply> {
+        let tx = self.begin()?;
+        let evaluation = tx.evaluate_requirements(context, request, working, now)?;
+        tx.commit()?;
+        Ok(reply(api::reply::Result::RequirementEvaluation(evaluation)))
+    }
+}
+
+impl Tx<'_> {
+    pub(super) fn evaluate_requirements(
+        &self,
+        context: &Context,
+        request: api::EvaluateRequirements,
+        working: &api::WorkingContext,
+        now: u64,
+    ) -> Result<api::RequirementEvaluation> {
+        self.evaluate_requirements_in_phase(context, request, working, now, core::Phase::Current)
+    }
+    pub(super) fn evaluate_requirements_in_phase(
+        &self,
+        context: &Context,
+        request: api::EvaluateRequirements,
+        working: &api::WorkingContext,
+        now: u64,
+        phase: core::Phase,
+    ) -> Result<api::RequirementEvaluation> {
+        self.requirement_evaluation(context, request, working, now, Some(phase))
+    }
+    pub(super) fn validate_requirement_graph(
+        &self,
+        context: &Context,
+        request: api::EvaluateRequirements,
+        working: &api::WorkingContext,
+    ) -> Result<()> {
+        let result = self.requirement_evaluation(context, request, working, 0, None)?;
+        if result.reason == api::RequirementReason::Cycle as i32 {
+            return Err(Error::Invalid);
+        }
+        Ok(())
+    }
+    fn requirement_evaluation(
+        &self,
+        context: &Context,
+        request: api::EvaluateRequirements,
+        working: &api::WorkingContext,
+        now: u64,
+        phase: Option<core::Phase>,
+    ) -> Result<api::RequirementEvaluation> {
         if request.nodes.is_empty()
             || request.nodes.len() > core::MAX_NODES
             || request.root as usize >= request.nodes.len()
@@ -313,10 +360,12 @@ impl Store {
         }
         let semantic_keys = semantic_keys(&request.nodes)?;
         let anchor = parse_target(request.anchor.as_ref())?;
-        let tx = self.begin()?;
-        tx.selection(context, working, false)?
-            .contains(anchor, &tx)?;
-        tx.visible_asset(context, anchor)?;
+        let tx = self;
+        if phase.is_some() {
+            tx.selection(context, working, false)?
+                .contains(anchor, tx)?;
+            tx.visible_asset(context, anchor)?;
+        }
         // Reserve the finite containers once; fields are selected by their indexed parent.
         let mut decisions = Vec::with_capacity(request.nodes.len());
         let mut responses = Vec::with_capacity(request.nodes.len());
@@ -426,12 +475,13 @@ impl Store {
                 if let Some(api::requirement_node::Expression::Field(condition)) =
                     request.nodes[index].expression.as_ref()
                 {
-                    node.expression = core::Expression::Fact(tx.requirement_field(
-                        context,
-                        condition,
-                        &mut responses[index],
-                        now,
-                    )?);
+                    let decision = if let Some(phase) = phase {
+                        tx.requirement_field(context, condition, &mut responses[index], now, phase)?
+                    } else {
+                        validate_field_condition(condition)?;
+                        core::Decision::unknown(core::Reason::Missing)
+                    };
+                    node.expression = core::Expression::Fact(decision);
                 }
             }
         }
@@ -458,11 +508,36 @@ impl Store {
             reason,
             results: output,
         };
-        tx.commit()?;
-        Ok(reply(api::reply::Result::RequirementEvaluation(evaluation)))
+        Ok(evaluation)
     }
 }
 
+fn validate_field_condition(condition: &api::FieldRequirement) -> Result<()> {
+    parse_target(condition.target.as_ref())?;
+    if !matches!(
+        api::RequirementLayer::try_from(condition.layer),
+        Ok(api::RequirementLayer::Accepted | api::RequirementLayer::Observed)
+    ) {
+        return Err(Error::Invalid);
+    }
+    let expected = condition.expected.as_ref().ok_or(Error::Invalid)?;
+    if expected.name.is_empty()
+        || expected.name.len() > 64
+        || !expected
+            .name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        || expected.encoded_len() > 8192
+    {
+        return Err(Error::Invalid);
+    }
+    if let Some(field::Value::Equipment(value)) = &expected.value {
+        omloom_contracts::equipment::validate_field(&expected.name, value)
+            .map_err(|_| Error::Invalid)?;
+    }
+    compare(expected, expected, condition.comparison)?;
+    Ok(())
+}
 impl Tx<'_> {
     fn requirement_field(
         &self,
@@ -470,25 +545,11 @@ impl Tx<'_> {
         condition: &api::FieldRequirement,
         response: &mut api::RequirementResult,
         now: u64,
+        phase: core::Phase,
     ) -> Result<core::Decision> {
         let target = parse_target(condition.target.as_ref())?;
         let expected = condition.expected.as_ref().ok_or(Error::Invalid)?;
-        if expected.name.is_empty()
-            || expected.name.len() > 64
-            || !expected
-                .name
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-            || expected.encoded_len() > 8192
-        {
-            return Err(Error::Invalid);
-        }
-        // Validate the desired predicate before any source lookup, including missing facts.
-        if let Some(field::Value::Equipment(value)) = &expected.value {
-            omloom_contracts::equipment::validate_field(&expected.name, value)
-                .map_err(|_| Error::Invalid)?;
-        }
-        compare(expected, expected, condition.comparison)?;
+        validate_field_condition(condition)?;
         let row = match self.asset(target) {
             Ok(row) => row,
             // A stale incarnation must not reveal that a protected asset ID exists.
@@ -629,7 +690,11 @@ impl Tx<'_> {
                 subject: subject(condition.target.as_ref().ok_or(Error::Invalid)?),
                 semantic: &expected.name,
                 vantage: "recorded-source-claim",
-                phase: core::Phase::Current,
+                phase: if layer == "intent" {
+                    core::Phase::Current
+                } else {
+                    phase
+                },
                 kind: if layer == "intent" {
                     core::EvidenceKind::Configuration
                 } else {
@@ -641,7 +706,10 @@ impl Tx<'_> {
             let validity = core::fact(
                 required,
                 core::Evidence {
-                    requirement: required,
+                    requirement: core::Requirement {
+                        phase: core::Phase::Current,
+                        ..required
+                    },
                     origin: if layer == "intent" {
                         core::Origin::Accepted
                     } else {

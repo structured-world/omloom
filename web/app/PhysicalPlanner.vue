@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import { call, input, key, model, AssetKind as K, type AssetRef } from './api';
 import PlacementSearch from './PlacementSearch.vue';
+import PlanStepControls from './PlanStepControls.vue';
 import { millimetres,upperMicrometres } from './physical-units';
 const props = defineProps<{target:AssetRef;kind:number;working:model.WorkingContext;inactive?:boolean}>();
 const emit=defineEmits<{changed:[]}>();
@@ -163,8 +164,18 @@ async function complete() {
     plan.value=reply.plan;selected.value=[];notPerformed.value=[];notice.value='Reported installation recorded. Live health has not been asserted.';await refresh();await summaries();
   });
 }
+async function recheck(){await run(async()=>{await refresh();const reply=await invoke({oneofKind:'complete',complete:model.PhysicalCompletion.create({plan:planKey()})});plan.value=reply.plan;notice.value='Postconditions rechecked. No physical work was repeated.';});}
+function subject(step:model.PhysicalStep){return step.action.oneofKind==='placement'?step.action.placement.item:step.action.oneofKind==='replacement'?step.action.replacement.replacement??step.action.replacement.previous:undefined;}
+function subjectKind(step:model.PhysicalStep){const target=subject(step);return planItems.value.find(i=>key(i.target)===key(target))?.kind;}
+function predecessors(index:number){return plan.value?.steps.slice(0,index).map(step=>({title:label(subject(step))===undefined?'Equipment name unavailable':label(subject(step))!,hasCheck:step.control?.check!==undefined}))??[];}
+function removeStep(index:number){
+  if(!plan.value)return;
+  if(plan.value.steps.some(s=>s.control?.after.some(d=>d.step===index))){error.value='Change dependent step links before removing this step.';return;}
+  plan.value.steps.splice(index,1);
+  for(const step of plan.value.steps)for(const dependency of step.control?.after??[])if(dependency.step>index)dependency.step--;
+}
 async function cancel() {
-  await run(async()=>{const reply=await invoke({oneofKind:'cancel',cancel:planKey()});plan.value=reply.plan;notice.value='Draft cancelled.';await summaries();});
+  await run(async()=>{const reply=await invoke({oneofKind:'cancel',cancel:planKey()});plan.value=reply.plan;notice.value='Remaining work stopped. Reported facts and unresolved reservations are preserved.';await summaries();});
 }
 const drawing=computed(()=>{
   const rack=envelope.value;
@@ -229,24 +240,26 @@ const local=computed(()=>placementRows.value.filter(row=>key(row.p.enclosure)===
 <button type="submit" :disabled="!plan?.steps.length">Save installation plan</button>
 </fieldset></form>
 <template v-if="plan"><h3>{{plan.name||name}} <small>{{state(plan.state)}}</small></h3>
-<ul class="planned-items"><li v-for="row in placementRows" :key="key(row.p.item)">
-<label v-if="installable&&![model.PhysicalStepState.RECORDED,model.PhysicalStepState.NOT_PERFORMED].includes(row.state)"><input v-model="selected" type="checkbox" :value="row.index"/>Actually installed: <span v-if="label(row.p.item)">{{label(row.p.item)}}</span><span v-else>Equipment name unavailable</span></label>
-<span v-else-if="label(row.p.item)">{{label(row.p.item)}}</span><span v-else>Equipment name unavailable</span>
-<small>{{model.PhysicalStepState[row.state]?.toLowerCase().replaceAll('_',' ')}}</small>
-<small v-if="row.p.volume?.y">Y {{millimetres(row.p.volume.y.startUm)}} mm; height {{millimetres(row.p.volume.y.lengthUm)}} mm</small>
-<button v-if="editable" type="button" :disabled="busy" @click="plan.steps.splice(row.index,1)">Remove planned placement</button>
-</li></ul>
-<ul class="planned-items"><li v-for="row in replacementRows" :key="'replacement/'+row.index">
-<p><span v-if="row.r.previous">Previous: <span v-if="label(row.r.previous)">{{label(row.r.previous)}}</span><span v-else>Component name unavailable</span>.</span><span v-else>Predecessor unresolved.</span> <span v-if="row.r.replacement">Incoming: <span v-if="label(row.r.replacement)">{{label(row.r.replacement)}}</span><span v-else>Component name unavailable</span>.</span><span v-else>Removal without an incoming part.</span></p>
-<small>{{model.PhysicalStepState[row.state]?.toLowerCase().replaceAll('_',' ')}}</small>
-<label v-if="installable&&![model.PhysicalStepState.RECORDED,model.PhysicalStepState.NOT_PERFORMED].includes(row.state)"><input v-model="selected" type="checkbox" :value="row.index" :disabled="notPerformed.includes(row.index)"/>Physical transition performed</label>
-<label v-if="installable&&![model.PhysicalStepState.RECORDED,model.PhysicalStepState.NOT_PERFORMED].includes(row.state)"><input v-model="notPerformed" type="checkbox" :value="row.index" :disabled="selected.includes(row.index)"/>Confirmed not performed</label>
-<button v-if="editable" type="button" :disabled="busy" @click="plan.steps.splice(row.index,1)">Remove proposed transition</button>
-</li></ul>
-<label v-if="plan.state===model.PhysicalPlanState.DRAFT" class="outcome"><input v-model="actualReport" type="checkbox"/>Record physical work already performed outside Omloom</label>
+<ol class="planned-items"><li v-for="(step,index) in plan.steps" :key="index">
+<template v-if="step.action.oneofKind==='placement'">
+<label v-if="installable&&![model.PhysicalStepState.RECORDED,model.PhysicalStepState.NOT_PERFORMED].includes(step.state)"><input v-model="selected" type="checkbox" :value="index" :disabled="notPerformed.includes(index)||(!actualReport&&step.readiness!==model.PlanReadiness.READY)"/>Actually installed: <span v-if="label(step.action.placement.item)">{{label(step.action.placement.item)}}</span><span v-else>Equipment name unavailable</span></label>
+<span v-else-if="label(step.action.placement.item)">{{label(step.action.placement.item)}}</span><span v-else>Equipment name unavailable</span>
+<small v-if="step.action.placement.volume?.y">Y {{millimetres(step.action.placement.volume.y.startUm)}} mm; height {{millimetres(step.action.placement.volume.y.lengthUm)}} mm</small>
+</template>
+<template v-if="step.action.oneofKind==='replacement'">
+<p><template v-if="step.action.replacement.previous">Previous: <span v-if="label(step.action.replacement.previous)">{{label(step.action.replacement.previous)}}</span><span v-else>Component name unavailable</span>.</template><template v-else>Predecessor unresolved.</template> <template v-if="step.action.replacement.replacement">Incoming: <span v-if="label(step.action.replacement.replacement)">{{label(step.action.replacement.replacement)}}</span><span v-else>Component name unavailable</span>.</template><template v-else>Removal without an incoming part.</template></p>
+<label v-if="installable&&![model.PhysicalStepState.RECORDED,model.PhysicalStepState.NOT_PERFORMED].includes(step.state)"><input v-model="selected" type="checkbox" :value="index" :disabled="notPerformed.includes(index)||(!actualReport&&step.readiness!==model.PlanReadiness.READY)"/>Physical transition performed</label>
+</template>
+<small>{{model.PhysicalStepState[step.state]?.toLowerCase().replaceAll('_',' ')}}</small>
+<PlanStepControls :control="step.control" :index="index" :predecessors="predecessors(index)" :subject="subject(step)" :kind="subjectKind(step)" :working="working()" :editable="editable&&!busy" :readiness="step.readiness" :checked-state="step.checkedState" :checked-reason="step.checkedReason" @change="step.control=$event;step.readiness=model.PlanReadiness.UNSPECIFIED;step.checkedState=undefined;step.checkedReason=undefined"/>
+<label v-if="installable&&![model.PhysicalStepState.RECORDED,model.PhysicalStepState.NOT_PERFORMED].includes(step.state)"><input v-model="notPerformed" type="checkbox" :value="index" :disabled="selected.includes(index)"/>Confirmed not performed</label>
+<button v-if="editable" type="button" :disabled="busy" @click="removeStep(index)">Remove proposed step</button>
+</li></ol>
+<button v-if="plan.state===model.PhysicalPlanState.PARTIAL" type="button" :disabled="busy" @click="recheck">Recheck postconditions</button>
+<label v-if="plan.state!==model.PhysicalPlanState.COMPLETED" class="outcome"><input v-model="actualReport" type="checkbox"/>Record physical work already performed outside Omloom</label>
 <form v-if="reservable" @submit.prevent="reserve"><label>Reserve until<input v-model="deadline" type="datetime-local" required/></label><button :disabled="busy" type="submit">Check and reserve capacity</button></form>
 <form v-if="installable" @submit.prevent="complete"><label>Installation discrepancies<textarea v-model="discrepancy" maxlength="2048"/></label><p>Record only physical outcomes actually known. Incompatibility may remain a discrepancy; this report does not verify wiring or service. Other reservations remain unresolved.</p><button :disabled="busy||(!selected.length&&!notPerformed.length)" type="submit">Record selected installation</button></form>
-<button v-if="reservable" :disabled="busy" type="button" @click="cancel">Cancel draft</button>
+<button v-if="plan.state!==model.PhysicalPlanState.COMPLETED&&plan.state!==model.PhysicalPlanState.CANCELLED" :disabled="busy" type="button" @click="cancel">Stop remaining work</button>
 </template>
 </section></div>
 </template>

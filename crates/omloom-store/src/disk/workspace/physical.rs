@@ -5,6 +5,7 @@ mod admission;
 mod completion;
 mod current;
 mod equipment;
+mod flow;
 mod lifecycle;
 mod positions;
 mod replacements;
@@ -58,6 +59,10 @@ fn step_row(step: &api::PhysicalStep) -> Result<Properties> {
         "state".into(),
         int(u64::try_from(step.state).map_err(|_| Error::Invalid)?)?,
     );
+    if let Some(control) = &step.control {
+        // The bounded immutable control artifact is consumed whole by plan evaluation.
+        row.insert("query".into(), Value::Binary(control.encode_to_vec()));
+    }
     Ok(row)
 }
 fn read_step(row: &Properties) -> Result<api::PhysicalStep> {
@@ -84,6 +89,17 @@ fn read_step(row: &Properties) -> Result<api::PhysicalStep> {
     Ok(api::PhysicalStep {
         state,
         action: Some(action),
+        control: row
+            .get("query")
+            .map(|_| {
+                let bytes = binary(row, "query")?;
+                if bytes.len() > 65536 {
+                    return Err(Error::Corrupt);
+                }
+                api::PlanControl::decode(bytes).map_err(|_| Error::Corrupt)
+            })
+            .transpose()?,
+        ..Default::default()
     })
 }
 
@@ -346,6 +362,7 @@ impl Store {
             Action::Save(save) => {
                 let mut plan = save.plan.ok_or(Error::Invalid)?;
                 tx.validate_physical_draft(context, &plan, working)?;
+                tx.refresh_plan_control(context, &mut plan, working, now)?;
                 for p in placements(&plan) {
                     tx.physical_access(context, parse_target(p.item.as_ref())?, working, true)?;
                     tx.physical_access(
@@ -381,6 +398,8 @@ impl Store {
                         working,
                         true,
                     )?;
+                    let mut existing = existing;
+                    tx.refresh_plan_control(context, &mut existing, working, now)?;
                     if existing.state != api::PhysicalPlanState::Draft as i32 {
                         return Err(Error::Conflict);
                     }
@@ -447,6 +466,9 @@ impl Store {
                 view.plan = Some(tx.cancel_physical(context, &key, working, now)?);
             }
         }
+        if let Some(plan) = &mut view.plan {
+            tx.refresh_plan_control(context, plan, working, now)?;
+        }
         tx.physical_labels(context, &mut view)?;
         view.revision = tx.commit()?;
         Ok(reply(api::reply::Result::Physical(view)))
@@ -476,7 +498,19 @@ impl Tx<'_> {
             return Err(Error::Invalid);
         }
         let mut items = BTreeSet::new();
+        flow::readiness(&plan.steps)?;
+        let mut controls = 0usize;
         for step in &plan.steps {
+            if let Some(control) = &step.control {
+                let size = control.encoded_len();
+                if size > 65536 - controls {
+                    return Err(Error::Limit);
+                }
+                controls += size;
+                if let Some(check) = &control.check {
+                    self.validate_requirement_graph(context, check.clone(), working)?;
+                }
+            }
             if !matches!(
                 api::PhysicalStepState::try_from(step.state),
                 Ok(api::PhysicalStepState::Unspecified | api::PhysicalStepState::Planned)

@@ -1070,6 +1070,345 @@ fn whole_chassis_replacement_requires_explicit_rack_placement() -> TestResult {
     Ok(())
 }
 
+// Resolving every work item does not imply that the selected goal was achieved.
+#[test]
+fn abandoning_required_work_does_not_complete_the_goal() -> TestResult {
+    // Resolved reservations are not proof that every selected installation happened.
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let a = create(&store, &actor, K::Device, "Installed machine")?;
+    let b = create(&store, &actor, K::Device, "Abandoned machine")?;
+    let rack_a = create(&store, &actor, K::Rack, "Rack A")?;
+    let rack_b = create(&store, &actor, K::Rack, "Rack B")?;
+    let mut plan = draft(&store, &actor, a.clone(), rack_a)?;
+    plan.steps.push(api::PhysicalStep {
+        action: Some(api::physical_step::Action::Placement(
+            api::PhysicalPlacement {
+                item: Some(b.clone()),
+                enclosure: Some(rack_b),
+                volume: Some(volume()),
+            },
+        )),
+        ..Default::default()
+    });
+    let saved = physical(
+        &store,
+        &actor,
+        api::physical::Action::Save(api::PhysicalSave { plan: Some(plan) }),
+    )?
+    .plan
+    .ok_or(Error::Corrupt)?;
+    let current = report_steps(&store, &actor, &saved, vec![0])?;
+    let resolved = physical(
+        &store,
+        &actor,
+        api::physical::Action::Complete(api::PhysicalCompletion {
+            plan: Some(api::PhysicalPlanKey {
+                id: current.id.ok_or(Error::Corrupt)?,
+                revision: current.revision,
+            }),
+            not_performed_steps: vec![1],
+            ..Default::default()
+        }),
+    )?
+    .plan
+    .ok_or(Error::Corrupt)?;
+    assert_eq!(resolved.state, api::PhysicalPlanState::Cancelled as i32);
+    binding(&store, &a)?;
+    assert!(
+        store
+            .relations(AssetRef::try_from(&b).map_err(|_| Error::Invalid)?, 32)?
+            .iter()
+            .all(|r| r.kind != wire::RelationKind::InstalledIn as i32)
+    );
+    Ok(())
+}
+
+// Guided work cannot skip a checkpoint; a fresh accepted fact unlocks only its selected branch.
+#[test]
+fn plan_steps_recheck_shared_requirements_before_advancing() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let rack_a = create(&store, &actor, K::Rack, "Rack A")?;
+    let rack_b = create(&store, &actor, K::Rack, "Rack B")?;
+    let a = create(&store, &actor, K::Device, "First machine")?;
+    let b = create(&store, &actor, K::Device, "Second machine")?;
+    for target in [&rack_a, &rack_b] {
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Define(api::PhysicalDefinitionEdit {
+                definition: Some(define(target.clone())),
+            }),
+        )?;
+    }
+    for target in [&a, &b] {
+        equipment_dimensions(&store, &actor, target)?;
+    }
+    let mut plan = draft(&store, &actor, a.clone(), rack_a)?;
+    plan.steps[0].control = Some(api::PlanControl {
+        after: vec![],
+        check: Some(api::EvaluateRequirements {
+            anchor: Some(a.clone()),
+            root: 0,
+            nodes: vec![api::RequirementNode {
+                expression: Some(api::requirement_node::Expression::Field(
+                    api::FieldRequirement {
+                        target: Some(a.clone()),
+                        expected: Some(text_field("description", "Ready for next step")),
+                        comparison: api::RequirementComparison::Equal as i32,
+                        layer: api::RequirementLayer::Accepted as i32,
+                    },
+                )),
+            }],
+        }),
+    });
+    plan.steps.push(api::PhysicalStep {
+        control: Some(api::PlanControl {
+            after: vec![api::PlanDependency {
+                step: 0,
+                when: api::PlanTrigger::Satisfied as i32,
+            }],
+            check: None,
+        }),
+        action: Some(api::physical_step::Action::Placement(
+            api::PhysicalPlacement {
+                item: Some(b),
+                enclosure: Some(rack_b),
+                volume: Some(volume()),
+            },
+        )),
+        ..Default::default()
+    });
+    let saved = physical(
+        &store,
+        &actor,
+        api::physical::Action::Save(api::PhysicalSave { plan: Some(plan) }),
+    )?
+    .plan
+    .ok_or(Error::Corrupt)?;
+    let mut current = reserve(&store, &actor, saved)?.plan.ok_or(Error::Corrupt)?;
+    let complete = |plan: &api::PhysicalPlan, indexes: Vec<u32>| {
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Complete(api::PhysicalCompletion {
+                plan: Some(api::PhysicalPlanKey {
+                    id: plan.id.clone().ok_or(Error::Corrupt)?,
+                    revision: plan.revision,
+                }),
+                completed_steps: indexes,
+                ..Default::default()
+            }),
+        )
+    };
+    let before = store.usage()?;
+    assert!(matches!(
+        complete(&current, vec![1]),
+        Err(Error::UnsafeTransition)
+    ));
+    assert_eq!(store.usage()?, before);
+    current = complete(&current, vec![0])?.plan.ok_or(Error::Corrupt)?;
+    assert_eq!(current.state, api::PhysicalPlanState::Partial as i32);
+    assert_eq!(
+        current.steps[0].checked_state,
+        Some(api::RequirementState::Unknown as i32)
+    );
+    assert_eq!(
+        current.steps[1].readiness,
+        api::PlanReadiness::Waiting as i32
+    );
+    let resource = store.asset(AssetRef::try_from(&a).map_err(|_| Error::Invalid)?)?;
+    call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            target: Some(a),
+            kind: K::Device as i32,
+            expected: Some(resource.revision),
+            changes: vec![text_field("description", "Ready for next step")],
+            ..Default::default()
+        }),
+    )?;
+    let before = store.usage()?;
+    current = complete(&current, vec![])?.plan.ok_or(Error::Corrupt)?;
+    assert_eq!(
+        current.steps[0].checked_state,
+        Some(api::RequirementState::Satisfied as i32)
+    );
+    assert_eq!(current.steps[1].readiness, api::PlanReadiness::Ready as i32);
+    assert_eq!(
+        store.usage()?,
+        before,
+        "Rechecking unchanged progress creates no history or new operation"
+    );
+    current = complete(&current, vec![1])?.plan.ok_or(Error::Corrupt)?;
+    assert_eq!(current.state, api::PhysicalPlanState::Completed as i32);
+    drop(store);
+    let reopened = Store::open(dir.path(), policy())?;
+    let loaded = physical(
+        &reopened,
+        &actor,
+        api::physical::Action::Load(api::PhysicalPlanKey {
+            id: current.id.ok_or(Error::Corrupt)?,
+            revision: 0,
+        }),
+    )?
+    .plan
+    .ok_or(Error::Corrupt)?;
+    assert_eq!(
+        loaded.steps[1]
+            .control
+            .as_ref()
+            .ok_or(Error::Corrupt)?
+            .after[0]
+            .step,
+        0
+    );
+    Ok(())
+}
+
+// Fresh current observations still lack causal qualification for the newly reported effect.
+#[test]
+fn postcondition_does_not_relabel_an_old_observation_as_verification() -> TestResult {
+    use omloom_contracts::ids::AuthorityId;
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let rack = create(&store, &actor, K::Rack, "Rack")?;
+    let item = create(&store, &actor, K::Device, "Machine")?;
+    equipment_dimensions(&store, &actor, &item)?;
+    let mut resource = store.asset(AssetRef::try_from(&item).map_err(|_| Error::Invalid)?)?;
+    let revision = resource.revision;
+    resource.observed = vec![observation(
+        &AuthorityId::generate().to_string(),
+        50,
+        vec![text_field("description", "Previously healthy")],
+    )];
+    store.refresh_asset(
+        &admit(wire::record::Body::Asset(resource)),
+        revision,
+        store.usage()?.revision,
+        "fixture",
+        60,
+    )?;
+    let mut plan = draft(&store, &actor, item.clone(), rack)?;
+    let request = api::EvaluateRequirements {
+        anchor: Some(item.clone()),
+        nodes: vec![api::RequirementNode {
+            expression: Some(api::requirement_node::Expression::Field(
+                api::FieldRequirement {
+                    target: Some(item),
+                    expected: Some(text_field("description", "Previously healthy")),
+                    comparison: api::RequirementComparison::Equal as i32,
+                    layer: api::RequirementLayer::Observed as i32,
+                },
+            )),
+        }],
+        root: 0,
+    };
+    let current = call(
+        &store,
+        &actor,
+        Command::EvaluateRequirements(request.clone()),
+    )?;
+    let Reply::RequirementEvaluation(current) = current else {
+        return Err("requirement result".into());
+    };
+    assert_eq!(current.state, api::RequirementState::Satisfied as i32);
+    plan.steps[0].control = Some(api::PlanControl {
+        after: vec![],
+        check: Some(request),
+    });
+    let saved = physical(
+        &store,
+        &actor,
+        api::physical::Action::Save(api::PhysicalSave { plan: Some(plan) }),
+    )?
+    .plan
+    .ok_or(Error::Corrupt)?;
+    let reported = report_steps(&store, &actor, &saved, vec![0])?;
+    assert_eq!(reported.state, api::PhysicalPlanState::Partial as i32);
+    assert_eq!(
+        reported.steps[0].checked_state,
+        Some(api::RequirementState::Unknown as i32)
+    );
+    assert_eq!(
+        reported.steps[0].checked_reason,
+        Some(api::RequirementReason::WrongEvidence as i32)
+    );
+    Ok(())
+}
+
+// Losing a check's field right blocks verification, not reporting actual physical work.
+#[test]
+fn unavailable_postcondition_does_not_discard_reported_work() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let rack = create(&store, &actor, K::Rack, "Rack")?;
+    let item = create(&store, &actor, K::Device, "Installed machine")?;
+    let mut plan = draft(&store, &actor, item.clone(), rack)?;
+    plan.steps[0].control = Some(api::PlanControl {
+        after: vec![],
+        check: Some(api::EvaluateRequirements {
+            anchor: Some(item.clone()),
+            root: 0,
+            nodes: vec![api::RequirementNode {
+                expression: Some(api::requirement_node::Expression::Field(
+                    api::FieldRequirement {
+                        target: Some(item.clone()),
+                        expected: Some(text_field("description", "Ready")),
+                        comparison: api::RequirementComparison::Equal as i32,
+                        layer: api::RequirementLayer::Accepted as i32,
+                    },
+                )),
+            }],
+        }),
+    });
+    let saved = physical(
+        &store,
+        &actor,
+        api::physical::Action::Save(api::PhysicalSave { plan: Some(plan) }),
+    )?
+    .plan
+    .ok_or(Error::Corrupt)?;
+    let mut narrowed = actor;
+    narrowed.grants[0].read = Fields::Selected(vec![
+        "name".into(),
+        "physical".into(),
+        "relations".into(),
+        "physical_availability".into(),
+    ]);
+    let usage = store.usage()?;
+    physical(
+        &store,
+        &narrowed,
+        api::physical::Action::Save(api::PhysicalSave {
+            plan: Some(saved.clone()),
+        }),
+    )?;
+    assert_eq!(store.usage()?, usage);
+    let recorded = report_steps(&store, &narrowed, &saved, vec![0])?;
+    assert_eq!(
+        recorded.steps[0].state,
+        api::PhysicalStepState::Recorded as i32
+    );
+    assert_eq!(
+        recorded.steps[0].checked_state,
+        Some(api::RequirementState::Unknown as i32)
+    );
+    assert_eq!(
+        recorded.steps[0].checked_reason,
+        Some(api::RequirementReason::Restricted as i32)
+    );
+    assert_eq!(recorded.state, api::PhysicalPlanState::Partial as i32);
+    binding(&store, &item)?;
+    Ok(())
+}
+
 // A draft cannot reserve an attachment the canonical inventory relation rules would reject later.
 #[test]
 fn physical_draft_reuses_inventory_endpoint_compatibility() -> TestResult {

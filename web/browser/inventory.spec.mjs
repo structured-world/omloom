@@ -142,6 +142,68 @@ test('physical plan reserves then records installation on desktop and phone',asy
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
 });
 
+test('plan checkpoints gate successive installation on desktop and phone',async({browser})=>{
+  // Native storage and real UI preserve unknown checks, block dependent work and recheck without replay.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-plan-checkpoints-'));const server=await host(dir);
+  try{
+    const {m,rpc}=await workspaceClient(server.url);
+    for(const width of [1440,390]){
+      const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600,timezoneId:'UTC'});
+      try{
+        await page.goto(server.url);
+        const a=await create(page,`Checkpoint A ${width}`);const b=await create(page,`Checkpoint B ${width}`);
+        const rack=await create(page,`Checkpoint rack ${width}`,'RACK');
+        const reference=t=>({assetId:t.asset_id,incarnation:t.incarnation});
+        for(const item of [a,b]){
+          const target=reference(item);const detail=await rpc({oneofKind:'read',read:m.Read.create({target})});
+          const changes=[['width',440000n],['height',44450n],['depth',500000n]].map(([name,value])=>({name,value:{oneofKind:'equipment',equipment:{basis:'Explicit physical specification',assertion:{oneofKind:'quantity',quantity:{lower:value,upper:value,unit:'mm',scale:3}}}}}));
+          await rpc({oneofKind:'write',write:m.Write.create({target,kind:m.AssetKind.DEVICE,expected:detail.detail.item.revision,changes})});
+        }
+        const extent=lengthUm=>({startUm:0n,lengthUm});
+        await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'define',define:{definition:{target:reference(rack),basis:'Measured usable space',volume:{x:extent(500000n),y:extent(2000000n),z:extent(1000000n)}}}}})});
+        await page.reload();await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
+        const planner=page.locator('.physical-planner');
+        await planner.getByLabel('Installation plan name',{exact:true}).fill(`Checkpoint plan ${width}`);
+        for(const [name,unit] of [[`Checkpoint A ${width}`,'1'],[`Checkpoint B ${width}`,'2']]){
+          await planner.getByRole('combobox',{name:'Find equipment',exact:true}).fill(name);
+          await planner.getByRole('option',{name:`Use equipment: ${name}`,exact:true}).click();
+          await planner.getByLabel('Starting U',{exact:true}).fill(unit);
+          await planner.getByRole('button',{name:'Add planned placement',exact:true}).click();
+        }
+        const first=planner.getByRole('region',{name:'Step 1 controls',exact:true});
+        await first.getByText('Configure a postcondition',{exact:true}).click();
+        await first.getByRole('combobox',{name:'Required fact',exact:true}).selectOption('description',{timeout:5000});
+        await first.getByLabel('Required value',{exact:true}).fill('Ready for next step');
+        await first.getByRole('button',{name:'Use this postcondition',exact:true}).click();
+        const second=planner.getByRole('region',{name:'Step 2 controls',exact:true});
+        await second.getByRole('combobox',{name:'Preceding step',exact:true}).selectOption('0',{timeout:5000});
+        await second.getByRole('combobox',{name:'Continue when',exact:true}).selectOption(String(m.PlanTrigger.SATISFIED),{timeout:5000});
+        await second.getByRole('button',{name:'Add prerequisite',exact:true}).click();
+        await planner.getByRole('button',{name:'Save installation plan',exact:true}).click();
+        await expect(planner.getByRole('status')).toHaveText('Plan saved. Nothing is reserved or installed.');
+        await planner.getByLabel('Reserve until',{exact:true}).fill(new Date(Date.now()+600000).toISOString().slice(0,16));
+        await planner.getByRole('button',{name:'Check and reserve capacity',exact:true}).click();
+        await expect(planner.getByRole('status')).toHaveText('Capacity reserved. Installation is not confirmed.');
+        const next=planner.getByRole('checkbox',{name:`Actually installed: Checkpoint B ${width}`,exact:true});
+        await expect(next).toBeDisabled();
+        await planner.getByRole('checkbox',{name:`Actually installed: Checkpoint A ${width}`,exact:true}).check();
+        await planner.getByRole('button',{name:'Record selected installation',exact:true}).click();
+        await expect(first).toContainText('Current result: unknown');await expect(next).toBeDisabled();
+        const target=reference(a);const detail=await rpc({oneofKind:'read',read:m.Read.create({target})});
+        await rpc({oneofKind:'write',write:m.Write.create({target,kind:m.AssetKind.DEVICE,expected:detail.detail.item.revision,changes:[{name:'description',value:{oneofKind:'text',text:'Ready for next step'}}]})});
+        const before=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'list',list:{limit:25}}})});
+        await planner.getByRole('button',{name:'Recheck postconditions',exact:true}).click();
+        await expect(first).toContainText('Current result: satisfied');await expect(next).toBeEnabled();
+        const after=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'list',list:{limit:25}}})});
+        expect(after.physical.revision).toBe(before.physical.revision);
+        await next.check();await planner.getByRole('button',{name:'Record selected installation',exact:true}).click();
+        await expect(planner.getByRole('heading',{name:`Checkpoint plan ${width} completed`,exact:true})).toBeVisible();
+        expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+      }finally{await page.close();}
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('requirements explain current and incomplete equipment on desktop and phone',async({browser})=>{
   // The real UI queries the disk-backed common evaluator; checks never create a plan or effect.
   const dir=await mkdtemp(join(tmpdir(),'omloom-requirements-'));const server=await host(dir);

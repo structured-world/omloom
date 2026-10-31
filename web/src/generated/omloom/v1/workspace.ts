@@ -3819,6 +3819,41 @@ export interface PhysicalReplacement {
     sourcePosition?: AssetRef;
 }
 /**
+ * @generated from protobuf message omloom.workspace.v1.PlanDependency
+ */
+export interface PlanDependency {
+    /**
+     * Zero-based stable step index within this admitted plan revision.
+     *
+     * @generated from protobuf field: uint32 step = 1
+     */
+    step: number;
+    /**
+     * Required predecessor outcome. Unknown evidence never selects a branch.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PlanTrigger when = 2
+     */
+    when: PlanTrigger;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PlanControl
+ */
+export interface PlanControl {
+    /**
+     * Explicit serial/branch prerequisites; at most 256 edges across the plan.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.PlanDependency after = 1
+     */
+    after: PlanDependency[];
+    /**
+     * Optional postcondition using the common requirement graph. Machine evidence
+     * must qualify for this post-effect phase, not merely be an old current sample.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.EvaluateRequirements check = 2
+     */
+    check?: EvaluateRequirements;
+}
+/**
  * @generated from protobuf message omloom.workspace.v1.PhysicalStep
  */
 export interface PhysicalStep {
@@ -3829,6 +3864,32 @@ export interface PhysicalStep {
      * @generated from protobuf field: omloom.workspace.v1.PhysicalStepState state = 1
      */
     state: PhysicalStepState;
+    /**
+     * Explicit serial/branch prerequisites, at most 256 edges across the plan.
+     * Empty means independent work, not an implicit dependency on list order.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.PlanControl control = 4
+     */
+    control?: PlanControl;
+    /**
+     * Server-derived current checkpoint verdict; absent before work is reported.
+     * Reports cannot set this value, and manual work is not machine verification.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.RequirementState checked_state = 5
+     */
+    checkedState?: RequirementState;
+    /**
+     * Current machine-readable checkpoint reason, never a caller-supplied verdict.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.RequirementReason checked_reason = 6
+     */
+    checkedReason?: RequirementReason;
+    /**
+     * Current graph result, recomputed under server permissions; never authority.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PlanReadiness readiness = 7
+     */
+    readiness: PlanReadiness;
     /**
      * Exactly one transition in the shared plan and reservation lifecycle.
      *
@@ -5517,6 +5578,52 @@ export enum PhysicalStepState {
      * @generated from protobuf enum value: PHYSICAL_STEP_STATE_NOT_PERFORMED = 4;
      */
     NOT_PERFORMED = 4
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.PlanTrigger
+ */
+export enum PlanTrigger {
+    /**
+     * @generated from protobuf enum value: PLAN_TRIGGER_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: PLAN_TRIGGER_REPORTED = 1;
+     */
+    REPORTED = 1,
+    /**
+     * @generated from protobuf enum value: PLAN_TRIGGER_SATISFIED = 2;
+     */
+    SATISFIED = 2,
+    /**
+     * @generated from protobuf enum value: PLAN_TRIGGER_FAILED = 3;
+     */
+    FAILED = 3
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.PlanReadiness
+ */
+export enum PlanReadiness {
+    /**
+     * @generated from protobuf enum value: PLAN_READINESS_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: PLAN_READINESS_READY = 1;
+     */
+    READY = 1,
+    /**
+     * @generated from protobuf enum value: PLAN_READINESS_WAITING = 2;
+     */
+    WAITING = 2,
+    /**
+     * @generated from protobuf enum value: PLAN_READINESS_UNSELECTED = 3;
+     */
+    UNSELECTED = 3,
+    /**
+     * @generated from protobuf enum value: PLAN_READINESS_COMPLETE = 4;
+     */
+    COMPLETE = 4
 }
 /**
  * @generated from protobuf enum omloom.workspace.v1.PhysicalPlanState
@@ -7269,10 +7376,40 @@ class PhysicalReplacement$Type extends MessageType<PhysicalReplacement> {
  */
 export const PhysicalReplacement = new PhysicalReplacement$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class PlanDependency$Type extends MessageType<PlanDependency> {
+    constructor() {
+        super("omloom.workspace.v1.PlanDependency", [
+            { no: 1, name: "step", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 2, name: "when", kind: "enum", T: () => ["omloom.workspace.v1.PlanTrigger", PlanTrigger, "PLAN_TRIGGER_"] }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PlanDependency
+ */
+export const PlanDependency = new PlanDependency$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PlanControl$Type extends MessageType<PlanControl> {
+    constructor() {
+        super("omloom.workspace.v1.PlanControl", [
+            { no: 1, name: "after", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PlanDependency },
+            { no: 2, name: "check", kind: "message", T: () => EvaluateRequirements }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PlanControl
+ */
+export const PlanControl = new PlanControl$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class PhysicalStep$Type extends MessageType<PhysicalStep> {
     constructor() {
         super("omloom.workspace.v1.PhysicalStep", [
             { no: 1, name: "state", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalStepState", PhysicalStepState, "PHYSICAL_STEP_STATE_"] },
+            { no: 4, name: "control", kind: "message", T: () => PlanControl },
+            { no: 5, name: "checked_state", kind: "enum", opt: true, T: () => ["omloom.workspace.v1.RequirementState", RequirementState, "REQUIREMENT_STATE_"] },
+            { no: 6, name: "checked_reason", kind: "enum", opt: true, T: () => ["omloom.workspace.v1.RequirementReason", RequirementReason, "REQUIREMENT_REASON_"] },
+            { no: 7, name: "readiness", kind: "enum", T: () => ["omloom.workspace.v1.PlanReadiness", PlanReadiness, "PLAN_READINESS_"] },
             { no: 2, name: "placement", kind: "message", oneof: "action", T: () => PhysicalPlacement },
             { no: 3, name: "replacement", kind: "message", oneof: "action", T: () => PhysicalReplacement }
         ]);

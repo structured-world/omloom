@@ -1629,10 +1629,46 @@ enum PhysicalStepState {
   PHYSICAL_STEP_STATE_RECORDED = 3;
   PHYSICAL_STEP_STATE_NOT_PERFORMED = 4;
 }
+enum PlanTrigger {
+  PLAN_TRIGGER_UNSPECIFIED = 0;
+  PLAN_TRIGGER_REPORTED = 1;
+  PLAN_TRIGGER_SATISFIED = 2;
+  PLAN_TRIGGER_FAILED = 3;
+}
+message PlanDependency {
+  // Zero-based stable step index within this admitted plan revision.
+  uint32 step = 1;
+  // Required predecessor outcome. Unknown evidence never selects a branch.
+  PlanTrigger when = 2;
+}
+message PlanControl {
+  // Explicit serial/branch prerequisites; at most 256 edges across the plan.
+  repeated PlanDependency after = 1;
+  // Optional postcondition using the common requirement graph. Machine evidence
+  // must qualify for this post-effect phase, not merely be an old current sample.
+  optional EvaluateRequirements check = 2;
+}
+enum PlanReadiness {
+  PLAN_READINESS_UNSPECIFIED = 0;
+  PLAN_READINESS_READY = 1;
+  PLAN_READINESS_WAITING = 2;
+  PLAN_READINESS_UNSELECTED = 3;
+  PLAN_READINESS_COMPLETE = 4;
+}
 message PhysicalStep {
   // Server-derived progress. New drafts may omit it or specify PLANNED only.
   // RECORDED is an attributed report, never verified connectivity or health.
   PhysicalStepState state = 1;
+  // Explicit serial/branch prerequisites, at most 256 edges across the plan.
+  // Empty means independent work, not an implicit dependency on list order.
+  optional PlanControl control = 4;
+  // Server-derived current checkpoint verdict; absent before work is reported.
+  // Reports cannot set this value, and manual work is not machine verification.
+  optional RequirementState checked_state = 5;
+  // Current machine-readable checkpoint reason, never a caller-supplied verdict.
+  optional RequirementReason checked_reason = 6;
+  // Current graph result, recomputed under server permissions; never authority.
+  PlanReadiness readiness = 7;
   // Exactly one transition in the shared plan and reservation lifecycle.
   oneof action {
     // Proposed geometry for a selected part in a selected enclosure.
