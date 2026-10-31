@@ -476,7 +476,10 @@ impl Tx<'_> {
         compare(expected, expected, condition.comparison)?;
         let row = match self.asset(target) {
             Ok(row) => row,
-            Err(Error::Missing) => return Ok(core::Decision::unknown(core::Reason::Restricted)),
+            // A stale incarnation must not reveal that a protected asset ID exists.
+            Err(Error::Missing | Error::Conflict) => {
+                return Ok(core::Decision::unknown(core::Reason::Restricted));
+            }
             Err(error) => return Err(error),
         };
         let kind = number(&row, "kind")? as i32;

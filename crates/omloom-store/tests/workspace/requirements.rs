@@ -90,6 +90,7 @@ fn requirements_use_real_current_facts_without_writes_or_unselected_expansion() 
 #[test]
 fn requirements_hide_denied_and_missing_dependencies_without_false_success() -> TestResult {
     // A narrow resource screen cannot turn a denied upstream fact into an empty safe set.
+    use omloom_contracts::ids::{AssetId, IncarnationId};
     let dir = tempfile::tempdir()?;
     let store = Store::open(dir.path(), policy())?;
     let actor = operator();
@@ -98,23 +99,34 @@ fn requirements_hide_denied_and_missing_dependencies_without_false_success() -> 
     let mut limited = actor;
     limited.grants[0].scope = Scope::Targets(vec![AssetRef::try_from(&anchor)?]);
     let before = store.usage()?;
-    let result = evaluate(
-        &store,
-        &limited,
-        &anchor,
-        vec![condition(
-            &hidden,
-            "name",
-            wire::field::Value::Text("Private hypervisor".into()),
-        )],
-        0,
-    )?;
-    assert_eq!(result.state, api::RequirementState::Unknown as i32);
-    assert_eq!(result.reason, api::RequirementReason::Restricted as i32);
-    assert!(result.results[0].target.is_none());
-    assert!(result.results[0].field.is_none());
-    assert!(result.results[0].evidence.is_empty());
-    assert!(result.results[0].resolutions.is_empty());
+    let missing = wire::AssetRef {
+        asset_id: AssetId::generate().to_string(),
+        incarnation: IncarnationId::generate().to_string(),
+    };
+    let mismatch = wire::AssetRef {
+        asset_id: hidden.asset_id.clone(),
+        incarnation: IncarnationId::generate().to_string(),
+    };
+    // Missing, protected and mismatched incarnations must have the same public result.
+    for dependency in [hidden, missing, mismatch] {
+        let result = evaluate(
+            &store,
+            &limited,
+            &anchor,
+            vec![condition(
+                &dependency,
+                "name",
+                wire::field::Value::Text("Private hypervisor".into()),
+            )],
+            0,
+        )?;
+        assert_eq!(result.state, api::RequirementState::Unknown as i32);
+        assert_eq!(result.reason, api::RequirementReason::Restricted as i32);
+        assert!(result.results[0].target.is_none());
+        assert!(result.results[0].field.is_none());
+        assert!(result.results[0].evidence.is_empty());
+        assert!(result.results[0].resolutions.is_empty());
+    }
     assert_eq!(store.usage()?, before);
     Ok(())
 }
