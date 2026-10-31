@@ -52,20 +52,18 @@ impl Tx<'_> {
         if !row.contains_key("vflag") {
             return Ok(());
         }
+        let parent = string(&row, "parent")?;
         operations::strip_envelope(&mut row);
         row.remove("vflag");
+        row.remove("actor");
+        row.remove("enclosure");
         row.insert(
             "revision".into(),
             int(number(&self.root, "revision")?
                 .checked_add(1)
                 .ok_or(Error::Limit)?)?,
         );
-        self.put(
-            &key,
-            &format!("positions/{}", string(&row, "enclosure")?),
-            Class::Inventory,
-            row,
-        )?;
+        self.put(&key, &parent, Class::Inventory, row)?;
         Ok(())
     }
     pub(super) fn current_physical_rows(

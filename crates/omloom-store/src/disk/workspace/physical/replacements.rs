@@ -147,22 +147,24 @@ impl Tx<'_> {
                 self.save_typed_relation(&binding, None, &context.actor, now)?;
             }
         }
-        let mut touched = incoming_positions.clone();
+        let mut touched = BTreeSet::new();
         for binding in &old {
             touched.insert(parse_target(binding.to.as_ref())?);
         }
         for position in touched {
+            // An incoming binding already clears a prior empty report atomically.
+            if incoming_positions.contains(&position) {
+                continue;
+            }
             if number(&self.asset(position)?, "kind")? != wire::AssetKind::PhysicalPosition as u64 {
                 continue;
             }
             let key = format!("position/{}", network::identity(position));
             let mut row = self.get(&key)?.ok_or(Error::Corrupt)?;
+            let parent = string(&row, "parent")?;
             operations::strip_envelope(&mut row);
-            if incoming_positions.contains(&position) {
-                row.remove("vflag");
-            } else {
-                row.insert("vflag".into(), Value::Bool(true));
-            }
+            row.remove("enclosure");
+            row.insert("vflag".into(), Value::Bool(true));
             row.insert("actor".into(), text(&context.actor));
             row.insert(
                 "revision".into(),
@@ -170,12 +172,7 @@ impl Tx<'_> {
                     .checked_add(1)
                     .ok_or(Error::Limit)?)?,
             );
-            self.put(
-                &key,
-                &format!("positions/{}", string(&row, "enclosure")?),
-                Class::Inventory,
-                row,
-            )?;
+            self.put(&key, &parent, Class::Inventory, row)?;
         }
         Ok(())
     }

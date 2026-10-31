@@ -811,8 +811,8 @@ impl Tx<'_> {
                 let position = self
                     .get(&format!("position/{}/{}", child.asset, child.incarnation))?
                     .ok_or(Error::Incomplete)?;
-                if string(&position, "enclosure")?
-                    != format!("{}/{}", parent.asset, parent.incarnation)
+                if string(&position, "parent")?
+                    != format!("positions/{}/{}", parent.asset, parent.incarnation)
                 {
                     return Err(Error::Conflict);
                 }

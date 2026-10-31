@@ -91,8 +91,8 @@ impl Tx<'_> {
             .ok_or(Error::Limit)?;
         let mut row = prior.unwrap_or_else(|| target_props(target));
         operations::strip_envelope(&mut row);
+        row.remove("enclosure");
         row.extend(props([
-            ("enclosure", text(network::identity(owner))),
             ("basis", text(value.structural_key)),
             ("vint", int(value.component_kind as u64)?),
             ("revision", int(revision)?),

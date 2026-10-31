@@ -814,6 +814,41 @@ fn structural_position_class_has_one_owner() -> TestResult {
     Ok(())
 }
 
+// Occupant changes own their binding revision, not a duplicate descriptor update for the same slot.
+#[test]
+fn installation_does_not_rewrite_an_unchanged_position_descriptor() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let owner = create(&store, &actor, K::Device, "Chassis")?;
+    let position = position_fixture(
+        &store,
+        &actor,
+        owner.clone(),
+        "disk/1",
+        api::PhysicalComponentKind::Disk,
+    )?;
+    let item = create(&store, &actor, K::PhysicalComponent, "Disk")?;
+    let query = api::PhysicalPositionQuery {
+        owner: Some(owner),
+        limit: 25,
+        ..Default::default()
+    };
+    let before = physical(
+        &store,
+        &actor,
+        api::physical::Action::Positions(query.clone()),
+    )?
+    .positions;
+    install_component(&store, &actor, position, item)?;
+    let after = physical(&store, &actor, api::physical::Action::Positions(query))?.positions;
+    assert_eq!(
+        after, before,
+        "The InstalledIn binding is the occupant-change authority"
+    );
+    Ok(())
+}
+
 // A draft cannot reserve an attachment the canonical inventory relation rules would reject later.
 #[test]
 fn physical_draft_reuses_inventory_endpoint_compatibility() -> TestResult {
