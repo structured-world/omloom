@@ -16,6 +16,7 @@ fn current_and_reserved_clearance_cannot_be_consumed_by_another_body() -> TestRe
         .as_mut()
         .ok_or(Error::Corrupt)?
         .length_um = 1_500_000;
+    rack_facts.occupancy_coverage = rack_facts.volume.map(Box::new);
     physical(
         &store,
         &actor,

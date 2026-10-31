@@ -144,7 +144,8 @@ test('selected capacity offers can be inspected and revoked on desktop and phone
         await page.goto(server.url);const rack=await create(page,`Offer rack ${width}`,'RACK');
         const {m,rpc}=await workspaceClient(server.url);
         const axis=lengthUm=>({startUm:0n,lengthUm});
-        await rpc({oneofKind:'physical',physical:{action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target:{assetId:rack.asset_id,incarnation:rack.incarnation},basis:'Measured rack interior',volume:{x:axis(500000n),y:axis(2000000n),z:axis(1000000n)}})}}}});
+        const recorded={x:axis(500000n),y:axis(2000000n),z:axis(1000000n)};
+        await rpc({oneofKind:'physical',physical:{action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target:{assetId:rack.asset_id,incarnation:rack.incarnation},basis:'Measured rack interior and recorded fixture occupancy',volume:recorded,occupancyCoverage:recorded})}}}});
         await page.reload();await page.getByText('Offer selected capacity without occupant access',{exact:true}).click();
         const panel=page.locator('.physical-offers');
         await panel.getByLabel('Offer name',{exact:true}).fill(`Approved region ${width}`);
@@ -169,6 +170,46 @@ test('selected capacity offers can be inspected and revoked on desktop and phone
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
 });
 
+test('partial equipment can use a saved unvalidated allocation on desktop and phone',async({browser})=>{
+  // A proposed box never creates source dimensions or a free-space claim when knowledge is incomplete.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-partial-plan-'));const server=await host(dir);
+  try{
+    const {m,rpc}=await workspaceClient(server.url);
+    for(const width of [1440,390]){
+      const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600});
+      try{
+        await page.goto(server.url);
+        const equipment=await create(page,`Partial equipment ${width}`);
+        await create(page,`Unsurveyed rack ${width}`,'RACK');
+        await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
+        const planner=page.locator('.physical-planner');
+        await planner.getByLabel('Installation plan name',{exact:true}).fill(`Unvalidated allocation ${width}`);
+        await planner.getByRole('combobox',{name:'Find equipment',exact:true}).fill(`Partial equipment ${width}`);
+        await planner.getByRole('option',{name:`Use equipment: Partial equipment ${width}`,exact:true}).click();
+        await planner.getByRole('checkbox',{name:'Use an explicit plan-only allocation',exact:true}).check();
+        for(const [axis,length] of [['X','440'],['Y','44.45'],['Z','500']]){
+          await planner.getByLabel(`${axis} allocation start (mm)`,{exact:true}).fill('0');
+          await planner.getByLabel(`${axis} allocation length (mm)`,{exact:true}).fill(length);
+        }
+        await planner.getByRole('button',{name:'Add planned placement',exact:true}).click();
+        const before=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'list',list:{limit:25}}})});
+        await planner.getByRole('button',{name:'Check physical requirements',exact:true}).click();
+        await expect(planner.getByRole('status')).toHaveText('Physical result unknown: missing. Nothing was saved or reserved.');
+        const after=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'list',list:{limit:25}}})});
+        expect(after.physical.revision).toBe(before.physical.revision);
+        await planner.getByRole('button',{name:'Save installation plan',exact:true}).click();
+        await expect(planner.getByRole('status')).toHaveText('Plan saved. Nothing is reserved or installed.');
+        await page.reload();await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
+        await planner.getByRole('button',{name:`Unvalidated allocation ${width} · draft`,exact:true}).click();
+        await expect(planner).toContainText('Z allocation: 0 mm + 500 mm');
+        const current=await rpc({oneofKind:'read',read:m.Read.create({target:{assetId:equipment.asset_id,incarnation:equipment.incarnation}})});
+        expect(current.detail.item.fields.filter(f=>['width','height','depth'].includes(f.name))).toEqual([]);
+        expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+      }finally{await page.close();}
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('physical dimensions save and reload on desktop and phone',async({browser})=>{
   // The real form preserves exact units through the API and disk store, including phone navigation.
   const dir=await mkdtemp(join(tmpdir(),'omloom-physical-'));const server=await host(dir);
@@ -184,6 +225,9 @@ test('physical dimensions save and reload on desktop and phone',async({browser})
         await page.getByRole('textbox',{name:'Width (mm)',exact:true}).fill('482.600');
         await page.getByRole('textbox',{name:'Height (mm)',exact:true}).fill('1866.900');
         await page.getByRole('textbox',{name:'Depth (mm)',exact:true}).fill('1000.125');
+        await page.getByText('Known current occupancy region',{exact:true}).click();
+        await page.getByRole('checkbox',{name:'Current occupancy is completely recorded in this region',exact:true}).check();
+        await page.getByRole('button',{name:'Copy entered usable region',exact:true}).click();
         await page.getByRole('button',{name:'Save physical facts',exact:true}).click();
         await expect(page.getByRole('status').filter({has:page.getByRole('button',{name:'Dismiss notice',exact:true})})).toHaveText('Physical facts saved.×');
         await page.reload();
@@ -192,6 +236,9 @@ test('physical dimensions save and reload on desktop and phone',async({browser})
         await expect(page.getByRole('textbox',{name:'Height (mm)',exact:true})).toHaveValue('1866.9');
         await expect(page.getByRole('textbox',{name:'Depth (mm)',exact:true})).toHaveValue('1000.125');
         await expect(page.getByRole('textbox',{name:'Measurement or specification source',exact:true})).toHaveValue('Measured inner mounting envelope');
+        await page.getByText('Known current occupancy region',{exact:true}).click();
+        await expect(page.getByRole('checkbox',{name:'Current occupancy is completely recorded in this region',exact:true})).toBeChecked();
+        await expect(page.getByRole('textbox',{name:'Z occupancy length (mm)',exact:true})).toHaveValue('1000.125');
         await create(page,`Equipment requiring connector access ${width}`);
         await page.getByText('Usable enclosure space and physical constraints',{exact:true}).click();
         await page.getByRole('textbox',{name:'Measurement or specification source',exact:true}).fill('Measured connector access requirement');
@@ -232,7 +279,7 @@ test('physical plan reserves then records installation on desktop and phone',asy
         changes.push({name:'serial',value:{oneofKind:'text',text:`material-serial-${width}`}});
         await rpc({oneofKind:'write',write:m.Write.create({target:equipmentTarget,expected:existing.detail.item.revision,kind:existing.detail.item.kind,changes})});
         const [x,y,z]=[482600n,1866900n,1000000n].map(lengthUm=>({startUm:0n,lengthUm}));
-        await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target:reference(rack),basis:'Measured test fixture usable space',volume:{x,y,z}})}}})});
+        await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target:reference(rack),basis:'Measured usable space and recorded fixture occupancy',volume:{x,y,z},occupancyCoverage:{x,y,z}})}}})});
         await page.reload();
         await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
         const planner=page.locator('.physical-planner');
@@ -309,7 +356,12 @@ test('plan checkpoints gate successive installation on desktop and phone',async(
           await rpc({oneofKind:'write',write:m.Write.create({target,kind:m.AssetKind.DEVICE,expected:detail.detail.item.revision,changes})});
         }
         const extent=lengthUm=>({startUm:0n,lengthUm});
-        await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'define',define:{definition:{target:reference(rack),basis:'Measured usable space',volume:{x:extent(500000n),y:extent(2000000n),z:extent(1000000n)}}}}})});
+        const recorded={x:extent(500000n),y:extent(2000000n),z:extent(1000000n)};
+        const rackDefinition=m.PhysicalDefinition.create({target:reference(rack),basis:'Measured usable space and recorded fixture occupancy',volume:recorded,occupancyCoverage:recorded});
+        await rpc({
+          oneofKind:'physical',
+          physical:m.Physical.create({action:{oneofKind:'define',define:{definition:rackDefinition}}}),
+        });
         await page.reload();await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
         const planner=page.locator('.physical-planner');
         await planner.getByLabel('Installation plan name',{exact:true}).fill(`Checkpoint plan ${width}`);

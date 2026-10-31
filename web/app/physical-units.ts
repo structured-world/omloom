@@ -17,6 +17,7 @@ function measurement(mm: string,positive:boolean): bigint {
 }
 export function micrometres(mm:string):bigint{return measurement(mm,true);}
 export function nonnegativeMicrometres(mm:string):bigint{return measurement(mm,false);}
+export function signedMicrometres(mm:string):bigint{return mm.startsWith('-')?-measurement(mm.slice(1),false):measurement(mm,false);}
 // A one-sided lower bound cannot reserve a safe maximum envelope.
 export function upperMicrometres(quantity:{upper?:bigint;unit:string;scale:number}):bigint|undefined {
   if(quantity.upper===undefined||quantity.unit!=='mm')return undefined;

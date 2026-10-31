@@ -29,7 +29,8 @@ fn define(target: wire::AssetRef) -> api::PhysicalDefinition {
     api::PhysicalDefinition {
         target: Some(target),
         volume: Some(volume()),
-        basis: "Measured mounting envelope".into(),
+        occupancy_coverage: Some(Box::new(volume())),
+        basis: "Measured mounting envelope and recorded fixture occupants".into(),
         ..Default::default()
     }
 }

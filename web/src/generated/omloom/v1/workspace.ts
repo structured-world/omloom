@@ -3659,6 +3659,15 @@ export interface PhysicalDefinition {
      * @generated from protobuf field: optional omloom.workspace.v1.PhysicalClearance clearance = 13
      */
     clearance?: PhysicalClearance;
+    /**
+     * Operator/source-asserted region whose current actual occupancy is completely
+     * represented, in this enclosure's coordinate frame. Missing is unqualified,
+     * never empty. A broader usable envelope does not extend this evidence.
+     * This grants no access and reserves no space; its source is the basis above.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.PhysicalVolume occupancy_coverage = 14
+     */
+    occupancyCoverage?: PhysicalVolume;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.PhysicalClearance
@@ -7819,7 +7828,8 @@ class PhysicalDefinition$Type extends MessageType<PhysicalDefinition> {
             { no: 10, name: "mounting", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 11, name: "component_kind", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalComponentKind", PhysicalComponentKind, "PHYSICAL_COMPONENT_KIND_"] },
             { no: 12, name: "mating", kind: "message", T: () => PhysicalMating },
-            { no: 13, name: "clearance", kind: "message", T: () => PhysicalClearance }
+            { no: 13, name: "clearance", kind: "message", T: () => PhysicalClearance },
+            { no: 14, name: "occupancy_coverage", kind: "message", T: () => PhysicalVolume }
         ]);
     }
 }

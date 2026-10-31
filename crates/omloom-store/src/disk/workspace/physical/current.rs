@@ -5,6 +5,7 @@ pub(super) fn pose_key(binding: &str) -> String {
     format!("physical-pose/{binding}")
 }
 pub(super) struct PhysicalUse {
+    pub definition: api::PhysicalDefinition,
     pub volumes: Vec<crate::physical::Region>,
     pub items: BTreeSet<AssetRef>,
     pub inspected: usize,
@@ -84,6 +85,9 @@ impl Tx<'_> {
         remaining: usize,
     ) -> Result<PhysicalUse> {
         debug_assert!(remaining <= 2048);
+        let definition = self
+            .physical_definition(enclosure)?
+            .ok_or(Error::Incomplete)?;
         let current = self.current_physical_rows(
             enclosure,
             u64::try_from(remaining + 1).map_err(|_| Error::Limit)?,
@@ -130,6 +134,7 @@ impl Tx<'_> {
             for row in self.query("UNWIND $keys AS key MATCH (p:OmRow {key:key}) RETURN properties(p) AS p LIMIT 2048",params([("keys",Value::Array(keys))]))? {poses.insert(string(&row,"key")?,row);}
         }
         let mut output = PhysicalUse {
+            definition,
             volumes: Vec::new(),
             items: BTreeSet::new(),
             inspected,

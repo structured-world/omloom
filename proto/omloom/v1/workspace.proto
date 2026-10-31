@@ -1553,6 +1553,11 @@ message PhysicalDefinition {
   // its enclosing coordinate frame. Missing is unqualified, not measured zero.
   // Admission checks declared margins without saving expanded occupancy copies.
   optional PhysicalClearance clearance = 13;
+  // Operator/source-asserted region whose current actual occupancy is completely
+  // represented, in this enclosure's coordinate frame. Missing is unqualified,
+  // never empty. A broader usable envelope does not extend this evidence.
+  // This grants no access and reserves no space; its source is the basis above.
+  optional PhysicalVolume occupancy_coverage = 14;
 }
 message PhysicalClearance {
   // User/source-required space before the equipment's X face, in micrometres.

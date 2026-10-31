@@ -1,5 +1,127 @@
 use super::*;
 
+// Recording a rack's dimensions does not establish that its unrecorded space is empty.
+#[test]
+fn dimensional_definition_alone_does_not_qualify_free_capacity() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let rack = create(&store, &actor, K::Rack, "Partly documented rack")?;
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(api::PhysicalDefinition {
+                target: Some(rack.clone()),
+                volume: Some(volume()),
+                basis: "Dimensions measured; current occupancy not surveyed".into(),
+                ..Default::default()
+            }),
+        }),
+    )?;
+    let offer = offer(&store, &actor, &rack)?;
+    let before = store.usage()?;
+    let availability = read(&store, &actor, &offer)?;
+    assert_eq!(availability.state, api::RequirementState::Unknown as i32);
+    assert_eq!(availability.reason, api::RequirementReason::Missing as i32);
+    assert_eq!(store.usage()?, before);
+    let item = create(&store, &actor, K::Device, "Known loose equipment")?;
+    equipment_dimensions(&store, &actor, &item)?;
+    let plan = draft(&store, &actor, item, rack)?;
+    assert!(matches!(
+        reserve(&store, &actor, plan),
+        Err(Error::Incomplete)
+    ));
+    Ok(())
+}
+
+// A limited survey qualifies only that region; withdrawing it cannot evict an admitted allocation.
+#[test]
+fn occupancy_coverage_is_explicit_scoped_and_not_a_reservation_lifetime() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let rack = create(&store, &actor, K::Rack, "Partly surveyed rack")?;
+    let mut facts = define(rack.clone());
+    let mut partial = volume();
+    partial.z.as_mut().ok_or(Error::Corrupt)?.length_um = 500_000;
+    facts.occupancy_coverage = Some(Box::new(partial));
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(facts.clone()),
+        }),
+    )?;
+    let mut offer = offer(&store, &actor, &rack)?;
+    assert_eq!(
+        read(&store, &actor, &offer)?.reason,
+        api::RequirementReason::Incomplete as i32
+    );
+    offer.region = Some(partial);
+    offer = physical(
+        &store,
+        &actor,
+        api::physical::Action::Offer(api::PhysicalOfferEdit { offer: Some(offer) }),
+    )?
+    .offers
+    .pop()
+    .ok_or(Error::Corrupt)?;
+    assert_eq!(
+        read(&store, &actor, &offer)?.state,
+        api::RequirementState::Satisfied as i32
+    );
+    // No observed load is not a complete whole-rack power statement.
+    offer.power = true;
+    offer = physical(
+        &store,
+        &actor,
+        api::physical::Action::Offer(api::PhysicalOfferEdit { offer: Some(offer) }),
+    )?
+    .offers
+    .pop()
+    .ok_or(Error::Corrupt)?;
+    assert_eq!(
+        read(&store, &actor, &offer)?.reason,
+        api::RequirementReason::Incomplete as i32
+    );
+    let item = create(&store, &actor, K::Device, "Unplaced known equipment")?;
+    equipment_dimensions(&store, &actor, &item)?;
+    let plan = draft(&store, &actor, item, rack)?;
+    assert!(matches!(
+        reserve(&store, &actor, plan.clone()),
+        Err(Error::Incomplete)
+    ));
+    facts.occupancy_coverage = Some(Box::new(volume()));
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(facts.clone()),
+        }),
+    )?;
+    reserve(&store, &actor, plan)?;
+    let held = store.usage()?.rows[omloom_store::Class::Pending as usize];
+    facts.occupancy_coverage = None;
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(facts),
+        }),
+    )?;
+    assert_eq!(
+        store.usage()?.rows[omloom_store::Class::Pending as usize],
+        held
+    );
+    // The retained allocation still proves this region is not offered, even after survey withdrawal.
+    assert_eq!(
+        read(&store, &actor, &offer)?.state,
+        api::RequirementState::Failed as i32
+    );
+    Ok(())
+}
+
 fn offer(
     store: &Store,
     actor: &Context,

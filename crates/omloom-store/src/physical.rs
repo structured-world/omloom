@@ -125,6 +125,9 @@ impl Region {
         }
         Ok(Self { body, service })
     }
+    pub fn within(self, space: Volume) -> bool {
+        space.contains(self.service)
+    }
 }
 /// A sourced interval, retaining uncertainty instead of averaging it away.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -182,7 +185,7 @@ pub fn placement(
     let (Some(enclosure), Some(candidate)) = (enclosure, candidate) else {
         return Decision::unknown(Reason::Missing);
     };
-    if !enclosure.contains(candidate.service) {
+    if !candidate.within(enclosure) {
         return Decision::FAIL;
     }
     for volume in occupied {

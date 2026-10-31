@@ -7,6 +7,7 @@ mod cables;
 mod clearance;
 mod completion;
 mod connector;
+mod coverage;
 mod current;
 mod equipment;
 mod flow;
@@ -191,6 +192,7 @@ fn definition_row(value: &api::PhysicalDefinition) -> Result<Properties> {
     }
     connector::store(&mut data, value.mating.as_ref())?;
     clearance::write(&mut data, value.clearance.as_ref())?;
+    coverage::write(&mut data, value.occupancy_coverage.as_deref())?;
     Ok(data)
 }
 fn definition(data: &Properties) -> Result<api::PhysicalDefinition> {
@@ -223,6 +225,7 @@ fn definition(data: &Properties) -> Result<api::PhysicalDefinition> {
             .transpose()?,
         mating: connector::read(data)?,
         clearance: clearance::read(data)?,
+        occupancy_coverage: coverage::read(data)?.map(Box::new),
     })
 }
 impl Tx<'_> {

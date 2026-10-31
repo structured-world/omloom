@@ -51,6 +51,20 @@ fn require_mounting(
     }
 }
 
+fn require_coverage(
+    definition: &api::PhysicalDefinition,
+    region: crate::physical::Region,
+) -> core::result::Result<(), Failure> {
+    let decision = coverage::assess(definition.occupancy_coverage.as_deref(), region)?;
+    if decision.state != crate::requirements::State::Satisfied {
+        return Err(Failure {
+            error: Error::Incomplete,
+            decision: Some(decision),
+        });
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 pub(super) struct Claims {
     pub(super) parts: BTreeSet<AssetRef>,
@@ -119,9 +133,8 @@ impl Tx<'_> {
                 rows_read += occupied.inspected;
                 entry.insert(occupied);
             }
-            let definition = self
-                .physical_definition(enclosure)?
-                .ok_or(Error::Incomplete)?;
+            let occupied = enclosures.get_mut(&enclosure).ok_or(Error::Corrupt)?;
+            let definition = &occupied.definition;
             let mounting = |target: &AssetRef| {
                 profiles
                     .get(target)
@@ -154,20 +167,18 @@ impl Tx<'_> {
                 .transpose()?
                 .flatten();
             let region = clearance::region(proposed, margins.as_ref())?;
-            let occupied = enclosures.get_mut(&enclosure).ok_or(Error::Corrupt)?;
             match crate::physical::placement(envelope, Some(region), &occupied.volumes).state {
                 crate::requirements::State::Satisfied => {}
                 crate::requirements::State::Failed => return Err(Failure::mismatch()),
                 crate::requirements::State::Unknown => return Err(Error::Incomplete.into()),
             }
+            require_coverage(definition, region)?;
             occupied.volumes.push(region);
             occupied.items.insert(item);
         }
         // Constraint disclosure never includes hidden occupants or their individual demands.
         for (enclosure, occupied) in &enclosures {
-            let definition = self
-                .physical_definition(*enclosure)?
-                .ok_or(Error::Incomplete)?;
+            let definition = &occupied.definition;
             let limits = [
                 definition.max_mass_g,
                 definition.capacity_mw,
@@ -176,6 +187,13 @@ impl Tx<'_> {
             if limits.iter().all(Option::is_none) {
                 continue;
             }
+            let envelope = definition
+                .volume
+                .as_ref()
+                .map(volume)
+                .transpose()?
+                .ok_or(Error::Incomplete)?;
+            require_coverage(definition, clearance::region(envelope, None)?)?;
             if limits[0].is_some() {
                 for placement in placements(plan) {
                     if parse_target(placement.enclosure.as_ref())? != *enclosure {
@@ -341,7 +359,10 @@ impl Tx<'_> {
                     y: locate(target_volume.y, item_volume.y)?,
                     z: locate(target_volume.z, item_volume.z)?,
                 };
-                if !target_volume.contains(located) {
+                let region = clearance::region(located, item.clearance.as_ref())?;
+                if crate::physical::placement(Some(target_volume), Some(region), &[]).state
+                    != crate::requirements::State::Satisfied
+                {
                     return Err(Failure::mismatch());
                 }
             }

@@ -32,6 +32,11 @@ reads do not save occupancy snapshots or maintain a second capacity inventory.
 Declared physical clearance retains six current integer margins in the existing
 typed array column. Expanded service regions are derived in bounded batches
 for admission and selected availability, without another geometry inventory.
+Format 16 records an explicitly surveyed occupancy region as six current
+coordinates in the existing typed array layout. Older data acquires no assumed
+empty-space evidence during migration. This independent current assertion can
+cover less than the usable enclosure; increasing dimensions cannot extend it.
+Older hosts reject the new format instead of ignoring its admission semantics.
 Plan material lists and exports likewise derive from current admitted steps and
 permitted inventory fields, with no persisted bill or per-open export copy.
 

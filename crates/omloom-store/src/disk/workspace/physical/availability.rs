@@ -193,26 +193,37 @@ impl Tx<'_> {
             return Ok((offer, Decision::unknown(Reason::Stale)));
         }
         let assessment = (|| -> Result<Decision> {
-            let definition = self
-                .physical_definition(enclosure)?
-                .ok_or(Error::Incomplete)?;
             let occupied = self.physical_use(enclosure, &api::PhysicalPlan::default(), 2048)?;
+            let definition = &occupied.definition;
+            let region =
+                clearance::region(volume(offer.region.as_ref().ok_or(Error::Corrupt)?)?, None)?;
             let state = crate::physical::placement(
                 definition.volume.as_ref().map(volume).transpose()?,
-                offer
-                    .region
-                    .as_ref()
-                    .map(volume)
-                    .transpose()?
-                    .map(|v| clearance::region(v, None))
-                    .transpose()?,
+                Some(region),
                 &occupied.volumes,
             );
             if state.state != State::Satisfied {
                 return Ok(state);
             }
+            let knowledge = coverage::assess(definition.occupancy_coverage.as_deref(), region)?;
+            if knowledge.state != State::Satisfied {
+                return Ok(knowledge);
+            }
             let selected = [offer.mass, offer.power, offer.cooling];
             if selected.iter().any(|&v| v) {
+                let envelope = definition
+                    .volume
+                    .as_ref()
+                    .map(volume)
+                    .transpose()?
+                    .ok_or(Error::Incomplete)?;
+                let knowledge = coverage::assess(
+                    definition.occupancy_coverage.as_deref(),
+                    clearance::region(envelope, None)?,
+                )?;
+                if knowledge.state != State::Satisfied {
+                    return Ok(knowledge);
+                }
                 let demand = self.physical_loads(&occupied.items, selected)?;
                 for ((selected, limit), demand) in selected
                     .into_iter()

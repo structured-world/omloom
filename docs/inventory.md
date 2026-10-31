@@ -797,6 +797,13 @@ region's result without occupant names, counts or silhouettes. Revocation stops
 new disclosure, and restored data cannot certify fresh availability. This is
 advisory information, separate from atomic reservation.
 
+Usable dimensions do not prove empty space. Record the bounded region whose
+current occupants are completely represented before qualifying its availability.
+Outside that region remains unknown. Whole-enclosure mass, power and cooling
+checks need coverage of their contributing area. Withdrawing this statement
+releases neither installed occupancy nor unresolved reservations. Drafts and
+attributed reports of actual work remain available without a complete survey.
+
 ## Verification
 
 ```sh

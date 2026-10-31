@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import { call, model, AssetKind, type AssetRef } from './api';
-import { millimetres, micrometres, nonnegativeMicrometres } from './physical-units';
+import { call, model, requestMessage, AssetKind, type AssetRef } from './api';
+import { millimetres, micrometres, nonnegativeMicrometres, signedMicrometres } from './physical-units';
 import MatingEditor from './MatingEditor.vue';
 const props = defineProps<{target: AssetRef; kind:number; working: model.WorkingContext}>();
 const emit = defineEmits<{saved: [];equipment:[]}>();
@@ -19,6 +19,16 @@ const maxMass=ref(''),demand=ref(''),capacity=ref(''),cooling=ref(''),coolingCap
 const componentKind=ref(model.PhysicalComponentKind.UNSPECIFIED);
 const mating=ref<model.PhysicalMating>();
 const clearanceKnown=ref(false);
+const occupancyKnown=ref(false);
+const axes=['x','y','z'] as const;
+const survey=ref({x:{start:'',length:''},y:{start:'',length:''},z:{start:'',length:''}});
+function surveyInputs(value:model.PhysicalVolume|undefined){for(const axis of axes){const extent=value?.[axis];survey.value[axis]={start:extent===undefined?'':millimetres(extent.startUm),length:extent===undefined?'':millimetres(extent.lengthUm)};}}
+function enteredVolume(){
+  if(!known.value)return undefined;
+  const extent=(length:string,previous?:model.PhysicalExtent):model.PhysicalExtent=>({startUm:previous===undefined?0n:previous.startUm,lengthUm:micrometres(length)});
+  return model.PhysicalVolume.create({x:extent(width.value,current.value?.volume?.x),y:extent(height.value,current.value?.volume?.y),z:extent(depth.value,current.value?.volume?.z)});
+}
+function copySurvey(){try{const value=enteredVolume();if(value===undefined)throw Error('Enter the known usable region first.');surveyInputs(value);}catch(e){error.value=requestMessage(e);}}
 const margins=ref<Record<keyof model.PhysicalClearance,string>>({beforeXUm:'',afterXUm:'',beforeYUm:'',afterYUm:'',beforeZUm:'',afterZUm:''});
 const faces:{key:keyof model.PhysicalClearance;label:string}[]=[
   {key:'beforeXUm',label:'Before X'},{key:'afterXUm',label:'After X'},
@@ -36,6 +46,8 @@ async function load() {
     current.value = response.physical.definitions[0];
     mating.value=current.value?.mating===undefined?undefined:model.PhysicalMating.clone(current.value.mating);
     clearanceKnown.value=current.value?.clearance!==undefined;
+    occupancyKnown.value=current.value?.occupancyCoverage!==undefined;
+    surveyInputs(current.value?.occupancyCoverage);
     for(const face of faces)margins.value[face.key]=current.value?.clearance===undefined?'':millimetres(current.value.clearance[face.key]);
     basis.value = current.value?.basis ?? '';
     const number=(value:bigint|undefined)=>value===undefined?'':value.toString();
@@ -52,15 +64,14 @@ async function load() {
       depth.value = millimetres(v.z.lengthUm);
     }
     opened.value = true;
-  } catch (e) { error.value = String(e); }
+  } catch (e) { error.value = requestMessage(e); }
   finally { busy.value = false; }
 }
 async function save() {
   if (busy.value || revision.value === undefined) return;
   busy.value = true; error.value = '';
   try {
-    const extent = (length: string, previous?: model.PhysicalExtent): model.PhysicalExtent => ({startUm:previous === undefined ? 0n : previous.startUm,lengthUm:micrometres(length)});
-    const volume = known.value ? model.PhysicalVolume.create({x:extent(width.value,current.value?.volume?.x),y:extent(height.value,current.value?.volume?.y),z:extent(depth.value,current.value?.volume?.z)}) : undefined;
+    const volume = enteredVolume();
     const quantity=(value:string)=>{
       if(value==='')return undefined;
       if(!/^(0|[1-9][0-9]{0,18})$/.test(value))throw Error('Enter a nonnegative integer or leave the quantity unknown.');
@@ -70,12 +81,13 @@ async function save() {
     const definition = model.PhysicalDefinition.create({...current.value,target:props.target,basis:basis.value,volume,componentKind:componentKind.value,maxMassG:quantity(maxMass.value),demandMw:quantity(demand.value),capacityMw:quantity(capacity.value),coolingMw:quantity(cooling.value),coolingCapacityMw:quantity(coolingCapacity.value),mounting:mounting.value===''?undefined:mounting.value});
     definition.mating=mating.value;
     definition.clearance=clearanceKnown.value?model.PhysicalClearance.create(Object.fromEntries(faces.map(face=>[face.key,nonnegativeMicrometres(margins.value[face.key])]))):undefined;
+    definition.occupancyCoverage=occupancyKnown.value?model.PhysicalVolume.create(Object.fromEntries(axes.map(axis=>[axis,{startUm:signedMicrometres(survey.value[axis].start),lengthUm:micrometres(survey.value[axis].length)}]))):undefined;
     const response = await call({oneofKind:'physical',physical:model.Physical.create({action:{oneofKind:'define',define:{definition}}})},{...props.working,expected:revision.value});
     if (response.oneofKind !== 'physical') throw Error('Physical facts were not saved.');
     current.value = response.physical.definitions[0];
     revision.value = response.physical.revision;
     emit('saved');
-  } catch (e) { error.value = String(e); }
+  } catch (e) { error.value = requestMessage(e); }
   finally { busy.value = false; }
 }
 </script>
@@ -96,6 +108,12 @@ async function save() {
       <label>Depth (mm)<input v-model="depth" inputmode="decimal" required maxlength="17" /></label>
     </template>
     <p v-else>Unknown dimensions cannot establish physical fit.</p>
+    <details v-if="kind!==AssetKind.PORT"><summary>Known current occupancy region</summary>
+      <p>Dimensions and model slots do not prove empty space. Explicitly record the region whose current occupants are all represented in inventory. Other regions remain unqualified; saving this statement moves no equipment and releases no reservation. Include the review source in the source field above.</p>
+      <label class="check"><input v-model="occupancyKnown" type="checkbox"/>Current occupancy is completely recorded in this region</label>
+      <template v-if="occupancyKnown"><button type="button" @click="copySurvey">Copy entered usable region</button>
+      <template v-for="axis in axes" :key="axis"><label>{{axis.toUpperCase()}} occupancy start (mm)<input v-model="survey[axis].start" required inputmode="decimal" maxlength="18"/></label><label>{{axis.toUpperCase()}} occupancy length (mm)<input v-model="survey[axis].length" required inputmode="decimal" maxlength="17"/></label></template></template>
+    </details>
     <details><summary>Capacity and mounting facts</summary>
       <p>Empty means unknown. Zero is an explicit sourced value. Dimensions alone do not establish power, cooling or mounting compatibility.</p>
       <label>Enclosure mass limit (g)<input v-model="maxMass" inputmode="numeric" maxlength="19"/></label>
