@@ -59,7 +59,7 @@ async function check(){
 <p>Inventory revision {{result.revision.toString()}}. Evaluated {{new Date(Number(result.evaluatedAtMs)).toLocaleString()}}. This result is not saved.</p>
 <template v-for="entry in result.results" :key="entry.semanticKey">
 <p v-if="entry.resolutions.includes(model.RequirementResolution.RECORD_FACT)">An authorized inventory edit can supply or correct this fact. Recheck after saving.</p>
-<p v-if="entry.resolutions.includes(model.RequirementResolution.OWNER_ACTION)">Use Request owner action on this account's card to review the exact target and change. This check has not submitted a request or granted account access.</p>
+<p v-if="entry.resolutions.includes(model.RequirementResolution.OWNER_ACTION)">Use Request owner action on this account's card when it is shown. It requires a visible managed resource. This check has not submitted a request or granted account access.</p>
 <ul v-if="entry.evidence.length"><li v-for="evidence in entry.evidence" :key="evidence.source">{{evidence.observedAtMs===undefined?'Accepted authority':'Observation source'}}: <span class="mono">{{evidence.source}}</span><template v-if="evidence.observedAtMs!==undefined"> · {{new Date(Number(evidence.observedAtMs)).toLocaleString()}}</template><template v-if="evidence.validUntilMs!==undefined"> · valid until {{new Date(Number(evidence.validUntilMs)).toLocaleString()}}</template></li></ul>
 </template>
 </section>
