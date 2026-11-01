@@ -14,6 +14,73 @@ fn edit(cable: &wire::AssetRef, key: &str) -> api::PhysicalCableEndEdit {
     }
 }
 
+// Changed connector evidence blocks ordinary completion while preserving truthful actual-state reports.
+#[test]
+fn wiring_completion_rechecks_changed_port_mating() -> TestResult {
+    for changed_role in [Some(api::PhysicalMatingRole::SideA), None] {
+        let dir = tempfile::tempdir()?;
+        let store = Store::open(dir.path(), policy())?;
+        let actor = operator();
+        let cable = create(&store, &actor, K::Cable, "Reserved cable")?;
+        let port = create(&store, &actor, K::Port, "Changed connector")?;
+        let mut end = edit(&cable, "A");
+        end.end.as_mut().ok_or(Error::Corrupt)?.mating =
+            Some(mating(api::PhysicalMatingRole::SideA));
+        let saved = physical(&store, &actor, api::physical::Action::CableEnd(end))?
+            .cable_ends
+            .pop()
+            .ok_or(Error::Missing)?;
+        let mut definition = api::PhysicalDefinition {
+            target: Some(port.clone()),
+            basis: "Measured connector interface".into(),
+            mating: Some(mating(api::PhysicalMatingRole::SideB)),
+            ..Default::default()
+        };
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Define(api::PhysicalDefinitionEdit {
+                definition: Some(definition.clone()),
+            }),
+        )?;
+        let plan = wiring_plan(
+            &store,
+            &actor,
+            &cable,
+            saved.revision,
+            api::physical_wiring::After::Port(port.clone()),
+            api::PhysicalWiringIntent::Preserve,
+        )?;
+        let reserved = reserve(&store, &actor, plan)?.plan.ok_or(Error::Missing)?;
+        definition.mating = changed_role.map(mating);
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Define(api::PhysicalDefinitionEdit {
+                definition: Some(definition),
+            }),
+        )?;
+        let before = store.usage()?;
+        let result = report(&store, &actor, &reserved, false);
+        if changed_role.is_some() {
+            assert!(matches!(result, Err(Error::Conflict)));
+        } else {
+            assert!(matches!(result, Err(Error::Incomplete)));
+        }
+        assert_eq!(store.usage()?, before);
+        let actual = report(&store, &actor, &reserved, true)?;
+        assert_eq!(actual.state, api::PhysicalPlanState::Completed as i32);
+        let current = ends(&store, &actor, &cable, None)?
+            .cable_ends
+            .pop()
+            .ok_or(Error::Missing)?;
+        assert!(
+            matches!(current.attachment, Some(api::physical_cable_end::Attachment::Connected(ref value)) if value.port.as_ref() == Some(&port))
+        );
+    }
+    Ok(())
+}
+
 // A breakout remains one adopted assembly with explicit internal paths, not cloned cables.
 #[test]
 fn breakout_channels_have_two_ends_and_one_assembly_identity() -> TestResult {

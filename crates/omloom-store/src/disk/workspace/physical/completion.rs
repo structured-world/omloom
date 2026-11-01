@@ -269,7 +269,7 @@ impl Tx<'_> {
                                 context,
                                 w,
                                 wiring_basis.ok_or(Error::Corrupt)?,
-                                &key.id,
+                                &value,
                                 working,
                                 now,
                             )?;

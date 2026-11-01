@@ -310,33 +310,7 @@ impl Tx<'_> {
                             return Err(admission::Failure::mismatch());
                         }
                     }
-                    if !context.field(port, wire::AssetKind::Port as i32, "physical", false) {
-                        return Err(Error::Denied.into());
-                    }
-                    let end_mating = connector::read(&row)?;
-                    let port_row = self.get(&format!("physical/{}", network::identity(port)))?;
-                    let port_mating = port_row
-                        .as_ref()
-                        .map(connector::read)
-                        .transpose()?
-                        .flatten();
-                    let result = crate::physical::mating(
-                        end_mating
-                            .as_ref()
-                            .map(connector::declaration)
-                            .transpose()?,
-                        port_mating
-                            .as_ref()
-                            .map(connector::declaration)
-                            .transpose()?,
-                    );
-                    match result.state {
-                        crate::requirements::State::Satisfied => {}
-                        crate::requirements::State::Failed => {
-                            return Err(admission::Failure::mismatch());
-                        }
-                        crate::requirements::State::Unknown => return Err(Error::Incomplete.into()),
-                    }
+                    self.wiring_mating(context, cable, &row, port)?;
                     claims.parts.insert(port);
                 }
             }
@@ -369,15 +343,51 @@ impl Tx<'_> {
         }
         Ok(())
     }
+    fn wiring_mating(
+        &self,
+        context: &Context,
+        cable: AssetRef,
+        end: &Properties,
+        port: AssetRef,
+    ) -> core::result::Result<(), admission::Failure> {
+        if !context.field(cable, wire::AssetKind::Cable as i32, "physical", false)
+            || !context.field(port, wire::AssetKind::Port as i32, "physical", false)
+        {
+            return Err(Error::Denied.into());
+        }
+        let end_mating = connector::read(end)?;
+        let port_row = self.get(&format!("physical/{}", network::identity(port)))?;
+        let port_mating = port_row
+            .as_ref()
+            .map(connector::read)
+            .transpose()?
+            .flatten();
+        let result = crate::physical::mating(
+            end_mating
+                .as_ref()
+                .map(connector::declaration)
+                .transpose()?,
+            port_mating
+                .as_ref()
+                .map(connector::declaration)
+                .transpose()?,
+        );
+        match result.state {
+            crate::requirements::State::Satisfied => Ok(()),
+            crate::requirements::State::Failed => Err(admission::Failure::mismatch()),
+            crate::requirements::State::Unknown => Err(Error::Incomplete.into()),
+        }
+    }
     pub(super) fn record_wiring(
         &mut self,
         context: &Context,
         step: &mut api::PhysicalWiring,
         expected: u64,
-        owner: &str,
+        report: &api::PhysicalCompletion,
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<()> {
+        let owner = report.plan.as_ref().ok_or(Error::Invalid)?.id.as_str();
         self.wiring_access(context, step, working, true)?;
         let cable = parse_target(step.cable.as_ref())?;
         let key = row_key(cable, &step.end_key)?;
@@ -422,6 +432,12 @@ impl Tx<'_> {
             api::physical_wiring::After::Port(port) => Some(parse_target(Some(port))?),
             _ => None,
         };
+        if let Some(port) = destination
+            && !report.actual_state
+        {
+            self.wiring_mating(context, cable, &row, port)
+                .map_err(|failure| failure.error)?;
+        }
         if let Some(port) = destination
             && let Some(occupied) = self.cable_binding_at(port)?
             && previous

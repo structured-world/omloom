@@ -839,6 +839,9 @@ An optional sourced mating contract identifies one exact declared interface and
 its complementary sides. Matching connector labels alone cannot establish fit;
 different contract revisions remain unqualified. The declaration checks only
 that interface, not signal compatibility, power safety or working service.
+Normal reserved cable completion rechecks the current endpoint declarations.
+Explicit actual-state reporting can retain an incompatible connection without
+asserting physical fit or service health.
 
 Equipment may also declare six service/connector margins in its enclosing
 coordinate frame. A missing declaration is unqualified, while explicit zero is
