@@ -23,6 +23,8 @@ mod power;
 mod rack_grid;
 #[path = "physical/reviews.rs"]
 mod reviews;
+#[path = "physical/shared_loads.rs"]
+mod shared_loads;
 
 fn volume() -> api::PhysicalVolume {
     let extent = |length| {

@@ -76,10 +76,12 @@ impl<'a> Placement<'a> {
             .transpose()
     }
 }
-fn step_placement(step: &api::PhysicalStep) -> Option<Placement<'_>> {
+fn step_allocation(step: &api::PhysicalStep) -> Option<Placement<'_>> {
     match &step.action {
         Some(api::physical_step::Action::Placement(value)) => Some(Placement::from(value)),
-        Some(api::physical_step::Action::Replacement(value)) if value.volume.is_some() => {
+        Some(api::physical_step::Action::Replacement(value))
+            if value.volume.is_some() || value.replacement.is_some() =>
+        {
             Some(Placement {
                 item: &value.replacement,
                 material: None,
@@ -89,6 +91,26 @@ fn step_placement(step: &api::PhysicalStep) -> Option<Placement<'_>> {
         }
         _ => None,
     }
+}
+fn allocation_steps(plan: &api::PhysicalPlan) -> impl Iterator<Item = (usize, Placement<'_>)> {
+    plan.steps
+        .iter()
+        .enumerate()
+        .filter_map(|(index, step)| step_allocation(step).map(|p| (index, p)))
+}
+fn step_placement(step: &api::PhysicalStep) -> Option<Placement<'_>> {
+    let allocation = step_allocation(step)?;
+    if matches!(
+        step.action,
+        Some(api::physical_step::Action::Replacement(_))
+    ) && allocation.volume.is_none()
+    {
+        return None;
+    }
+    Some(allocation)
+}
+fn shared_enclosure(kind: u64) -> bool {
+    kind == wire::AssetKind::Site as u64 || kind == wire::AssetKind::Location as u64
 }
 fn placement_steps(plan: &api::PhysicalPlan) -> impl Iterator<Item = (usize, Placement<'_>)> {
     plan.steps

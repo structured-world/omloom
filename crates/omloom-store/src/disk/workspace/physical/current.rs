@@ -86,6 +86,7 @@ impl Tx<'_> {
         plan: &api::PhysicalPlan,
         ancestors: &[u64; crate::plans::MAX_STEPS],
         remaining: usize,
+        geometry: bool,
     ) -> Result<PhysicalUse> {
         debug_assert!(remaining <= 2048);
         let definition = self
@@ -130,7 +131,7 @@ impl Tx<'_> {
             let removal = removed.get(id.as_str()).copied();
             if let Some(removal) = removal {
                 let mut always_before = true;
-                for (index, p) in placement_steps(plan) {
+                for (index, p) in allocation_steps(plan) {
                     if parse_target(p.enclosure.as_ref())? == enclosure
                         && index != removal
                         && ancestors[index] & (1u64 << removal) == 0
@@ -145,10 +146,13 @@ impl Tx<'_> {
             }
             bindings.push((id, target(&row)?, removal));
         }
-        let mut keys = bindings
-            .iter()
-            .map(|(id, _, _)| text(pose_key(id)))
-            .collect::<Vec<_>>();
+        let mut keys =
+            Vec::with_capacity(pending.len() + if geometry { bindings.len() } else { 0 });
+        if geometry {
+            for (id, _, _) in &bindings {
+                keys.push(text(pose_key(id)));
+            }
+        }
         for row in &pending {
             keys.push(text(string(row, "claim")?));
         }
@@ -158,7 +162,11 @@ impl Tx<'_> {
         }
         let mut output = PhysicalUse {
             definition,
-            volumes: Vec::with_capacity(bindings.len() + pending.len()),
+            volumes: Vec::with_capacity(if geometry {
+                bindings.len() + pending.len()
+            } else {
+                0
+            }),
             conditional_removals: Vec::with_capacity(bindings.len()),
             items: BTreeSet::new(),
             future_loads: Vec::new(),
@@ -168,6 +176,12 @@ impl Tx<'_> {
         let mut removals = Vec::with_capacity(bindings.len() + pending.len());
         for (id, item, removal) in bindings {
             output.items.insert(item);
+            if !geometry {
+                if let Some(removal) = removal {
+                    output.conditional_removals.push((removal, None));
+                }
+                continue;
+            }
             let Some(pose) = poses.get(&pose_key(&id)) else {
                 if let Some(removal) = removal {
                     output.conditional_removals.push((removal, None));
@@ -191,7 +205,7 @@ impl Tx<'_> {
             if step.state != api::PhysicalStepState::Reserved as i32 {
                 return Err(Error::Corrupt);
             }
-            let placement = step_placement(&step).ok_or(Error::Corrupt)?;
+            let placement = step_allocation(&step).ok_or(Error::Corrupt)?;
             if parse_target(placement.enclosure.as_ref())? != enclosure {
                 return Err(Error::Corrupt);
             }
@@ -208,11 +222,14 @@ impl Tx<'_> {
                 continue;
             }
             let item = parse_target(placement.item.as_ref())?;
+            output.items.insert(item);
+            if !geometry {
+                continue;
+            }
             bodies.push((
                 item,
                 volume(placement.volume.as_ref().ok_or(Error::Corrupt)?)?,
             ));
-            output.items.insert(item);
             removals.push(None);
         }
         if !future.is_empty() {
@@ -242,14 +259,18 @@ impl Tx<'_> {
                 if u64::from(unit) >= number(profile, "count")? {
                     return Err(Error::Corrupt);
                 }
-                output
-                    .volumes
-                    .push(clearance::region(body, clearance::read(profile)?.as_ref())?);
+                if geometry {
+                    output
+                        .volumes
+                        .push(clearance::region(body, clearance::read(profile)?.as_ref())?);
+                }
                 if let Some(allocation) = rows.get(&format!("{key}/unit/{unit}")) {
                     let item = target(allocation)?;
                     output.items.insert(item);
-                    bodies.push((item, body));
-                    removals.push(None);
+                    if geometry {
+                        bodies.push((item, body));
+                        removals.push(None);
+                    }
                     continue;
                 }
                 if needed.iter().any(|v| *v) {
@@ -260,6 +281,9 @@ impl Tx<'_> {
                     )?);
                 }
             }
+        }
+        if !geometry {
+            return Ok(output);
         }
         for (region, removal) in self
             .current_regions(&bodies, &output.items)?

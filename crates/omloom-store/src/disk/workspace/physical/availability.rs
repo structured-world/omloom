@@ -198,6 +198,7 @@ impl Tx<'_> {
                 &api::PhysicalPlan::default(),
                 &[0; crate::plans::MAX_STEPS],
                 2048,
+                true,
             )?;
             let definition = &occupied.definition;
             let region =

@@ -165,7 +165,7 @@ impl Tx<'_> {
             }
             if let std::collections::btree_map::Entry::Vacant(entry) = enclosures.entry(enclosure) {
                 let occupied =
-                    self.physical_use(enclosure, plan, &graph.ancestors, 2048 - rows_read)?;
+                    self.physical_use(enclosure, plan, &graph.ancestors, 2048 - rows_read, true)?;
                 rows_read += occupied.inspected;
                 entry.insert(occupied);
             }
@@ -248,6 +248,40 @@ impl Tx<'_> {
                 }
             }
         }
+        // Site/location membership consumes shared budgets even without a geometric pose.
+        for (_, allocation) in allocation_steps(plan) {
+            if allocation.volume.is_some() {
+                continue;
+            }
+            let enclosure = parse_target(allocation.enclosure.as_ref())?;
+            if !shared_enclosure(number(&self.asset(enclosure)?, "kind")?) {
+                continue;
+            }
+            if let std::collections::btree_map::Entry::Vacant(entry) = enclosures.entry(enclosure) {
+                let definition = self
+                    .physical_definition(enclosure)?
+                    .ok_or(Error::Incomplete)?;
+                if definition.max_mass_g.is_none()
+                    && definition.capacity_mw.is_none()
+                    && definition.cooling_capacity_mw.is_none()
+                {
+                    continue;
+                }
+                let occupied =
+                    self.physical_use(enclosure, plan, &graph.ancestors, 2048 - rows_read, false)?;
+                rows_read += occupied.inspected;
+                entry.insert(occupied);
+            }
+            enclosures
+                .get_mut(&enclosure)
+                .ok_or(Error::Corrupt)?
+                .items
+                .insert(
+                    allocation
+                        .actual(&plan.materials)?
+                        .ok_or(Error::Incomplete)?,
+                );
+        }
         // Constraint disclosure never includes hidden occupants or their individual demands.
         for (enclosure, occupied) in &enclosures {
             let definition = &occupied.definition;
@@ -267,7 +301,7 @@ impl Tx<'_> {
                 .ok_or(Error::Incomplete)?;
             require_coverage(definition, clearance::region(envelope, None)?)?;
             if limits[0].is_some() {
-                for placement in placements(plan) {
+                for (_, placement) in allocation_steps(plan) {
                     if parse_target(placement.enclosure.as_ref())? != *enclosure {
                         continue;
                     }

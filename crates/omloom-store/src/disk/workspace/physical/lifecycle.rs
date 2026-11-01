@@ -168,8 +168,11 @@ impl Tx<'_> {
             .assess_physical(context, &plan, working)
             .map_err(|failure| failure.error)?;
         self.acquire_physical_claims(claims, &key.id)?;
-        for (index, p) in placement_steps(&plan) {
+        for (index, p) in allocation_steps(&plan) {
             let enclosure = parse_target(p.enclosure.as_ref())?;
+            if p.volume.is_none() && !shared_enclosure(number(&self.asset(enclosure)?, "kind")?) {
+                continue;
+            }
             self.put(
                 &reservations::reservation_key(&key.id, index),
                 &format!("physical-reservations/{}", network::identity(enclosure)),

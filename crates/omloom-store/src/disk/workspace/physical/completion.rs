@@ -34,8 +34,8 @@ impl Tx<'_> {
                 if string(&row, "claim")? != format!("plan/{id}/{index}") {
                     return Err(Error::Corrupt);
                 }
-                self.clear_physical_reservation(id, index as usize)?;
             }
+            self.clear_physical_reservation(id, index as usize)?;
             indexes[index as usize] = Some(proposal.steps.len() as u32);
             proposal.steps.push(step.clone());
         }
