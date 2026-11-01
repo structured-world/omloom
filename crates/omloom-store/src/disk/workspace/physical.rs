@@ -309,7 +309,7 @@ fn definition_kind(kind: wire::AssetKind, value: &api::PhysicalDefinition) -> Re
 fn definition_facts(value: &api::PhysicalDefinition) -> Result<Properties> {
     api::PhysicalAssemblyKind::try_from(value.assembly_kind).map_err(|_| Error::Invalid)?;
     api::PhysicalComponentKind::try_from(value.component_kind).map_err(|_| Error::Invalid)?;
-    if value.basis.is_empty()
+    if value.basis.trim().is_empty()
         || value.basis.len() > 512
         || value.basis.chars().any(char::is_control)
         || value
