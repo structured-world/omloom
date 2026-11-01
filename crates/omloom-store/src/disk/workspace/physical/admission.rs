@@ -361,13 +361,20 @@ impl Tx<'_> {
     ) -> core::result::Result<Claims, Failure> {
         let mut claims = Claims::default();
         let mut mass_limits = Vec::new();
+        let removed: BTreeSet<_> = replacement_steps(plan)
+            .filter_map(|replacement| replacement.previous_binding.as_deref())
+            .collect();
         for replacement in replacement_steps(plan) {
             self.replacement_access(context, replacement, working, false)?;
             let destination = parse_target(replacement.position.as_ref())?;
-            let destination_row = self.asset(destination)?;
+            let destination_kind = wire::AssetKind::try_from(
+                i32::try_from(number(&self.asset(destination)?, "kind")?)
+                    .map_err(|_| Error::Corrupt)?,
+            )
+            .map_err(|_| Error::Corrupt)?;
             if !context.field(
                 destination,
-                number(&destination_row, "kind")? as i32,
+                destination_kind as i32,
                 "physical_availability",
                 false,
             ) {
@@ -385,9 +392,7 @@ impl Tx<'_> {
             }
             if let Some(incoming) = &replacement.replacement {
                 let incoming = parse_target(Some(incoming))?;
-                if number(&destination_row, "kind")? == wire::AssetKind::Rack as u64
-                    && replacement.volume.is_none()
-                {
+                if destination_kind == wire::AssetKind::Rack && replacement.volume.is_none() {
                     return Err(Error::Incomplete.into());
                 }
                 let item = self
@@ -401,7 +406,7 @@ impl Tx<'_> {
                 {
                     mass_limits.push(limit);
                 }
-                if number(&destination_row, "kind")? == wire::AssetKind::PhysicalPosition as u64 {
+                if destination_kind == wire::AssetKind::PhysicalPosition {
                     self.require_position_class(destination, item.component_kind)?;
                 }
                 require_mounting(target.mounting.as_deref(), item.mounting.as_deref())?;
@@ -445,26 +450,19 @@ impl Tx<'_> {
             {
                 claims.parts.insert(parse_target(Some(part))?);
             }
-            for position in [
-                replacement.position.as_ref(),
-                replacement.source_position.as_ref(),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                let position = parse_target(Some(position))?;
-                if number(&self.asset(position)?, "kind")?
-                    == wire::AssetKind::PhysicalPosition as u64
+            if destination_kind == wire::AssetKind::PhysicalPosition {
+                claims.positions.insert(destination);
+            }
+            if let Some(source) = &replacement.source_position {
+                let source = parse_target(Some(source))?;
+                if source != destination
+                    && number(&self.asset(source)?, "kind")?
+                        == wire::AssetKind::PhysicalPosition as u64
                 {
-                    claims.positions.insert(position);
+                    claims.positions.insert(source);
                 }
             }
-        }
-        let removed: BTreeSet<_> = replacement_steps(plan)
-            .filter_map(|replacement| replacement.previous_binding.as_deref())
-            .collect();
-        for replacement in replacement_steps(plan) {
-            self.require_replacement_space(replacement, &removed)
+            self.require_replacement_space(replacement, &removed, destination_kind)
                 .map_err(|error| {
                     if matches!(error, Error::Conflict) {
                         Failure::mismatch()

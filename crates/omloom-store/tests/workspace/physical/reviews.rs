@@ -1,4 +1,6 @@
 use super::*;
+use prost::Message;
+use sha2::{Digest, Sha256};
 
 // Reordered or repeated roots describe the same disclosure scope and one current contribution.
 #[test]
@@ -87,6 +89,26 @@ fn replacement_feedback_scope_canonicalizes_root_identity_sets() -> TestResult {
     )?
     .plan
     .ok_or(Error::Corrupt)?;
+    // The optimized hash must retain the canonical protobuf representation of each identity.
+    let mut reference = Sha256::new();
+    reference.update(actor.authority_revision.to_le_bytes());
+    reference.update(Sha256::digest(
+        format!("{:?}/{:?}", actor.grants[0].scope, actor.grants[0].read).as_bytes(),
+    ));
+    let mut encoded: Vec<_> = roots.iter().map(Message::encode_to_vec).collect();
+    encoded.sort_unstable();
+    encoded.dedup();
+    for root in encoded {
+        reference.update(root);
+    }
+    let Some(api::physical_step::Action::Replacement(replacement)) = &accepted.steps[0].action
+    else {
+        return Err(Error::Corrupt.into());
+    };
+    assert_eq!(
+        replacement.feedback.as_ref().ok_or(Error::Corrupt)?.scope,
+        format!("{:x}", reference.finalize())
+    );
     let mut reversed = roots.clone();
     reversed.reverse();
     let quality_action = || {

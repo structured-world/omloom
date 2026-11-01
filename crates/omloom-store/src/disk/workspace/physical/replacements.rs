@@ -133,9 +133,10 @@ impl Tx<'_> {
         &self,
         replacement: &api::PhysicalReplacement,
         removed: &BTreeSet<T>,
+        destination_kind: wire::AssetKind,
     ) -> Result<()> {
         let position = parse_target(replacement.position.as_ref())?;
-        if number(&self.asset(position)?, "kind")? == wire::AssetKind::PhysicalPosition as u64 {
+        if destination_kind == wire::AssetKind::PhysicalPosition {
             let rows=self.query("MATCH (p:OmRow {key:$key})<-[:OmRelationTo]-(r:OmRow) WHERE r.kind=$kind RETURN properties(r) AS p LIMIT 2",params([("key",text(asset_key(position))),("kind",int(wire::RelationKind::InstalledIn as u64)?)]))?;
             if rows.len() > 1 {
                 return Err(Error::Conflict);
@@ -205,7 +206,12 @@ impl Tx<'_> {
             if replacement.replacement.is_some() {
                 incoming_positions.insert(position);
             }
-            self.require_replacement_space(replacement, &removed)?;
+            let kind = wire::AssetKind::try_from(
+                i32::try_from(number(&self.asset(position)?, "kind")?)
+                    .map_err(|_| Error::Corrupt)?,
+            )
+            .map_err(|_| Error::Corrupt)?;
+            self.require_replacement_space(replacement, &removed, kind)?;
         }
         // Detach every selected old binding before attaching incoming parts, including swaps.
         for binding in &old {

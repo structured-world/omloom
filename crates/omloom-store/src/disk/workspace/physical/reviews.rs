@@ -54,8 +54,12 @@ fn scope(context: &Context, working: &api::WorkingContext) -> Result<String> {
     for grant in grants {
         hash.update(grant);
     }
+    // Two validated UUID strings, each with its one-byte protobuf tag and length.
+    let mut encoded = [0_u8; 2 * (2 + 36)];
     for root in roots {
-        hash.update(root.encode_to_vec());
+        root.encode(&mut encoded.as_mut_slice())
+            .map_err(|_| Error::Corrupt)?;
+        hash.update(encoded.as_slice());
     }
     Ok(format!("{:x}", hash.finalize()))
 }

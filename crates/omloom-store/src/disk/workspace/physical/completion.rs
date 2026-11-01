@@ -53,8 +53,9 @@ impl Tx<'_> {
                     action: Some(api::physical_step::Action::Placement(
                         api::PhysicalPlacement {
                             item: Some(target_wire(item)),
+                            enclosure: placement.enclosure.clone(),
+                            volume: placement.volume,
                             material: None,
-                            ..placement.clone()
                         },
                     )),
                     ..Default::default()
