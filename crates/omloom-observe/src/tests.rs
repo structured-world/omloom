@@ -280,6 +280,39 @@ fn collection_publication_failures_remain_errors() {
     );
 }
 
+pub(super) fn source_unavailable(reason: &str) -> bool {
+    reason.contains("Command unavailable (")
+        || reason.contains("Command deadline exceeded (")
+        || reason.contains("Permission denied")
+        || reason.contains("Collection execution budget exhausted")
+        || reason.contains("Collection byte budget exhausted")
+        || reason.contains("Hardware evidence changed during collection")
+        || reason.contains("Installation or boot changed during collection")
+}
+
+// Unavailable commands are normal, but parsing and execution defects must not skip native assertions.
+#[test]
+fn native_availability_does_not_hide_implementation_errors() {
+    for reason in [
+        "Invalid structured output; source: Windows identity",
+        "Missing source field boot",
+        "Invalid native identity claim",
+        "Command wait failed",
+        "Cannot terminate failed command",
+    ] {
+        assert!(!source_unavailable(reason), "{reason}");
+    }
+    for reason in [
+        "Initial host identity: Command unavailable (powershell.exe): NotFound",
+        "Required interface table unavailable: Permission denied",
+        "Command deadline exceeded (powershell.exe)",
+        "Collection execution budget exhausted",
+        "Installation or boot changed during collection; output not written",
+    ] {
+        assert!(source_unavailable(reason), "{reason}");
+    }
+}
+
 // Native availability is reported honestly. A failed source cannot publish an
 // empty inventory; available sources retain coherent boot and decoder checks.
 #[tokio::test]
@@ -287,7 +320,10 @@ async fn native_host_collection_reports_verified_or_unavailable_sources() {
     let report = match collect().await {
         Ok(report) => report,
         Err(reason) => {
-            assert!(!reason.is_empty());
+            assert!(
+                source_unavailable(&reason),
+                "Unexpected native failure: {reason}"
+            );
             let dir = tempfile::tempdir().expect("temporary directory");
             let path = dir.path().join("unavailable.omloom");
             finish_collection(Err(reason), &path).expect("normal unavailable outcome");

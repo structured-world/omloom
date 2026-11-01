@@ -92,7 +92,10 @@ async fn native_identity_observation_keeps_layers_separate() -> Result<()> {
         Err(error) => {
             let dir = tempfile::tempdir().expect("temporary directory");
             let path = dir.path().join("unavailable.omloom");
-            assert!(!error.is_empty());
+            assert!(
+                crate::tests::source_unavailable(&error),
+                "Unexpected identity failure: {error}"
+            );
             crate::finish_collection(Err(error), &path)?;
             assert!(!path.exists());
             return Ok(());
