@@ -134,7 +134,30 @@ fn actual_component_report_preserves_a_conflicting_future_reservation() -> TestR
             ..Default::default()
         }),
     )?;
-    assert_eq!(binding(&store, &found)?.to, Some(position));
+    assert_eq!(binding(&store, &found)?.to, Some(position.clone()));
+    let held = store
+        .diagnostic_database()
+        .execute_cypher_shared(
+            "MATCH (n:OmRow {key:$key}) RETURN n.owner AS owner",
+            Some(std::collections::HashMap::from([(
+                "key".into(),
+                coordinode_core::graph::types::Value::String(format!(
+                    "physical-slot/{}/{}",
+                    position.asset_id, position.incarnation
+                )),
+            )])),
+            None,
+            None,
+            None,
+        )?
+        .rows;
+    assert_eq!(held.len(), 1);
+    assert_eq!(
+        held[0]
+            .get("owner")
+            .and_then(coordinode_core::graph::types::Value::as_str),
+        future.id.as_deref()
+    );
     let before = store.usage()?;
     assert!(matches!(
         physical(
