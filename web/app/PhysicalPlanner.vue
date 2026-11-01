@@ -105,12 +105,21 @@ async function summaries(after?:string) {
   const reply=await invoke({oneofKind:'list',list:{after,limit:25}});
   plans.value=reply.plans;next.value=reply.next;
 }
-async function refresh() {
+async function refresh(resetGrid=true) {
   const reply=await invoke({oneofKind:'read',read:{enclosure:props.target,occupants:true}});
   view.value=reply;
-  if(rackGrid.value)unit.value=String(rackGrid.value.firstUnit);
+  if(resetGrid&&rackGrid.value)unit.value=String(rackGrid.value.firstUnit);
   if(props.kind===K.CABLE)await loadEnds();
 }
+let parentBasis=props.working.expected;
+watch([()=>props.working.expected,()=>props.inactive,busy],async()=>{
+  if(props.inactive){parentBasis=undefined;return;}
+  if(!opened.value||busy.value||parentBasis===props.working.expected)return;
+  parentBasis=props.working.expected;
+  // A current read can outrun its parent; it must not start a refresh loop.
+  if(props.working.expected===view.value.revision)return;
+  await run(async()=>{assessment.value=undefined;reviewHypotheses.value.clear();await refresh(false);await summaries();});
+});
 async function loadEnds(after?:string){const reply=await invoke({oneofKind:'cableEnds',cableEnds:{cable:props.target,after}});cableEnds.value=reply.cableEnds;endsNext.value=reply.next;}
 function addWiring(){
   error.value='';

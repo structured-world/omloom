@@ -99,7 +99,7 @@ test('material quantities stay plan-local and partial receiving survives reload 
       try{
         await page.goto(server.url);
         const actual=await create(page,`Received material ${width}`);
-        await create(page,`Receiving enclosure ${width}`,'RACK');
+        const enclosure=await create(page,`Receiving enclosure ${width}`,'RACK');
         await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
         const planner=page.locator('.physical-planner');
         await planner.getByText('Required materials and receiving (0 lines)',{exact:true}).click();
@@ -122,6 +122,15 @@ test('material quantities stay plan-local and partial receiving survives reload 
         await expect(planner.getByRole('button',{name:'Save installation plan',exact:true})).toBeVisible({timeout:5000});
         await expect(planner).toContainText('0 allocated of 3 requested');
         await planner.getByLabel('Installation plan name',{exact:true}).fill(`Receiving plan ${width}`);
+        // A global refresh must update the open physical view without erasing this unsaved draft.
+        const extent=lengthUm=>({startUm:0n,lengthUm});
+        const updatedVolume={x:extent(800000n),y:extent(3000000n),z:extent(1000000n)};
+        await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target:{assetId:enclosure.asset_id,incarnation:enclosure.incarnation},basis:'Updated enclosure survey',volume:updatedVolume,occupancyCoverage:updatedVolume})}}})});
+        if(width<600){await page.getByText('Usable enclosure space and physical constraints',{exact:true}).click();await page.locator('.physical-facts').getByLabel('Measurement or specification source',{exact:true}).fill('Survey reviewed on phone');await page.locator('.physical-facts').getByRole('button',{name:'Save physical facts',exact:true}).click();}
+        else await page.getByRole('button',{name:'↻ Refresh',exact:true}).click();
+        await expect(planner.getByRole('group',{name:'Rack physical placement',exact:true})).toHaveAttribute('viewBox','0 0 800 3000',{timeout:2000});
+        await expect(planner.getByLabel('Installation plan name',{exact:true})).toHaveValue(`Receiving plan ${width}`);
+        await expect(planner.locator('rect.proposed')).toHaveCount(1);
         await planner.getByRole('button',{name:'Receive or reuse a unit for requirement 1',exact:true}).click();
         const receiving=planner.getByRole('form',{name:'Material receiving',exact:true});
         await receiving.getByLabel('Requested unit number',{exact:true}).fill('3');
