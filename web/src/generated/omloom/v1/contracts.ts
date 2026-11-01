@@ -1041,7 +1041,19 @@ export enum AssetKind {
      *
      * @generated from protobuf enum value: ASSET_KIND_CONTAINER = 28;
      */
-    CONTAINER = 28
+    CONTAINER = 28,
+    /**
+     * Adopted movable physical part, independent of its present bay, label or serial evidence.
+     *
+     * @generated from protobuf enum value: ASSET_KIND_PHYSICAL_COMPONENT = 29;
+     */
+    PHYSICAL_COMPONENT = 29,
+    /**
+     * Instantiated structural position scoped to its actual owning component incarnation.
+     *
+     * @generated from protobuf enum value: ASSET_KIND_PHYSICAL_POSITION = 30;
+     */
+    PHYSICAL_POSITION = 30
 }
 /**
  * @generated from protobuf enum omloom.v1.NullValue

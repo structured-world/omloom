@@ -13,6 +13,8 @@ pub(super) struct Runner {
     deadline: Instant,
     remaining: usize,
     calls: usize,
+    #[cfg(test)]
+    inputs: Option<&'static [(&'static str, &'static str)]>,
 }
 pub(super) struct Output {
     pub text: String,
@@ -48,7 +50,24 @@ impl Runner {
             deadline: Instant::now() + Duration::from_secs(90),
             remaining: 16 * OUTPUT,
             calls: 0,
+            #[cfg(test)]
+            inputs: None,
         }
+    }
+    #[cfg(test)]
+    pub(super) fn scripted(
+        inputs: &'static [(&'static str, &'static str)],
+        remaining: usize,
+    ) -> Self {
+        Self {
+            inputs: Some(inputs),
+            remaining,
+            ..Self::new()
+        }
+    }
+    #[cfg(test)]
+    pub(super) fn budget(&self) -> (usize, usize) {
+        (self.calls, self.remaining)
     }
     pub async fn run(&mut self, executable: &str, args: &[&str]) -> Result<Output> {
         if self.calls == 128 || self.remaining == 0 || Instant::now() >= self.deadline {
@@ -68,6 +87,18 @@ impl Runner {
         let mut out = Vec::new();
         let mut err = Vec::new();
         let result: Result<()> = async {
+            #[cfg(test)]
+            if let Some(inputs) = &mut self.inputs {
+                let (&(source, payload), rest) =
+                    inputs.split_first().ok_or("Unexpected fixture command")?;
+                *inputs = rest;
+                if executable != "powershell.exe" || !args.iter().any(|arg| arg.contains(source)) {
+                    return Err("Unexpected fixture source".into());
+                }
+                out = Vec::with_capacity(limit + 1);
+                read(payload.as_bytes(), &mut out, limit).await?;
+                return Ok(());
+            }
             let mut child = command(executable, args)
                 .spawn()
                 .map_err(|e| format!("Command unavailable ({executable}): {}", e.kind()))?;
@@ -101,7 +132,7 @@ impl Runner {
             };
             let result = match timeout_at(deadline, work).await {
                 Ok(result) => result,
-                Err(_) => Err("Command deadline exceeded".into()),
+                Err(_) => Err(format!("Command deadline exceeded ({executable})")),
             };
             if result.is_err() && child.id().is_some() {
                 child

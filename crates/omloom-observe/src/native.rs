@@ -100,7 +100,7 @@ fn known_address(
         } as i32,
     }))
 }
-async fn ps(runner: &mut Runner, script: &str) -> Result<String> {
+async fn ps(runner: &mut Runner, source: &str, script: &str) -> Result<String> {
     runner
         .run(
             "powershell.exe",
@@ -114,6 +114,7 @@ async fn ps(runner: &mut Runner, script: &str) -> Result<String> {
         )
         .await
         .map(|v| v.text)
+        .map_err(|error| format!("{error}; source: {source}"))
 }
 pub(super) struct Identity {
     pub platform: &'static str,
@@ -122,6 +123,31 @@ pub(super) struct Identity {
     pub name: String,
     pub hardware: Option<api::HostIdentityClaim>,
     pub installation: api::HostIdentityClaim,
+}
+
+const WINDOWS_IDENTITY_SOURCE: &str =
+    "Windows identity (Win32_OperatingSystem, Win32_ComputerSystemProduct, HKLM MachineGuid)";
+fn windows_identity(input: &str) -> Result<Identity> {
+    (|| {
+        let value = json(input)?;
+        let source = string(&value, "source")?;
+        Ok(Identity {
+            platform: "windows",
+            source: source.into(),
+            boot: string(&value, "boot")?.into(),
+            name: string(&value, "name")?.into(),
+            hardware: value
+                .get("hardware")
+                .and_then(Value::as_str)
+                .and_then(|v| hardware_claim("smbios/system-uuid", v)),
+            installation: identity_claim(
+                api::HostIdentityKind::InstallationId,
+                "windows/machine-guid",
+                source,
+            )?,
+        })
+    })()
+    .map_err(|error: String| format!("{error}; source: {WINDOWS_IDENTITY_SOURCE}"))
 }
 
 fn identity_claim(
@@ -220,23 +246,8 @@ pub(super) async fn identity(runner: &mut Runner) -> Result<Identity> {
             })
         }
         "windows" => {
-            let result = ps(runner, "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $os=Get-CimInstance Win32_OperatingSystem -Property LastBootUpTime; $cs=Get-CimInstance Win32_ComputerSystemProduct -Property Name,UUID; @{source=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography').MachineGuid; boot=$os.LastBootUpTime.ToUniversalTime().ToString('o'); name=$cs.Name; hardware=$cs.UUID} | ConvertTo-Json -Compress").await?;
-            let value = json(&result)?;
-            Ok(Identity {
-                platform: "windows",
-                source: string(&value, "source")?.into(),
-                boot: string(&value, "boot")?.into(),
-                name: string(&value, "name")?.into(),
-                hardware: value
-                    .get("hardware")
-                    .and_then(Value::as_str)
-                    .and_then(|v| hardware_claim("smbios/system-uuid", v)),
-                installation: identity_claim(
-                    api::HostIdentityKind::InstallationId,
-                    "windows/machine-guid",
-                    string(&value, "source")?,
-                )?,
-            })
+            let result = ps(runner, WINDOWS_IDENTITY_SOURCE, "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $os=Get-CimInstance Win32_OperatingSystem -Property LastBootUpTime; $cs=Get-CimInstance Win32_ComputerSystemProduct -Property Name,UUID; @{source=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography').MachineGuid; boot=$os.LastBootUpTime.ToUniversalTime().ToString('o'); name=$cs.Name; hardware=$cs.UUID} | ConvertTo-Json -Compress").await?;
+            windows_identity(&result)
         }
         _ => Err("Native platform is not supported".into()),
     }
@@ -248,9 +259,11 @@ fn result(report: &mut api::HostReport, module: &str, outcome: Result<()>, note:
     }
 }
 pub(super) fn failure_status(error: &str) -> &'static str {
-    if error == "Permission denied" {
+    if error.starts_with("Permission denied") {
         "blocked"
-    } else if error.starts_with("Command unavailable (") {
+    } else if error.starts_with("Command unavailable (")
+        || error.starts_with("Command deadline exceeded (")
+    {
         "unavailable"
     } else {
         "failed"
@@ -527,7 +540,7 @@ async fn windows_interfaces(
     report: &mut api::HostReport,
     excluded: &mut std::collections::BTreeSet<String>,
 ) -> Result<()> {
-    let output = ps(runner,"$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); ConvertTo-Json -InputObject @(Get-NetIPAddress | Select-Object InterfaceIndex,InterfaceAlias,IPAddress,PrefixLength,@{n='State';e={$_.AddressState.ToString()}},@{n='Origin';e={$_.SuffixOrigin.ToString()}}) -Depth 4 -Compress").await?;
+    let output = ps(runner,"Windows interfaces (Get-NetIPAddress)","$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); ConvertTo-Json -InputObject @(Get-NetIPAddress | Select-Object InterfaceIndex,InterfaceAlias,IPAddress,PrefixLength,@{n='State';e={$_.AddressState.ToString()}},@{n='Origin';e={$_.SuffixOrigin.ToString()}}) -Depth 4 -Compress").await?;
     let value = json(&output)?;
     let mut rows = std::collections::BTreeMap::<u64, api::HostFinding>::new();
     for item in array(&value)? {
@@ -664,38 +677,41 @@ async fn sockets(runner: &mut Runner, report: &mut api::HostReport) -> Result<()
             network.sockets_complete = complete;
         }
         "windows" => {
-            let output=ps(runner,"$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $rows=@(foreach($s in Get-NetTCPConnection -State Listen){@{protocol='tcp';bind=$s.LocalAddress;port=$s.LocalPort;pid=$s.OwningProcess}}; foreach($s in Get-NetUDPEndpoint){@{protocol='udp';bind=$s.LocalAddress;port=$s.LocalPort;pid=$s.OwningProcess}}); ConvertTo-Json -InputObject @($rows) -Depth 4 -Compress").await?;
-            let values = json(&output)?;
-            for row in array(&values)? {
-                let ip = string(row, "bind")?;
-                let pid = row
-                    .get("pid")
-                    .and_then(Value::as_u64)
-                    .ok_or("Missing socket owner")?;
-                let port = row
-                    .get("port")
-                    .and_then(Value::as_u64)
-                    .ok_or("Missing socket port")?
-                    .try_into()
-                    .map_err(|_| "Invalid port")?;
-                bind(
-                    report,
-                    pid,
-                    &format!("Process {pid}"),
-                    string(row, "protocol")?,
-                    if ip.contains(':') { "IPv6" } else { "IPv4" },
-                    ip,
-                    port,
-                )?;
-            }
-            let network = report.network.as_mut().ok_or("Missing network")?;
-            network.socket_coverage =
-                "Windows kernel endpoint tables; process names and executable attribution unknown"
-                    .into();
-            network.sockets_complete = true;
+            let output=ps(runner,"Windows sockets (Get-NetTCPConnection, Get-NetUDPEndpoint)","$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $rows=@(foreach($s in Get-NetTCPConnection -State Listen){@{protocol='tcp';bind=$s.LocalAddress;port=$s.LocalPort;pid=$s.OwningProcess}}; foreach($s in Get-NetUDPEndpoint){@{protocol='udp';bind=$s.LocalAddress;port=$s.LocalPort;pid=$s.OwningProcess}}); ConvertTo-Json -InputObject @($rows) -Depth 4 -Compress").await?;
+            windows_sockets(&output, report)?;
         }
         _ => return Err("Unsupported socket platform".into()),
     }
+    Ok(())
+}
+fn windows_sockets(input: &str, report: &mut api::HostReport) -> Result<()> {
+    let values = json(input)?;
+    for row in array(&values)? {
+        let ip = string(row, "bind")?;
+        let pid = row
+            .get("pid")
+            .and_then(Value::as_u64)
+            .ok_or("Missing socket owner")?;
+        let port = row
+            .get("port")
+            .and_then(Value::as_u64)
+            .ok_or("Missing socket port")?
+            .try_into()
+            .map_err(|_| "Invalid port")?;
+        bind(
+            report,
+            pid,
+            &format!("Process {pid}"),
+            string(row, "protocol")?,
+            if ip.contains(':') { "IPv6" } else { "IPv4" },
+            ip,
+            port,
+        )?;
+    }
+    let network = report.network.as_mut().ok_or("Missing network")?;
+    network.socket_coverage =
+        "Windows kernel endpoint tables; process names and executable attribution unknown".into();
+    network.sockets_complete = true;
     Ok(())
 }
 fn bind(
@@ -993,29 +1009,8 @@ async fn routes(runner: &mut Runner, report: &mut api::HostReport) -> Result<()>
             }
         }
         "windows" => {
-            let output=ps(runner,"$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); ConvertTo-Json -InputObject @(Get-NetRoute -IncludeAllCompartments | Select-Object DestinationPrefix,NextHop,InterfaceIndex,CompartmentId,@{n='Family';e={$_.AddressFamily.ToString()}},@{n='Protocol';e={$_.Protocol.ToString()}}) -Depth 4 -Compress").await?;
-            let values = json(&output)?;
-            for value in array(&values)? {
-                rows.push(api::LocalRoute {
-                    destination: string(value, "DestinationPrefix")?.into(),
-                    gateway: string(value, "NextHop")?.into(),
-                    interface: value
-                        .get("InterfaceIndex")
-                        .and_then(Value::as_u64)
-                        .ok_or("Route interface missing")?
-                        .to_string(),
-                    family: string(value, "Family")?.into(),
-                    flags: format!(
-                        "protocol={};compartment={}",
-                        string(value, "Protocol")?,
-                        value
-                            .get("CompartmentId")
-                            .and_then(Value::as_u64)
-                            .ok_or("Route compartment missing")?
-                    ),
-                    link_layer: false,
-                });
-            }
+            let output=ps(runner,"Windows routes (Get-NetRoute)","$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); ConvertTo-Json -InputObject @(Get-NetRoute -IncludeAllCompartments | Select-Object DestinationPrefix,NextHop,InterfaceIndex,CompartmentId,@{n='Family';e={$_.AddressFamily.ToString()}},@{n='Protocol';e={$_.Protocol.ToString()}}) -Depth 4 -Compress").await?;
+            rows = windows_routes(&output)?;
         }
         _ => return Err("Unsupported route platform".into()),
     }
@@ -1027,6 +1022,33 @@ async fn routes(runner: &mut Runner, report: &mut api::HostReport) -> Result<()>
     Ok(())
 }
 
+fn windows_routes(input: &str) -> Result<Vec<api::LocalRoute>> {
+    let values = json(input)?;
+    let values = array(&values)?;
+    let mut rows = Vec::with_capacity(values.len());
+    for value in values {
+        rows.push(api::LocalRoute {
+            destination: string(value, "DestinationPrefix")?.into(),
+            gateway: string(value, "NextHop")?.into(),
+            interface: value
+                .get("InterfaceIndex")
+                .and_then(Value::as_u64)
+                .ok_or("Route interface missing")?
+                .to_string(),
+            family: string(value, "Family")?.into(),
+            flags: format!(
+                "protocol={};compartment={}",
+                string(value, "Protocol")?,
+                value
+                    .get("CompartmentId")
+                    .and_then(Value::as_u64)
+                    .ok_or("Route compartment missing")?
+            ),
+            link_layer: false,
+        });
+    }
+    Ok(rows)
+}
 fn route_qualifiers(value: &Value) -> Result<String> {
     let mut flags = Vec::new();
     for name in ["table", "type", "protocol", "scope", "metric"] {
@@ -1183,7 +1205,7 @@ async fn firewall(runner: &mut Runner, report: &mut api::HostReport) -> Result<(
         }
         "windows" => {
             let outcome: Result<String> = async {
-                let output=ps(runner,"$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); ConvertTo-Json -InputObject @(Get-NetFirewallProfile -PolicyStore ActiveStore | Select-Object Name,@{n='Enabled';e={$_.Enabled.ToString()}},@{n='Inbound';e={$_.DefaultInboundAction.ToString()}},@{n='Outbound';e={$_.DefaultOutboundAction.ToString()}}) -Depth 4 -Compress").await?;
+                let output=ps(runner,"Windows firewall (Get-NetFirewallProfile)","$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); ConvertTo-Json -InputObject @(Get-NetFirewallProfile -PolicyStore ActiveStore | Select-Object Name,@{n='Enabled';e={$_.Enabled.ToString()}},@{n='Inbound';e={$_.DefaultInboundAction.ToString()}},@{n='Outbound';e={$_.DefaultOutboundAction.ToString()}}) -Depth 4 -Compress").await?;
                 let value = json(&output)?;
                 let mut profiles = Vec::new();
                 for row in array(&value)? {

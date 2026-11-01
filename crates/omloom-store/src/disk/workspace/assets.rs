@@ -35,6 +35,8 @@ fn ownership_groups(
         K::SoftwareRelease,
         K::Workload,
         K::Container,
+        K::PhysicalComponent,
+        K::PhysicalPosition,
     ];
     let mut groups = BTreeMap::<(i32, bool, i32), Vec<i32>>::new();
     for parent in kinds {
@@ -111,6 +113,46 @@ fn browse_clause(
     )
 }
 
+pub(super) fn detail_page_fingerprint(
+    context: &Context,
+    working: &api::WorkingContext,
+    target: AssetRef,
+    domain: &str,
+) -> String {
+    query_fingerprint(
+        &api::Query {
+            roots: working.roots.clone(),
+            focus: Some(target_wire(target)),
+            search: format!("{domain}/{:?}", working.focus),
+            ..Default::default()
+        },
+        context,
+    )
+}
+
+pub(super) fn page_position<'a>(
+    cursor: &'a str,
+    revision: u64,
+    fingerprint: &str,
+    authority: u64,
+) -> Result<&'a str> {
+    if cursor.len() > 256 {
+        return Err(Error::Invalid);
+    }
+    let mut parts = cursor.split(':');
+    if parts.next().and_then(|s| s.parse::<u64>().ok()) != Some(revision)
+        || parts.next() != Some(fingerprint)
+        || parts.next().and_then(|s| s.parse::<u64>().ok()) != Some(authority)
+    {
+        return Err(Error::Expired);
+    }
+    let position = parts.next().ok_or(Error::Expired)?;
+    if parts.next().is_some() {
+        return Err(Error::Expired);
+    }
+    Ok(position)
+}
+
 impl Tx<'_> {
     fn relation_page(
         &self,
@@ -120,27 +162,12 @@ impl Tx<'_> {
         cursor: Option<&str>,
     ) -> Result<RelationPage> {
         let revision = number(&self.root, "revision")?;
-        let query = api::Query {
-            roots: working.roots.clone(),
-            focus: Some(target_wire(target)),
-            search: format!("relations/{:?}", working.focus),
-            ..Default::default()
-        };
-        let fingerprint = query_fingerprint(&query, context);
+        let fingerprint = detail_page_fingerprint(context, working, target, "relations");
         let mut offset = 0;
         if let Some(cursor) = cursor {
-            if cursor.len() > 256 {
-                return Err(Error::Invalid);
-            }
-            let parts: Vec<_> = cursor.split(':').collect();
-            if parts.len() != 4
-                || parts[0].parse::<u64>().ok() != Some(revision)
-                || parts[1] != fingerprint
-                || parts[2].parse::<u64>().ok() != Some(context.authority_revision)
-            {
-                return Err(Error::Expired);
-            }
-            offset = parts[3].parse::<u64>().map_err(|_| Error::Invalid)?;
+            offset = page_position(cursor, revision, &fingerprint, context.authority_revision)?
+                .parse::<u64>()
+                .map_err(|_| Error::Invalid)?;
             if offset > 100_000 {
                 return Err(Error::Limit);
             }
@@ -310,6 +337,8 @@ pub(super) fn kind_for_view(view: api::View) -> &'static [wire::AssetKind] {
         api::View::Overview => &[],
         api::View::Hardware => &[
             K::Device,
+            K::PhysicalComponent,
+            K::PhysicalPosition,
             K::Port,
             K::Cable,
             K::Rack,
@@ -1476,6 +1505,9 @@ impl Tx<'_> {
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<AssetRef> {
+        if write.target.is_none() && write.kind == wire::AssetKind::PhysicalPosition as i32 {
+            return Err(Error::Invalid);
+        }
         if write.kind == wire::AssetKind::AddressReference as i32 {
             if write.changes.is_empty() || write.changes.len() > MAX_FIELDS {
                 return Err(Error::Invalid);
@@ -1560,27 +1592,8 @@ impl Store {
                 {
                     return Err(Error::Conflict);
                 }
-                let key = format!("relation/{id}");
-                // Each relation owns one edge in each direction. Delete those
-                // exact attachments before removing their metadata row.
-                for query in [
-                    "MATCH (r:OmRow {key:$key})<-[e:OmRelationFrom]-() DELETE e",
-                    "MATCH (r:OmRow {key:$key})-[e:OmRelationTo]->() DELETE e",
-                ] {
-                    self.db.execute_in_transaction(
-                        tx.id.ok_or(Error::Corrupt)?,
-                        query,
-                        params([("key", text(&key))]),
-                    )?;
-                }
-                tx.delete(&key)?;
-                tx.audit(
-                    &key,
-                    &context.actor,
-                    "relation.removed",
-                    relation.revision.checked_add(1).ok_or(Error::Limit)?,
-                    now,
-                )?;
+                tx.require_structural_relation_edit(&existing)?;
+                tx.remove_binding_relation(&existing, &context.actor, now)?;
                 return Ok(mutation(tx.commit()?, Vec::new()));
             }
         }
@@ -1808,6 +1821,7 @@ impl Tx<'_> {
         // Existing operation/retirement code owns uncertain effects and identity fences.
         self.require_no_account_references(target)?;
         self.require_no_pending_operations(target)?;
+        self.require_no_physical_reservations(target)?;
         let linked = self.query("MATCH (n:OmRow) WHERE n.parent='relations' AND (n.asset=$asset OR n.to_asset=$asset) RETURN properties(n) AS p LIMIT 1",params([("asset", text(target.asset.to_string()))]))?;
         if !linked.is_empty() {
             return Err(Error::Conflict);
@@ -1845,6 +1859,11 @@ impl Tx<'_> {
             self.delete(&group_key)?;
         }
         self.retire_current_facts(target)?;
+        self.remove_physical_offers(target)?;
+        self.delete(&format!("physical/{scope}"))?;
+        if number(row, "kind")? == wire::AssetKind::Cable as u64 {
+            self.remove_cable_ends(target)?;
+        }
         let mappings = self.query("MATCH (n:OmRow {asset:$asset}) WHERE n.parent='csv-mappings' AND n.incarnation=$incarnation AND n.class=$class RETURN properties(n) AS p LIMIT 2049", params([("asset", text(target.asset.to_string())), ("incarnation", text(target.incarnation.to_string())), ("class", Value::Int(Class::Inventory as i64))]))?;
         if mappings.len() > MAX_CHILDREN {
             return Err(Error::Limit);
