@@ -101,7 +101,7 @@ impl Runner {
             };
             let result = match timeout_at(deadline, work).await {
                 Ok(result) => result,
-                Err(_) => Err("Command deadline exceeded".into()),
+                Err(_) => Err(format!("Command deadline exceeded ({executable})")),
             };
             if result.is_err() && child.id().is_some() {
                 child

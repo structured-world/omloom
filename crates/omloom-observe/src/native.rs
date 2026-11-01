@@ -100,7 +100,7 @@ fn known_address(
         } as i32,
     }))
 }
-async fn ps(runner: &mut Runner, script: &str) -> Result<String> {
+async fn ps(runner: &mut Runner, source: &str, script: &str) -> Result<String> {
     runner
         .run(
             "powershell.exe",
@@ -114,6 +114,7 @@ async fn ps(runner: &mut Runner, script: &str) -> Result<String> {
         )
         .await
         .map(|v| v.text)
+        .map_err(|error| format!("{error}; source: {source}"))
 }
 pub(super) struct Identity {
     pub platform: &'static str,
@@ -220,7 +221,7 @@ pub(super) async fn identity(runner: &mut Runner) -> Result<Identity> {
             })
         }
         "windows" => {
-            let result = ps(runner, "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $os=Get-CimInstance Win32_OperatingSystem -Property LastBootUpTime; $cs=Get-CimInstance Win32_ComputerSystemProduct -Property Name,UUID; @{source=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography').MachineGuid; boot=$os.LastBootUpTime.ToUniversalTime().ToString('o'); name=$cs.Name; hardware=$cs.UUID} | ConvertTo-Json -Compress").await?;
+            let result = ps(runner, "Windows identity (Win32_OperatingSystem, Win32_ComputerSystemProduct)", "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $os=Get-CimInstance Win32_OperatingSystem -Property LastBootUpTime; $cs=Get-CimInstance Win32_ComputerSystemProduct -Property Name,UUID; @{source=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography').MachineGuid; boot=$os.LastBootUpTime.ToUniversalTime().ToString('o'); name=$cs.Name; hardware=$cs.UUID} | ConvertTo-Json -Compress").await?;
             let value = json(&result)?;
             Ok(Identity {
                 platform: "windows",
@@ -248,9 +249,11 @@ fn result(report: &mut api::HostReport, module: &str, outcome: Result<()>, note:
     }
 }
 pub(super) fn failure_status(error: &str) -> &'static str {
-    if error == "Permission denied" {
+    if error.starts_with("Permission denied") {
         "blocked"
-    } else if error.starts_with("Command unavailable (") {
+    } else if error.starts_with("Command unavailable (")
+        || error.starts_with("Command deadline exceeded (")
+    {
         "unavailable"
     } else {
         "failed"
@@ -527,7 +530,7 @@ async fn windows_interfaces(
     report: &mut api::HostReport,
     excluded: &mut std::collections::BTreeSet<String>,
 ) -> Result<()> {
-    let output = ps(runner,"$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); ConvertTo-Json -InputObject @(Get-NetIPAddress | Select-Object InterfaceIndex,InterfaceAlias,IPAddress,PrefixLength,@{n='State';e={$_.AddressState.ToString()}},@{n='Origin';e={$_.SuffixOrigin.ToString()}}) -Depth 4 -Compress").await?;
+    let output = ps(runner,"Windows interfaces (Get-NetIPAddress)","$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); ConvertTo-Json -InputObject @(Get-NetIPAddress | Select-Object InterfaceIndex,InterfaceAlias,IPAddress,PrefixLength,@{n='State';e={$_.AddressState.ToString()}},@{n='Origin';e={$_.SuffixOrigin.ToString()}}) -Depth 4 -Compress").await?;
     let value = json(&output)?;
     let mut rows = std::collections::BTreeMap::<u64, api::HostFinding>::new();
     for item in array(&value)? {
@@ -664,7 +667,7 @@ async fn sockets(runner: &mut Runner, report: &mut api::HostReport) -> Result<()
             network.sockets_complete = complete;
         }
         "windows" => {
-            let output=ps(runner,"$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $rows=@(foreach($s in Get-NetTCPConnection -State Listen){@{protocol='tcp';bind=$s.LocalAddress;port=$s.LocalPort;pid=$s.OwningProcess}}; foreach($s in Get-NetUDPEndpoint){@{protocol='udp';bind=$s.LocalAddress;port=$s.LocalPort;pid=$s.OwningProcess}}); ConvertTo-Json -InputObject @($rows) -Depth 4 -Compress").await?;
+            let output=ps(runner,"Windows sockets (Get-NetTCPConnection, Get-NetUDPEndpoint)","$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $rows=@(foreach($s in Get-NetTCPConnection -State Listen){@{protocol='tcp';bind=$s.LocalAddress;port=$s.LocalPort;pid=$s.OwningProcess}}; foreach($s in Get-NetUDPEndpoint){@{protocol='udp';bind=$s.LocalAddress;port=$s.LocalPort;pid=$s.OwningProcess}}); ConvertTo-Json -InputObject @($rows) -Depth 4 -Compress").await?;
             let values = json(&output)?;
             for row in array(&values)? {
                 let ip = string(row, "bind")?;
@@ -993,7 +996,7 @@ async fn routes(runner: &mut Runner, report: &mut api::HostReport) -> Result<()>
             }
         }
         "windows" => {
-            let output=ps(runner,"$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); ConvertTo-Json -InputObject @(Get-NetRoute -IncludeAllCompartments | Select-Object DestinationPrefix,NextHop,InterfaceIndex,CompartmentId,@{n='Family';e={$_.AddressFamily.ToString()}},@{n='Protocol';e={$_.Protocol.ToString()}}) -Depth 4 -Compress").await?;
+            let output=ps(runner,"Windows routes (Get-NetRoute)","$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); ConvertTo-Json -InputObject @(Get-NetRoute -IncludeAllCompartments | Select-Object DestinationPrefix,NextHop,InterfaceIndex,CompartmentId,@{n='Family';e={$_.AddressFamily.ToString()}},@{n='Protocol';e={$_.Protocol.ToString()}}) -Depth 4 -Compress").await?;
             let values = json(&output)?;
             for value in array(&values)? {
                 rows.push(api::LocalRoute {
@@ -1183,7 +1186,7 @@ async fn firewall(runner: &mut Runner, report: &mut api::HostReport) -> Result<(
         }
         "windows" => {
             let outcome: Result<String> = async {
-                let output=ps(runner,"$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); ConvertTo-Json -InputObject @(Get-NetFirewallProfile -PolicyStore ActiveStore | Select-Object Name,@{n='Enabled';e={$_.Enabled.ToString()}},@{n='Inbound';e={$_.DefaultInboundAction.ToString()}},@{n='Outbound';e={$_.DefaultOutboundAction.ToString()}}) -Depth 4 -Compress").await?;
+                let output=ps(runner,"Windows firewall (Get-NetFirewallProfile)","$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); ConvertTo-Json -InputObject @(Get-NetFirewallProfile -PolicyStore ActiveStore | Select-Object Name,@{n='Enabled';e={$_.Enabled.ToString()}},@{n='Inbound';e={$_.DefaultInboundAction.ToString()}},@{n='Outbound';e={$_.DefaultOutboundAction.ToString()}}) -Depth 4 -Compress").await?;
                 let value = json(&output)?;
                 let mut profiles = Vec::new();
                 for row in array(&value)? {

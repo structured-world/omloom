@@ -599,6 +599,16 @@ atomic no-replace operation; an interrupted collection cannot publish a partial
 frame. Reports contain private host facts. Keep them outside version control.
 The check command prints coverage and counts, without inventory names or IPs.
 
+External commands have a ten-second deadline within the ninety-second collection
+budget. A timed-out child is terminated and reaped; diagnostics identify the
+executable and, for Windows PowerShell sources, the module and native cmdlets,
+without dumping scripts or their output. Timeouts leave coverage unavailable.
+Optional source failures remain in the report's coverage. If required identity
+or interface evidence cannot be collected, the command reports collection
+unavailable and exits successfully without writing a report or replacing an
+existing file. This is not a verified inventory or an empty scan. Invalid
+arguments, malformed report frames and file publication errors remain errors.
+
 In the workspace, choose **Import host report**, supply a source name and select
 the resources to adopt. Select required parents together with their components.
 Match an existing resource only after checking its identity and incarnation.

@@ -76,7 +76,9 @@ fn add(report: &mut api::HostReport, value: api::HostFinding) -> Result<()> {
 
 async fn collect() -> Result<api::HostReport> {
     let mut runner = command::Runner::new();
-    let identity = native::identity(&mut runner).await?;
+    let identity = native::identity(&mut runner)
+        .await
+        .map_err(|error| format!("Initial host identity unavailable: {error}"))?;
     let native::Identity {
         platform,
         source,
@@ -128,7 +130,9 @@ async fn collect() -> Result<api::HostReport> {
     });
     native::collect(&mut runner, &mut report).await?;
     runtime::collect(&mut runner, &mut report).await?;
-    let after = native::identity(&mut runner).await?;
+    let after = native::identity(&mut runner)
+        .await
+        .map_err(|error| format!("Final host identity unavailable: {error}"))?;
     check_identity(&source, &boot, &after.source, &after.boot)?;
     if report.findings.first().and_then(|v| v.identity.first()) != after.hardware.as_ref() {
         return Err("Hardware evidence changed during collection; output not written".into());
@@ -203,6 +207,20 @@ fn save(path: &Path, bytes: &[u8]) -> Result<()> {
         .map_err(|e| format!("Report directory sync failed: {e}"))?;
     Ok(())
 }
+fn finish_collection(report: Result<api::HostReport>, path: &Path) -> Result<()> {
+    let report = match report {
+        Ok(report) => report,
+        Err(reason) => {
+            println!("Collection unavailable: {reason}. No report was written.");
+            return Ok(());
+        }
+    };
+    let bytes = encode(report)?;
+    save(path, &bytes)?;
+    println!("Report written. Import it in Omloom to review selected current facts.");
+    Ok(())
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
@@ -245,9 +263,5 @@ async fn main() -> Result<()> {
         }
         return Ok(());
     }
-    let report = collect().await?;
-    let bytes = encode(report)?;
-    save(Path::new(&args[1]), &bytes)?;
-    println!("Report written. Import it in Omloom to review selected current facts.");
-    Ok(())
+    finish_collection(collect().await, Path::new(&args[1]))
 }

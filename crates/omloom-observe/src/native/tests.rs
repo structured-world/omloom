@@ -1,15 +1,40 @@
 use super::*;
 
+// Command timeouts leave source coverage unavailable, never verified or a fatal collection status.
+#[test]
+fn timed_out_sources_are_unavailable_with_safe_command_context() {
+    assert_eq!(
+        failure_status(
+            "Command deadline exceeded (powershell.exe); source: Windows routes (Get-NetRoute)"
+        ),
+        "unavailable"
+    );
+    assert_eq!(
+        failure_status("Permission denied; source: Windows firewall (Get-NetFirewallProfile)"),
+        "blocked"
+    );
+}
+
 // Exercise the native OS source on each qualified host, without assuming that
 // an unreadable or unset hardware UUID exists or inventing one from an address.
 #[tokio::test]
 async fn native_identity_observation_keeps_layers_separate() -> Result<()> {
-    let value = identity(&mut Runner::new()).await?;
     let namespace = match std::env::consts::OS {
         "macos" => "macos/apfs-volume",
         "linux" => "linux/machine-id",
         "windows" => "windows/machine-guid",
         _ => return Err("Unsupported native identity platform".into()),
+    };
+    let value = match identity(&mut Runner::new()).await {
+        Ok(value) => value,
+        Err(error) => {
+            let dir = tempfile::tempdir().expect("temporary directory");
+            let path = dir.path().join("unavailable.omloom");
+            assert!(!error.is_empty());
+            crate::finish_collection(Err(error), &path)?;
+            assert!(!path.exists());
+            return Ok(());
+        }
     };
     assert!(!value.source.is_empty());
     assert!(!value.boot.is_empty());

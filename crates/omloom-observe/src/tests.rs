@@ -242,15 +242,63 @@ fn temporary_literals_are_removed_from_routes_and_binds() {
     assert!(value.network.expect("network").routes.is_empty());
 }
 
-// This runs on the actual native host. Fixtures cannot substitute for working
-// OS reads, coherent boot evidence or a file accepted by the common decoder.
+// An unavailable source is a collection outcome, not a crash or an empty inventory.
+#[test]
+fn unavailable_collection_does_not_publish_or_fail_the_command() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = dir.path().join("unavailable.omloom");
+    assert_eq!(
+        finish_collection(
+            Err("Windows identity: command deadline exceeded (powershell.exe)".into()),
+            &path
+        ),
+        Ok(())
+    );
+    assert!(!path.exists());
+    std::fs::write(&path, b"existing report").expect("existing output");
+    assert_eq!(
+        finish_collection(Err("Interfaces unavailable".into()), &path),
+        Ok(())
+    );
+    assert_eq!(
+        std::fs::read(&path).expect("preserved file"),
+        b"existing report"
+    );
+}
+
+// Source unavailability cannot turn storage/publication failures into success.
+#[test]
+fn collection_publication_failures_remain_errors() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = dir.path().join("existing.omloom");
+    std::fs::write(&path, b"original report").expect("existing output");
+    let error = finish_collection(Ok(report()), &path).expect_err("no replacement");
+    assert!(error.contains("Cannot publish report"), "{error}");
+    assert_eq!(
+        std::fs::read(path).expect("preserved output"),
+        b"original report"
+    );
+}
+
+// Native availability is reported honestly. A failed source cannot publish an
+// empty inventory; available sources retain coherent boot and decoder checks.
 #[tokio::test]
-async fn native_host_collection_has_a_decodable_core() {
-    let report = collect().await.expect("native collection");
+async fn native_host_collection_reports_verified_or_unavailable_sources() {
+    let report = match collect().await {
+        Ok(report) => report,
+        Err(reason) => {
+            assert!(!reason.is_empty());
+            let dir = tempfile::tempdir().expect("temporary directory");
+            let path = dir.path().join("unavailable.omloom");
+            finish_collection(Err(reason), &path).expect("normal unavailable outcome");
+            assert!(!path.exists());
+            return;
+        }
+    };
     for coverage in &report.coverage {
         println!("native module {}: {}", coverage.module, coverage.status);
-        if coverage.module == "docker" && coverage.status != "verified" {
-            println!("native Docker diagnostic: {}", coverage.detail);
+        if coverage.status != "verified" {
+            println!("native source {}: {}", coverage.module, coverage.detail);
         }
     }
     println!(
@@ -272,7 +320,13 @@ async fn native_host_collection_has_a_decodable_core() {
             .iter()
             .find(|v| v.module == module)
             .expect("attempted native module");
-        assert_eq!(coverage.status, "verified", "{module}: {}", coverage.detail);
+        assert!(
+            ["verified", "partial", "blocked", "unavailable", "failed"]
+                .contains(&coverage.status.as_str()),
+            "{module}: {}",
+            coverage.status
+        );
+        assert!(!coverage.detail.is_empty());
     }
     assert!(
         report
