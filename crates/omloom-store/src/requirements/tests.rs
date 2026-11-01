@@ -38,6 +38,29 @@ fn post_effect_requirement_rejects_current_phase_evidence() {
         Decision::unknown(Reason::WrongEvidence)
     );
 }
+// Fresh, matching post-effect evidence must remain usable after rejecting older phases.
+#[test]
+fn post_effect_requirement_accepts_matching_post_effect_evidence() {
+    let wanted = Requirement {
+        subject: subject("endpoint"),
+        semantic: "reachable",
+        vantage: "customer",
+        phase: Phase::PostEffect,
+        kind: EvidenceKind::Observation,
+        interval: None,
+    };
+    let evidence = Evidence {
+        requirement: wanted,
+        origin: Origin::DirectObservation,
+        observed_at: Some(10),
+        valid_until: Some(100),
+        coverage: None,
+        qualified: true,
+        decision: Decision::PASS,
+    };
+    assert_eq!(fact(wanted, evidence, 20), Decision::PASS);
+}
+
 fn leaf(id: &'static str, decision: Decision) -> Node<'static> {
     Node {
         subject: subject(id),
