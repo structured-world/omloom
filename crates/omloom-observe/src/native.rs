@@ -125,6 +125,31 @@ pub(super) struct Identity {
     pub installation: api::HostIdentityClaim,
 }
 
+const WINDOWS_IDENTITY_SOURCE: &str =
+    "Windows identity (Win32_OperatingSystem, Win32_ComputerSystemProduct)";
+fn windows_identity(input: &str) -> Result<Identity> {
+    (|| {
+        let value = json(input)?;
+        let source = string(&value, "source")?;
+        Ok(Identity {
+            platform: "windows",
+            source: source.into(),
+            boot: string(&value, "boot")?.into(),
+            name: string(&value, "name")?.into(),
+            hardware: value
+                .get("hardware")
+                .and_then(Value::as_str)
+                .and_then(|v| hardware_claim("smbios/system-uuid", v)),
+            installation: identity_claim(
+                api::HostIdentityKind::InstallationId,
+                "windows/machine-guid",
+                source,
+            )?,
+        })
+    })()
+    .map_err(|error: String| format!("{error}; source: {WINDOWS_IDENTITY_SOURCE}"))
+}
+
 fn identity_claim(
     kind: api::HostIdentityKind,
     namespace: &str,
@@ -221,23 +246,8 @@ pub(super) async fn identity(runner: &mut Runner) -> Result<Identity> {
             })
         }
         "windows" => {
-            let result = ps(runner, "Windows identity (Win32_OperatingSystem, Win32_ComputerSystemProduct)", "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $os=Get-CimInstance Win32_OperatingSystem -Property LastBootUpTime; $cs=Get-CimInstance Win32_ComputerSystemProduct -Property Name,UUID; @{source=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography').MachineGuid; boot=$os.LastBootUpTime.ToUniversalTime().ToString('o'); name=$cs.Name; hardware=$cs.UUID} | ConvertTo-Json -Compress").await?;
-            let value = json(&result)?;
-            Ok(Identity {
-                platform: "windows",
-                source: string(&value, "source")?.into(),
-                boot: string(&value, "boot")?.into(),
-                name: string(&value, "name")?.into(),
-                hardware: value
-                    .get("hardware")
-                    .and_then(Value::as_str)
-                    .and_then(|v| hardware_claim("smbios/system-uuid", v)),
-                installation: identity_claim(
-                    api::HostIdentityKind::InstallationId,
-                    "windows/machine-guid",
-                    string(&value, "source")?,
-                )?,
-            })
+            let result = ps(runner, WINDOWS_IDENTITY_SOURCE, "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $os=Get-CimInstance Win32_OperatingSystem -Property LastBootUpTime; $cs=Get-CimInstance Win32_ComputerSystemProduct -Property Name,UUID; @{source=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography').MachineGuid; boot=$os.LastBootUpTime.ToUniversalTime().ToString('o'); name=$cs.Name; hardware=$cs.UUID} | ConvertTo-Json -Compress").await?;
+            windows_identity(&result)
         }
         _ => Err("Native platform is not supported".into()),
     }

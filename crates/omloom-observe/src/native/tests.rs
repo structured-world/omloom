@@ -1,5 +1,20 @@
 use super::*;
 
+// Parser failures identify the same native query as command failures without exposing source data.
+#[test]
+fn windows_identity_parser_errors_name_the_source() {
+    for input in [
+        "untrusted-private-output",
+        "{}",
+        r#"{"source":"installation"}"#,
+        r#"{"source":"installation","boot":"session"}"#,
+    ] {
+        let error = windows_identity(input).err().expect("incomplete source");
+        assert!(error.contains(WINDOWS_IDENTITY_SOURCE), "{error}");
+        assert!(!error.contains("untrusted-private-output"));
+    }
+}
+
 // Command timeouts leave source coverage unavailable, never verified or a fatal collection status.
 #[test]
 fn timed_out_sources_are_unavailable_with_safe_command_context() {
