@@ -284,6 +284,124 @@ fn future_reservations_account_for_other_plans_material_demands() -> TestResult 
     Ok(())
 }
 
+// Receiving real hardware replaces the hypothetical load used by other plans' admission.
+#[test]
+fn received_units_replace_declared_loads_in_other_reservations() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let rack = create(&store, &actor, K::Rack, "Received load rack")?;
+    let mut facts = define(rack.clone());
+    facts.max_mass_g = Some(15);
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(facts),
+        }),
+    )?;
+    let material = api::PhysicalMaterial {
+        name: "Ten gram requested unit".into(),
+        quantity: 1,
+        kind: K::Device as i32,
+        specifications: vec![
+            equipment_quantity("width", 500_000, "mm", 3),
+            equipment_quantity("height", 1_000_000, "mm", 3),
+            equipment_quantity("depth", 1_000_000, "mm", 3),
+            equipment_quantity("weight", 10, "g", 0),
+        ],
+        ..Default::default()
+    };
+    let mut region = volume();
+    region.y.as_mut().ok_or(Error::Missing)?.length_um = 1_000_000;
+    let mut proposal = api::PhysicalPlan {
+        name: "Reserved requested unit".into(),
+        materials: vec![material],
+        steps: vec![api::PhysicalStep {
+            action: Some(api::physical_step::Action::Placement(
+                api::PhysicalPlacement {
+                    enclosure: Some(rack.clone()),
+                    volume: Some(region),
+                    material: Some(api::PhysicalMaterialUnit {
+                        material: 0,
+                        unit: 0,
+                    }),
+                    item: None,
+                },
+            )),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let reserved = reserve(
+        &store,
+        &actor,
+        save_material_plan(&store, &actor, proposal.clone())?,
+    )?
+    .plan
+    .ok_or(Error::Missing)?;
+    let actual = create(&store, &actor, K::Device, "Twenty gram received unit")?;
+    let asset = store.asset(AssetRef::try_from(&actual).map_err(|_| Error::Invalid)?)?;
+    call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            target: Some(actual.clone()),
+            kind: K::Device as i32,
+            expected: Some(asset.revision),
+            changes: vec![
+                equipment_quantity("width", 500_000, "mm", 3),
+                equipment_quantity("height", 1_000_000, "mm", 3),
+                equipment_quantity("depth", 1_000_000, "mm", 3),
+                equipment_quantity("weight", 20, "g", 0),
+            ],
+            ..Default::default()
+        }),
+    )?;
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Receive(api::PhysicalMaterialReceipt {
+            plan: Some(api::PhysicalPlanKey {
+                id: reserved.id.ok_or(Error::Missing)?,
+                revision: reserved.revision,
+            }),
+            material: 0,
+            allocation: Some(api::PhysicalMaterialAllocation {
+                unit: 0,
+                item: Some(actual),
+                basis: "Actual receipt, heavier than requested".into(),
+            }),
+        }),
+    )?;
+    proposal.materials[0]
+        .specifications
+        .retain(|f| f.name != "weight");
+    proposal.materials[0]
+        .specifications
+        .push(equipment_quantity("weight", 5, "g", 0));
+    let Some(api::physical_step::Action::Placement(placement)) = &mut proposal.steps[0].action
+    else {
+        return Err(Error::Corrupt.into());
+    };
+    placement
+        .volume
+        .as_mut()
+        .ok_or(Error::Missing)?
+        .y
+        .as_mut()
+        .ok_or(Error::Missing)?
+        .start_um = 1_000_000;
+    let second = save_material_plan(&store, &actor, proposal)?;
+    let before = store.usage()?;
+    assert!(matches!(
+        reserve(&store, &actor, second),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // Late partial receipt uses the same serialized locks; cancellation and expiry do not release unresolved work.
 #[test]
 fn received_materials_share_reservation_and_resolution_lifecycle() -> TestResult {

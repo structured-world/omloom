@@ -215,30 +215,24 @@ impl Tx<'_> {
             output.items.insert(item);
             removals.push(None);
         }
-        for (region, removal) in self
-            .current_regions(&bodies, &output.items)?
-            .into_iter()
-            .zip(removals)
-        {
-            if let Some(removal) = removal {
-                output.conditional_removals.push((removal, Some(region)));
-            } else {
-                output.volumes.push(region);
-            }
-        }
         if !future.is_empty() {
             let mut keys = BTreeSet::new();
             for (key, _, _) in &future {
                 keys.insert(key.as_str());
             }
-            let mut selected = Vec::with_capacity(keys.len() * (1 + usize::from(needed[0])));
+            let mut selected =
+                Vec::with_capacity(future.len() + keys.len() * (1 + usize::from(needed[0])));
+            for (key, unit, _) in &future {
+                selected.push(text(format!("{key}/unit/{unit}")));
+            }
             for key in keys {
                 selected.push(text(key));
                 if needed[0] {
                     selected.push(text(format!("{key}/field/weight")));
                 }
             }
-            let rows=self.query("UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN properties(n) AS p LIMIT 4096",params([("keys",Value::Array(selected))]))?;
+            let limit = selected.len() as u64;
+            let rows=self.query("UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN properties(n) AS p LIMIT $limit",params([("keys",Value::Array(selected)),("limit",int(limit)?)]))?;
             let rows = rows
                 .into_iter()
                 .map(|row| Ok((string(&row, "key")?, row)))
@@ -251,6 +245,13 @@ impl Tx<'_> {
                 output
                     .volumes
                     .push(clearance::region(body, clearance::read(profile)?.as_ref())?);
+                if let Some(allocation) = rows.get(&format!("{key}/unit/{unit}")) {
+                    let item = target(allocation)?;
+                    output.items.insert(item);
+                    bodies.push((item, body));
+                    removals.push(None);
+                    continue;
+                }
                 if needed.iter().any(|v| *v) {
                     output.future_loads.push(equipment::row_loads(
                         Some(profile),
@@ -258,6 +259,17 @@ impl Tx<'_> {
                         needed,
                     )?);
                 }
+            }
+        }
+        for (region, removal) in self
+            .current_regions(&bodies, &output.items)?
+            .into_iter()
+            .zip(removals)
+        {
+            if let Some(removal) = removal {
+                output.conditional_removals.push((removal, Some(region)));
+            } else {
+                output.volumes.push(region);
             }
         }
         Ok(output)
