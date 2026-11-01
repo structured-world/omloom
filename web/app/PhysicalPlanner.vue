@@ -4,6 +4,7 @@ import { call, input, key, model, AssetKind as K, type AssetRef } from './api';
 import PlacementSearch from './PlacementSearch.vue';
 import PlanStepControls from './PlanStepControls.vue';
 import { millimetres,micrometres,signedMicrometres,upperMicrometres } from './physical-units';
+import {frameSize,projectElevation,depthOrder,type Face} from './physical-elevation';
 const props = defineProps<{target:AssetRef;kind:number;working:model.WorkingContext;inactive?:boolean}>();
 const emit=defineEmits<{changed:[]}>();
 const opened=ref(false),busy=ref(false),error=ref(''),notice=ref('');
@@ -30,8 +31,12 @@ const predecessor=ref(''),removePart=ref(false),reseat=ref(false),moving=ref(fal
 const sourceView=ref<model.PhysicalView>();
 const oldOccupancy=computed(()=>sourceView.value?.occupancy??view.value.occupancy);
 const actualReport=ref(false),notPerformed=ref<number[]>([]);
-const unit=ref('1'),side=ref('front'),lane=ref('left'),selected=ref<number[]>([]);
+const unit=ref('1'),side=ref<Face>('front'),lane=ref('left'),selected=ref<number[]>([]);
 const elevation=ref<SVGSVGElement>();
+const coordinatesOpen=ref(false),coordinatePage=ref(0);
+watch(()=>view.value.occupancy,()=>{coordinatePage.value=0;});
+const coordinateRows=computed(()=>view.value.occupancy.slice(coordinatePage.value*25,(coordinatePage.value+1)*25));
+function coordinate(value:model.PhysicalExtent|undefined){return value===undefined?'Unavailable':`${millimetres(value.startUm)} + ${millimetres(value.lengthUm)}`;}
 const working=()=>model.WorkingContext.create({roots:props.working.roots,expected:view.value.revision});
 const editable=computed(()=>plan.value===undefined||plan.value.state===model.PhysicalPlanState.DRAFT);
 const reservable=computed(()=>plan.value?.state===model.PhysicalPlanState.DRAFT);
@@ -39,11 +44,15 @@ const installable=computed(()=>plan.value!==undefined&&([model.PhysicalPlanState
 const envelope=computed(()=>view.value.definitions[0]?.volume);
 const state=(value:number)=>model.PhysicalPlanState[value]?.toLowerCase();
 const itemName=(item:model.Item)=>input(item.fields.find(f=>f.name==='name'));
-const label=(target:AssetRef|undefined)=>{
-  const item=planItems.value.find(i=>key(i.target)===key(target))??view.value.items.find(i=>key(i.target)===key(target))??sourceView.value?.items.find(i=>key(i.target)===key(target));
-  const field=item?.fields.find(f=>f.name==='name');
-  return field===undefined?undefined:input(field);
-};
+const labels=computed(()=>{
+  const result=new Map<string,string|undefined>();
+  for(const items of [sourceView.value?.items,view.value.items,planItems.value]){
+    if(items===undefined)continue;
+    for(const item of items){if(!item.target)continue;const field=item.fields.find(f=>f.name==='name');result.set(key(item.target),field===undefined?undefined:input(field));}
+  }
+  return result;
+});
+const label=(target:AssetRef|undefined)=>target===undefined?undefined:labels.value.get(key(target));
 async function invoke(action:model.Physical['action']) {
   const response=await call({oneofKind:'physical',physical:{action}},working());
   if(response.oneofKind!=='physical')throw Error('Physical planning is unavailable.');
@@ -209,16 +218,16 @@ function removeStep(index:number){
 async function cancel() {
   await run(async()=>{const reply=await invoke({oneofKind:'cancel',cancel:planKey()});plan.value=reply.plan;notice.value='Remaining work stopped. Reported facts and unresolved reservations are preserved.';await summaries();});
 }
-const drawing=computed(()=>{
-  const rack=envelope.value;
-  if(!rack?.x||!rack.y)return;
-  return {width:Number(rack.x.lengthUm)/1000,height:Number(rack.y.lengthUm)/1000,x:Number(rack.x.startUm)/1000,y:Number(rack.y.startUm)/1000};
-});
-function rect(p:model.PhysicalPlacement) {
-  const v=p.volume;
-  if(!v?.x||!v.y)return;
-  return {x:Number(v.x.startUm)/1000,y:Number(v.y.startUm)/1000,width:Number(v.x.lengthUm)/1000,height:Number(v.y.lengthUm)/1000};
+const drawing=computed(()=>frameSize(envelope.value));
+function projections(placements:Iterable<model.PhysicalPlacement>){
+  const frame=envelope.value;
+  const result:{p:model.PhysicalPlacement;rect:{x:number;y:number;width:number;height:number};depth:bigint;name:string|undefined}[]=[];
+  if(!frame)return result;
+  for(const p of placements){if(!p.volume)continue;const projection=projectElevation(frame,p.volume,side.value);if(projection)result.push({p,...projection,name:label(p.item)});}
+  return result.sort(depthOrder);
 }
+function* reportedPlacements(){for(const entry of view.value.occupancy)if(entry.placement)yield entry.placement;}
+const reportedProjection=computed(()=>projections(reportedPlacements()));
 function dropEquipment(event:DragEvent){
   if(!editable.value||manualRegion.value||!equipmentVolume.value||!elevation.value||event.dataTransfer?.getData('application/x-omloom-equipment')!==key(equipment.value?.target))return;
   const svg=elevation.value,transform=svg.getScreenCTM();
@@ -228,7 +237,8 @@ function dropEquipment(event:DragEvent){
   const u=Math.floor((point.y-drawingValue.y)/44.45)+1;
   if(u<1||u>999){error.value='Choose a position inside the known rack.';return;}
   unit.value=String(u);
-  lane.value=point.x-drawingValue.x<drawingValue.width/2?'left':'right';
+  const fromFront=side.value==='front'?point.x:drawingValue.width-point.x;
+  lane.value=fromFront<drawingValue.width/2?'left':'right';
   add();
 }
 function dragEquipment(event:DragEvent){if(event.dataTransfer&&equipment.value?.target){event.dataTransfer.effectAllowed='copy';event.dataTransfer.setData('application/x-omloom-equipment',key(equipment.value.target));}}
@@ -238,11 +248,12 @@ function rackKeyboard(event:KeyboardEvent){
   if(event.key==='ArrowUp'||event.key==='ArrowDown'){
     event.preventDefault();const current=Number(unit.value);if(!Number.isFinite(current))return;
     unit.value=String(Math.min(999,Math.max(1,current+(event.key==='ArrowUp'?-1:1))));
-  }else if(event.key==='ArrowLeft'||event.key==='ArrowRight'){event.preventDefault();lane.value=event.key==='ArrowLeft'?'left':'right';}
+  }else if(event.key==='ArrowLeft'||event.key==='ArrowRight'){event.preventDefault();const visualLeft=event.key==='ArrowLeft';lane.value=(side.value==='front'?visualLeft:!visualLeft)?'left':'right';}
 }
 const placementRows=computed(()=>plan.value?.steps.flatMap((step,index)=>step.action.oneofKind==='placement'?[{p:step.action.placement,index,state:step.state}]:[])??[]);
 const replacementRows=computed(()=>plan.value?.steps.flatMap((step,index)=>step.action.oneofKind==='replacement'?[{r:step.action.replacement,index,state:step.state}]:[])??[]);
 const local=computed(()=>placementRows.value.filter(row=>key(row.p.enclosure)===key(props.target)).map(row=>row.p));
+const plannedProjection=computed(()=>projections(local.value));
 const bill=computed(()=>{
   const items=new Map<string,{target:AssetRef;steps:model.PhysicalStep[]}>();
   for(const step of plan.value?.steps??[]){
@@ -276,16 +287,23 @@ async function exportPlan(){await run(async()=>{
 <button v-if="next" type="button" :disabled="busy" @click="run(()=>summaries(next))">Next saved plans</button>
 </section>
 <div class="plan-layout">
-<section v-if="drawing" aria-label="Rack elevation">
-<h3>Physical elevation</h3><p>Solid: reported installed. Dashed: proposed or reserved. Opposing sides can share U positions when depth permits.</p>
+<section aria-label="Rack elevation"><template v-if="drawing">
+<h3>Physical elevation</h3><p>Solid bodies are ordered by depth from the chosen face. Dashed proposals are overlays, not actual presence. Opposing sides can share U positions when depth permits.</p>
 <div class="placement-controls"><button type="button" :aria-pressed="side==='front'" @click="side='front'">Front elevation</button><button type="button" :aria-pressed="side==='rear'" @click="side='rear'">Rear elevation</button></div>
 <p>{{side==='front'?'Front':'Rear'}} placement context. Coordinates use the recorded enclosure origin. Arrow keys select U/side, Enter adds the selected equipment to the draft.</p>
 <svg ref="elevation" role="group" tabindex="0" aria-label="Rack physical placement" :viewBox="`${drawing.x} ${drawing.y} ${drawing.width} ${drawing.height}`" @dragover.prevent @drop.prevent="dropEquipment" @keydown="rackKeyboard">
 <rect :x="drawing.x" :y="drawing.y" :width="drawing.width" :height="drawing.height" class="rack"/>
-<template v-for="occupant in view.occupancy" :key="key(occupant.placement?.item)"><rect v-if="occupant.placement&&rect(occupant.placement)" v-bind="rect(occupant.placement)" class="installed"><title>Reported installation: <template v-if="label(occupant.placement.item)">{{label(occupant.placement.item)}}</template><template v-else>Equipment name unavailable</template></title></rect></template>
-<template v-for="placement in local" :key="key(placement.item)"><rect v-if="rect(placement)" v-bind="rect(placement)" class="proposed"><title>Planned placement: <template v-if="label(placement.item)">{{label(placement.item)}}</template><template v-else>Equipment name unavailable</template></title></rect></template>
+<rect v-for="entry in reportedProjection" :key="key(entry.p.item)" v-bind="entry.rect" class="installed"><title>Reported installation: <template v-if="entry.name">{{entry.name}}</template><template v-else>Equipment name unavailable</template></title></rect>
+<rect v-for="entry in plannedProjection" :key="key(entry.p.item)" v-bind="entry.rect" class="proposed"><title>Planned placement: <template v-if="entry.name">{{entry.name}}</template><template v-else>Equipment name unavailable</template></title></rect>
 </svg>
-</section><p v-else>Set known enclosure dimensions before drawing or reserving physical capacity.</p>
+</template><p v-else>Known enclosure geometry is needed for an elevation. Available recorded coordinates and draft editing remain accessible.</p>
+<p v-if="reportedProjection.length<view.occupancy.length">Some placements have no drawable coordinates in this view. The coordinate table preserves their available facts.</p>
+<details v-if="view.occupancy.length" @toggle="coordinatesOpen=($event.target as HTMLDetailsElement).open"><summary>Reported placement coordinates</summary>
+<template v-if="coordinatesOpen"><p>Start + length in millimetres in the recorded enclosure frame. Changing the viewing face changes no physical coordinates.</p>
+<div class="coordinate-table" tabindex="0" role="region" aria-label="Reported coordinate table"><table><thead><tr><th>Equipment</th><th>X (mm)</th><th>Y (mm)</th><th>Z (mm)</th></tr></thead><tbody><tr v-for="(entry,index) in coordinateRows" :key="index"><th><template v-if="label(entry.placement?.item)">{{label(entry.placement?.item)}}</template><template v-else>Equipment name unavailable</template></th><td v-for="axis in axes" :key="axis">{{coordinate(entry.placement?.volume?.[axis])}}</td></tr></tbody></table></div>
+<div class="placement-controls"><button type="button" :disabled="coordinatePage===0" @click="coordinatePage--">Previous reported positions</button><button type="button" :disabled="(coordinatePage+1)*25>=view.occupancy.length" @click="coordinatePage++">Next reported positions</button></div></template>
+</details>
+</section>
 <section aria-label="Installation plan editor">
 <form v-if="editable" @submit.prevent="save"><fieldset :disabled="busy">
 <label>Installation plan name<input v-model="name" required maxlength="160" /></label>
@@ -299,7 +317,7 @@ async function exportPlan(){await run(async()=>{
 <template v-else><button v-if="equipmentVolume" type="button" draggable="true" @dragstart="dragEquipment" @click="add">Drag selected equipment onto elevation, or add at chosen coordinates</button>
 <div class="placement-controls"><label>Starting U<input v-model="unit" inputmode="decimal" maxlength="5"/></label>
 <label>Side<select v-model="side"><option value="front">Front</option><option value="rear">Rear</option></select></label>
-<label>Horizontal position<select v-model="lane"><option value="left">Left</option><option value="right">Right</option></select></label></div></template>
+<label>Horizontal position<select v-model="lane"><option value="left">Left from front</option><option value="right">Right from front</option></select></label></div></template>
 <button type="button" :disabled="!equipment?.target||(!manualRegion&&!equipmentVolume)" @click="add">Add planned placement</button>
 </template>
 <template v-else-if="mode==='replacement'">
@@ -357,6 +375,7 @@ async function exportPlan(){await run(async()=>{
 </details>
 </template>
 <style scoped>
+.coordinate-table{max-width:100%;overflow:auto}.coordinate-table table{border-collapse:collapse;min-width:32rem}.coordinate-table th,.coordinate-table td{padding:.5rem;text-align:left;border-bottom:1px solid #cbd8da;overflow-wrap:anywhere}
 .physical-planner{margin-block:1rem;min-width:0}.physical-planner fieldset{border:0;padding:0;min-width:0}.physical-planner label{display:grid;gap:.35rem;margin-block:.75rem}.physical-planner button,.physical-planner input,.physical-planner select{min-height:44px;max-width:100%;box-sizing:border-box}.physical-planner textarea{width:100%;min-height:90px;box-sizing:border-box}.physical-planner ul{padding-left:1rem}.physical-planner small{display:block;overflow-wrap:anywhere}.plan-layout{display:grid;grid-template-columns:minmax(180px,1fr) minmax(260px,2fr);gap:1.5rem}.plan-layout>section{min-width:0}.plan-layout svg{display:block;width:100%;max-height:660px;background:#eef3f3}.rack{fill:#fff;stroke:#365c65;stroke-width:2;vector-effect:non-scaling-stroke}.installed{fill:#a6c6ce;stroke:#244c58;stroke-width:2;vector-effect:non-scaling-stroke}.proposed{fill:#d9e5be66;stroke:#586b28;stroke-width:2;stroke-dasharray:5 4;vector-effect:non-scaling-stroke}.placement-controls{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.5rem}.planned-items li{padding-block:.5rem;overflow-wrap:anywhere}.planned-items label{display:flex;align-items:center}.physical-planner section>ul button{text-align:left}@media(max-width:700px){.plan-layout{display:flex;flex-direction:column-reverse}.plan-layout svg{max-height:420px}.placement-controls{grid-template-columns:1fr}.physical-planner button{width:100%;margin-block:.25rem}}
 .outcome{display:flex!important;align-items:center;gap:.5rem}
 </style>

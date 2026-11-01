@@ -768,6 +768,12 @@ facts and use ordinary Powered by relationships for the actual topology.
 These checks do not certify live power, electrical safety or surviving capacity.
 The same condition can be saved as a physical step's postcondition.
 
+Rack elevations project the recorded enclosure frame. Rear viewing mirrors the
+horizontal axis and orders reported bodies from far to near; proposed placements
+remain explicit overlays. Switching faces changes no inventory coordinates.
+The reported coordinate table keeps exact values available, including geometry
+that cannot be drawn, in pages of 25 without loading neighboring infrastructure.
+
 Named ends belong to a retained cable. Their definition, accepted destination
 intent and reported attachment are distinct. A confirmed loose end releases its
 physical binding while preserving intent unless explicitly cleared. An unknown

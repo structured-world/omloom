@@ -98,6 +98,76 @@ test('recorded power paths use explicit boundaries and expose a visible shared U
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
 });
 
+test('rack elevations mirror rear coordinates and order reported bodies by depth',async({browser})=>{
+  // Opposing half-width bodies share XY without being the same visible front/rear surface.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-elevation-'));const server=await host(dir);
+  try{
+    const {m,rpc}=await workspaceClient(server.url);const reference=t=>({assetId:t.asset_id,incarnation:t.incarnation});
+    for(const width of [1440,390]){
+      const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600});
+      try{
+        await page.goto(server.url);
+        const front=reference(await create(page,`Front half ${width}`));
+        const rear=reference(await create(page,`Rear half ${width}`));
+        const spare=reference(await create(page,`Rear placement spare ${width}`));
+        const rack=reference(await create(page,`Depth-aware rack ${width}`,'RACK'));
+        for(const target of [front,rear,spare]){
+          const detail=await rpc({oneofKind:'read',read:m.Read.create({target})});
+          const changes=[['width',250000n],['height',44450n],['depth',400000n]].map(([name,value])=>({name,value:{oneofKind:'equipment',equipment:{basis:'Measured half-width body',assertion:{oneofKind:'quantity',quantity:{lower:value,upper:value,unit:'mm',scale:3}}}}}));
+          await rpc({oneofKind:'write',write:m.Write.create({target,kind:detail.detail.item.kind,expected:detail.detail.item.revision,changes})});
+        }
+        const axis=(startUm,lengthUm)=>({startUm,lengthUm});
+        const volume={x:axis(0n,500000n),y:axis(0n,2000000n),z:axis(0n,1000000n)};
+        await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target:rack,basis:'Measured enclosure and complete current occupancy',volume,occupancyCoverage:volume})}}})});
+        const steps=[[front,0n],[rear,600000n]].map(([item,z])=>({action:{oneofKind:'placement',placement:{item,enclosure:rack,volume:{x:axis(0n,250000n),y:axis(0n,44450n),z:axis(z,400000n)}}}}));
+        const saved=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'save',save:{plan:m.PhysicalPlan.create({name:'Recorded opposing faces',steps})}}})});
+        const plan=saved.physical.plan;
+        await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'complete',complete:{plan:{id:plan.id,revision:plan.revision},completedSteps:[0,1],actualState:true}}})});
+        await page.reload();await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
+        const planner=page.locator('details.physical-planner');
+        const bodies=planner.locator('rect.installed');
+        await expect(bodies).toHaveCount(2);
+        const frontBody=bodies.filter({hasText:`Front half ${width}`});
+        await expect(frontBody).toHaveAttribute('x','0');
+        await planner.getByRole('button',{name:'Rear elevation',exact:true}).click();
+        await expect(frontBody).toHaveAttribute('x','250');
+        await expect(bodies.last()).toHaveText(`Reported installation: Rear half ${width}`);
+        await planner.getByRole('button',{name:'Front elevation',exact:true}).click();
+        await expect(frontBody).toHaveAttribute('x','0');
+        await expect(bodies.last()).toHaveText(`Reported installation: Front half ${width}`);
+        await planner.getByText('Reported placement coordinates',{exact:true}).click();
+        const coordinates=planner.getByRole('region',{name:'Reported coordinate table',exact:true});
+        const frontRow=coordinates.getByRole('row').filter({hasText:`Front half ${width}`});
+        await expect(frontRow.getByRole('cell')).toHaveText(['0 + 250','0 + 44.45','0 + 400']);
+        const rearRow=coordinates.getByRole('row').filter({hasText:`Rear half ${width}`});
+        await expect(rearRow.getByRole('cell')).toHaveText(['0 + 250','0 + 44.45','600 + 400']);
+        const current=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'read',read:{enclosure:rack,occupants:true}}})});
+        expect(current.physical.occupancy.map(o=>o.placement.volume.x.startUm)).toEqual([0n,0n]);
+        await planner.getByRole('combobox',{name:'Find equipment',exact:true}).fill(`Rear placement spare ${width}`);
+        await planner.getByRole('option',{name:`Use equipment: Rear placement spare ${width}`,exact:true}).click();
+        await planner.getByLabel('Installation plan name',{exact:true}).fill('Rear input placement');
+        await planner.getByLabel('Starting U',{exact:true}).fill('2');
+        await planner.getByRole('button',{name:'Rear elevation',exact:true}).click();
+        const canvas=planner.getByRole('group',{name:'Rack physical placement',exact:true});
+        if(width>600){await canvas.press('ArrowLeft');await canvas.press('Enter');}
+        else{await planner.getByRole('combobox',{name:'Horizontal position',exact:true}).selectOption('right');await planner.getByRole('button',{name:'Add planned placement',exact:true}).click();}
+        await expect(planner.locator('rect.proposed')).toHaveAttribute('x','0');
+        await expect(planner.getByRole('combobox',{name:'Horizontal position',exact:true})).toHaveValue('right');
+        await expect(planner.getByText('X allocation: 250 mm + 250 mm',{exact:true})).toBeVisible();
+        if(width>600){
+          await planner.getByRole('button',{name:'Remove proposed step',exact:true}).click();
+          const location=await canvas.evaluate(el=>{const p=new DOMPoint(125,66.675).matrixTransform(el.getScreenCTM());const r=el.getBoundingClientRect();return{x:p.x-r.x,y:p.y-r.y};});
+          await planner.getByRole('button',{name:'Drag selected equipment onto elevation, or add at chosen coordinates',exact:true}).dragTo(canvas,{targetPosition:location});
+          await expect(planner.locator('rect.proposed')).toHaveAttribute('x','0');
+          await expect(planner.getByText('X allocation: 250 mm + 250 mm',{exact:true})).toBeVisible();
+          await expect(planner.getByText('Y allocation: 44.45 mm + 44.45 mm',{exact:true})).toBeVisible();
+        }
+        expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+      }finally{await page.close();}
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('named cable ends preserve definitions on desktop and phone',async({browser})=>{
   // Ends belong to the retained cable, not the optic that may later be replaced.
   const dir=await mkdtemp(join(tmpdir(),'omloom-cable-ends-'));const server=await host(dir);
