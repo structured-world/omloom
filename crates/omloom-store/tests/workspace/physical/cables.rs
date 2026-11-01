@@ -488,13 +488,43 @@ fn ordered_socket_handoff_admits_two_cables_without_parallel_booking() -> TestRe
     )?
     .plan
     .ok_or(Error::Corrupt)?;
-    assert_eq!(
-        reserve(&store, &actor, plan)?
-            .plan
-            .ok_or(Error::Corrupt)?
-            .state,
-        api::PhysicalPlanState::Reserved as i32
-    );
+    let mut plan = reserve(&store, &actor, plan)?.plan.ok_or(Error::Corrupt)?;
+    assert_eq!(plan.state, api::PhysicalPlanState::Reserved as i32);
+    for index in 0..3 {
+        plan = physical(
+            &store,
+            &actor,
+            api::physical::Action::Complete(api::PhysicalCompletion {
+                plan: Some(api::PhysicalPlanKey {
+                    id: plan.id.clone().ok_or(Error::Corrupt)?,
+                    revision: plan.revision,
+                }),
+                completed_steps: vec![index],
+                ..Default::default()
+            }),
+        )?
+        .plan
+        .ok_or(Error::Corrupt)?;
+    }
+    assert_eq!(plan.state, api::PhysicalPlanState::Completed as i32);
+    let Some(api::physical_step::Action::Wiring(last)) = &plan.steps[2].action else {
+        return Err(Error::Corrupt.into());
+    };
+    let view = ends(
+        &store,
+        &actor,
+        last.cable.as_ref().ok_or(Error::Corrupt)?,
+        None,
+    )?;
+    let end = view
+        .cable_ends
+        .iter()
+        .find(|e| e.key == last.end_key)
+        .ok_or(Error::Corrupt)?;
+    let Some(api::physical_cable_end::Attachment::Connected(binding)) = &end.attachment else {
+        return Err(Error::Corrupt.into());
+    };
+    assert_eq!(binding.port, Some(port));
     Ok(())
 }
 
