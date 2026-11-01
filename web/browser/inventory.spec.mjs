@@ -147,6 +147,47 @@ test('replacement judgments invalidate quality pagination on desktop and phone',
         await expect(planner.getByText(/evidence class 1 · confirmed/)).toHaveCount(0);
         await planner.getByRole('button',{name:'Load current review counts',exact:true}).click();
         await expect(next).toBeVisible();
+        // Roots can change without changing the target or inventory revision. Keep the draft,
+        // but never carry aggregate values or their cursor into the new disclosure scope.
+        const draftName=planner.getByLabel('Installation plan name',{exact:true});
+        await draftName.fill(`Unsaved scoped plan ${width}`);
+        await page.evaluate(hash=>{location.hash=hash;},`/?asset=${rack.assetId}&incarnation=${rack.incarnation}&scope=${rack.assetId}&scopeInc=${rack.incarnation}`);
+        await expect(next).toHaveCount(0);
+        await expect(planner.getByText(/evidence class/)).toHaveCount(0);
+        await expect(draftName).toHaveValue(`Unsaved scoped plan ${width}`);
+        const globalScopeLoaded=page.waitForResponse(response=>{
+          if(!response.url().endsWith('/omloom.workspace.v1.Workspace/Call'))return false;
+          const bytes=response.request().postDataBuffer();
+          if(!bytes)return false;
+          const request=m.Request.fromBinary(bytes.subarray(5));
+          return request.command?.oneofKind==='prepare'&&request.working?.roots.length===0;
+        });
+        await page.evaluate(hash=>{location.hash=hash;},`/?asset=${rack.assetId}&incarnation=${rack.incarnation}`);
+        await globalScopeLoaded;
+        await expect(planner).not.toHaveAttribute('inert','');
+        await planner.getByRole('button',{name:'Load current review counts',exact:true}).click();
+        await expect(next).toBeVisible();
+        // Deliver an actual old-scope response after switching, without replacing its contents.
+        let held=false,release;
+        const resumed=new Promise(resolve=>{release=resolve;});
+        await page.route('**/omloom.workspace.v1.Workspace/Call',async route=>{
+          const bytes=route.request().postDataBuffer();
+          const command=bytes?m.Request.fromBinary(bytes.subarray(5)).command:undefined;
+          if(!held&&command?.oneofKind==='physical'&&command.physical.action.oneofKind==='replacementQuality'){
+            held=true;
+            const response=await route.fetch();await resumed;await route.fulfill({response});
+          }else await route.continue();
+        });
+        try{
+          await planner.getByRole('button',{name:'Load current review counts',exact:true}).click();
+          await expect.poll(()=>held).toBe(true);
+          await page.evaluate(hash=>{location.hash=hash;},`/?asset=${rack.assetId}&incarnation=${rack.incarnation}&scope=${rack.assetId}&scopeInc=${rack.incarnation}`);
+          await expect(next).toHaveCount(0);
+        }finally{release();}
+        await expect(planner.getByRole('button',{name:'Load current review counts',exact:true})).toBeEnabled();
+        await expect(next).toHaveCount(0);
+        await expect(planner.getByText(/evidence class/)).toHaveCount(0);
+        await page.unrouteAll({behavior:'wait'});
       }finally{await page.close();}
     }
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}

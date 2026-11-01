@@ -22,6 +22,8 @@ const assessment=ref<{state:number;reason:number;revision:bigint}>();
 const reviewHypotheses=ref(new Map<number,model.PhysicalReplacementHypothesis>());
 const quality=ref<model.PhysicalReplacementQuality[]>(),qualityNext=ref<string>();
 function clearQuality(){quality.value=undefined;qualityNext.value=undefined;}
+const qualityScope=computed(()=>props.working.roots.map(key).sort().join('|'));
+watch(qualityScope,clearQuality);
 watch(()=>plan.value?.id,()=>{reviewHypotheses.value.clear();});
 async function reviewReplacement(index:number,decision?:model.PhysicalReplacementDecision,reason=model.PhysicalReplacementReason.UNSPECIFIED,basis?:string){await run(async()=>{
   const reply=await invoke({oneofKind:'reviewReplacement',reviewReplacement:{plan:planKey('current'),step:index,decision,reason,basis}});
@@ -29,7 +31,7 @@ async function reviewReplacement(index:number,decision?:model.PhysicalReplacemen
   if(reply.replacementHypothesis)reviewHypotheses.value.set(index,reply.replacementHypothesis);
   if(decision!==undefined){notice.value='Review decision recorded. Installation and endpoint decisions are unchanged.';clearQuality();}
 });}
-async function loadQuality(after?:string){await run(async()=>{const reply=await invoke({oneofKind:'replacementQuality',replacementQuality:{after}});quality.value=reply.replacementQuality;qualityNext.value=reply.next;});}
+async function loadQuality(after?:string){await run(async()=>{const scope=qualityScope.value;const reply=await invoke({oneofKind:'replacementQuality',replacementQuality:{after}});if(scope!==qualityScope.value)return;quality.value=reply.replacementQuality;qualityNext.value=reply.next;});}
 watch([plan,name],()=>{assessment.value=undefined;savedCurrent.value=false;},{deep:true,flush:'sync'});
 const assessmentText=computed(()=>{
   if(!assessment.value)return '';
