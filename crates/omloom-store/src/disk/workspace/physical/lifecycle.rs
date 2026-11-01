@@ -66,10 +66,19 @@ impl Tx<'_> {
             }
             steps.push(step);
         }
-        Ok(api::PhysicalPlan {
+        let plan = api::PhysicalPlan {
             id: Some(request.id.clone()),
             name: string(&row, "name")?,
             steps,
+            materials: self.load_materials(
+                &key,
+                if row.contains_key("material_count") {
+                    usize::try_from(number(&row, "material_count")?).map_err(|_| Error::Corrupt)?
+                } else {
+                    0
+                },
+                number(&row, "class")? == Class::Detail as u64,
+            )?,
             state,
             revision: number(&row, "revision")?,
             reserved_until_ms: if row.contains_key("until") {
@@ -77,7 +86,11 @@ impl Tx<'_> {
             } else {
                 None
             },
-        })
+        };
+        if !plan.materials.is_empty() {
+            self.material_access(context, &plan.materials, working, write)?;
+        }
+        Ok(plan)
     }
     pub(super) fn physical_state(
         &mut self,
@@ -117,6 +130,9 @@ impl Tx<'_> {
         };
         if terminal_detail {
             row.insert("at".into(), int(now)?);
+            if !plan.materials.is_empty() {
+                self.retire_materials(&key, now)?;
+            }
             for index in 0..plan.steps.len() {
                 let child_key = format!("{key}/{index}");
                 let mut child = self.get(&child_key)?.ok_or(Error::Corrupt)?;
@@ -188,6 +204,7 @@ impl Tx<'_> {
         if plan.state == api::PhysicalPlanState::Completed as i32 {
             return Err(Error::UnsafeTransition);
         }
+        let held = plan.state != api::PhysicalPlanState::Draft as i32;
         // Cancelling future intent never silently releases unresolved reserved work.
         if plan.state == api::PhysicalPlanState::Draft as i32 {
             for (index, step) in plan.steps.iter_mut().enumerate() {
@@ -201,6 +218,9 @@ impl Tx<'_> {
             }
         }
         self.physical_state(context, &mut plan, api::PhysicalPlanState::Cancelled, now)?;
+        if held {
+            self.release_resolved_physical_locks(&plan)?;
+        }
         Ok(plan)
     }
 }

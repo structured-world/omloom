@@ -815,8 +815,23 @@ declared service spaces and the candidate's service space against other bodies.
 Empty service spaces may overlap each other. An interior envelope does not
 certify an outside maintenance aisle or a cable route.
 
-A plan's selected serialized materials are derived from its steps. Moving and
-placing the same retained component counts it once. The list separates related
+A plan can retain up to 64 material requirements, each with a scalar positive
+quantity and optional sourced equipment claims or physical specifications. These
+are plan-local intentions, not assets, orders or promised stock. Even a large
+quantity creates no rows per unreceived unit. Current occupancy and power-source
+completeness cannot be asserted for proposed equipment.
+
+Explicit receipt or reuse links an adopted resource to one requested unit.
+Receipt may be partial and can continue after reservation. It neither installs
+the resource nor proves compatibility or health. Real allocations use the same
+serialized-part locks as plan steps. Cancellation releases unused materials but
+preserves holds for unresolved effects. An allocation already used by a step
+cannot be silently replaced. Terminal BOM detail follows the existing finite
+cleanup lifecycle. Equal input, including equivalent quantity spellings, writes
+no additional revision or history.
+
+Selected serialized materials combine step targets and real BOM allocations.
+Moving and placing the same retained component counts it once. The list separates related
 reported work from outstanding reservations and includes a serial only when
 that current field is permitted. Export reloads the authorized plan first; it
 does not order equipment, copy credentials or retain an inventory snapshot.

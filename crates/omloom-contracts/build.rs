@@ -26,6 +26,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         // Keep the request stack bound; allocate this volume only for an explicit coverage assertion.
         .boxed(".omloom.workspace.v1.PhysicalDefinition.occupancy_coverage")
         .boxed(".omloom.workspace.v1.PhysicalDefinition.rack_grid")
+        .boxed(".omloom.workspace.v1.PhysicalMaterial.physical")
         .file_descriptor_set_path(&descriptor)
         .compile_protos(&[workspace], &["../../proto"])?;
     let set = FileDescriptorSet::decode(fs::read(descriptor)?.as_slice())?;
@@ -74,8 +75,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                     || (message.name() == "PhysicalView" && field.name() == "definitions")
                     || (message.name() == "PhysicalCompletion"
                         && matches!(field.name(), "completed_steps" | "not_performed_steps"))
+                    || (message.name() == "PhysicalPlan" && field.name() == "materials")
+                    || (message.name() == "PhysicalMaterial" && field.name() == "allocations")
                 {
                     64
+                } else if message.name() == "PhysicalMaterial" && field.name() == "specifications" {
+                    12
                 } else if message.name() == "PhysicalView" && field.name() == "occupancy" {
                     128
                 } else if message.name() == "PhysicalView"

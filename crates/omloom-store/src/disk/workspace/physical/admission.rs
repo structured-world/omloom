@@ -105,7 +105,13 @@ impl Tx<'_> {
         plan: &api::PhysicalPlan,
         working: &api::WorkingContext,
     ) -> core::result::Result<Claims, Failure> {
+        if plan.steps.is_empty() {
+            return Err(Error::Incomplete.into());
+        }
         let mut claims = self.check_replacement_capacity(context, plan, working)?;
+        for allocation in plan.materials.iter().flat_map(|m| &m.allocations) {
+            claims.parts.insert(parse_target(allocation.item.as_ref())?);
+        }
         let graph = flow::analysis(&plan.steps)?;
         self.assess_wiring(context, plan, working, &graph, &mut claims)?;
         let profiles = self.placement_profiles(plan)?;

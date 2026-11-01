@@ -52,6 +52,61 @@ async function workspaceClient(url) {
   return { m, rpc, revision };
 }
 
+test('material quantities stay plan-local and partial receiving survives reload on desktop and phone',async({browser})=>{
+  // Real UI/API keeps unreceived demand out of inventory and current physical occupancy.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-material-receiving-'));const server=await host(dir);
+  try{
+    const {m,rpc}=await workspaceClient(server.url);
+    for(const width of [1440,390]){
+      const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600});
+      try{
+        await page.goto(server.url);
+        const actual=await create(page,`Received material ${width}`);
+        await create(page,`Receiving enclosure ${width}`,'RACK');
+        await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
+        const planner=page.locator('.physical-planner');
+        await planner.getByText('Required materials and receiving (0 lines)',{exact:true}).click();
+        await planner.getByRole('button',{name:'Add material requirement',exact:true}).click();
+        const form=planner.getByRole('form',{name:'Material requirement editor',exact:true});
+        await form.getByLabel('Material requirement name',{exact:true}).fill(`Future hardware ${width}`);
+        await form.getByLabel('Required quantity',{exact:true}).fill('3');
+        await form.getByRole('button',{name:'Apply material requirement',exact:true}).click();
+        await expect(planner.getByRole('button',{name:'Save installation plan',exact:true})).toBeVisible({timeout:5000});
+        await expect(planner).toContainText('0 allocated of 3 requested');
+        await planner.getByLabel('Installation plan name',{exact:true}).fill(`Receiving plan ${width}`);
+        await planner.getByRole('button',{name:'Receive or reuse a unit for requirement 1',exact:true}).click();
+        const receiving=planner.getByRole('form',{name:'Material receiving',exact:true});
+        await receiving.getByLabel('Requested unit number',{exact:true}).fill('3');
+        await receiving.getByRole('combobox',{name:'Find material',exact:true}).fill(`Received material ${width}`);
+        await receiving.getByRole('option',{name:`Use material: Received material ${width}`,exact:true}).click();
+        await receiving.getByLabel('Receipt or reuse basis',{exact:true}).fill('Physically received and selected for this plan');
+        await receiving.getByRole('button',{name:'Record actual material allocation',exact:true}).click();
+        await expect(planner).toContainText('1 allocated of 3 requested');
+        await expect(planner).toContainText(`Unit 3: Received material ${width}`);
+        await planner.getByRole('button',{name:'Save installation plan',exact:true}).click();
+        await expect(planner.getByRole('status')).toHaveText('Plan saved. Nothing is reserved or installed.');
+        const summaries=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'list',list:{limit:25}}})});
+        const saved=summaries.physical.plans.find(p=>p.name===`Receiving plan ${width}`);
+        expect(saved).toBeDefined();
+        const receipt=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'receive',receive:{plan:{id:saved.id,revision:saved.revision},material:0,allocation:{unit:2,item:{assetId:actual.asset_id,incarnation:actual.incarnation},basis:'Receiving note corrected by operator'}}}})});
+        expect(receipt.physical.plan.materials[0].allocations[0].basis).toBe('Receiving note corrected by operator');
+        await page.reload();await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
+        await planner.getByRole('button',{name:`Receiving plan ${width} · draft`,exact:true}).click();
+        await planner.getByText('Required materials and receiving (1 lines)',{exact:true}).click();
+        await expect(planner).toContainText('1 allocated of 3 requested');
+        await expect(planner).toContainText(`Unit 3: Received material ${width}`);
+        await expect(planner).toContainText('Receiving note corrected by operator');
+        const target={assetId:actual.asset_id,incarnation:actual.incarnation};
+        const resource=await rpc({oneofKind:'read',read:m.Read.create({target})});
+        expect(resource.detail.relations).toEqual([]);
+        const inventory=await rpc({oneofKind:'query',query:m.Query.create({search:`Future hardware ${width}`,limit:25})});
+        expect(inventory.page.items).toEqual([]);
+        expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+      }finally{await page.close();}
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('recorded power paths use explicit boundaries and expose a visible shared UPS on desktop and phone',async({browser},testInfo)=>{
   // Actual current graph changes invalidate separation; incomplete boundaries never certify power.
   const dir=await mkdtemp(join(tmpdir(),'omloom-power-paths-'));const server=await host(dir);

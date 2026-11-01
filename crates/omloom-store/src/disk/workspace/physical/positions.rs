@@ -201,6 +201,14 @@ impl Tx<'_> {
                 targets.extend(wiring::targets(w)?);
             }
         }
+        for allocation in view
+            .plan
+            .iter()
+            .flat_map(|p| &p.materials)
+            .flat_map(|m| &m.allocations)
+        {
+            targets.insert(parse_target(allocation.item.as_ref())?);
+        }
         for end in &view.cable_ends {
             for port in [
                 end.intended_port.as_ref(),

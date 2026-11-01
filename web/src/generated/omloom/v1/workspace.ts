@@ -4138,6 +4138,109 @@ export interface PhysicalPlan {
      * @generated from protobuf field: optional uint64 reserved_until_ms = 6
      */
     reservedUntilMs?: bigint;
+    /**
+     * User's plan-local material requirements, at most 64. These are not adopted
+     * assets or stock promises. Quantities never allocate one record per unit.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.PhysicalMaterial materials = 7
+     */
+    materials: PhysicalMaterial[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalMaterial
+ */
+export interface PhysicalMaterial {
+    /**
+     * User-visible current BOM label, 1-160 UTF-8 bytes, not a global identity.
+     *
+     * @generated from protobuf field: string name = 1
+     */
+    name: string;
+    /**
+     * Requested count of discrete units, positive uint32. Large counts do not
+     * instantiate assets, positions or allocations. Receipt may be partial.
+     *
+     * @generated from protobuf field: uint32 quantity = 2
+     */
+    quantity: number;
+    /**
+     * Requested physical resource kind: device, physical component, cable or rack.
+     *
+     * @generated from protobuf field: omloom.v1.AssetKind kind = 3
+     */
+    kind: AssetKind;
+    /**
+     * Optional selected canonical equipment claims, without serials or credentials.
+     * Each field has its own source basis; at most the 12 equipment claim names.
+     *
+     * @generated from protobuf field: repeated omloom.v1.Field specifications = 4
+     */
+    specifications: Field[];
+    /**
+     * Optional plan-local physical specification using the common fact vocabulary.
+     * Target must be absent. Current occupancy/power completeness assertions are
+     * forbidden: proposed equipment cannot assert actual inventory or live sources.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.PhysicalDefinition physical = 5
+     */
+    physical?: PhysicalDefinition;
+    /**
+     * Explicitly received/reused adopted resources, at most 64 across one plan.
+     * Each retains its real identity and current serial; no template serial is copied.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.PhysicalMaterialAllocation allocations = 6
+     */
+    allocations: PhysicalMaterialAllocation[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalMaterialAllocation
+ */
+export interface PhysicalMaterialAllocation {
+    /**
+     * User-selected zero-based unit within this BOM line, less than quantity.
+     * Sparse receipt can name any requested unit without allocating preceding ones.
+     *
+     * @generated from protobuf field: uint32 unit = 1
+     */
+    unit: number;
+    /**
+     * Actual adopted resource explicitly received or selected for reuse. This
+     * reference grants nothing and does not assert installation or verified health.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef item = 2
+     */
+    item?: AssetRef;
+    /**
+     * User's bounded receipt/reuse source, 1-512 UTF-8 bytes; no secrets. Manual
+     * attribution is not provider verification, procurement or a financial action.
+     *
+     * @generated from protobuf field: string basis = 3
+     */
+    basis: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalMaterialReceipt
+ */
+export interface PhysicalMaterialReceipt {
+    /**
+     * Caller-selected saved plan and last reviewed revision, under current rights.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalPlanKey plan = 1
+     */
+    plan?: PhysicalPlanKey;
+    /**
+     * Zero-based material line in that saved plan, not a global stock identifier.
+     *
+     * @generated from protobuf field: uint32 material = 2
+     */
+    material: number;
+    /**
+     * Explicit actual unit and receipt/reuse source. New units may arrive partially
+     * after reservation. Replacing an allocation already used by a step is forbidden.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalMaterialAllocation allocation = 3
+     */
+    allocation?: PhysicalMaterialAllocation;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.PhysicalPreview
@@ -4478,6 +4581,14 @@ export interface Physical {
          * @generated from protobuf field: omloom.workspace.v1.PhysicalOffers offers = 16
          */
         offers: PhysicalOffers;
+    } | {
+        oneofKind: "receive";
+        /**
+         * Record one received/reused unit without installing it or completing a step.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PhysicalMaterialReceipt receive = 17
+         */
+        receive: PhysicalMaterialReceipt;
     } | {
         oneofKind: undefined;
     };
@@ -8145,7 +8256,8 @@ class PhysicalPlan$Type extends MessageType<PhysicalPlan> {
             { no: 3, name: "steps", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalStep },
             { no: 4, name: "state", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalPlanState", PhysicalPlanState, "PHYSICAL_PLAN_STATE_"] },
             { no: 5, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
-            { no: 6, name: "reserved_until_ms", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
+            { no: 6, name: "reserved_until_ms", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 7, name: "materials", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalMaterial }
         ]);
     }
 }
@@ -8153,6 +8265,51 @@ class PhysicalPlan$Type extends MessageType<PhysicalPlan> {
  * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalPlan
  */
 export const PhysicalPlan = new PhysicalPlan$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalMaterial$Type extends MessageType<PhysicalMaterial> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalMaterial", [
+            { no: 1, name: "name", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "quantity", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 3, name: "kind", kind: "enum", T: () => ["omloom.v1.AssetKind", AssetKind, "ASSET_KIND_"] },
+            { no: 4, name: "specifications", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Field },
+            { no: 5, name: "physical", kind: "message", T: () => PhysicalDefinition },
+            { no: 6, name: "allocations", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalMaterialAllocation }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalMaterial
+ */
+export const PhysicalMaterial = new PhysicalMaterial$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalMaterialAllocation$Type extends MessageType<PhysicalMaterialAllocation> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalMaterialAllocation", [
+            { no: 1, name: "unit", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 2, name: "item", kind: "message", T: () => AssetRef },
+            { no: 3, name: "basis", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalMaterialAllocation
+ */
+export const PhysicalMaterialAllocation = new PhysicalMaterialAllocation$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalMaterialReceipt$Type extends MessageType<PhysicalMaterialReceipt> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalMaterialReceipt", [
+            { no: 1, name: "plan", kind: "message", T: () => PhysicalPlanKey },
+            { no: 2, name: "material", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 3, name: "allocation", kind: "message", T: () => PhysicalMaterialAllocation }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalMaterialReceipt
+ */
+export const PhysicalMaterialReceipt = new PhysicalMaterialReceipt$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class PhysicalPreview$Type extends MessageType<PhysicalPreview> {
     constructor() {
@@ -8296,7 +8453,8 @@ class Physical$Type extends MessageType<Physical> {
             { no: 13, name: "cable_ends", kind: "message", oneof: "action", T: () => PhysicalCableEnds },
             { no: 14, name: "offer", kind: "message", oneof: "action", T: () => PhysicalOfferEdit },
             { no: 15, name: "availability", kind: "message", oneof: "action", T: () => PhysicalOfferRead },
-            { no: 16, name: "offers", kind: "message", oneof: "action", T: () => PhysicalOffers }
+            { no: 16, name: "offers", kind: "message", oneof: "action", T: () => PhysicalOffers },
+            { no: 17, name: "receive", kind: "message", oneof: "action", T: () => PhysicalMaterialReceipt }
         ]);
     }
 }

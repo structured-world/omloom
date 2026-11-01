@@ -356,10 +356,12 @@ impl Tx<'_> {
         plan: &mut api::PhysicalPlan,
         working: &api::WorkingContext,
     ) -> Result<()> {
-        if plan.steps.is_empty() || plan.steps.len() > 64 {
+        if (plan.steps.is_empty() && plan.materials.is_empty()) || plan.steps.len() > 64 {
             return Err(Error::Invalid);
         }
-        flow::analysis(&plan.steps)?;
+        if !plan.steps.is_empty() {
+            flow::analysis(&plan.steps)?;
+        }
         for step in &mut plan.steps {
             if let Some(api::physical_step::Action::Wiring(wire)) = &mut step.action {
                 self.capture_wiring(context, wire, working)?;

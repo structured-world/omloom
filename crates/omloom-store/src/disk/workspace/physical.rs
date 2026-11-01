@@ -12,6 +12,7 @@ mod current;
 mod equipment;
 mod flow;
 mod lifecycle;
+mod materials;
 mod positions;
 mod rack_grid;
 mod replacements;
@@ -177,6 +178,35 @@ fn read_volume(data: &Properties) -> Result<Option<api::PhysicalVolume>> {
     Ok(Some(value))
 }
 fn definition_row(value: &api::PhysicalDefinition) -> Result<Properties> {
+    let target = parse_target(value.target.as_ref())?;
+    let mut data = definition_facts(value)?;
+    data.extend(props([
+        ("asset", text(target.asset.to_string())),
+        ("incarnation", text(target.incarnation.to_string())),
+    ]));
+    Ok(data)
+}
+fn definition_kind(kind: wire::AssetKind, value: &api::PhysicalDefinition) -> Result<()> {
+    if (value.rack_grid.is_some() && kind != wire::AssetKind::Rack)
+        || (value.power_sources_complete
+            && !matches!(
+                kind,
+                wire::AssetKind::Device
+                    | wire::AssetKind::PhysicalComponent
+                    | wire::AssetKind::Port
+                    | wire::AssetKind::PowerFeed
+            ))
+        || (value.component_kind != api::PhysicalComponentKind::Unspecified as i32
+            && !matches!(
+                kind,
+                wire::AssetKind::Device | wire::AssetKind::PhysicalComponent
+            ))
+    {
+        return Err(Error::Invalid);
+    }
+    Ok(())
+}
+fn definition_facts(value: &api::PhysicalDefinition) -> Result<Properties> {
     api::PhysicalComponentKind::try_from(value.component_kind).map_err(|_| Error::Invalid)?;
     if value.basis.is_empty()
         || value.basis.len() > 512
@@ -188,12 +218,7 @@ fn definition_row(value: &api::PhysicalDefinition) -> Result<Properties> {
     {
         return Err(Error::Invalid);
     }
-    let target = parse_target(value.target.as_ref())?;
-    let mut data = props([
-        ("asset", text(target.asset.to_string())),
-        ("incarnation", text(target.incarnation.to_string())),
-        ("basis", text(&value.basis)),
-    ]);
+    let mut data = props([("basis", text(&value.basis))]);
     if value.component_kind != api::PhysicalComponentKind::Unspecified as i32 {
         data.insert("vint".into(), int(value.component_kind as u64)?);
     }
@@ -224,6 +249,11 @@ fn definition_row(value: &api::PhysicalDefinition) -> Result<Properties> {
     Ok(data)
 }
 fn definition(data: &Properties) -> Result<api::PhysicalDefinition> {
+    let mut value = definition_facts_read(data)?;
+    value.target = Some(target_wire(target(data)?));
+    Ok(value)
+}
+fn definition_facts_read(data: &Properties) -> Result<api::PhysicalDefinition> {
     let component_kind = if data.contains_key("vint") {
         i32::try_from(number(data, "vint")?).map_err(|_| Error::Corrupt)?
     } else {
@@ -238,7 +268,7 @@ fn definition(data: &Properties) -> Result<api::PhysicalDefinition> {
         }
     };
     Ok(api::PhysicalDefinition {
-        target: Some(target_wire(target(data)?)),
+        target: None,
         volume: read_volume(data)?,
         basis: string(data, "basis")?,
         component_kind,
@@ -272,10 +302,25 @@ impl Tx<'_> {
     ) -> Result<wire::AssetKind> {
         self.selection(context, working, write)?
             .contains(target, self)?;
-        let row = self.visible_asset(context, target)?;
-        let kind = number(&row, "kind")? as i32;
-        if !context.field(target, kind, "physical", false)
-            || (write && !context.field(target, kind, "physical", true))
+        let row = self.get(&asset_key(target))?.ok_or(Error::Missing)?;
+        Self::physical_metadata_access(context, target, &row, write)
+    }
+    fn physical_metadata_access(
+        context: &Context,
+        expected: AssetRef,
+        row: &Properties,
+        write: bool,
+    ) -> Result<wire::AssetKind> {
+        if target(row)? != expected {
+            return Err(Error::Conflict);
+        }
+        if number(row, "adoption")? != wire::Adoption::Adopted as u64 {
+            return Err(Error::Missing);
+        }
+        let kind = number(row, "kind")? as i32;
+        if !context.readable(expected, kind)
+            || !context.field(expected, kind, "physical", false)
+            || (write && !context.field(expected, kind, "physical", true))
         {
             return Err(Error::Denied);
         }
@@ -379,28 +424,7 @@ impl Store {
                 let value = edit.definition.ok_or(Error::Invalid)?;
                 let target = parse_target(value.target.as_ref())?;
                 let kind = tx.physical_access(context, target, working, true)?;
-                if value.rack_grid.is_some() && kind != wire::AssetKind::Rack {
-                    return Err(Error::Invalid);
-                }
-                if value.power_sources_complete
-                    && !matches!(
-                        kind,
-                        wire::AssetKind::Device
-                            | wire::AssetKind::PhysicalComponent
-                            | wire::AssetKind::Port
-                            | wire::AssetKind::PowerFeed
-                    )
-                {
-                    return Err(Error::Invalid);
-                }
-                if value.component_kind != api::PhysicalComponentKind::Unspecified as i32
-                    && !matches!(
-                        kind,
-                        wire::AssetKind::Device | wire::AssetKind::PhysicalComponent
-                    )
-                {
-                    return Err(Error::Invalid);
-                }
+                definition_kind(kind, &value)?;
                 let data = definition_row(&value)?;
                 if tx.put(
                     &format!("physical/{}", network::identity(target)),
@@ -420,8 +444,9 @@ impl Store {
             }
             Action::Preview(preview) => {
                 let mut plan = preview.plan.ok_or(Error::Invalid)?;
+                materials::normalize(&mut plan)?;
                 tx.prepare_wiring_plan(context, &mut plan, working)?;
-                tx.validate_physical_draft(context, &plan, working)?;
+                tx.validate_physical_draft(context, &plan, working, false)?;
                 if let Some(id) = &plan.id {
                     tx.load_physical_plan(
                         context,
@@ -445,8 +470,9 @@ impl Store {
             }
             Action::Save(save) => {
                 let mut plan = save.plan.ok_or(Error::Invalid)?;
+                materials::normalize(&mut plan)?;
                 tx.prepare_wiring_plan(context, &mut plan, working)?;
-                tx.validate_physical_draft(context, &plan, working)?;
+                let materials = tx.validate_physical_draft(context, &plan, working, true)?;
                 tx.refresh_plan_control(context, &mut plan, working, now)?;
                 for p in placements(&plan) {
                     tx.physical_access(context, parse_target(p.item.as_ref())?, working, true)?;
@@ -464,6 +490,7 @@ impl Store {
                 };
                 let key = format!("plan/{id}");
                 let mut previous_count = 0;
+                let mut previous_material_count = 0;
                 for step in &mut plan.steps {
                     step.state = api::PhysicalStepState::Planned as i32;
                 }
@@ -489,6 +516,7 @@ impl Store {
                         return Err(Error::Conflict);
                     }
                     previous_count = existing.steps.len();
+                    previous_material_count = existing.materials.len();
                     plan.state = api::PhysicalPlanState::Draft as i32;
                     if existing == plan {
                         view.plan = Some(existing);
@@ -503,19 +531,19 @@ impl Store {
                 plan.state = api::PhysicalPlanState::Draft as i32;
                 plan.reserved_until_ms = None;
                 plan.revision = view.revision.checked_add(1).ok_or(Error::Limit)?;
-                tx.put(
-                    &key,
-                    "plans",
-                    Class::Inventory,
-                    props([
-                        ("name", text(&plan.name)),
-                        ("actor", text(&context.actor)),
-                        ("action", text("physical")),
-                        ("state", int(api::PhysicalPlanState::Draft as u64)?),
-                        ("revision", int(plan.revision)?),
-                        ("count", int(plan.steps.len() as u64)?),
-                    ]),
-                )?;
+                let mut header = props([
+                    ("name", text(&plan.name)),
+                    ("actor", text(&context.actor)),
+                    ("action", text("physical")),
+                    ("state", int(api::PhysicalPlanState::Draft as u64)?),
+                    ("revision", int(plan.revision)?),
+                    ("count", int(plan.steps.len() as u64)?),
+                ]);
+                if !plan.materials.is_empty() {
+                    header.insert("material_count".into(), int(plan.materials.len() as u64)?);
+                }
+                tx.put(&key, "plans", Class::Inventory, header)?;
+                tx.save_materials(&key, materials, previous_material_count)?;
                 for (i, step) in plan.steps.iter().enumerate() {
                     tx.put(
                         &format!("{key}/{i}"),
@@ -538,6 +566,9 @@ impl Store {
             }
             Action::Load(key) => {
                 view.plan = Some(tx.load_physical_plan(context, &key, working, false)?);
+            }
+            Action::Receive(receipt) => {
+                view.plan = Some(tx.receive_material(context, receipt, working, now)?);
             }
             Action::Reserve(value) => {
                 let key = value.plan.ok_or(Error::Invalid)?;
@@ -565,11 +596,12 @@ impl Tx<'_> {
         context: &Context,
         plan: &api::PhysicalPlan,
         working: &api::WorkingContext,
-    ) -> Result<()> {
+        write: bool,
+    ) -> Result<materials::Prepared> {
         if plan.name.is_empty()
             || plan.name.len() > 160
             || plan.name.chars().any(char::is_control)
-            || plan.steps.is_empty()
+            || (plan.steps.is_empty() && plan.materials.is_empty())
             || plan.steps.len() > 64
         {
             return Err(Error::Invalid);
@@ -583,7 +615,10 @@ impl Tx<'_> {
             return Err(Error::Invalid);
         }
         let mut items = BTreeSet::new();
-        flow::analysis(&plan.steps)?;
+        if !plan.steps.is_empty() {
+            flow::analysis(&plan.steps)?;
+        }
+        let materials = self.prepare_materials(context, plan, working, write)?;
         let mut controls = 0usize;
         for step in &plan.steps {
             if let Some(control) = &step.control {
@@ -618,6 +653,6 @@ impl Tx<'_> {
             volume(p.volume.as_ref().ok_or(Error::Invalid)?)?;
         }
         self.check_replacements(context, plan, working, false)?;
-        Ok(())
+        Ok(materials)
     }
 }

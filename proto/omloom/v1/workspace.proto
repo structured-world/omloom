@@ -1786,6 +1786,48 @@ message PhysicalPlan {
   uint64 revision = 5;
   // Server-admitted reservation deadline in Unix milliseconds, absent for drafts.
   optional uint64 reserved_until_ms = 6;
+  // User's plan-local material requirements, at most 64. These are not adopted
+  // assets or stock promises. Quantities never allocate one record per unit.
+  repeated PhysicalMaterial materials = 7;
+}
+message PhysicalMaterial {
+  // User-visible current BOM label, 1-160 UTF-8 bytes, not a global identity.
+  string name = 1;
+  // Requested count of discrete units, positive uint32. Large counts do not
+  // instantiate assets, positions or allocations. Receipt may be partial.
+  uint32 quantity = 2;
+  // Requested physical resource kind: device, physical component, cable or rack.
+  omloom.v1.AssetKind kind = 3;
+  // Optional selected canonical equipment claims, without serials or credentials.
+  // Each field has its own source basis; at most the 12 equipment claim names.
+  repeated omloom.v1.Field specifications = 4;
+  // Optional plan-local physical specification using the common fact vocabulary.
+  // Target must be absent. Current occupancy/power completeness assertions are
+  // forbidden: proposed equipment cannot assert actual inventory or live sources.
+  optional PhysicalDefinition physical = 5;
+  // Explicitly received/reused adopted resources, at most 64 across one plan.
+  // Each retains its real identity and current serial; no template serial is copied.
+  repeated PhysicalMaterialAllocation allocations = 6;
+}
+message PhysicalMaterialAllocation {
+  // User-selected zero-based unit within this BOM line, less than quantity.
+  // Sparse receipt can name any requested unit without allocating preceding ones.
+  uint32 unit = 1;
+  // Actual adopted resource explicitly received or selected for reuse. This
+  // reference grants nothing and does not assert installation or verified health.
+  omloom.v1.AssetRef item = 2;
+  // User's bounded receipt/reuse source, 1-512 UTF-8 bytes; no secrets. Manual
+  // attribution is not provider verification, procurement or a financial action.
+  string basis = 3;
+}
+message PhysicalMaterialReceipt {
+  // Caller-selected saved plan and last reviewed revision, under current rights.
+  PhysicalPlanKey plan = 1;
+  // Zero-based material line in that saved plan, not a global stock identifier.
+  uint32 material = 2;
+  // Explicit actual unit and receipt/reuse source. New units may arrive partially
+  // after reservation. Replacing an allocation already used by a step is forbidden.
+  PhysicalMaterialAllocation allocation = 3;
 }
 message PhysicalPreview {
   // User-supplied proposed plan; state, revision and deadline are not authority.
@@ -1897,6 +1939,8 @@ message Physical {
     PhysicalOfferRead availability = 15;
     // List the current actor's offers for one already selected enclosure.
     PhysicalOffers offers = 16;
+    // Record one received/reused unit without installing it or completing a step.
+    PhysicalMaterialReceipt receive = 17;
   }
 }
 message PhysicalCableEnd {

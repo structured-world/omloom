@@ -86,6 +86,23 @@ impl Tx<'_> {
                 }
             }
         }
+        // Keep unused BOM units for accepted future work, never after its cancellation.
+        let future_work = !pending.is_empty()
+            && matches!(
+                api::PhysicalPlanState::try_from(plan.state),
+                Ok(api::PhysicalPlanState::Reserved | api::PhysicalPlanState::Partial)
+            );
+        for allocation in plan.materials.iter().flat_map(|m| &m.allocations) {
+            let key = format!(
+                "physical-lock/{}",
+                network::identity(parse_target(allocation.item.as_ref())?)
+            );
+            if future_work && !resolved.contains(&key) {
+                pending.insert(key);
+            } else {
+                resolved.insert(key);
+            }
+        }
         for key in resolved.difference(&pending) {
             if let Some(row) = self.get(key)? {
                 if string(&row, "owner")? != owner {

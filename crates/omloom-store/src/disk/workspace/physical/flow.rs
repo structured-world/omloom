@@ -139,6 +139,9 @@ impl Tx<'_> {
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<()> {
+        if plan.steps.is_empty() {
+            return Ok(());
+        }
         for step in &mut plan.steps {
             step.checked_state = None;
             step.checked_reason = None;

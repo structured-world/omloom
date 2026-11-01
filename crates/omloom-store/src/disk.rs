@@ -22,9 +22,10 @@ use std::{
 type Properties = BTreeMap<String, Value>;
 type Result<T> = std::result::Result<T, Error>;
 const ROOT: &str = "installation";
-const SCHEMA_VERSION: u64 = 19;
+const SCHEMA_VERSION: u64 = 20;
 const PHYSICAL_TEXT: &[&str] = &["basis", "mounting", "item", "enclosure", "old_item"];
 const PHYSICAL_NUMBERS: &[&str] = &[
+    "material_count",
     "expected",
     "x_start",
     "x_length",

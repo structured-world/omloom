@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 import { call, input, key, model, AssetKind as K, type AssetRef } from './api';
 import PlacementSearch from './PlacementSearch.vue';
 import PlanStepControls from './PlanStepControls.vue';
+import PhysicalMaterials from './PhysicalMaterials.vue';
 import { millimetres,micrometres,signedMicrometres,upperMicrometres } from './physical-units';
 import {frameSize,projectElevation,depthOrder,type Face} from './physical-elevation';
 import {rackAllocation,rackUnitAt,adjacentRackUnit} from './rack-grid';
@@ -21,6 +22,13 @@ const assessmentText=computed(()=>{
   return `Physical result unknown: ${model.RequirementReason[assessment.value.reason]?.toLowerCase().replaceAll('_',' ')}. Nothing was saved or reserved.`;
 });
 const planItems=ref<model.Item[]>([]);
+const emptyMaterials:model.PhysicalMaterial[]=[];
+function updateMaterials(materials:model.PhysicalMaterial[]){plan.value=model.PhysicalPlan.create({...plan.value,name:name.value,state:model.PhysicalPlanState.DRAFT,materials});}
+function selectedMaterial(item:model.Item){const index=planItems.value.findIndex(old=>key(old.target)===key(item.target));if(index===-1)planItems.value.push(item);else planItems.value[index]=item;}
+async function receiveMaterial(material:number,allocation:model.PhysicalMaterialAllocation){await run(async()=>{
+  const reply=await invoke({oneofKind:'receive',receive:{plan:planKey(),material,allocation}});
+  plan.value=reply.plan;notice.value='Actual material allocation recorded. Nothing was installed.';
+});}
 const equipment=ref<model.Item>(),equipmentVolume=ref<model.PhysicalVolume>();
 const manualRegion=ref(false),allocation=ref({x:{start:'',length:''},y:{start:'',length:''},z:{start:'',length:''}});
 const axes=['x','y','z'] as const;
@@ -59,7 +67,7 @@ const label=(target:AssetRef|undefined)=>target===undefined?undefined:labels.val
 async function invoke(action:model.Physical['action']) {
   const response=await call({oneofKind:'physical',physical:{action}},working());
   if(response.oneofKind!=='physical')throw Error('Physical planning is unavailable.');
-  if((action.oneofKind==='save'||action.oneofKind==='reserve'||action.oneofKind==='complete'||action.oneofKind==='cancel')&&response.physical.revision!==view.value.revision)changed=true;
+  if((action.oneofKind==='save'||action.oneofKind==='reserve'||action.oneofKind==='complete'||action.oneofKind==='cancel'||action.oneofKind==='receive')&&response.physical.revision!==view.value.revision)changed=true;
   view.value.revision=response.physical.revision;
   if(response.physical.plan)planItems.value=response.physical.items;
   return response.physical;
@@ -186,7 +194,7 @@ function add() {
 function addAtCoordinates(){if(mode.value==='placement')add();else if(mode.value==='replacement')addReplacement();}
 async function save() {
   await run(async()=>{
-    if(!plan.value)throw Error('Add at least one placement.');
+    if(!plan.value)throw Error('Add a physical step or material requirement.');
     const reply=await invoke({oneofKind:'save',save:{plan:{...plan.value,name:name.value}}});
     plan.value=reply.plan;notice.value='Plan saved. Nothing is reserved or installed.';await summaries();
   });
@@ -289,6 +297,7 @@ const bill=computed(()=>{
     if(step.action.oneofKind==='wiring'&&step.action.wiring.cable)targets.push(step.action.wiring.cable);
     for(const target of targets){let line=items.get(key(target));if(!line){line={target,steps:[]};items.set(key(target),line);}line.steps.push(step);}
   }
+  for(const material of plan.value?.materials??[])for(const allocation of material.allocations){const target=allocation.item;if(target&&!items.has(key(target)))items.set(key(target),{target,steps:[]});}
   return [...items.values()].map(line=>({...line,reported:line.steps.filter(s=>s.state===model.PhysicalStepState.RECORDED).length,reserved:line.steps.some(s=>s.state===model.PhysicalStepState.RESERVED)}));
 });
 function serial(target:AssetRef){return planItems.value.find(i=>key(i.target)===key(target))?.fields.find(f=>f.name==='serial');}
@@ -331,6 +340,7 @@ async function exportPlan(){await run(async()=>{
 </details>
 </section>
 <section aria-label="Installation plan editor">
+<PhysicalMaterials :materials="plan?.materials??emptyMaterials" :items="planItems" :working="working()" :editable="editable" :receivable="editable||plan?.state===model.PhysicalPlanState.RESERVED||plan?.state===model.PhysicalPlanState.PARTIAL" :busy="busy" @update="updateMaterials" @receive="receiveMaterial" @selected="selectedMaterial"/>
 <form v-if="editable" @submit.prevent="save"><fieldset :disabled="busy">
 <label>Installation plan name<input v-model="name" required maxlength="160" /></label>
 <div class="placement-controls"><button v-if="kind===K.RACK" type="button" :aria-pressed="mode==='placement'" @click="mode='placement'">Plan rack placement</button><button v-if="kind!==K.CABLE" type="button" :aria-pressed="mode==='replacement'" @click="mode='replacement'">Replace, remove or move a part</button></div>
@@ -372,11 +382,11 @@ async function exportPlan(){await run(async()=>{
 <button v-if="mode==='placement'" type="button" :disabled="!equipment?.target||(!manualRegion&&!equipmentVolume)" @click="add">Add planned placement</button>
 <button v-else-if="mode==='replacement'" type="button" @click="addReplacement">Add reviewed physical transition</button>
 <button type="button" :disabled="!plan?.steps.length" @click="preview">Check physical requirements</button>
-<button type="submit" :disabled="!plan?.steps.length">Save installation plan</button>
+<button type="submit" :disabled="!plan||(!plan.steps.length&&!plan.materials.length)">Save installation plan</button>
 </fieldset></form>
 <template v-if="plan"><h3>{{plan.name||name}} <small>{{state(plan.state)}}</small></h3>
 <section aria-label="Bill of materials"><h4>Selected serialized materials</h4><p>Each retained physical asset is counted once, including a component both moved and placed. Draft selection does not change stock or order equipment.</p>
-<ul><li v-for="line in bill" :key="key(line.target)"><strong>{{label(line.target)??'Equipment name unavailable'}}</strong> · quantity 1<span v-if="serial(line.target)"> · serial {{input(serial(line.target))}}</span><small>{{line.reported}} reported of {{line.steps.length}} related steps. {{line.reserved?'Reservation held.':''}}</small></li></ul>
+<ul><li v-for="line in bill" :key="key(line.target)"><strong>{{label(line.target)??'Equipment name unavailable'}}</strong> · quantity 1<span v-if="serial(line.target)"> · serial {{input(serial(line.target))}}</span><small v-if="line.steps.length">{{line.reported}} reported of {{line.steps.length}} related steps. {{line.reserved?'Reservation held.':''}}</small></li></ul>
 <button v-if="plan.id" type="button" :disabled="busy" @click="exportPlan">Export authorized plan and materials</button></section>
 <ol class="planned-items"><li v-for="(step,index) in plan.steps" :key="index">
 <template v-if="step.action.oneofKind==='placement'">
