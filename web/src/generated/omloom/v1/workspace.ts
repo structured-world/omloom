@@ -4712,7 +4712,9 @@ export interface PhysicalReserve {
  */
 export interface PhysicalCompletion {
     /**
-     * Admitted plan and revision under which the operator performed manual work.
+     * Saved plan and reviewed revision for manual outcomes or a postcondition
+     * refresh. With no outcomes, checks are refreshed without repeating work;
+     * unchanged progress is not written, but newly satisfied goals can finish.
      *
      * @generated from protobuf field: omloom.workspace.v1.PhysicalPlanKey plan = 1
      */
