@@ -317,6 +317,12 @@ impl Store {
                 if number(p, "revision")? == rev && super::target(p)? == target => {}
             _ => return Err(Error::Conflict),
         }
+        if asset.kind == wire::AssetKind::PhysicalPosition as i32 {
+            let prior = old.as_ref().ok_or(Error::Invalid)?;
+            if number(prior, "kind")? != wire::AssetKind::PhysicalPosition as u64 {
+                return Err(Error::Invalid);
+            }
+        }
         let children = tx.children(&key)?;
         if asset.kind != wire::AssetKind::Container as i32
             && old.as_ref().is_some_and(|p| {

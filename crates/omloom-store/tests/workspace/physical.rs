@@ -1737,6 +1737,54 @@ fn mountable_component_fixture(
     install_component(store, actor, position.clone(), item.clone())?;
     Ok((position, item))
 }
+
+// Structural identities can only originate from the position owner, including through low-level writes.
+#[test]
+fn low_level_asset_writes_cannot_create_or_retype_physical_positions() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut value = asset();
+    value.kind = K::PhysicalPosition as i32;
+    let before = store.usage()?;
+    assert!(matches!(
+        store.save_asset(
+            &admit(wire::record::Body::Asset(value.clone())),
+            None,
+            "fixture",
+            100
+        ),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
+    value.kind = K::PhysicalComponent as i32;
+    store.save_asset(
+        &admit(wire::record::Body::Asset(value.clone())),
+        None,
+        "fixture",
+        100,
+    )?;
+    value.kind = K::PhysicalPosition as i32;
+    value.revision = 2;
+    let before = store.usage()?;
+    let record = admit(wire::record::Body::Asset(value));
+    let projection = physical(
+        &store,
+        &operator(),
+        api::physical::Action::List(api::PhysicalPlanList::default()),
+    )?
+    .revision;
+    assert!(matches!(
+        store.save_asset(&record, Some(1), "fixture", 100),
+        Err(Error::Invalid)
+    ));
+    assert!(matches!(
+        store.refresh_asset(&record, 1, projection, "fixture", 100),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 fn install_component(
     store: &Store,
     actor: &Context,
