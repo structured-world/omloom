@@ -11,6 +11,8 @@ mod clearance;
 mod materials;
 #[path = "physical/mounting.rs"]
 mod mounting;
+#[path = "physical/power.rs"]
+mod power;
 
 fn volume() -> api::PhysicalVolume {
     let extent = |length| {

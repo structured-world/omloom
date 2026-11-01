@@ -1106,7 +1106,15 @@ pub(super) fn compatible(
             (from, to),
             (K::Device, K::Interface) | (K::Vrf, K::AddressSpace)
         ),
-        R::PoweredBy => matches!((from, to), (K::Device, K::Port) | (K::Port, K::PowerFeed)),
+        R::PoweredBy => matches!(
+            (from, to),
+            (K::Device | K::PhysicalComponent, K::Port)
+                | (K::Port, K::PowerFeed)
+                | (
+                    K::PowerFeed,
+                    K::Device | K::PhysicalComponent | K::PowerFeed
+                )
+        ),
         R::Manages => matches!(
             (from, to),
             (K::Device, K::Device) | (K::Service, K::Device | K::VirtualMachine)

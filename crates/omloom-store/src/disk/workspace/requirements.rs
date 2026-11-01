@@ -1,6 +1,7 @@
 //! Current selected facts enter the common evaluator through this restricted query.
 use super::*;
 use crate::requirements::{self as core, knowledge as k};
+mod power;
 
 impl k::Alternatives for wire::EquipmentAlternatives {
     fn candidates(&self) -> usize {
@@ -179,6 +180,19 @@ fn group_mode(group: &api::RequirementGroup) -> Result<core::Group> {
 fn semantic_keys(nodes: &[api::RequirementNode]) -> Result<Vec<String>> {
     let mut digests = [None; core::MAX_NODES];
     for (index, node) in nodes.iter().enumerate() {
+        if let Some(api::requirement_node::Expression::PowerPaths(condition)) = &node.expression {
+            let (mut sources, mut boundaries) = power::validate(condition)?;
+            sources.sort_unstable();
+            boundaries.sort_unstable();
+            let canonical = api::PowerPathRequirement {
+                sources: sources.into_iter().map(target_wire).collect(),
+                boundaries: boundaries.into_iter().map(target_wire).collect(),
+            };
+            let mut hash = Sha256::new();
+            hash.update(b"power-paths");
+            hash.update(canonical.encode_to_vec());
+            digests[index] = Some(hash.finalize().into());
+        }
         if let Some(api::requirement_node::Expression::Field(condition)) = &node.expression {
             let mut condition = condition.clone();
             if let Some(wire::Field {
@@ -355,6 +369,9 @@ impl Tx<'_> {
                     }
                     total_edges += group.members.len();
                 }
+                Some(api::requirement_node::Expression::PowerPaths(condition)) => {
+                    power::validate(condition)?;
+                }
                 None => return Err(Error::Invalid),
             }
         }
@@ -378,7 +395,8 @@ impl Tx<'_> {
                 ..Default::default()
             };
             let decision = match node.expression.as_ref().ok_or(Error::Invalid)? {
-                api::requirement_node::Expression::Field(_) => {
+                api::requirement_node::Expression::Field(_)
+                | api::requirement_node::Expression::PowerPaths(_) => {
                     core::Decision::unknown(core::Reason::Missing)
                 }
                 api::requirement_node::Expression::Group(group) => {
@@ -432,6 +450,15 @@ impl Tx<'_> {
                         },
                     )
                 }
+                api::requirement_node::Expression::PowerPaths(_) => (
+                    core::Subject {
+                        namespace: "requirement",
+                        resource: &keys[index],
+                        incarnation: "",
+                        network: core::NetworkScope::NotApplicable,
+                    },
+                    core::Expression::Fact(decisions[index]),
+                ),
             };
             nodes.push(core::Node {
                 subject,
@@ -457,6 +484,7 @@ impl Tx<'_> {
             core::evaluate(&nodes, request.root as usize, &mut results).map_err(map_error)?;
         if shape.reason != core::Reason::Cycle {
             // Validate all selected group semantics before loading any field evidence.
+            let mut power_budget = power::Budget::new();
             for (index, node) in nodes.iter_mut().enumerate() {
                 if results[index].reason == core::Reason::NotSelected {
                     continue;
@@ -479,6 +507,22 @@ impl Tx<'_> {
                         tx.requirement_field(context, condition, &mut responses[index], now, phase)?
                     } else {
                         validate_field_condition(condition)?;
+                        core::Decision::unknown(core::Reason::Missing)
+                    };
+                    node.expression = core::Expression::Fact(decision);
+                }
+                if let Some(api::requirement_node::Expression::PowerPaths(condition)) =
+                    request.nodes[index].expression.as_ref()
+                {
+                    let decision = if phase.is_some() {
+                        tx.requirement_power_paths(
+                            context,
+                            condition,
+                            &mut power_budget,
+                            &mut responses[index],
+                        )?
+                    } else {
+                        power::validate(condition)?;
                         core::Decision::unknown(core::Reason::Missing)
                     };
                     node.expression = core::Expression::Fact(decision);

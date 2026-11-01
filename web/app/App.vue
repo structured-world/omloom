@@ -17,7 +17,8 @@ import AvailabilityAccess from './AvailabilityAccess.vue';
 import PhysicalOffers from './PhysicalOffers.vue';
 import { softwareFields } from './software-fields';
 import { equipmentFields } from './equipment-fields';
-import { ref, computed, watch, onMounted, nextTick } from 'vue';
+import { ref, computed, watch, onMounted, nextTick, defineAsyncComponent } from 'vue';
+const PowerPathsPanel=defineAsyncComponent(()=>import('./PowerPathsPanel.vue'));
 import { useRoute, useRouter } from 'vue-router';
 import type { LocationQuery } from 'vue-router';
 import AssetEditor from './AssetEditor.vue'; import SchemaEditor from './SchemaEditor.vue'; import ImportEditor from './ImportEditor.vue'; import ViewEditor from './ViewEditor.vue'; import NetworkEditor from './NetworkEditor.vue';
@@ -385,7 +386,8 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <button v-if="detail.item.kind === K.VIRTUAL_MACHINE && identity?.writable && detail.item.target" @click="placementVm=detail.item.target">Change hypervisor after migration</button>
 <HostIdentityEvidence :observations="detail.identity" />
 <RequirementsPanel v-if="detail.item.target&&!loading&&[K.DEVICE,K.PROVIDER_ACCOUNT].includes(detail.item.kind)" :key="key(detail.item.target)+'/'+detail.item.revision" :target="detail.item.target" :kind="detail.item.kind" :working="working" />
-<PhysicalFacts v-if="detail.item.target&&!loading&&[K.RACK,K.DEVICE,K.PORT,K.CABLE,K.LOCATION,K.PHYSICAL_COMPONENT,K.PHYSICAL_POSITION].includes(detail.item.kind)" :key="key(detail.item.target)+'/'+detail.item.revision" :target="detail.item.target" :kind="detail.item.kind" :working="working" @equipment="edit" @saved="notice='Physical facts saved.'; load()" />
+<PhysicalFacts v-if="detail.item.target&&!loading&&[K.RACK,K.DEVICE,K.PORT,K.CABLE,K.LOCATION,K.PHYSICAL_COMPONENT,K.PHYSICAL_POSITION,K.POWER_FEED].includes(detail.item.kind)" :key="key(detail.item.target)+'/'+detail.item.revision" :target="detail.item.target" :kind="detail.item.kind" :working="working" @equipment="edit" @saved="notice='Physical facts saved.'; load()" />
+<PowerPathsPanel v-if="detail.item.target&&!loading&&[K.RACK,K.DEVICE,K.POWER_FEED].includes(detail.item.kind)" :key="'power/'+key(detail.item.target)+'/'+detail.item.revision" :target="detail.item.target" :working="working"/>
 <PhysicalPlanner v-if="detail.item.target&&[K.RACK,K.PHYSICAL_POSITION,K.CABLE].includes(detail.item.kind)" :key="'plan/'+key(detail.item.target)" :target="detail.item.target" :kind="detail.item.kind" :working="working" :inactive="loading" @changed="load" />
 <PhysicalPositions v-if="detail.item.target&&!loading&&[K.RACK,K.DEVICE,K.PORT,K.PHYSICAL_COMPONENT].includes(detail.item.kind)" :key="'positions/'+key(detail.item.target)" :target="detail.item.target" :working="working" @open="open" @changed="notice='Physical position saved.'; load()" />
 <ResponsibilityPanel v-if="detail.item&&!loading" :key="key(detail.item.target)+'/'+detail.item.revision" :item="detail.item" :working="working" @changed="saved()" @open="open" />

@@ -3362,6 +3362,27 @@ export interface RequirementGroup {
     minimum: number;
 }
 /**
+ * @generated from protobuf message omloom.workspace.v1.PowerPathRequirement
+ */
+export interface PowerPathRequirement {
+    /**
+     * Caller-selected input sources/ports whose accepted dependency paths must be
+     * disjoint, from 2 to 8 references. Repeated identity proves a shared source.
+     *
+     * @generated from protobuf field: repeated omloom.v1.AssetRef sources = 1
+     */
+    sources: AssetRef[];
+    /**
+     * Caller-selected terminal boundaries, at most 8 references. Every recorded
+     * path must reach one to qualify a pass; a boundary cannot hide known upstream
+     * dependencies. Omission allows counterexamples, never a positive result.
+     * Completeness and authority come from current server records, not this list.
+     *
+     * @generated from protobuf field: repeated omloom.v1.AssetRef boundaries = 2
+     */
+    boundaries: AssetRef[];
+}
+/**
  * @generated from protobuf message omloom.workspace.v1.RequirementNode
  */
 export interface RequirementNode {
@@ -3382,6 +3403,15 @@ export interface RequirementNode {
          * @generated from protobuf field: omloom.workspace.v1.RequirementGroup group = 2
          */
         group: RequirementGroup;
+    } | {
+        oneofKind: "powerPaths";
+        /**
+         * Accepted dependency-path disjointness within explicit boundaries. This
+         * does not certify live power, surviving capacity or electrical safety.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PowerPathRequirement power_paths = 3
+         */
+        powerPaths: PowerPathRequirement;
     } | {
         oneofKind: undefined;
     };
@@ -3668,6 +3698,15 @@ export interface PhysicalDefinition {
      * @generated from protobuf field: optional omloom.workspace.v1.PhysicalVolume occupancy_coverage = 14
      */
     occupancyCoverage?: PhysicalVolume;
+    /**
+     * Operator/source assertion that all current upstream PoweredBy dependencies
+     * of this resource are recorded. False/absent is unqualified, not an empty
+     * supply list. The basis above attributes this assertion. It grants no rights
+     * and does not assert live power or independence beyond the selected boundary.
+     *
+     * @generated from protobuf field: bool power_sources_complete = 15
+     */
+    powerSourcesComplete: boolean;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.PhysicalClearance
@@ -7709,11 +7748,25 @@ class RequirementGroup$Type extends MessageType<RequirementGroup> {
  */
 export const RequirementGroup = new RequirementGroup$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class PowerPathRequirement$Type extends MessageType<PowerPathRequirement> {
+    constructor() {
+        super("omloom.workspace.v1.PowerPathRequirement", [
+            { no: 1, name: "sources", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AssetRef },
+            { no: 2, name: "boundaries", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AssetRef }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PowerPathRequirement
+ */
+export const PowerPathRequirement = new PowerPathRequirement$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class RequirementNode$Type extends MessageType<RequirementNode> {
     constructor() {
         super("omloom.workspace.v1.RequirementNode", [
             { no: 1, name: "field", kind: "message", oneof: "expression", T: () => FieldRequirement },
-            { no: 2, name: "group", kind: "message", oneof: "expression", T: () => RequirementGroup }
+            { no: 2, name: "group", kind: "message", oneof: "expression", T: () => RequirementGroup },
+            { no: 3, name: "power_paths", kind: "message", oneof: "expression", T: () => PowerPathRequirement }
         ]);
     }
 }
@@ -7829,7 +7882,8 @@ class PhysicalDefinition$Type extends MessageType<PhysicalDefinition> {
             { no: 11, name: "component_kind", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalComponentKind", PhysicalComponentKind, "PHYSICAL_COMPONENT_KIND_"] },
             { no: 12, name: "mating", kind: "message", T: () => PhysicalMating },
             { no: 13, name: "clearance", kind: "message", T: () => PhysicalClearance },
-            { no: 14, name: "occupancy_coverage", kind: "message", T: () => PhysicalVolume }
+            { no: 14, name: "occupancy_coverage", kind: "message", T: () => PhysicalVolume },
+            { no: 15, name: "power_sources_complete", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
         ]);
     }
 }

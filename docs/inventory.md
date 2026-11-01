@@ -758,6 +758,16 @@ commands. Completed effects survive cancellation of remaining work. A required
 postcondition can remain unknown after work is reported; an old observation is
 not automatically evidence of the new result.
 
+Recorded power-path separation is another condition in that same evaluator.
+Select two feeds and, when known, their terminal boundaries. A visible shared
+UPS is a counterexample without needing to read its private upstream supplies.
+A positive result requires explicitly complete source lists through the selected
+boundaries. Missing boundaries allow counterexamples only; an early boundary
+cannot hide known dependencies. Record current source-list coverage in physical
+facts and use ordinary Powered by relationships for the actual topology.
+These checks do not certify live power, electrical safety or surviving capacity.
+The same condition can be saved as a physical step's postcondition.
+
 Named ends belong to a retained cable. Their definition, accepted destination
 intent and reported attachment are distinct. A confirmed loose end releases its
 physical binding while preserving intent unless explicitly cleared. An unknown

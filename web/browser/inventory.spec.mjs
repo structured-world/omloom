@@ -52,6 +52,52 @@ async function workspaceClient(url) {
   return { m, rpc, revision };
 }
 
+test('recorded power paths use explicit boundaries and expose a visible shared UPS on desktop and phone',async({browser},testInfo)=>{
+  // Actual current graph changes invalidate separation; incomplete boundaries never certify power.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-power-paths-'));const server=await host(dir);
+  try{
+    const client=await workspaceClient(server.url);const {m}=client;
+    const reference=target=>({assetId:target.asset_id,incarnation:target.incarnation});
+    for(const width of [1440,390]){
+      const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600});
+      try{
+        await page.goto(server.url);
+        const ups=reference(await create(page,`Shared UPS ${width}`));
+        const feeds=[];
+        for(const side of ['A','B']){
+          const name=`Power ${side} ${width}`;const target=reference(await create(page,name,'POWER_FEED'));feeds.push({name,target});
+          const facts=page.locator('details.physical-facts');
+          await facts.getByText('Power source coverage',{exact:true}).click();
+          await facts.getByLabel('Measurement or specification source',{exact:true}).fill('Reviewed current supply connections');
+          await facts.getByText('Recorded power sources',{exact:true}).click();
+          await facts.getByLabel('All upstream power dependencies of this resource are recorded',{exact:true}).check();
+          await facts.getByRole('button',{name:'Save physical facts',exact:true}).click();
+          await expect(page.locator('p.notice[role="status"]')).toHaveText('Physical facts saved.×');
+        }
+        const panel=page.locator('details.power-paths');
+        await panel.getByText('Compare recorded power paths',{exact:true}).click();
+        async function choose(scope,name){await scope.getByRole('combobox').fill(name);await scope.getByRole('option',{name:`Use power: ${name}`,exact:true}).click();}
+        for(let i=0;i<feeds.length;i++)await choose(panel.getByRole('region',{name:`Input feed ${i+1}`,exact:true}),feeds[i].name);
+        const boundary=panel.getByRole('region',{name:'Terminal power boundaries',exact:true});
+        for(const feed of feeds){await choose(boundary,feed.name);await boundary.getByRole('button',{name:'Add terminal boundary',exact:true}).click();}
+        await panel.getByRole('button',{name:'Check power path separation',exact:true}).click();
+        const result=panel.getByRole('region',{name:'Power path result',exact:true});
+        await expect(result.getByRole('heading',{name:'Recorded paths are disjoint within the selected boundaries',exact:true})).toBeVisible();
+        for(const feed of feeds)await client.rpc({oneofKind:'relation',relation:m.Relationship.create({relation:{from:feed.target,to:ups,kind:m.RelationKind.POWERED_BY}})});
+        await panel.getByRole('button',{name:'Check power path separation',exact:true}).click();
+        await expect(result.locator('p').first()).toHaveText(/^scope mismatch · Inventory revision [1-9]\d*$/);
+        for(let i=0;i<feeds.length;i++)await boundary.getByRole('button',{name:'Remove boundary',exact:true}).first().click();
+        await panel.getByRole('button',{name:'Check power path separation',exact:true}).click();
+        await expect(result.getByRole('heading',{name:'Recorded paths share a dependency',exact:true})).toBeVisible();
+        expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+        if(width===390)await page.screenshot({path:testInfo.outputPath('power-paths-phone.png'),fullPage:true});
+        await result.getByRole('link',{name:'Inspect the shared or unqualified resource',exact:true}).click();
+        await expect(page.getByRole('region',{name:'Resource details',exact:true}).getByRole('heading',{name:`Shared UPS ${width}`,exact:true})).toBeVisible();
+      }finally{await page.close();}
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('named cable ends preserve definitions on desktop and phone',async({browser})=>{
   // Ends belong to the retained cable, not the optic that may later be replaced.
   const dir=await mkdtemp(join(tmpdir(),'omloom-cable-ends-'));const server=await host(dir);

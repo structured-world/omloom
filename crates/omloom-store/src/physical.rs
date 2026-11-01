@@ -1,6 +1,7 @@
 //! Integer physical constraints shared by planning and final admission.
 //! Geometry proves only the supplied constraints, never authority or live health.
 use crate::requirements::{Decision, Reason};
+pub mod power;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MatingRole {

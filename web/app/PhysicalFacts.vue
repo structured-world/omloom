@@ -20,6 +20,7 @@ const componentKind=ref(model.PhysicalComponentKind.UNSPECIFIED);
 const mating=ref<model.PhysicalMating>();
 const clearanceKnown=ref(false);
 const occupancyKnown=ref(false);
+const powerSourcesComplete=ref(false);
 const axes=['x','y','z'] as const;
 const survey=ref({x:{start:'',length:''},y:{start:'',length:''},z:{start:'',length:''}});
 function surveyInputs(value:model.PhysicalVolume|undefined){for(const axis of axes){const extent=value?.[axis];survey.value[axis]={start:extent===undefined?'':millimetres(extent.startUm),length:extent===undefined?'':millimetres(extent.lengthUm)};}}
@@ -44,6 +45,7 @@ async function load() {
     if (response.oneofKind !== 'physical') throw Error('Physical facts are unavailable.');
     revision.value = response.physical.revision;
     current.value = response.physical.definitions[0];
+    powerSourcesComplete.value=current.value?.powerSourcesComplete===true;
     mating.value=current.value?.mating===undefined?undefined:model.PhysicalMating.clone(current.value.mating);
     clearanceKnown.value=current.value?.clearance!==undefined;
     occupancyKnown.value=current.value?.occupancyCoverage!==undefined;
@@ -80,6 +82,7 @@ async function save() {
     };
     const definition = model.PhysicalDefinition.create({...current.value,target:props.target,basis:basis.value,volume,componentKind:componentKind.value,maxMassG:quantity(maxMass.value),demandMw:quantity(demand.value),capacityMw:quantity(capacity.value),coolingMw:quantity(cooling.value),coolingCapacityMw:quantity(coolingCapacity.value),mounting:mounting.value===''?undefined:mounting.value});
     definition.mating=mating.value;
+    definition.powerSourcesComplete=powerSourcesComplete.value;
     definition.clearance=clearanceKnown.value?model.PhysicalClearance.create(Object.fromEntries(faces.map(face=>[face.key,nonnegativeMicrometres(margins.value[face.key])]))):undefined;
     definition.occupancyCoverage=occupancyKnown.value?model.PhysicalVolume.create(Object.fromEntries(axes.map(axis=>[axis,{startUm:signedMicrometres(survey.value[axis].start),lengthUm:micrometres(survey.value[axis].length)}]))):undefined;
     const response = await call({oneofKind:'physical',physical:model.Physical.create({action:{oneofKind:'define',define:{definition}}})},{...props.working,expected:revision.value});
@@ -93,13 +96,18 @@ async function save() {
 </script>
 <template>
 <details class="physical-facts" @toggle="($event.target as HTMLDetailsElement).open && load()">
-<summary>Usable enclosure space and physical constraints</summary>
+<summary>{{kind===AssetKind.POWER_FEED?'Power source coverage':'Usable enclosure space and physical constraints'}}</summary>
 <template v-if="[AssetKind.DEVICE,AssetKind.PHYSICAL_COMPONENT].includes(kind)"><p>Equipment dimensions and mass belong to its equipment facts, including their source and uncertainty. Usable interior space is a separate measurement.</p><button type="button" @click="emit('equipment')">Edit equipment facts</button></template>
 <p v-if="busy" role="status">Loading physical facts…</p>
 <p v-if="error" role="alert">{{error}}</p>
 <form v-if="opened" @submit.prevent="save">
   <fieldset :disabled="busy">
     <label>Measurement or specification source<input v-model="basis" required maxlength="512" /></label>
+    <details v-if="[AssetKind.DEVICE,AssetKind.PHYSICAL_COMPONENT,AssetKind.PORT,AssetKind.POWER_FEED].includes(kind)"><summary>Recorded power sources</summary>
+      <p>Record upstream supplies with Powered by relationships. This statement covers the current source list, not live power, electrical safety or capacity after a failure.</p>
+      <label class="check"><input v-model="powerSourcesComplete" type="checkbox"/>All upstream power dependencies of this resource are recorded</label>
+    </details>
+    <template v-if="kind!==AssetKind.POWER_FEED">
     <label v-if="[AssetKind.DEVICE,AssetKind.PHYSICAL_COMPONENT].includes(kind)">Known physical class<select v-model="componentKind"><option v-for="kind in componentKinds" :key="kind" :value="kind">{{model.PhysicalComponentKind[kind]?.toLowerCase().replaceAll('_',' ')}}</option></select></label>
     <label class="check"><input v-model="known" type="checkbox" />Usable enclosure dimensions are known</label>
     <template v-if="known">
@@ -128,6 +136,7 @@ async function save() {
       <label class="check"><input v-model="clearanceKnown" type="checkbox"/>Required clearance measurements are known</label>
       <template v-if="clearanceKnown"><label v-for="face in faces" :key="face.key">{{face.label}} clearance (mm)<input v-model="margins[face.key]" inputmode="decimal" required maxlength="17"/></label></template>
     </details>
+    </template>
     <button type="submit">Save physical facts</button>
     <MatingEditor v-if="kind===AssetKind.PORT" v-model="mating"/>
   </fieldset>

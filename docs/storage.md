@@ -37,6 +37,13 @@ coordinates in the existing typed array layout. Older data acquires no assumed
 empty-space evidence during migration. This independent current assertion can
 cover less than the usable enclosure; increasing dimensions cannot extend it.
 Older hosts reject the new format instead of ignoring its admission semantics.
+Format 17 adds one current sourced assertion per physical profile that its
+upstream power dependencies are completely recorded. Missing remains unqualified.
+The existing typed relationship graph owns those dependencies; no second topology,
+path cache or evaluation history is stored. Requirement evaluation reads selected
+paths in one snapshot, within a shared 128-node/256-edge request allowance.
+Boundary selection cannot hide a known upstream dependency. Path disjointness
+does not qualify surviving capacity, live power or electrical safety.
 Plan material lists and exports likewise derive from current admitted steps and
 permitted inventory fields, with no persisted bill or per-open export copy.
 

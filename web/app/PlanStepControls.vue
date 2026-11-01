@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import {ref} from 'vue';
+import {ref,defineAsyncComponent} from 'vue';
 import {model,enumLabel,input,type AssetRef} from './api';
 import RequirementsPanel from './RequirementsPanel.vue';
+const PowerPathsPanel=defineAsyncComponent(()=>import('./PowerPathsPanel.vue'));
 const props=defineProps<{control?:model.PlanControl;index:number;predecessors:{title:string;hasCheck:boolean}[];subject?:AssetRef;kind?:number;working:model.WorkingContext;editable:boolean;readiness:number;checkedState?:number;checkedReason?:number}>();
 const emit=defineEmits<{change:[control:model.PlanControl]}>();
 const previous=ref(''),when=ref(model.PlanTrigger.REPORTED),error=ref('');
@@ -28,8 +29,9 @@ function condition(check?:model.EvaluateRequirements){const control=current();co
 <button type="button" :disabled="previous===''" @click="add">Add prerequisite</button>
 </fieldset>
 <p v-if="control?.check">Postcondition configured. <span v-if="checkedState!==undefined">Current result: {{enumLabel(model.RequirementState,checkedState).replaceAll('_',' ')}}<template v-if="checkedReason!==undefined"> · {{enumLabel(model.RequirementReason,checkedReason).replaceAll('_',' ')}}</template>.</span><span v-else>Evaluated after this work is reported.</span> <button v-if="editable" type="button" @click="condition()">Remove postcondition</button></p>
-<ul v-if="control?.check" aria-label="Configured postcondition"><li v-for="(node,i) in control.check.nodes" :key="i"><template v-if="node.expression.oneofKind==='field'">{{node.expression.field.expected?.name}} · {{enumLabel(model.RequirementComparison,node.expression.field.comparison).replaceAll('_',' ')}} · {{input(node.expression.field.expected)}} · {{enumLabel(model.RequirementLayer,node.expression.field.layer).replaceAll('_',' ')}}</template><template v-else>Condition group {{i+1}}</template></li></ul>
+<ul v-if="control?.check" aria-label="Configured postcondition"><li v-for="(node,i) in control.check.nodes" :key="i"><template v-if="node.expression.oneofKind==='field'">{{node.expression.field.expected?.name}} · {{enumLabel(model.RequirementComparison,node.expression.field.comparison).replaceAll('_',' ')}} · {{input(node.expression.field.expected)}} · {{enumLabel(model.RequirementLayer,node.expression.field.layer).replaceAll('_',' ')}}</template><template v-else-if="node.expression.oneofKind==='powerPaths'">Recorded power path separation: {{node.expression.powerPaths.sources.length}} inputs, {{node.expression.powerPaths.boundaries.length}} terminal boundaries</template><template v-else>Condition group {{i+1}}</template></li></ul>
 <RequirementsPanel v-if="editable&&subject&&kind!==undefined" :target="subject" :kind="kind" :working="working" plan @configure="condition"/>
+<PowerPathsPanel v-if="editable&&subject" :target="subject" :working="working" plan @configure="condition"/>
 </section></template>
 <style scoped>
 .step-controls{border-left:3px solid #b6c9cb;padding-left:.75rem;margin-block:.75rem;min-width:0}.step-controls fieldset{border:0;padding:0}.step-controls label{display:grid;gap:.35rem;margin-block:.5rem}.step-controls button,.step-controls select{min-height:44px;max-width:100%;box-sizing:border-box}.step-controls li{overflow-wrap:anywhere}@media(max-width:700px){.step-controls button,.step-controls select{width:100%}}

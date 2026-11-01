@@ -1415,11 +1415,24 @@ message RequirementGroup {
   // Direct field subjects can vote; nested logical groups have unknown voter identity.
   uint32 minimum = 3;
 }
+message PowerPathRequirement {
+  // Caller-selected input sources/ports whose accepted dependency paths must be
+  // disjoint, from 2 to 8 references. Repeated identity proves a shared source.
+  repeated omloom.v1.AssetRef sources = 1;
+  // Caller-selected terminal boundaries, at most 8 references. Every recorded
+  // path must reach one to qualify a pass; a boundary cannot hide known upstream
+  // dependencies. Omission allows counterexamples, never a positive result.
+  // Completeness and authority come from current server records, not this list.
+  repeated omloom.v1.AssetRef boundaries = 2;
+}
 message RequirementNode {
   // One bounded predicate or group. Groups are a flat indexed graph, not recursive wire messages.
   oneof expression {
     FieldRequirement field = 1;
     RequirementGroup group = 2;
+    // Accepted dependency-path disjointness within explicit boundaries. This
+    // does not certify live power, surviving capacity or electrical safety.
+    PowerPathRequirement power_paths = 3;
   }
 }
 message EvaluateRequirements {
@@ -1558,6 +1571,11 @@ message PhysicalDefinition {
   // never empty. A broader usable envelope does not extend this evidence.
   // This grants no access and reserves no space; its source is the basis above.
   optional PhysicalVolume occupancy_coverage = 14;
+  // Operator/source assertion that all current upstream PoweredBy dependencies
+  // of this resource are recorded. False/absent is unqualified, not an empty
+  // supply list. The basis above attributes this assertion. It grants no rights
+  // and does not assert live power or independence beyond the selected boundary.
+  bool power_sources_complete = 15;
 }
 message PhysicalClearance {
   // User/source-required space before the equipment's X face, in micrometres.

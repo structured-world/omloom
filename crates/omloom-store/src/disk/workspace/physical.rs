@@ -193,6 +193,9 @@ fn definition_row(value: &api::PhysicalDefinition) -> Result<Properties> {
     connector::store(&mut data, value.mating.as_ref())?;
     clearance::write(&mut data, value.clearance.as_ref())?;
     coverage::write(&mut data, value.occupancy_coverage.as_deref())?;
+    if value.power_sources_complete {
+        data.insert("approved".into(), Value::Bool(true));
+    }
     Ok(data)
 }
 fn definition(data: &Properties) -> Result<api::PhysicalDefinition> {
@@ -226,6 +229,11 @@ fn definition(data: &Properties) -> Result<api::PhysicalDefinition> {
         mating: connector::read(data)?,
         clearance: clearance::read(data)?,
         occupancy_coverage: coverage::read(data)?.map(Box::new),
+        power_sources_complete: match data.get("approved") {
+            None => false,
+            Some(Value::Bool(value)) => *value,
+            _ => return Err(Error::Corrupt),
+        },
     })
 }
 impl Tx<'_> {
@@ -345,6 +353,17 @@ impl Store {
                 let value = edit.definition.ok_or(Error::Invalid)?;
                 let target = parse_target(value.target.as_ref())?;
                 let kind = tx.physical_access(context, target, working, true)?;
+                if value.power_sources_complete
+                    && !matches!(
+                        kind,
+                        wire::AssetKind::Device
+                            | wire::AssetKind::PhysicalComponent
+                            | wire::AssetKind::Port
+                            | wire::AssetKind::PowerFeed
+                    )
+                {
+                    return Err(Error::Invalid);
+                }
                 if value.component_kind != api::PhysicalComponentKind::Unspecified as i32
                     && !matches!(
                         kind,
