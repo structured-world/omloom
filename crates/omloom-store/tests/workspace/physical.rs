@@ -131,6 +131,35 @@ fn blank_physical_definition_basis_is_rejected_without_writes() -> TestResult {
     Ok(())
 }
 
+// Blank mounting labels cannot become matching rack/item qualifications or produce durable rows.
+#[test]
+fn blank_physical_mounting_is_rejected_without_writes() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let rack = create(&store, &actor, K::Rack, "Mounting enclosure")?;
+    let item = create(&store, &actor, K::Device, "Mounting item")?;
+    let before = store.usage()?;
+    for target in [rack, item] {
+        for mounting in ["  ", "\u{2003}", "\u{a0}"] {
+            let mut definition = define(target.clone());
+            definition.mounting = Some(mounting.into());
+            assert!(matches!(
+                physical(
+                    &store,
+                    &actor,
+                    api::physical::Action::Define(api::PhysicalDefinitionEdit {
+                        definition: Some(definition)
+                    })
+                ),
+                Err(Error::Invalid)
+            ));
+            assert_eq!(store.usage()?, before);
+        }
+    }
+    Ok(())
+}
+
 // Current facts survive reopen; repeated input and read-only inspection do not grow state.
 #[test]
 fn physical_definition_is_current_bounded_and_durable() -> TestResult {

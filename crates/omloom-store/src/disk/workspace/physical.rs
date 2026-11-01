@@ -312,10 +312,9 @@ fn definition_facts(value: &api::PhysicalDefinition) -> Result<Properties> {
     if value.basis.trim().is_empty()
         || value.basis.len() > 512
         || value.basis.chars().any(char::is_control)
-        || value
-            .mounting
-            .as_ref()
-            .is_some_and(|s| s.is_empty() || s.len() > 128 || s.chars().any(char::is_control))
+        || value.mounting.as_ref().is_some_and(|s| {
+            s.trim().is_empty() || s.len() > 128 || s.chars().any(char::is_control)
+        })
     {
         return Err(Error::Invalid);
     }
