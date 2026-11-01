@@ -92,6 +92,60 @@ test('location and site chassis replacements work on desktop and phone',async({b
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
 });
 
+test('site facts qualify ordinary replacement on desktop and phone',async({browser})=>{
+  // Site geometry and mounting can be recorded in the UI before reserving a replacement.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-site-facts-'));const server=await host(dir);
+  try{
+    const {m,rpc}=await workspaceClient(server.url);
+    async function resource(kind,name){return (await rpc({oneofKind:'write',write:m.Write.create({kind,changes:[{name:'name',value:{oneofKind:'text',text:name}}]})})).mutation.targets[0];}
+    for(const width of [1440,390]){
+      const site=await resource(m.AssetKind.SITE,`Site ${width}`);
+      const old=await resource(m.AssetKind.DEVICE,`Old site chassis ${width}`);
+      const incoming=await resource(m.AssetKind.DEVICE,`New site chassis ${width}`);
+      const existing=(await rpc({oneofKind:'read',read:m.Read.create({target:incoming})})).detail.item;
+      const changes=[['width',500000n],['height',1000000n],['depth',500000n]].map(([name,value])=>({name,value:{oneofKind:'equipment',equipment:{basis:'Measured incoming chassis',assertion:{oneofKind:'quantity',quantity:{lower:value,upper:value,unit:'mm',scale:3}}}}}));
+      await rpc({oneofKind:'write',write:m.Write.create({target:incoming,expected:existing.revision,kind:m.AssetKind.DEVICE,changes})});
+      await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target:incoming,basis:'Reviewed chassis mounting',mounting:'floor-standing'})}}})});
+      await rpc({oneofKind:'relation',relation:m.Relationship.create({relation:{from:old,to:site,kind:m.RelationKind.INSTALLED_IN}})});
+      const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600});
+      try{
+        await page.goto(`${server.url}/#/?asset=${site.assetId}&incarnation=${site.incarnation}`);
+        const facts=page.locator('.physical-facts');
+        await expect(facts).toBeVisible();
+        await facts.getByText('Usable enclosure space and physical constraints',{exact:true}).click();
+        await facts.getByLabel('Measurement or specification source',{exact:true}).fill('Measured site installation envelope');
+        await facts.getByLabel('Usable enclosure dimensions are known',{exact:true}).check();
+        for(const [label,value] of [['Width (mm)','1000'],['Height (mm)','2000'],['Depth (mm)','1000']])await facts.getByLabel(label,{exact:true}).fill(value);
+        await facts.getByText('Capacity and mounting facts',{exact:true}).click();
+        await facts.getByLabel('Mounting specification',{exact:true}).fill('floor-standing');
+        await facts.getByRole('button',{name:'Save physical facts',exact:true}).click();
+        await expect(page.locator('.notice[role="status"]')).toHaveText('Physical facts saved.×');
+        await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
+        const planner=page.locator('.physical-planner');
+        await planner.getByRole('combobox',{name:'Known predecessor or moving part',exact:true}).selectOption({label:`Old site chassis ${width}`});
+        await planner.getByRole('combobox',{name:'Find equipment',exact:true}).fill(`New site chassis ${width}`);
+        await planner.getByRole('option',{name:new RegExp(`New site chassis ${width}`)}).click();
+        await planner.getByRole('button',{name:'Add reviewed physical transition',exact:true}).click();
+        await planner.getByLabel('Installation plan name',{exact:true}).fill(`Qualified site replacement ${width}`);
+        await planner.getByRole('button',{name:'Save installation plan',exact:true}).click();
+        await expect(planner.getByRole('status')).toContainText('Plan saved.');
+        const deadline=await page.evaluate(()=>{const date=new Date(Date.now()+3600000);date.setMinutes(date.getMinutes()-date.getTimezoneOffset());return date.toISOString().slice(0,16);});
+        await planner.getByLabel('Reserve until',{exact:true}).fill(deadline);
+        await planner.getByRole('button',{name:'Check and reserve capacity',exact:true}).click();
+        await expect(planner.getByRole('status')).toHaveText('Capacity reserved. Installation is not confirmed.');
+        await expect(planner.getByLabel('Record physical work already performed outside Omloom',{exact:true})).not.toBeChecked();
+        await planner.getByLabel('Physical transition performed',{exact:true}).check();
+        await planner.getByRole('button',{name:'Record selected installation',exact:true}).click();
+        await expect(planner.getByRole('status')).toContainText('Reported installation recorded.');
+        const current=(await rpc({oneofKind:'read',read:m.Read.create({target:incoming})})).detail;
+        expect(current.relations.filter(r=>r.kind===m.RelationKind.INSTALLED_IN&&r.to.assetId===site.assetId)).toHaveLength(1);
+        const previous=(await rpc({oneofKind:'read',read:m.Read.create({target:old})})).detail;
+        expect(previous.relations.filter(r=>r.kind===m.RelationKind.INSTALLED_IN)).toHaveLength(0);
+      }finally{await page.close();}
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('replacement judgments invalidate quality pagination on desktop and phone',async({browser})=>{
   // A new early-sorting bucket must not leave a continuation into the old quality page.
   const dir=await mkdtemp(join(tmpdir(),'omloom-review-cursor-'));const server=await host(dir);
