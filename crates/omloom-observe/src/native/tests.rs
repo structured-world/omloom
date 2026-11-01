@@ -1,5 +1,52 @@
 use super::*;
 
+// Readable Windows tables must produce verified coverage and preserve their endpoint/route values.
+#[test]
+fn readable_windows_tables_have_verified_coverage() -> Result<()> {
+    let mut report = api::HostReport {
+        boot_basis: "fixture-boot".into(),
+        network: Some(api::HostNetwork::default()),
+        ..Default::default()
+    };
+    let sockets = windows_sockets(
+        r#"[{"protocol":"tcp","bind":"0.0.0.0","port":443,"pid":17}]"#,
+        &mut report,
+    );
+    assert!(sockets.is_ok());
+    result(
+        &mut report,
+        "sockets",
+        sockets,
+        "Readable Windows endpoint fixture",
+    );
+    let routes = windows_routes(
+        r#"[{"DestinationPrefix":"192.0.2.0/24","NextHop":"192.0.2.1","InterfaceIndex":5,"Family":"IPv4","Protocol":"Local","CompartmentId":1}]"#,
+    )?;
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0].destination, "192.0.2.0/24");
+    assert_eq!(routes[0].interface, "5");
+    result(
+        &mut report,
+        "routes",
+        Ok(()),
+        "Readable Windows route fixture",
+    );
+    assert_eq!(report.binds.len(), 1);
+    assert_eq!(report.binds[0].value.as_ref().expect("socket").port, 443);
+    assert!(report.network.as_ref().expect("network").sockets_complete);
+    assert_eq!(
+        report
+            .coverage
+            .iter()
+            .map(|v| (v.module.as_str(), v.status.as_str()))
+            .collect::<Vec<_>>(),
+        [("sockets", "verified"), ("routes", "verified")]
+    );
+    assert!(windows_routes(r#"[{"DestinationPrefix":"192.0.2.0/24"}]"#).is_err());
+    assert!(windows_sockets(r#"[{"protocol":"tcp"}]"#, &mut report).is_err());
+    Ok(())
+}
+
 // Parser failures identify the same native query as command failures without exposing source data.
 #[test]
 fn windows_identity_parser_errors_name_the_source() {

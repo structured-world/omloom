@@ -678,37 +678,40 @@ async fn sockets(runner: &mut Runner, report: &mut api::HostReport) -> Result<()
         }
         "windows" => {
             let output=ps(runner,"Windows sockets (Get-NetTCPConnection, Get-NetUDPEndpoint)","$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $rows=@(foreach($s in Get-NetTCPConnection -State Listen){@{protocol='tcp';bind=$s.LocalAddress;port=$s.LocalPort;pid=$s.OwningProcess}}; foreach($s in Get-NetUDPEndpoint){@{protocol='udp';bind=$s.LocalAddress;port=$s.LocalPort;pid=$s.OwningProcess}}); ConvertTo-Json -InputObject @($rows) -Depth 4 -Compress").await?;
-            let values = json(&output)?;
-            for row in array(&values)? {
-                let ip = string(row, "bind")?;
-                let pid = row
-                    .get("pid")
-                    .and_then(Value::as_u64)
-                    .ok_or("Missing socket owner")?;
-                let port = row
-                    .get("port")
-                    .and_then(Value::as_u64)
-                    .ok_or("Missing socket port")?
-                    .try_into()
-                    .map_err(|_| "Invalid port")?;
-                bind(
-                    report,
-                    pid,
-                    &format!("Process {pid}"),
-                    string(row, "protocol")?,
-                    if ip.contains(':') { "IPv6" } else { "IPv4" },
-                    ip,
-                    port,
-                )?;
-            }
-            let network = report.network.as_mut().ok_or("Missing network")?;
-            network.socket_coverage =
-                "Windows kernel endpoint tables; process names and executable attribution unknown"
-                    .into();
-            network.sockets_complete = true;
+            windows_sockets(&output, report)?;
         }
         _ => return Err("Unsupported socket platform".into()),
     }
+    Ok(())
+}
+fn windows_sockets(input: &str, report: &mut api::HostReport) -> Result<()> {
+    let values = json(input)?;
+    for row in array(&values)? {
+        let ip = string(row, "bind")?;
+        let pid = row
+            .get("pid")
+            .and_then(Value::as_u64)
+            .ok_or("Missing socket owner")?;
+        let port = row
+            .get("port")
+            .and_then(Value::as_u64)
+            .ok_or("Missing socket port")?
+            .try_into()
+            .map_err(|_| "Invalid port")?;
+        bind(
+            report,
+            pid,
+            &format!("Process {pid}"),
+            string(row, "protocol")?,
+            if ip.contains(':') { "IPv6" } else { "IPv4" },
+            ip,
+            port,
+        )?;
+    }
+    let network = report.network.as_mut().ok_or("Missing network")?;
+    network.socket_coverage =
+        "Windows kernel endpoint tables; process names and executable attribution unknown".into();
+    network.sockets_complete = true;
     Ok(())
 }
 fn bind(
@@ -1007,28 +1010,7 @@ async fn routes(runner: &mut Runner, report: &mut api::HostReport) -> Result<()>
         }
         "windows" => {
             let output=ps(runner,"Windows routes (Get-NetRoute)","$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); ConvertTo-Json -InputObject @(Get-NetRoute -IncludeAllCompartments | Select-Object DestinationPrefix,NextHop,InterfaceIndex,CompartmentId,@{n='Family';e={$_.AddressFamily.ToString()}},@{n='Protocol';e={$_.Protocol.ToString()}}) -Depth 4 -Compress").await?;
-            let values = json(&output)?;
-            for value in array(&values)? {
-                rows.push(api::LocalRoute {
-                    destination: string(value, "DestinationPrefix")?.into(),
-                    gateway: string(value, "NextHop")?.into(),
-                    interface: value
-                        .get("InterfaceIndex")
-                        .and_then(Value::as_u64)
-                        .ok_or("Route interface missing")?
-                        .to_string(),
-                    family: string(value, "Family")?.into(),
-                    flags: format!(
-                        "protocol={};compartment={}",
-                        string(value, "Protocol")?,
-                        value
-                            .get("CompartmentId")
-                            .and_then(Value::as_u64)
-                            .ok_or("Route compartment missing")?
-                    ),
-                    link_layer: false,
-                });
-            }
+            rows = windows_routes(&output)?;
         }
         _ => return Err("Unsupported route platform".into()),
     }
@@ -1040,6 +1022,33 @@ async fn routes(runner: &mut Runner, report: &mut api::HostReport) -> Result<()>
     Ok(())
 }
 
+fn windows_routes(input: &str) -> Result<Vec<api::LocalRoute>> {
+    let values = json(input)?;
+    let values = array(&values)?;
+    let mut rows = Vec::with_capacity(values.len());
+    for value in values {
+        rows.push(api::LocalRoute {
+            destination: string(value, "DestinationPrefix")?.into(),
+            gateway: string(value, "NextHop")?.into(),
+            interface: value
+                .get("InterfaceIndex")
+                .and_then(Value::as_u64)
+                .ok_or("Route interface missing")?
+                .to_string(),
+            family: string(value, "Family")?.into(),
+            flags: format!(
+                "protocol={};compartment={}",
+                string(value, "Protocol")?,
+                value
+                    .get("CompartmentId")
+                    .and_then(Value::as_u64)
+                    .ok_or("Route compartment missing")?
+            ),
+            link_layer: false,
+        });
+    }
+    Ok(rows)
+}
 fn route_qualifiers(value: &Value) -> Result<String> {
     let mut flags = Vec::new();
     for name in ["table", "type", "protocol", "scope", "metric"] {
