@@ -16,18 +16,20 @@ const view=ref(model.PhysicalView.create());
 const revision=ref(props.working.expected);
 const plans=ref<model.PhysicalPlanSummary[]>([]),next=ref<string>();
 const plan=ref<model.PhysicalPlan>(),name=ref(''),deadline=ref(''),discrepancy=ref('');
+const savedCurrent=ref(false);
+function acceptPlan(value:model.PhysicalPlan|undefined){if(!value)throw Error('The saved plan was not returned. Reload before continuing.');plan.value=value;name.value=value.name;savedCurrent.value=true;}
 const assessment=ref<{state:number;reason:number;revision:bigint}>();
 const reviewHypotheses=ref(new Map<number,model.PhysicalReplacementHypothesis>());
 const quality=ref<model.PhysicalReplacementQuality[]>(),qualityNext=ref<string>();
 watch(()=>plan.value?.id,()=>{reviewHypotheses.value.clear();});
 async function reviewReplacement(index:number,decision?:model.PhysicalReplacementDecision,reason=model.PhysicalReplacementReason.UNSPECIFIED,basis?:string){await run(async()=>{
-  const reply=await invoke({oneofKind:'reviewReplacement',reviewReplacement:{plan:planKey(),step:index,decision,reason,basis}});
-  plan.value=reply.plan;
+  const reply=await invoke({oneofKind:'reviewReplacement',reviewReplacement:{plan:planKey('current'),step:index,decision,reason,basis}});
+  acceptPlan(reply.plan);
   if(reply.replacementHypothesis)reviewHypotheses.value.set(index,reply.replacementHypothesis);
   if(decision!==undefined){notice.value='Review decision recorded. Installation and endpoint decisions are unchanged.';quality.value=undefined;}
 });}
 async function loadQuality(after?:string){await run(async()=>{const reply=await invoke({oneofKind:'replacementQuality',replacementQuality:{after}});quality.value=reply.replacementQuality;qualityNext.value=reply.next;});}
-watch([plan,name],()=>{assessment.value=undefined;},{deep:true});
+watch([plan,name],()=>{assessment.value=undefined;savedCurrent.value=false;},{deep:true,flush:'sync'});
 const assessmentText=computed(()=>{
   if(!assessment.value)return '';
   if(assessment.value.state===model.RequirementState.SATISFIED)return 'Declared physical constraints satisfied. Nothing was saved or reserved.';
@@ -38,7 +40,7 @@ const planItems=ref<model.Item[]>([]);
 const emptyMaterials:model.PhysicalMaterial[]=[];
 const future=ref<model.PhysicalMaterialUnit>();
 const materialUses=computed(()=>{const units:model.PhysicalMaterialUnit[]=[];for(const step of plan.value?.steps??[])if(step.action.oneofKind==='placement'&&step.action.placement.material)units.push(step.action.placement.material);return units;});
-watch(()=>plan.value?.id,()=>{future.value=undefined;});
+watch(()=>plan.value?.id,()=>{future.value=undefined;selected.value=[];notPerformed.value=[];});
 function updateMaterials(materials:model.PhysicalMaterial[]){future.value=undefined;plan.value=model.PhysicalPlan.create({...plan.value,name:name.value,state:model.PhysicalPlanState.DRAFT,materials});}
 function removeMaterial(index:number){
   if(!plan.value)return;
@@ -49,8 +51,8 @@ function removeMaterial(index:number){
 }
 function selectedMaterial(item:model.Item){const index=planItems.value.findIndex(old=>key(old.target)===key(item.target));if(index===-1)planItems.value.push(item);else planItems.value[index]=item;}
 async function receiveMaterial(material:number,allocation:model.PhysicalMaterialAllocation){await run(async()=>{
-  const reply=await invoke({oneofKind:'receive',receive:{plan:planKey(),material,allocation}});
-  plan.value=reply.plan;notice.value='Actual material allocation recorded. Nothing was installed.';
+  const reply=await invoke({oneofKind:'receive',receive:{plan:planKey('current'),material,allocation}});
+  acceptPlan(reply.plan);selected.value=[];notPerformed.value=[];notice.value='Actual material allocation recorded. Nothing was installed.';
 });}
 const equipment=ref<model.Item>(),equipmentVolume=ref<model.PhysicalVolume>();
 const manualRegion=ref(false),allocation=ref({x:{start:'',length:''},y:{start:'',length:''},z:{start:'',length:''}});
@@ -143,7 +145,7 @@ async function open() {
 async function load(saved:model.PhysicalPlanSummary) {
   await run(async()=>{
     const reply=await invoke({oneofKind:'load',load:{id:saved.id,revision:saved.revision}});
-    plan.value=reply.plan;name.value=reply.plan?.name??'';selected.value=[];
+    acceptPlan(reply.plan);selected.value=[];notPerformed.value=[];
   });
 }
 let selection=0;
@@ -239,7 +241,7 @@ async function save() {
   await run(async()=>{
     if(!plan.value)throw Error('Add a physical step or material requirement.');
     const reply=await invoke({oneofKind:'save',save:{plan:{...plan.value,name:name.value}}});
-    plan.value=reply.plan;notice.value='Plan saved. Nothing is reserved or installed.';await summaries();
+    acceptPlan(reply.plan);notice.value='Plan saved. Nothing is reserved or installed.';await summaries();
   });
 }
 async function preview() {
@@ -249,26 +251,27 @@ async function preview() {
     assessment.value={state:reply.state,reason:reply.reason,revision:reply.revision};
   });
 }
-function planKey():model.PhysicalPlanKey {
+function planKey(basis:'current'|'stop'):model.PhysicalPlanKey {
   if(!plan.value?.id)throw Error('Save this plan before changing its lifecycle.');
+  if(basis==='current'&&!savedCurrent.value)throw Error('Save these draft changes before reviewing, reserving or reporting work.');
   return {id:plan.value.id,revision:plan.value.revision};
 }
 async function reserve() {
   await run(async()=>{
     const value=new Date(deadline.value).getTime();
     if(!Number.isFinite(value))throw Error('Select an explicit reservation deadline.');
-    const reply=await invoke({oneofKind:'reserve',reserve:{plan:planKey(),untilMs:BigInt(value)}});
-    plan.value=reply.plan;notice.value='Capacity reserved. Installation is not confirmed.';await summaries();
+    const reply=await invoke({oneofKind:'reserve',reserve:{plan:planKey('current'),untilMs:BigInt(value)}});
+    acceptPlan(reply.plan);notice.value='Capacity reserved. Installation is not confirmed.';await summaries();
   });
 }
 async function complete() {
   await run(async()=>{
     if(!plan.value||(!selected.value.length&&!notPerformed.value.length))throw Error('Select the physical outcomes actually confirmed.');
-    const reply=await invoke({oneofKind:'complete',complete:model.PhysicalCompletion.create({plan:planKey(),completedSteps:selected.value,notPerformedSteps:notPerformed.value,actualState:actualReport.value,discrepancy:discrepancy.value===''?undefined:discrepancy.value})});
-    plan.value=reply.plan;selected.value=[];notPerformed.value=[];notice.value='Reported installation recorded. Live health has not been asserted.';await refresh();await summaries();
+    const reply=await invoke({oneofKind:'complete',complete:model.PhysicalCompletion.create({plan:planKey('current'),completedSteps:selected.value,notPerformedSteps:notPerformed.value,actualState:actualReport.value,discrepancy:discrepancy.value===''?undefined:discrepancy.value})});
+    acceptPlan(reply.plan);selected.value=[];notPerformed.value=[];notice.value='Reported installation recorded. Live health has not been asserted.';await refresh();await summaries();
   });
 }
-async function recheck(){await run(async()=>{await refresh();const reply=await invoke({oneofKind:'complete',complete:model.PhysicalCompletion.create({plan:planKey()})});plan.value=reply.plan;notice.value='Postconditions rechecked. No physical work was repeated.';});}
+async function recheck(){await run(async()=>{await refresh();const reply=await invoke({oneofKind:'complete',complete:model.PhysicalCompletion.create({plan:planKey('current')})});acceptPlan(reply.plan);notice.value='Postconditions rechecked. No physical work was repeated.';});}
 function subject(step:model.PhysicalStep){return step.action.oneofKind==='placement'?placementTarget(step.action.placement):step.action.oneofKind==='replacement'?step.action.replacement.replacement??step.action.replacement.previous:step.action.oneofKind==='wiring'?step.action.wiring.cable:undefined;}
 function subjectKind(step:model.PhysicalStep){const target=subject(step);return planItems.value.find(i=>key(i.target)===key(target))?.kind;}
 function predecessors(index:number){return plan.value?.steps.slice(0,index).map(step=>({title:label(subject(step))===undefined?'Equipment name unavailable':label(subject(step))!,hasCheck:step.control?.check!==undefined}))??[];}
@@ -276,11 +279,12 @@ function removeStep(index:number){
   if(!plan.value)return;
   if(plan.value.steps.some(s=>s.control?.after.some(d=>d.step===index)||(s.action.oneofKind==='wiring'&&s.action.wiring.basis.oneofKind==='afterStep'&&s.action.wiring.basis.afterStep===index))){error.value='Change dependent step links before removing this step.';return;}
   plan.value.steps.splice(index,1);
+  reviewHypotheses.value.clear();selected.value=[];notPerformed.value=[];
   for(const step of plan.value.steps)for(const dependency of step.control?.after??[])if(dependency.step>index)dependency.step--;
   for(const step of plan.value.steps)if(step.action.oneofKind==='wiring'&&step.action.wiring.basis.oneofKind==='afterStep'&&step.action.wiring.basis.afterStep>index)step.action.wiring.basis.afterStep--;
 }
 async function cancel() {
-  await run(async()=>{const reply=await invoke({oneofKind:'cancel',cancel:planKey()});plan.value=reply.plan;notice.value='Remaining work stopped. Reported facts and unresolved reservations are preserved.';await summaries();});
+  await run(async()=>{const reply=await invoke({oneofKind:'cancel',cancel:planKey('stop')});acceptPlan(reply.plan);notice.value='Remaining work stopped. Reported facts and unresolved reservations are preserved.';await summaries();});
 }
 const drawing=computed(()=>frameSize(envelope.value));
 function projections(placements:Iterable<model.PhysicalPlacement>){
@@ -348,7 +352,7 @@ const bill=computed(()=>{
 });
 function serial(target:AssetRef){return planItems.value.find(i=>key(i.target)===key(target))?.fields.find(f=>f.name==='serial');}
 async function exportPlan(){await run(async()=>{
-  const response=await invoke({oneofKind:'load',load:planKey()});
+  const response=await invoke({oneofKind:'load',load:planKey('current')});
   if(!response.plan)throw Error('The selected plan is unavailable.');
   const data={format:'omloom.physical-plan.v1',plan:model.PhysicalPlan.toJson(response.plan),items:response.items.map(item=>model.Item.toJson(item))};
   const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
@@ -447,7 +451,7 @@ async function exportPlan(){await run(async()=>{
 </template>
 <template v-if="step.action.oneofKind==='replacement'">
 <EndpointMappings :replacement="step.action.replacement" :editable="editable&&!busy" :remaining="64-mappingCount" :items="planItems" @change="step.action.replacement.endpoints=$event" @selected="selectedMaterial"/>
-<ReplacementReview :hypothesis="reviewHypotheses.get(index)" :feedback="step.action.replacement.feedback" :disabled="busy" :saved="!!plan.id" @inspect="reviewReplacement(index)" @judge="(decision,reason,basis)=>reviewReplacement(index,decision,reason,basis)"/>
+<ReplacementReview :hypothesis="reviewHypotheses.get(index)" :feedback="step.action.replacement.feedback" :disabled="busy" :saved="!!plan.id&&savedCurrent" @inspect="reviewReplacement(index)" @judge="(decision,reason,basis)=>reviewReplacement(index,decision,reason,basis)"/>
 <p><template v-if="step.action.replacement.previous">Previous: <span v-if="label(step.action.replacement.previous)">{{label(step.action.replacement.previous)}}</span><span v-else>Component name unavailable</span>.</template><template v-else>Predecessor unresolved.</template> <template v-if="step.action.replacement.replacement">Incoming: <span v-if="label(step.action.replacement.replacement)">{{label(step.action.replacement.replacement)}}</span><span v-else>Component name unavailable</span>.</template><template v-else>Removal without an incoming part.</template></p>
 <label v-if="installable&&![model.PhysicalStepState.RECORDED,model.PhysicalStepState.NOT_PERFORMED].includes(step.state)"><input v-model="selected" type="checkbox" :value="index" :disabled="notPerformed.includes(index)||(!actualReport&&step.readiness!==model.PlanReadiness.READY)"/>Physical transition performed</label>
 </template>
@@ -459,8 +463,9 @@ async function exportPlan(){await run(async()=>{
 </li></ol>
 <button v-if="plan.state===model.PhysicalPlanState.PARTIAL" type="button" :disabled="busy" @click="recheck">Recheck postconditions</button>
 <label v-if="plan.state!==model.PhysicalPlanState.COMPLETED" class="outcome"><input v-model="actualReport" type="checkbox"/>Record physical work already performed outside Omloom</label>
-<form v-if="reservable" @submit.prevent="reserve"><label>Reserve until<input v-model="deadline" type="datetime-local" required/></label><button :disabled="busy" type="submit">Check and reserve capacity</button></form>
-<form v-if="installable" @submit.prevent="complete"><label>Installation discrepancies<textarea v-model="discrepancy" maxlength="2048"/></label><p>Record only physical outcomes actually known. Incompatibility may remain a discrepancy; this report does not verify wiring or service. Other reservations remain unresolved.</p><button :disabled="busy||(!selected.length&&!notPerformed.length)" type="submit">Record selected installation</button></form>
+<p v-if="plan.id&&!savedCurrent">Save these draft changes before reviewing, reserving or reporting work.</p>
+<form v-if="reservable" @submit.prevent="reserve"><label>Reserve until<input v-model="deadline" type="datetime-local" required/></label><button :disabled="busy||!savedCurrent" type="submit">Check and reserve capacity</button></form>
+<form v-if="installable" @submit.prevent="complete"><label>Installation discrepancies<textarea v-model="discrepancy" maxlength="2048"/></label><p>Record only physical outcomes actually known. Incompatibility may remain a discrepancy; this report does not verify wiring or service. Other reservations remain unresolved.</p><button :disabled="busy||!savedCurrent||(!selected.length&&!notPerformed.length)" type="submit">Record selected installation</button></form>
 <button v-if="plan.state!==model.PhysicalPlanState.COMPLETED&&plan.state!==model.PhysicalPlanState.CANCELLED" :disabled="busy" type="button" @click="cancel">Stop remaining work</button>
 </template>
 <details><summary>Local replacement review quality</summary><p>Counts describe reviewed judgments in the current finite window, not predictor accuracy or recall. Deferred judgments are unlabelled. Unreviewed events and selection bias are not measured. The complete contributing read authorization and selected scope are required, including for an independent auditor.</p><button type="button" :disabled="busy" @click="loadQuality()">Load current review counts</button>

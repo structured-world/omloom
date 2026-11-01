@@ -83,12 +83,25 @@ test('replacement endpoint review follows shifted plan steps',async({browser})=>
         await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
         const planner=page.locator('.physical-planner');
         await planner.getByRole('button',{name:'Two replacement reviews · draft',exact:true}).click();
+        const reviews=planner.locator('.replacement-review');
+        await reviews.nth(0).getByText('Replacement evidence and event decision',{exact:true}).click();
+        await reviews.nth(0).getByRole('button',{name:'Explain current replacement hypothesis',exact:true}).click();
+        await expect(reviews.nth(0).getByRole('heading',{name:'Established same-part identity',exact:true})).toBeVisible();
+        await reviews.nth(1).getByText('Replacement evidence and event decision',{exact:true}).click();
+        await reviews.nth(1).getByRole('button',{name:'Explain current replacement hypothesis',exact:true}).click();
+        await expect(reviews.nth(1).getByRole('heading',{name:'Contextual evidence',exact:true})).toBeVisible();
         const mapping=planner.locator('.endpoint-mappings').first();
         await mapping.getByText('Review endpoint correspondence (26)',{exact:true}).click();
         await expect(mapping.getByRole('region',{name:'Previous endpoint coverage',exact:true})).toContainText('Previous 0 socket');
         await mapping.getByRole('button',{name:'Next endpoint decisions',exact:true}).click();
         await expect(mapping.getByRole('button',{name:'Remove endpoint decision 26',exact:true})).toBeVisible();
+        await planner.getByRole('checkbox',{name:'Record physical work already performed outside Omloom',exact:true}).check();
+        await planner.getByRole('checkbox',{name:'Physical transition performed',exact:true}).first().check();
         await planner.getByRole('button',{name:'Remove proposed step',exact:true}).first().click();
+        await expect(reviews.locator('h4')).toHaveCount(0);
+        await expect(planner.getByRole('checkbox',{name:'Physical transition performed',exact:true})).not.toBeChecked();
+        await expect(reviews.getByRole('button',{name:'Explain current replacement hypothesis',exact:true})).toBeDisabled();
+        await expect(planner.getByRole('button',{name:'Check and reserve capacity',exact:true})).toBeDisabled();
         await expect(mapping.getByRole('region',{name:'Previous endpoint coverage',exact:true})).toContainText('Previous 1 socket 0');
         await expect(mapping.getByRole('button',{name:'Remove endpoint decision 1',exact:true})).toBeVisible();
       }finally{await page.close();}
