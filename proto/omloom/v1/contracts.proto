@@ -49,6 +49,10 @@ enum AssetKind {
   ASSET_KIND_WORKLOAD = 27;
   // Concrete container lifetime; a name, image or published port is not its identity.
   ASSET_KIND_CONTAINER = 28;
+  // Adopted movable physical part, independent of its present bay, label or serial evidence.
+  ASSET_KIND_PHYSICAL_COMPONENT = 29;
+  // Instantiated structural position scoped to its actual owning component incarnation.
+  ASSET_KIND_PHYSICAL_POSITION = 30;
 }
 
 // Scoped provider identity is matching evidence, never authority.

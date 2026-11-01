@@ -502,11 +502,18 @@ impl Tx<'_> {
             return Err(Error::Invalid);
         }
         if omloom_contracts::equipment::FIELDS.contains(&value.name.as_str())
-            && (kind == wire::AssetKind::Device as i32
-                || !software::fields(wire::AssetKind::try_from(kind).map_err(|_| Error::Invalid)?)
-                    .contains(&value.name.as_str()))
+            && (matches!(
+                wire::AssetKind::try_from(kind),
+                Ok(wire::AssetKind::Device | wire::AssetKind::PhysicalComponent)
+            ) || !software::fields(
+                wire::AssetKind::try_from(kind).map_err(|_| Error::Invalid)?,
+            )
+            .contains(&value.name.as_str()))
         {
-            if kind != wire::AssetKind::Device as i32 {
+            if !matches!(
+                wire::AssetKind::try_from(kind),
+                Ok(wire::AssetKind::Device | wire::AssetKind::PhysicalComponent)
+            ) {
                 return Err(Error::Invalid);
             }
             return match value.value.as_ref() {
@@ -578,6 +585,7 @@ impl Tx<'_> {
                         | wire::AssetKind::Rack
                         | wire::AssetKind::Port
                         | wire::AssetKind::Cable)
+                        | Ok(wire::AssetKind::PhysicalComponent)
                 ) =>
             {
                 Err(Error::Invalid)

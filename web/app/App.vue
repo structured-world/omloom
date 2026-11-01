@@ -9,9 +9,16 @@ import VmPlacement from './VmPlacement.vue';
 import ResponsibilityPanel from './ResponsibilityPanel.vue';
 import AccountPanel from './AccountPanel.vue';
 import RequirementsPanel from './RequirementsPanel.vue';
+import PhysicalFacts from './PhysicalFacts.vue';
+import PhysicalPositions from './PhysicalPositions.vue';
+import CableEnds from './CableEnds.vue';
+import AvailabilityAccess from './AvailabilityAccess.vue';
+import PhysicalOffers from './PhysicalOffers.vue';
 import { softwareFields } from './software-fields';
 import { equipmentFields } from './equipment-fields';
-import { ref, computed, watch, onMounted, nextTick } from 'vue';
+import { ref, computed, watch, onMounted, nextTick, defineAsyncComponent } from 'vue';
+const PowerPathsPanel=defineAsyncComponent(()=>import('./PowerPathsPanel.vue'));
+const PhysicalPlanner=defineAsyncComponent(()=>import('./PhysicalPlanner.vue'));
 import { useRoute, useRouter } from 'vue-router';
 import type { LocationQuery } from 'vue-router';
 import AssetEditor from './AssetEditor.vue'; import SchemaEditor from './SchemaEditor.vue'; import ImportEditor from './ImportEditor.vue'; import ViewEditor from './ViewEditor.vue'; import NetworkEditor from './NetworkEditor.vue';
@@ -378,7 +385,14 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <button v-if="detail.item.kind === K.VIRTUAL_MACHINE && identity?.writable && detail.item.target" @click="placementVm=detail.item.target">Change hypervisor after migration</button>
 <HostIdentityEvidence :observations="detail.identity" />
 <RequirementsPanel v-if="detail.item.target&&!loading&&[K.DEVICE,K.PROVIDER_ACCOUNT].includes(detail.item.kind)" :key="key(detail.item.target)+'/'+detail.item.revision" :target="detail.item.target" :kind="detail.item.kind" :working="working" />
+<PhysicalFacts v-if="detail.item.target&&!loading&&[K.RACK,K.DEVICE,K.PORT,K.CABLE,K.LOCATION,K.PHYSICAL_COMPONENT,K.PHYSICAL_POSITION,K.POWER_FEED].includes(detail.item.kind)" :key="key(detail.item.target)+'/'+detail.item.revision" :target="detail.item.target" :kind="detail.item.kind" :working="working" @equipment="edit" @saved="notice='Physical facts saved.'; load()" />
+<PowerPathsPanel v-if="detail.item.target&&!loading&&[K.RACK,K.DEVICE,K.POWER_FEED].includes(detail.item.kind)" :key="'power/'+key(detail.item.target)+'/'+detail.item.revision" :target="detail.item.target" :working="working"/>
+<!-- Keep drafts mounted across scope navigation; replacement counts are invalidated inside the planner. -->
+<PhysicalPlanner v-if="detail.item.target&&[K.SITE,K.LOCATION,K.RACK,K.PHYSICAL_POSITION,K.CABLE].includes(detail.item.kind)" :key="'plan/'+key(detail.item.target)" :target="detail.item.target" :kind="detail.item.kind" :working="working" :inactive="loading" @changed="load" />
+<PhysicalPositions v-if="detail.item.target&&!loading&&[K.RACK,K.DEVICE,K.PORT,K.PHYSICAL_COMPONENT].includes(detail.item.kind)" :key="'positions/'+key(detail.item.target)" :target="detail.item.target" :working="working" @open="open" @changed="notice='Physical position saved.'; load()" />
 <ResponsibilityPanel v-if="detail.item&&!loading" :key="key(detail.item.target)+'/'+detail.item.revision" :item="detail.item" :working="working" @changed="saved()" @open="open" />
+<CableEnds v-if="detail.item.target&&detail.item.kind===K.CABLE" :key="'ends/'+key(detail.item.target)" :target="detail.item.target" :working="working" :inactive="loading" @changed="notice='Cable-end definition saved.';load()" />
+<PhysicalOffers v-if="detail.item.target&&[K.RACK,K.PHYSICAL_POSITION,K.DEVICE].includes(detail.item.kind)" :key="'offers/'+key(detail.item.target)" :target="detail.item.target" :working="working" :inactive="loading" @changed="load"/>
 <AccountPanel v-if="detail.item?.kind===K.PROVIDER_ACCOUNT&&!loading" :key="key(detail.item.target)+'/'+detail.item.revision" :item="detail.item" :working="working" @changed="saved()" @open="open" @share="editor='view'" />
 <p v-if="detail.networkNext || networkCursor" class="hint">Showing one bounded evidence page. Observation counts and filters apply to this page.</p>
 <HostNetwork v-for="evidence in detail.hostNetwork" :key="evidence.sourceId" :evidence="evidence" @open="open" />
@@ -386,7 +400,7 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <div class="section-title"><h3>Typed relationships</h3><button v-if="identity?.writable" @click="relations">Connections in broader scope</button></div><p v-if="!detail.relations.length" class="hint">No relationships visible in this scope. This does not establish absence outside it.</p><ul><li v-for="r in detail.relations" :key="r.relationId"><button @click="open(key(r.from) === key(detail.item?.target) ? r.to : r.from)">{{ RelationKind[r.kind]?.replace('RELATION_KIND_', '').toLowerCase().replaceAll('_',' ') }} · {{ relatedName(key(r.from) === key(detail.item?.target) ? r.to : r.from) }}</button><button v-if="identity?.writable" @click="removeRelation(r)">Remove relationship</button></li></ul>
 <button v-if="detail.relationsNext" @click="nextRelations">Next relationships</button>
 <template v-for="section in [{ title: 'Observed evidence', items: detail.observed }, { title: 'Import proposals', items: detail.imported }]" :key="section.title"><h3>{{ section.title }}</h3><p v-if="!section.items.length" class="hint">{{ detail.hostNetwork.length && section.title === 'Observed evidence' ? 'No additional visible field evidence.' : 'No visible current evidence. Accepted values are not observations.' }}</p><div v-for="o in section.items" :key="o.evidence?.sourceId"><p class="mono">Source {{ o.evidence?.sourceId }}</p><dl><template v-for="f in o.evidence?.fields" :key="f.name"><dt>{{ f.name }}</dt><dd>{{ display(f) }}</dd></template></dl></div></template></section>
-</div></main></div>
+</div><AvailabilityAccess/></main></div>
 <AssetEditor v-if="editor === 'asset'" :item="editing" :initial-kind="initialKind" :initial-hypervisor="query.view === model.View.VIRTUALIZATION && query.kinds.length === 1 && query.kinds[0] === K.SOFTWARE_INSTALLATION" :definitions="definitions" :working="working" :view="query.view" @close="editor = ''" @saved="saved" />
 <SchemaEditor v-if="editor === 'schema'" :definitions="definitions" :revision="page.revision" @close="editor = ''" @saved="saved" />
 <ImportEditor v-if="editor === 'import'" :definitions="definitions" :working="working" @close="editor = ''" @saved="saved" />
