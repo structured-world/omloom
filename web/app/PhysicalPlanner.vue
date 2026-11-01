@@ -407,7 +407,7 @@ async function exportPlan(){await run(async()=>{
 <p v-if="equipment">Selected: {{itemName(equipment)}}. {{equipmentVolume?'Accepted upper-bound dimensions available.':'Accepted dimension bounds are unknown or unavailable.'}}</p>
 <p v-if="future&&plan?.materials[future.material]">Selected requested material: {{plan.materials[future.material]!.name}}, unit {{future.unit+1}}. {{equipmentVolume?'Declared upper-bound dimensions available.':'Declare a draft allocation; material dimensions remain unknown.'}} This is not an adopted asset.</p>
 <button v-if="mode==='replacement'&&!moving&&predecessor" type="button" @click="proposePreviousAllocation">Use previous allocation as a proposal</button>
-<label v-if="equipment"><input v-model="manualRegion" type="checkbox"/>Use an explicit plan-only allocation</label>
+<label v-if="equipment||future"><input v-model="manualRegion" type="checkbox"/>Use an explicit plan-only allocation</label>
 <template v-if="manualRegion"><p>This is proposed space, not new equipment facts. Unknown source dimensions or occupancy keep fit unqualified. Confirm the recorded position and envelope when reporting actual installation.</p>
 <template v-for="axis in axes" :key="axis"><label>{{axis.toUpperCase()}} allocation start (mm)<input v-model="allocation[axis].start" inputmode="decimal" maxlength="18"/></label><label>{{axis.toUpperCase()}} allocation length (mm)<input v-model="allocation[axis].length" inputmode="decimal" maxlength="17"/></label></template></template>
 <template v-else><button v-if="equipmentVolume" type="button" draggable="true" @dragstart="dragEquipment" @click="addAtCoordinates">Drag selected equipment onto elevation, or add at chosen coordinates</button>

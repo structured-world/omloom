@@ -108,6 +108,17 @@ test('material quantities stay plan-local and partial receiving survives reload 
         await form.getByLabel('Material requirement name',{exact:true}).fill(`Future hardware ${width}`);
         await form.getByLabel('Required quantity',{exact:true}).fill('3');
         await form.getByRole('button',{name:'Apply material requirement',exact:true}).click();
+        // Incomplete material measurements still permit an explicitly unqualified space draft.
+        await planner.getByRole('button',{name:'Place a unit from requirement 1',exact:true}).click();
+        await planner.getByLabel('Unit to place',{exact:true}).fill('1');
+        await planner.getByRole('button',{name:'Select requested unit for placement',exact:true}).click();
+        await expect(planner.getByRole('checkbox',{name:'Use an explicit plan-only allocation',exact:true})).toBeVisible({timeout:2000});
+        await planner.getByRole('checkbox',{name:'Use an explicit plan-only allocation',exact:true}).check();
+        for(const axis of ['X','Y','Z']){
+          await planner.getByLabel(`${axis} allocation start (mm)`,{exact:true}).fill('0');
+          await planner.getByLabel(`${axis} allocation length (mm)`,{exact:true}).fill('100');
+        }
+        await planner.getByRole('button',{name:'Add planned placement',exact:true}).click();
         await expect(planner.getByRole('button',{name:'Save installation plan',exact:true})).toBeVisible({timeout:5000});
         await expect(planner).toContainText('0 allocated of 3 requested');
         await planner.getByLabel('Installation plan name',{exact:true}).fill(`Receiving plan ${width}`);
