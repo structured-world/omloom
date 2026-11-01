@@ -1,5 +1,122 @@
 use super::*;
 
+// A resolved step's released lock may be reused without blocking the original plan's remaining work.
+#[test]
+fn resolved_resource_reuse_does_not_block_completion_recheck_or_cancellation() -> TestResult {
+    for cancel in [false, true] {
+        let dir = tempfile::tempdir()?;
+        let store = Store::open(dir.path(), policy())?;
+        let actor = operator();
+        let a = create(&store, &actor, K::Rack, "First enclosure")?;
+        let b = create(&store, &actor, K::Rack, "Second enclosure")?;
+        for rack in [&a, &b] {
+            physical(
+                &store,
+                &actor,
+                api::physical::Action::Define(api::PhysicalDefinitionEdit {
+                    definition: Some(define(rack.clone())),
+                }),
+            )?;
+        }
+        let first = create(&store, &actor, K::Device, "First installation")?;
+        let second = create(&store, &actor, K::Device, "Independent installation")?;
+        for item in [&first, &second] {
+            equipment_dimensions(&store, &actor, item)?;
+        }
+        let mut plan = draft(&store, &actor, first.clone(), a.clone())?;
+        let mut step = plan.steps[0].clone();
+        let Some(api::physical_step::Action::Placement(p)) = &mut step.action else {
+            return Err(Error::Corrupt.into());
+        };
+        p.item = Some(second);
+        p.enclosure = Some(b);
+        plan.steps.push(step);
+        let plan = physical(
+            &store,
+            &actor,
+            api::physical::Action::Save(api::PhysicalSave { plan: Some(plan) }),
+        )?
+        .plan
+        .ok_or(Error::Corrupt)?;
+        let plan = reserve(&store, &actor, plan)?.plan.ok_or(Error::Corrupt)?;
+        let mut plan = report_steps(&store, &actor, &plan, vec![0])?;
+        let old = binding(&store, &first)?;
+        let removal = api::PhysicalReplacement {
+            position: Some(a),
+            previous: Some(first.clone()),
+            previous_binding: Some(old.relation_id),
+            previous_revision: Some(old.revision),
+            ..Default::default()
+        };
+        let next = replacement_plan(&store, &actor, vec![removal.clone()])?;
+        let next = reserve(&store, &actor, next)?.plan.ok_or(Error::Corrupt)?;
+        let rechecked = physical(
+            &store,
+            &actor,
+            api::physical::Action::Complete(api::PhysicalCompletion {
+                plan: Some(api::PhysicalPlanKey {
+                    id: plan.id.clone().ok_or(Error::Corrupt)?,
+                    revision: plan.revision,
+                }),
+                ..Default::default()
+            }),
+        );
+        assert!(
+            rechecked.is_ok(),
+            "a reused lock must not block a postcondition recheck"
+        );
+        plan = rechecked?.plan.ok_or(Error::Corrupt)?;
+        if cancel {
+            plan = physical(
+                &store,
+                &actor,
+                api::physical::Action::Cancel(api::PhysicalPlanKey {
+                    id: plan.id.clone().ok_or(Error::Corrupt)?,
+                    revision: plan.revision,
+                }),
+            )?
+            .plan
+            .ok_or(Error::Corrupt)?;
+        }
+        let resolved = physical(
+            &store,
+            &actor,
+            api::physical::Action::Complete(api::PhysicalCompletion {
+                plan: Some(api::PhysicalPlanKey {
+                    id: plan.id.ok_or(Error::Corrupt)?,
+                    revision: plan.revision,
+                }),
+                completed_steps: if cancel { vec![] } else { vec![1] },
+                not_performed_steps: if cancel { vec![1] } else { vec![] },
+                ..Default::default()
+            }),
+        )?
+        .plan
+        .ok_or(Error::Corrupt)?;
+        assert_eq!(
+            resolved.steps[0].state,
+            api::PhysicalStepState::Recorded as i32
+        );
+        assert_eq!(
+            resolved.steps[1].state,
+            if cancel {
+                api::PhysicalStepState::NotPerformed
+            } else {
+                api::PhysicalStepState::Recorded
+            } as i32
+        );
+        let competitor = replacement_plan(&store, &actor, vec![removal])?;
+        let before = store.usage()?;
+        assert!(matches!(
+            reserve(&store, &actor, competitor),
+            Err(Error::Conflict)
+        ));
+        assert_eq!(store.usage()?, before);
+        assert_eq!(next.state, api::PhysicalPlanState::Reserved as i32);
+    }
+    Ok(())
+}
+
 // Large enclosures remain readable through bounded pages rather than failing the entire projection.
 #[test]
 fn occupancy_beyond_128_parts_returns_a_bounded_first_page() -> TestResult {

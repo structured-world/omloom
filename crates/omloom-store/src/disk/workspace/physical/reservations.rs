@@ -108,10 +108,9 @@ impl Tx<'_> {
         }
         for key in resolved.difference(&pending) {
             if let Some(row) = self.get(key)? {
-                if string(&row, "owner")? != owner {
-                    return Err(Error::Conflict);
+                if string(&row, "owner")? == owner {
+                    self.delete(key)?;
                 }
-                self.delete(key)?;
             }
         }
         Ok(())
