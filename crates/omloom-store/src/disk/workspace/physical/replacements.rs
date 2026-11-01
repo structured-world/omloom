@@ -129,6 +129,38 @@ pub(super) fn read_replacement(row: &Properties) -> Result<api::PhysicalReplacem
     })
 }
 impl Tx<'_> {
+    pub(super) fn require_replacement_space<T: core::borrow::Borrow<str> + Ord>(
+        &self,
+        replacement: &api::PhysicalReplacement,
+        removed: &BTreeSet<T>,
+    ) -> Result<()> {
+        let position = parse_target(replacement.position.as_ref())?;
+        if number(&self.asset(position)?, "kind")? == wire::AssetKind::PhysicalPosition as u64 {
+            let rows=self.query("MATCH (p:OmRow {key:$key})<-[:OmRelationTo]-(r:OmRow) WHERE r.kind=$kind RETURN properties(r) AS p LIMIT 2",params([("key",text(asset_key(position))),("kind",int(wire::RelationKind::InstalledIn as u64)?)]))?;
+            if rows.len() > 1 {
+                return Err(Error::Conflict);
+            }
+            for row in rows {
+                let binding = inventory::relation_projection(&row)?;
+                if !removed.contains(binding.relation_id.as_str())
+                    && binding.from != replacement.replacement
+                {
+                    return Err(Error::Conflict);
+                }
+            }
+        }
+        if let Some(incoming) = &replacement.replacement {
+            for binding in self.installed_bindings(parse_target(Some(incoming))?)? {
+                if !removed.contains(binding.relation_id.as_str())
+                    && binding.to != replacement.position
+                {
+                    return Err(Error::Conflict);
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn record_physical_replacements(
         &mut self,
         context: &Context,
@@ -172,28 +204,7 @@ impl Tx<'_> {
             if replacement.replacement.is_some() {
                 incoming_positions.insert(position);
             }
-            if number(&self.asset(position)?, "kind")? == wire::AssetKind::PhysicalPosition as u64 {
-                let rows=self.query("MATCH (p:OmRow {key:$key})<-[:OmRelationTo]-(r:OmRow) WHERE r.kind=$kind RETURN properties(r) AS p LIMIT 2",params([("key",text(asset_key(position))),("kind",int(wire::RelationKind::InstalledIn as u64)?)]))?;
-                if rows.len() > 1 {
-                    return Err(Error::Conflict);
-                }
-                for row in rows {
-                    let binding = inventory::relation_projection(&row)?;
-                    if !removed.contains(&binding.relation_id)
-                        && binding.from != replacement.replacement
-                    {
-                        return Err(Error::Conflict);
-                    }
-                }
-            }
-            if let Some(incoming) = &replacement.replacement {
-                for binding in self.installed_bindings(parse_target(Some(incoming))?)? {
-                    if !removed.contains(&binding.relation_id) && binding.to != replacement.position
-                    {
-                        return Err(Error::Conflict);
-                    }
-                }
-            }
+            self.require_replacement_space(replacement, &removed)?;
         }
         // Detach every selected old binding before attaching incoming parts, including swaps.
         for binding in &old {

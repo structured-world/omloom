@@ -1682,6 +1682,40 @@ fn binding(store: &Store, item: &wire::AssetRef) -> Result<wire::Relation, Error
         .find(|r| r.kind == wire::RelationKind::InstalledIn as i32)
         .ok_or(Error::Corrupt)
 }
+fn mountable_component_fixture(
+    store: &Store,
+    actor: &Context,
+    owner: wire::AssetRef,
+    key: &str,
+) -> Result<(wire::AssetRef, wire::AssetRef), Error> {
+    let position = position_fixture(store, actor, owner, key, api::PhysicalComponentKind::Disk)?;
+    let mut slot = define(position.clone());
+    slot.mounting = Some("drive-carrier-v1".into());
+    physical(
+        store,
+        actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(slot),
+        }),
+    )?;
+    let item = create(store, actor, K::PhysicalComponent, key)?;
+    equipment_dimensions(store, actor, &item)?;
+    physical(
+        store,
+        actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(api::PhysicalDefinition {
+                target: Some(item.clone()),
+                basis: "Measured drive carrier".into(),
+                mounting: Some("drive-carrier-v1".into()),
+                component_kind: api::PhysicalComponentKind::Disk as i32,
+                ..Default::default()
+            }),
+        }),
+    )?;
+    install_component(store, actor, position.clone(), item.clone())?;
+    Ok((position, item))
+}
 fn install_component(
     store: &Store,
     actor: &Context,

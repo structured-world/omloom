@@ -1,5 +1,77 @@
 use super::*;
 
+// An occupied destination cannot be reserved unless its occupant is explicitly removed in the plan.
+#[test]
+fn component_move_admission_checks_destination_and_preserves_atomic_swaps() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let owner = create(&store, &actor, K::Device, "Two-slot enclosure")?;
+    let (a, first) = mountable_component_fixture(&store, &actor, owner.clone(), "disk/1")?;
+    let (b, second) = mountable_component_fixture(&store, &actor, owner, "disk/2")?;
+    let old = binding(&store, &first)?;
+    let first_move = api::PhysicalReplacement {
+        position: Some(b.clone()),
+        source_position: Some(a.clone()),
+        previous: Some(first.clone()),
+        replacement: Some(first.clone()),
+        previous_binding: Some(old.relation_id),
+        previous_revision: Some(old.revision),
+        ..Default::default()
+    };
+    let impossible = replacement_plan(&store, &actor, vec![first_move.clone()])?;
+    let before = store.usage()?;
+    let preview = physical(
+        &store,
+        &actor,
+        api::physical::Action::Preview(api::PhysicalPreview {
+            plan: Some(impossible.clone()),
+        }),
+    )?;
+    assert_eq!(preview.state, api::RequirementState::Failed as i32);
+    assert!(matches!(
+        reserve(&store, &actor, impossible),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.usage()?, before);
+    let old = binding(&store, &second)?;
+    let swap = replacement_plan(
+        &store,
+        &actor,
+        vec![
+            first_move,
+            api::PhysicalReplacement {
+                position: Some(a.clone()),
+                source_position: Some(b.clone()),
+                previous: Some(second.clone()),
+                replacement: Some(second.clone()),
+                previous_binding: Some(old.relation_id),
+                previous_revision: Some(old.revision),
+                ..Default::default()
+            },
+        ],
+    )?;
+    let reserved = reserve(&store, &actor, swap)?.plan.ok_or(Error::Corrupt)?;
+    let completed = physical(
+        &store,
+        &actor,
+        api::physical::Action::Complete(api::PhysicalCompletion {
+            plan: Some(api::PhysicalPlanKey {
+                id: reserved.id.ok_or(Error::Corrupt)?,
+                revision: reserved.revision,
+            }),
+            completed_steps: vec![0, 1],
+            ..Default::default()
+        }),
+    )?
+    .plan
+    .ok_or(Error::Corrupt)?;
+    assert_eq!(completed.state, api::PhysicalPlanState::Completed as i32);
+    assert_eq!(binding(&store, &first)?.to, Some(b));
+    assert_eq!(binding(&store, &second)?.to, Some(a));
+    Ok(())
+}
+
 // A manual report records work already performed, not a new physical-effect authorization.
 #[test]
 fn changed_geometry_does_not_discard_an_attributed_manual_installation() -> TestResult {

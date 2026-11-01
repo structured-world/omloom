@@ -471,6 +471,19 @@ impl Tx<'_> {
                 }
             }
         }
+        let removed: BTreeSet<_> = replacement_steps(plan)
+            .filter_map(|replacement| replacement.previous_binding.as_deref())
+            .collect();
+        for replacement in replacement_steps(plan) {
+            self.require_replacement_space(replacement, &removed)
+                .map_err(|error| {
+                    if matches!(error, Error::Conflict) {
+                        Failure::mismatch()
+                    } else {
+                        error.into()
+                    }
+                })?;
+        }
         self.check_replacement_masses(context, &mass_limits)?;
         Ok(claims)
     }
