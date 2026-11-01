@@ -193,6 +193,87 @@ fn rack_replacement_fixture(
     })
 }
 
+// Explicit allocations can leave front/side service space before the incoming body.
+#[test]
+fn replacement_clearance_uses_the_proposed_allocation() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let mut replacement = rack_replacement_fixture(&store, &actor)?;
+    let incoming = replacement.replacement.clone().ok_or(Error::Corrupt)?;
+    let mut enclosure = define(replacement.position.clone().ok_or(Error::Corrupt)?);
+    enclosure.mounting = Some("rack-19".into());
+    enclosure.capacity_mw = Some(20);
+    enclosure.cooling_capacity_mw = Some(20);
+    enclosure
+        .volume
+        .as_mut()
+        .ok_or(Error::Corrupt)?
+        .x
+        .as_mut()
+        .ok_or(Error::Corrupt)?
+        .length_um += 1;
+    enclosure.occupancy_coverage = enclosure.volume.map(Box::new);
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(enclosure),
+        }),
+    )?;
+    let mut item = define(incoming.clone());
+    item.mounting = Some("rack-19".into());
+    item.demand_mw = Some(20);
+    item.cooling_mw = Some(20);
+    item.clearance = Some(Box::new(api::PhysicalClearance {
+        before_x_um: 1,
+        ..Default::default()
+    }));
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(item),
+        }),
+    )?;
+    replacement
+        .volume
+        .as_mut()
+        .ok_or(Error::Corrupt)?
+        .x
+        .as_mut()
+        .ok_or(Error::Corrupt)?
+        .start_um = 1;
+    let plan = replacement_plan(&store, &actor, vec![replacement])?;
+    let before = store.usage()?;
+    let preview = physical(
+        &store,
+        &actor,
+        api::physical::Action::Preview(api::PhysicalPreview {
+            plan: Some(plan.clone()),
+        }),
+    )?;
+    assert_eq!(preview.state, api::RequirementState::Satisfied as i32);
+    assert_eq!(store.usage()?, before);
+    let reserved = reserve(&store, &actor, plan)?.plan.ok_or(Error::Corrupt)?;
+    let completed = physical(
+        &store,
+        &actor,
+        api::physical::Action::Complete(api::PhysicalCompletion {
+            plan: Some(api::PhysicalPlanKey {
+                id: reserved.id.ok_or(Error::Corrupt)?,
+                revision: reserved.revision,
+            }),
+            completed_steps: vec![0],
+            ..Default::default()
+        }),
+    )?
+    .plan
+    .ok_or(Error::Corrupt)?;
+    assert_eq!(completed.state, api::PhysicalPlanState::Completed as i32);
+    Ok(())
+}
+
 // Replacement allocations pass the same requested-coordinate checks as ordinary placements.
 #[test]
 fn replacement_preview_and_reservation_reject_outside_coordinates() -> TestResult {

@@ -418,35 +418,38 @@ impl Tx<'_> {
                     self.require_position_class(destination, item.component_kind)?;
                 }
                 require_mounting(target.mounting.as_deref(), item.mounting.as_deref())?;
-                let target_volume = target
-                    .volume
-                    .as_ref()
-                    .map(volume)
-                    .transpose()?
-                    .ok_or(Error::Incomplete)?;
-                let item_volume = self
-                    .equipment_envelope(context, incoming)?
-                    .as_ref()
-                    .map(volume)
-                    .transpose()?
-                    .ok_or(Error::Incomplete)?;
-                let locate = |target: Span, item: Span| {
-                    Span::new(
-                        target.start(),
-                        u64::try_from(item.end() - item.start()).map_err(|_| Error::Corrupt)?,
-                    )
-                    .map_err(|_| Error::Invalid)
-                };
-                let located = Volume {
-                    x: locate(target_volume.x, item_volume.x)?,
-                    y: locate(target_volume.y, item_volume.y)?,
-                    z: locate(target_volume.z, item_volume.z)?,
-                };
-                let region = clearance::region(located, item.clearance.as_deref())?;
-                if crate::physical::placement(Some(target_volume), Some(region), &[]).state
-                    != crate::requirements::State::Satisfied
-                {
-                    return Err(Failure::mismatch());
+                // Explicit allocations are checked at their real coordinates by placement admission.
+                if replacement.volume.is_none() {
+                    let target_volume = target
+                        .volume
+                        .as_ref()
+                        .map(volume)
+                        .transpose()?
+                        .ok_or(Error::Incomplete)?;
+                    let item_volume = self
+                        .equipment_envelope(context, incoming)?
+                        .as_ref()
+                        .map(volume)
+                        .transpose()?
+                        .ok_or(Error::Incomplete)?;
+                    let locate = |target: Span, item: Span| {
+                        Span::new(
+                            target.start(),
+                            u64::try_from(item.end() - item.start()).map_err(|_| Error::Corrupt)?,
+                        )
+                        .map_err(|_| Error::Invalid)
+                    };
+                    let located = Volume {
+                        x: locate(target_volume.x, item_volume.x)?,
+                        y: locate(target_volume.y, item_volume.y)?,
+                        z: locate(target_volume.z, item_volume.z)?,
+                    };
+                    let region = clearance::region(located, item.clearance.as_deref())?;
+                    if crate::physical::placement(Some(target_volume), Some(region), &[]).state
+                        != crate::requirements::State::Satisfied
+                    {
+                        return Err(Failure::mismatch());
+                    }
                 }
             }
             for part in [
