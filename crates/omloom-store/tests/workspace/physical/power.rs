@@ -224,6 +224,71 @@ fn power_paths_validate_every_requested_incarnation() -> TestResult {
     Ok(())
 }
 
+// Recording manual work evaluates the persisted power postcondition through the common evaluator.
+#[test]
+fn recorded_step_evaluates_its_power_postcondition() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let rack = create(&store, &actor, K::Rack, "Planning rack")?;
+    let item = create(&store, &actor, K::Device, "Installed server")?;
+    let feeds = [
+        create(&store, &actor, K::PowerFeed, "Terminal feed A")?,
+        create(&store, &actor, K::PowerFeed, "Terminal feed B")?,
+    ];
+    for feed in &feeds {
+        survey(&store, &actor, feed)?;
+    }
+    let expected = evaluate(&store, &actor, &feeds, &feeds)?;
+    assert_eq!(expected.state, api::RequirementState::Satisfied as i32);
+    let mut plan = draft(&store, &actor, item, rack.clone())?;
+    plan.steps[0].control = Some(api::PlanControl {
+        check: Some(api::EvaluateRequirements {
+            anchor: Some(rack),
+            nodes: vec![api::RequirementNode {
+                expression: Some(api::requirement_node::Expression::PowerPaths(
+                    api::PowerPathRequirement {
+                        sources: feeds.to_vec(),
+                        boundaries: feeds.to_vec(),
+                    },
+                )),
+            }],
+            root: 0,
+        }),
+        ..Default::default()
+    });
+    let saved = physical(
+        &store,
+        &actor,
+        api::physical::Action::Save(api::PhysicalSave { plan: Some(plan) }),
+    )?
+    .plan
+    .ok_or(Error::Corrupt)?;
+    let recorded = physical(
+        &store,
+        &actor,
+        api::physical::Action::Complete(api::PhysicalCompletion {
+            plan: Some(api::PhysicalPlanKey {
+                id: saved.id.ok_or(Error::Corrupt)?,
+                revision: saved.revision,
+            }),
+            completed_steps: vec![0],
+            actual_state: true,
+            discrepancy: Some("Recorded manually completed installation".into()),
+            ..Default::default()
+        }),
+    )?
+    .plan
+    .ok_or(Error::Corrupt)?;
+    assert_eq!(
+        recorded.steps[0].state,
+        api::PhysicalStepState::Recorded as i32
+    );
+    assert_eq!(recorded.steps[0].checked_state, Some(expected.state));
+    assert_eq!(recorded.steps[0].checked_reason, Some(expected.reason));
+    Ok(())
+}
+
 // The typed power predicate survives the existing plan codec without an early source/geometry gate.
 #[test]
 fn power_postcondition_uses_the_common_persisted_plan() -> TestResult {
