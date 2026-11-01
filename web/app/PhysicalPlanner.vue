@@ -5,6 +5,7 @@ import PlacementSearch from './PlacementSearch.vue';
 import PlanStepControls from './PlanStepControls.vue';
 import { millimetres,micrometres,signedMicrometres,upperMicrometres } from './physical-units';
 import {frameSize,projectElevation,depthOrder,type Face} from './physical-elevation';
+import {rackAllocation,rackUnitAt,adjacentRackUnit} from './rack-grid';
 const props = defineProps<{target:AssetRef;kind:number;working:model.WorkingContext;inactive?:boolean}>();
 const emit=defineEmits<{changed:[]}>();
 const opened=ref(false),busy=ref(false),error=ref(''),notice=ref('');
@@ -42,6 +43,7 @@ const editable=computed(()=>plan.value===undefined||plan.value.state===model.Phy
 const reservable=computed(()=>plan.value?.state===model.PhysicalPlanState.DRAFT);
 const installable=computed(()=>plan.value!==undefined&&([model.PhysicalPlanState.RESERVED,model.PhysicalPlanState.PARTIAL,model.PhysicalPlanState.CANCELLED].includes(plan.value.state)||(plan.value.state===model.PhysicalPlanState.DRAFT&&actualReport.value)));
 const envelope=computed(()=>view.value.definitions[0]?.volume);
+const rackGrid=computed(()=>view.value.definitions[0]?.rackGrid);
 const state=(value:number)=>model.PhysicalPlanState[value]?.toLowerCase();
 const itemName=(item:model.Item)=>input(item.fields.find(f=>f.name==='name'));
 const labels=computed(()=>{
@@ -75,6 +77,7 @@ async function summaries(after?:string) {
 async function refresh() {
   const reply=await invoke({oneofKind:'read',read:{enclosure:props.target,occupants:true}});
   view.value=reply;
+  if(rackGrid.value)unit.value=String(rackGrid.value.firstUnit);
   if(props.kind===K.CABLE)await loadEnds();
 }
 async function loadEnds(after?:string){const reply=await invoke({oneofKind:'cableEnds',cableEnds:{cable:props.target,after}});cableEnds.value=reply.cableEnds;endsNext.value=reply.next;}
@@ -155,11 +158,12 @@ function add() {
       proposed=model.PhysicalVolume.create(Object.fromEntries(axes.map(axis=>[axis,{startUm:signedMicrometres(allocation.value[axis].start),lengthUm:micrometres(allocation.value[axis].length)}])));
     }else{
       if(!v?.x||!v.y||!v.z||!rack?.x||!rack.y||!rack.z)throw Error('Use an explicit draft allocation when equipment or enclosure dimensions are unknown.');
-      if(!/^[1-9][0-9]{0,2}(\.5)?$/.test(unit.value))throw Error('Enter a rack position in whole or half rack units, starting at 1.');
+      if(!/^[1-9][0-9]{0,9}(\.5)?$/.test(unit.value)||(!rackGrid.value&&Number(unit.value)>=1000))throw Error('Enter a supported whole or half-unit position within the recorded range.');
       const halves=BigInt(unit.value.split('.')[0]!)*2n+(unit.value.endsWith('.5')?1n:0n);
+      const y=rackGrid.value?rackAllocation(rackGrid.value,unit.value,v.y.lengthUm):{startUm:rack.y.startUm+(halves-2n)*22225n,lengthUm:v.y.lengthUm};
       proposed={
       x:{startUm:rack.x.startUm+(lane.value==='right'?BigInt(rack.x.lengthUm)-BigInt(v.x.lengthUm):0n),lengthUm:v.x.lengthUm},
-      y:{startUm:rack.y.startUm+(halves-2n)*22225n,lengthUm:v.y.lengthUm},
+      y,
       z:{startUm:rack.z.startUm+(side.value==='rear'?BigInt(rack.z.lengthUm)-BigInt(v.z.lengthUm):0n),lengthUm:v.z.lengthUm},
       };
     }
@@ -234,9 +238,17 @@ function dropEquipment(event:DragEvent){
   if(!transform)return;
   const point=new DOMPoint(event.clientX,event.clientY).matrixTransform(transform.inverse());
   const drawingValue=drawing.value;if(!drawingValue)return;
-  const u=Math.floor((point.y-drawingValue.y)/44.45)+1;
-  if(u<1||u>999){error.value='Choose a position inside the known rack.';return;}
-  unit.value=String(u);
+  try{
+    if(rackGrid.value&&envelope.value?.y&&equipmentVolume.value.y){
+      const chosen=rackUnitAt(rackGrid.value,envelope.value.y.startUm+BigInt(Math.round(point.y*1000)),equipmentVolume.value.y.lengthUm);
+      if(chosen===undefined)throw Error('Choose a position inside the declared rail grid.');
+      unit.value=chosen;
+    }else{
+      const u=Math.floor((point.y-drawingValue.y)/44.45)+1;
+      if(u<1||u>999)throw Error('Choose a position inside the known enclosure.');
+      unit.value=String(u);
+    }
+  }catch(e){error.value=String(e);return;}
   const fromFront=side.value==='front'?point.x:drawingValue.width-point.x;
   lane.value=fromFront<drawingValue.width/2?'left':'right';
   add();
@@ -246,7 +258,9 @@ function rackKeyboard(event:KeyboardEvent){
   if(!editable.value||manualRegion.value)return;
   if(event.key==='Enter'){event.preventDefault();add();return;}
   if(event.key==='ArrowUp'||event.key==='ArrowDown'){
-    event.preventDefault();const current=Number(unit.value);if(!Number.isFinite(current))return;
+    event.preventDefault();
+    if(rackGrid.value){const height=equipmentVolume.value?.y?.lengthUm;if(height===undefined){error.value='Select equipment with a known height before choosing a rail position.';return;}try{unit.value=adjacentRackUnit(rackGrid.value,unit.value,height,event.key==='ArrowUp');}catch(e){error.value=String(e);}return;}
+    const current=Number(unit.value);if(!Number.isFinite(current))return;
     unit.value=String(Math.min(999,Math.max(1,current+(event.key==='ArrowUp'?-1:1))));
   }else if(event.key==='ArrowLeft'||event.key==='ArrowRight'){event.preventDefault();const visualLeft=event.key==='ArrowLeft';lane.value=(side.value==='front'?visualLeft:!visualLeft)?'left':'right';}
 }
@@ -315,7 +329,8 @@ async function exportPlan(){await run(async()=>{
 <template v-if="manualRegion"><p>This is proposed space, not new equipment facts. Unknown source dimensions or occupancy keep fit unqualified. Confirm the recorded position and envelope when reporting actual installation.</p>
 <template v-for="axis in axes" :key="axis"><label>{{axis.toUpperCase()}} allocation start (mm)<input v-model="allocation[axis].start" inputmode="decimal" maxlength="18"/></label><label>{{axis.toUpperCase()}} allocation length (mm)<input v-model="allocation[axis].length" inputmode="decimal" maxlength="17"/></label></template></template>
 <template v-else><button v-if="equipmentVolume" type="button" draggable="true" @dragstart="dragEquipment" @click="add">Drag selected equipment onto elevation, or add at chosen coordinates</button>
-<div class="placement-controls"><label>Starting U<input v-model="unit" inputmode="decimal" maxlength="5"/></label>
+<p v-if="rackGrid">Uses the sourced rail grid. Allocation height rounds outward to half-U increments; equipment dimensions remain unchanged.</p><p v-else>No sourced rail grid. Positions below are geometric offsets from the usable top, not printed rack unit numbers.</p>
+<div class="placement-controls"><label>{{rackGrid?'Starting U':'Position from usable top (U)'}}<input v-model="unit" inputmode="decimal" maxlength="12"/></label>
 <label>Side<select v-model="side"><option value="front">Front</option><option value="rear">Rear</option></select></label>
 <label>Horizontal position<select v-model="lane"><option value="left">Left from front</option><option value="right">Right from front</option></select></label></div></template>
 <button type="button" :disabled="!equipment?.target||(!manualRegion&&!equipmentVolume)" @click="add">Add planned placement</button>

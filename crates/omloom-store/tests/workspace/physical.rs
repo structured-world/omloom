@@ -13,6 +13,8 @@ mod materials;
 mod mounting;
 #[path = "physical/power.rs"]
 mod power;
+#[path = "physical/rack_grid.rs"]
+mod rack_grid;
 
 fn volume() -> api::PhysicalVolume {
     let extent = |length| {

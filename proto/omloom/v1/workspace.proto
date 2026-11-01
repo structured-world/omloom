@@ -1576,6 +1576,26 @@ message PhysicalDefinition {
   // supply list. The basis above attributes this assertion. It grants no rights
   // and does not assert live power or independence beyond the selected boundary.
   bool power_sources_complete = 15;
+  // Optional sourced rack rail grid, independent of cabinet dimensions or occupancy.
+  // Missing permits coordinate-based drafts but supplies no rack unit numbering.
+  optional PhysicalRackGrid rack_grid = 16;
+}
+message PhysicalRackGrid {
+  // User/source-measured top of the rail grid in enclosure Y micrometres.
+  // Increasing Y runs downward for this rack frame; this is not the cabinet height.
+  sint64 top_um = 1;
+  // User/source-declared positive number of rack units; each is exactly 44450 um.
+  uint32 unit_count = 2;
+  // User/source-declared lowest printed unit number, positive. Together with count
+  // it must fit uint32. Labels do not create inventory objects for every unit.
+  uint32 first_unit = 3;
+  // User/source-declared numbering direction. UNSPECIFIED is invalid when present.
+  PhysicalRackDirection direction = 4;
+}
+enum PhysicalRackDirection {
+  PHYSICAL_RACK_DIRECTION_UNSPECIFIED = 0;
+  PHYSICAL_RACK_DIRECTION_TOP_DOWN = 1;
+  PHYSICAL_RACK_DIRECTION_BOTTOM_UP = 2;
 }
 message PhysicalClearance {
   // User/source-required space before the equipment's X face, in micrometres.

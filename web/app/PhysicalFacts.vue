@@ -3,6 +3,7 @@ import { ref } from 'vue';
 import { call, model, requestMessage, AssetKind, type AssetRef } from './api';
 import { millimetres, micrometres, nonnegativeMicrometres, signedMicrometres } from './physical-units';
 import MatingEditor from './MatingEditor.vue';
+import {railGrid} from './rack-grid';
 const props = defineProps<{target: AssetRef; kind:number; working: model.WorkingContext}>();
 const emit = defineEmits<{saved: [];equipment:[]}>();
 const current = ref<model.PhysicalDefinition>();
@@ -21,6 +22,8 @@ const mating=ref<model.PhysicalMating>();
 const clearanceKnown=ref(false);
 const occupancyKnown=ref(false);
 const powerSourcesComplete=ref(false);
+const gridKnown=ref(false),gridTop=ref(''),gridCount=ref(''),gridFirst=ref('');
+const gridDirection=ref(model.PhysicalRackDirection.UNSPECIFIED);
 const axes=['x','y','z'] as const;
 const survey=ref({x:{start:'',length:''},y:{start:'',length:''},z:{start:'',length:''}});
 function surveyInputs(value:model.PhysicalVolume|undefined){for(const axis of axes){const extent=value?.[axis];survey.value[axis]={start:extent===undefined?'':millimetres(extent.startUm),length:extent===undefined?'':millimetres(extent.lengthUm)};}}
@@ -46,6 +49,12 @@ async function load() {
     revision.value = response.physical.revision;
     current.value = response.physical.definitions[0];
     powerSourcesComplete.value=current.value?.powerSourcesComplete===true;
+    const grid=current.value?.rackGrid;
+    gridKnown.value=grid!==undefined;
+    gridTop.value=grid===undefined?'':millimetres(grid.topUm);
+    gridCount.value=grid===undefined?'':String(grid.unitCount);
+    gridFirst.value=grid===undefined?'':String(grid.firstUnit);
+    gridDirection.value=grid===undefined?model.PhysicalRackDirection.UNSPECIFIED:grid.direction;
     mating.value=current.value?.mating===undefined?undefined:model.PhysicalMating.clone(current.value.mating);
     clearanceKnown.value=current.value?.clearance!==undefined;
     occupancyKnown.value=current.value?.occupancyCoverage!==undefined;
@@ -83,6 +92,12 @@ async function save() {
     const definition = model.PhysicalDefinition.create({...current.value,target:props.target,basis:basis.value,volume,componentKind:componentKind.value,maxMassG:quantity(maxMass.value),demandMw:quantity(demand.value),capacityMw:quantity(capacity.value),coolingMw:quantity(cooling.value),coolingCapacityMw:quantity(coolingCapacity.value),mounting:mounting.value===''?undefined:mounting.value});
     definition.mating=mating.value;
     definition.powerSourcesComplete=powerSourcesComplete.value;
+    definition.rackGrid=undefined;
+    if(gridKnown.value){
+      const positive=(value:string)=>{if(!/^[1-9][0-9]{0,9}$/.test(value)||Number(value)>0xffffffff)throw Error('Enter a positive rack number within uint32.');return Number(value);};
+      const grid=model.PhysicalRackGrid.create({topUm:signedMicrometres(gridTop.value),unitCount:positive(gridCount.value),firstUnit:positive(gridFirst.value),direction:gridDirection.value});
+      railGrid(grid);definition.rackGrid=grid;
+    }
     definition.clearance=clearanceKnown.value?model.PhysicalClearance.create(Object.fromEntries(faces.map(face=>[face.key,nonnegativeMicrometres(margins.value[face.key])]))):undefined;
     definition.occupancyCoverage=occupancyKnown.value?model.PhysicalVolume.create(Object.fromEntries(axes.map(axis=>[axis,{startUm:signedMicrometres(survey.value[axis].start),lengthUm:micrometres(survey.value[axis].length)}]))):undefined;
     const response = await call({oneofKind:'physical',physical:model.Physical.create({action:{oneofKind:'define',define:{definition}}})},{...props.working,expected:revision.value});
@@ -116,6 +131,14 @@ async function save() {
       <label>Depth (mm)<input v-model="depth" inputmode="decimal" required maxlength="17" /></label>
     </template>
     <p v-else>Unknown dimensions cannot establish physical fit.</p>
+    <details v-if="kind===AssetKind.RACK"><summary>Mounting rail grid</summary>
+      <p>The rail grid is independent of cabinet height and occupancy. Record its source above. Unit numbers do not instantiate inventory slots.</p>
+      <label class="check"><input v-model="gridKnown" type="checkbox"/>Rack rail grid and numbering are known</label>
+      <template v-if="gridKnown"><label>Rail grid top Y (mm)<input v-model="gridTop" required inputmode="decimal" maxlength="18"/></label>
+      <label>Rail unit count<input v-model="gridCount" required inputmode="numeric" maxlength="10"/></label>
+      <label>Lowest printed U<input v-model="gridFirst" required inputmode="numeric" maxlength="10"/></label>
+      <label>Rack numbering direction<select v-model="gridDirection"><option :value="model.PhysicalRackDirection.UNSPECIFIED">Choose the sourced direction</option><option :value="model.PhysicalRackDirection.TOP_DOWN">Top to bottom</option><option :value="model.PhysicalRackDirection.BOTTOM_UP">Bottom to top</option></select></label></template>
+    </details>
     <details v-if="kind!==AssetKind.PORT"><summary>Known current occupancy region</summary>
       <p>Dimensions and model slots do not prove empty space. Explicitly record the region whose current occupants are all represented in inventory. Other regions remain unqualified; saving this statement moves no equipment and releases no reservation. Include the review source in the source field above.</p>
       <label class="check"><input v-model="occupancyKnown" type="checkbox"/>Current occupancy is completely recorded in this region</label>

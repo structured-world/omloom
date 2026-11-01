@@ -146,7 +146,7 @@ test('rack elevations mirror rear coordinates and order reported bodies by depth
         await planner.getByRole('combobox',{name:'Find equipment',exact:true}).fill(`Rear placement spare ${width}`);
         await planner.getByRole('option',{name:`Use equipment: Rear placement spare ${width}`,exact:true}).click();
         await planner.getByLabel('Installation plan name',{exact:true}).fill('Rear input placement');
-        await planner.getByLabel('Starting U',{exact:true}).fill('2');
+        await planner.getByLabel('Position from usable top (U)',{exact:true}).fill('2');
         await planner.getByRole('button',{name:'Rear elevation',exact:true}).click();
         const canvas=planner.getByRole('group',{name:'Rack physical placement',exact:true});
         if(width>600){await canvas.press('ArrowLeft');await canvas.press('Enter');}
@@ -341,6 +341,12 @@ test('physical dimensions save and reload on desktop and phone',async({browser})
         await page.getByRole('textbox',{name:'Width (mm)',exact:true}).fill('482.600');
         await page.getByRole('textbox',{name:'Height (mm)',exact:true}).fill('1866.900');
         await page.getByRole('textbox',{name:'Depth (mm)',exact:true}).fill('1000.125');
+        await page.getByText('Mounting rail grid',{exact:true}).click();
+        await page.getByRole('checkbox',{name:'Rack rail grid and numbering are known',exact:true}).check();
+        await page.getByLabel('Rail grid top Y (mm)',{exact:true}).fill('30');
+        await page.getByLabel('Rail unit count',{exact:true}).fill('40');
+        await page.getByLabel('Lowest printed U',{exact:true}).fill('10');
+        await page.getByRole('combobox',{name:'Rack numbering direction',exact:true}).selectOption({label:'Bottom to top'});
         await page.getByText('Known current occupancy region',{exact:true}).click();
         await page.getByRole('checkbox',{name:'Current occupancy is completely recorded in this region',exact:true}).check();
         await page.getByRole('button',{name:'Copy entered usable region',exact:true}).click();
@@ -352,6 +358,11 @@ test('physical dimensions save and reload on desktop and phone',async({browser})
         await expect(page.getByRole('textbox',{name:'Height (mm)',exact:true})).toHaveValue('1866.9');
         await expect(page.getByRole('textbox',{name:'Depth (mm)',exact:true})).toHaveValue('1000.125');
         await expect(page.getByRole('textbox',{name:'Measurement or specification source',exact:true})).toHaveValue('Measured inner mounting envelope');
+        await page.getByText('Mounting rail grid',{exact:true}).click();
+        await expect(page.getByLabel('Rail grid top Y (mm)',{exact:true})).toHaveValue('30');
+        await expect(page.getByLabel('Rail unit count',{exact:true})).toHaveValue('40');
+        await expect(page.getByLabel('Lowest printed U',{exact:true})).toHaveValue('10');
+        await expect(page.getByRole('combobox',{name:'Rack numbering direction',exact:true}).getByRole('option',{name:'Bottom to top',exact:true})).toHaveJSProperty('selected',true);
         await page.getByText('Known current occupancy region',{exact:true}).click();
         await expect(page.getByRole('checkbox',{name:'Current occupancy is completely recorded in this region',exact:true})).toBeChecked();
         await expect(page.getByRole('textbox',{name:'Z occupancy length (mm)',exact:true})).toHaveValue('1000.125');
@@ -395,7 +406,7 @@ test('physical plan reserves then records installation on desktop and phone',asy
         changes.push({name:'serial',value:{oneofKind:'text',text:`material-serial-${width}`}});
         await rpc({oneofKind:'write',write:m.Write.create({target:equipmentTarget,expected:existing.detail.item.revision,kind:existing.detail.item.kind,changes})});
         const [x,y,z]=[482600n,1866900n,1000000n].map(lengthUm=>({startUm:0n,lengthUm}));
-        await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target:reference(rack),basis:'Measured usable space and recorded fixture occupancy',volume:{x,y,z},occupancyCoverage:{x,y,z}})}}})});
+        await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target:reference(rack),basis:'Measured usable space, rails and recorded fixture occupancy',volume:{x,y,z},occupancyCoverage:{x,y,z},rackGrid:{topUm:30000n,unitCount:40,firstUnit:10,direction:m.PhysicalRackDirection.BOTTOM_UP}})}}})});
         await page.reload();
         await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
         const planner=page.locator('.physical-planner');
@@ -405,10 +416,11 @@ test('physical plan reserves then records installation on desktop and phone',asy
         await expect(planner.getByRole('button',{name:'Add planned placement',exact:true})).toBeEnabled();
         if(width===1440){
           const canvas=planner.getByRole('group',{name:'Rack physical placement',exact:true});
-          await canvas.press('ArrowDown');await expect(planner.getByLabel('Starting U',{exact:true})).toHaveValue('2');
-          await canvas.press('ArrowUp');await expect(planner.getByLabel('Starting U',{exact:true})).toHaveValue('1');
+          await canvas.press('ArrowUp');await expect(planner.getByLabel('Starting U',{exact:true})).toHaveValue('11');
+          await canvas.press('ArrowDown');await expect(planner.getByLabel('Starting U',{exact:true})).toHaveValue('10');
           await canvas.press('Enter');
         }else{await planner.getByRole('button',{name:'Add planned placement',exact:true}).click();}
+        await expect(planner.getByText('Y allocation: 1763.55 mm + 44.45 mm',{exact:true})).toBeVisible();
         const beforePreview=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'list',list:{limit:25}}})});
         await planner.getByRole('button',{name:'Check physical requirements',exact:true}).click();
         await expect(planner.getByRole('status')).toHaveText('Declared physical constraints satisfied. Nothing was saved or reserved.');
@@ -440,6 +452,7 @@ test('physical plan reserves then records installation on desktop and phone',asy
         await expect(planner.getByRole('status')).toHaveText('Reported installation recorded. Live health has not been asserted.');
         const read=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'read',read:{enclosure:reference(rack),occupants:true}}})});
         expect(read.physical.occupancy.map(o=>o.placement.item)).toEqual([reference(equipment)]);
+        expect(read.physical.occupancy[0].placement.volume.y).toEqual({startUm:1763550n,lengthUm:44450n});
         await expect(planner.getByRole('group',{name:'Rack physical placement',exact:true})).toBeVisible();
         await expect(page.getByRole('region',{name:'Resource details'}).getByRole('button',{name:`installed in · Planned equipment ${width}`,exact:true})).toBeVisible();
         expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
@@ -484,7 +497,7 @@ test('plan checkpoints gate successive installation on desktop and phone',async(
         for(const [name,unit] of [[`Checkpoint A ${width}`,'1'],[`Checkpoint B ${width}`,'2']]){
           await planner.getByRole('combobox',{name:'Find equipment',exact:true}).fill(name);
           await planner.getByRole('option',{name:`Use equipment: ${name}`,exact:true}).click();
-          await planner.getByLabel('Starting U',{exact:true}).fill(unit);
+          await planner.getByLabel('Position from usable top (U)',{exact:true}).fill(unit);
           await planner.getByRole('button',{name:'Add planned placement',exact:true}).click();
         }
         const first=planner.getByRole('region',{name:'Step 1 controls',exact:true});

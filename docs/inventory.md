@@ -773,6 +773,12 @@ horizontal axis and orders reported bodies from far to near; proposed placements
 remain explicit overlays. Switching faces changes no inventory coordinates.
 The reported coordinate table keeps exact values available, including geometry
 that cannot be drawn, in pages of 25 without loading neighboring infrastructure.
+An optional sourced rail grid records its top Y coordinate, unit count, lowest
+printed number and numbering direction on the current rack profile. Cabinet
+height does not supply these facts. Printed U selection follows this declaration
+and rounds allocation height outward to half-U increments without changing the
+equipment dimensions. Without the declaration, the geometric offset editor and
+explicit coordinate drafts remain available and do not claim printed rack units.
 
 Named ends belong to a retained cable. Their definition, accepted destination
 intent and reported attachment are distinct. A confirmed loose end releases its

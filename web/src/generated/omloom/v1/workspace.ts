@@ -3707,6 +3707,44 @@ export interface PhysicalDefinition {
      * @generated from protobuf field: bool power_sources_complete = 15
      */
     powerSourcesComplete: boolean;
+    /**
+     * Optional sourced rack rail grid, independent of cabinet dimensions or occupancy.
+     * Missing permits coordinate-based drafts but supplies no rack unit numbering.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.PhysicalRackGrid rack_grid = 16
+     */
+    rackGrid?: PhysicalRackGrid;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalRackGrid
+ */
+export interface PhysicalRackGrid {
+    /**
+     * User/source-measured top of the rail grid in enclosure Y micrometres.
+     * Increasing Y runs downward for this rack frame; this is not the cabinet height.
+     *
+     * @generated from protobuf field: sint64 top_um = 1
+     */
+    topUm: bigint;
+    /**
+     * User/source-declared positive number of rack units; each is exactly 44450 um.
+     *
+     * @generated from protobuf field: uint32 unit_count = 2
+     */
+    unitCount: number;
+    /**
+     * User/source-declared lowest printed unit number, positive. Together with count
+     * it must fit uint32. Labels do not create inventory objects for every unit.
+     *
+     * @generated from protobuf field: uint32 first_unit = 3
+     */
+    firstUnit: number;
+    /**
+     * User/source-declared numbering direction. UNSPECIFIED is invalid when present.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalRackDirection direction = 4
+     */
+    direction: PhysicalRackDirection;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.PhysicalClearance
@@ -6059,6 +6097,23 @@ export enum RequirementResolution {
     OWNER_ACTION = 3
 }
 /**
+ * @generated from protobuf enum omloom.workspace.v1.PhysicalRackDirection
+ */
+export enum PhysicalRackDirection {
+    /**
+     * @generated from protobuf enum value: PHYSICAL_RACK_DIRECTION_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_RACK_DIRECTION_TOP_DOWN = 1;
+     */
+    TOP_DOWN = 1,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_RACK_DIRECTION_BOTTOM_UP = 2;
+     */
+    BOTTOM_UP = 2
+}
+/**
  * @generated from protobuf enum omloom.workspace.v1.PhysicalMatingRole
  */
 export enum PhysicalMatingRole {
@@ -7883,7 +7938,8 @@ class PhysicalDefinition$Type extends MessageType<PhysicalDefinition> {
             { no: 12, name: "mating", kind: "message", T: () => PhysicalMating },
             { no: 13, name: "clearance", kind: "message", T: () => PhysicalClearance },
             { no: 14, name: "occupancy_coverage", kind: "message", T: () => PhysicalVolume },
-            { no: 15, name: "power_sources_complete", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+            { no: 15, name: "power_sources_complete", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 16, name: "rack_grid", kind: "message", T: () => PhysicalRackGrid }
         ]);
     }
 }
@@ -7891,6 +7947,21 @@ class PhysicalDefinition$Type extends MessageType<PhysicalDefinition> {
  * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalDefinition
  */
 export const PhysicalDefinition = new PhysicalDefinition$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalRackGrid$Type extends MessageType<PhysicalRackGrid> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalRackGrid", [
+            { no: 1, name: "top_um", kind: "scalar", T: 18 /*ScalarType.SINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 2, name: "unit_count", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 3, name: "first_unit", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 4, name: "direction", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalRackDirection", PhysicalRackDirection, "PHYSICAL_RACK_DIRECTION_"] }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalRackGrid
+ */
+export const PhysicalRackGrid = new PhysicalRackGrid$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class PhysicalClearance$Type extends MessageType<PhysicalClearance> {
     constructor() {

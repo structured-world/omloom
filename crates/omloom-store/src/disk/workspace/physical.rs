@@ -13,6 +13,7 @@ mod equipment;
 mod flow;
 mod lifecycle;
 mod positions;
+mod rack_grid;
 mod replacements;
 mod reservations;
 mod wiring;
@@ -193,6 +194,7 @@ fn definition_row(value: &api::PhysicalDefinition) -> Result<Properties> {
     connector::store(&mut data, value.mating.as_ref())?;
     clearance::write(&mut data, value.clearance.as_ref())?;
     coverage::write(&mut data, value.occupancy_coverage.as_deref())?;
+    rack_grid::write(&mut data, value.rack_grid.as_deref(), value.volume.as_ref())?;
     if value.power_sources_complete {
         data.insert("approved".into(), Value::Bool(true));
     }
@@ -234,6 +236,7 @@ fn definition(data: &Properties) -> Result<api::PhysicalDefinition> {
             Some(Value::Bool(value)) => *value,
             _ => return Err(Error::Corrupt),
         },
+        rack_grid: rack_grid::read(data)?.map(Box::new),
     })
 }
 impl Tx<'_> {
@@ -353,6 +356,9 @@ impl Store {
                 let value = edit.definition.ok_or(Error::Invalid)?;
                 let target = parse_target(value.target.as_ref())?;
                 let kind = tx.physical_access(context, target, working, true)?;
+                if value.rack_grid.is_some() && kind != wire::AssetKind::Rack {
+                    return Err(Error::Invalid);
+                }
                 if value.power_sources_complete
                     && !matches!(
                         kind,
