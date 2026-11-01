@@ -453,10 +453,11 @@ impl Store {
         &self,
         context: &Context,
         request: api::Physical,
-        working: &api::WorkingContext,
+        working: Option<&api::WorkingContext>,
         now: u64,
     ) -> Result<api::Reply> {
         use api::physical::Action;
+        let working = || working.ok_or(Error::Invalid);
         let mut tx = self.begin()?;
         let mut view = api::PhysicalView {
             revision: number(&tx.root, "revision")?,
@@ -466,42 +467,45 @@ impl Store {
         };
         match request.action.ok_or(Error::Invalid)? {
             Action::ReviewReplacement(value) => {
-                let (plan, hypothesis) = tx.review_replacement(context, value, working, now)?;
+                let (plan, hypothesis) = tx.review_replacement(context, value, working()?, now)?;
                 view.plan = Some(plan);
                 view.replacement_hypothesis = Some(hypothesis);
             }
             Action::ReplacementQuality(value) => {
-                let (buckets, next) = tx.replacement_quality(context, value, working, now)?;
+                let (buckets, next) = tx.replacement_quality(context, value, working()?, now)?;
                 view.replacement_quality = buckets;
                 view.next = next;
             }
-            Action::Offer(value) => view
-                .offers
-                .push(tx.save_physical_offer(context, value, working, now)?),
+            Action::Offer(value) => {
+                view.offers
+                    .push(tx.save_physical_offer(context, value, working()?, now)?)
+            }
             Action::Offers(value) => {
-                let (offers, next) = tx.physical_offers(context, value, working)?;
+                let (offers, next) = tx.physical_offers(context, value, working()?)?;
                 view.offers = offers;
                 view.next = next;
             }
             Action::Availability(value) => {
+                working()?;
                 let (offer, result) = tx.offered_availability(context, value)?;
                 view.offers.push(offer);
                 (view.state, view.reason) = requirements::wire_decision(result);
             }
-            Action::CableEnd(value) => view
-                .cable_ends
-                .push(tx.save_cable_end(context, value, working, now)?),
+            Action::CableEnd(value) => {
+                view.cable_ends
+                    .push(tx.save_cable_end(context, value, working()?, now)?)
+            }
             Action::CableEnds(value) => {
-                let (ends, next) = tx.cable_ends(context, value, working)?;
+                let (ends, next) = tx.cable_ends(context, value, working()?)?;
                 view.cable_ends = ends;
                 view.next = next;
             }
             Action::Position(value) => {
                 view.positions
-                    .push(tx.save_physical_position(context, value, working, now)?);
+                    .push(tx.save_physical_position(context, value, working()?, now)?);
             }
             Action::Positions(value) => {
-                let (positions, next) = tx.physical_positions(context, value, working)?;
+                let (positions, next) = tx.physical_positions(context, value, working()?)?;
                 view.positions = positions;
                 view.next = next;
             }
@@ -539,7 +543,7 @@ impl Store {
                     return Err(Error::Invalid);
                 }
                 let target = parse_target(read.enclosure.as_ref())?;
-                tx.physical_access(context, target, working, false)?;
+                tx.physical_access(context, target, working()?, false)?;
                 if let Some(value) = tx.physical_definition(target)? {
                     view.definitions.push(value);
                 }
@@ -548,7 +552,7 @@ impl Store {
                     tx.read_physical_current(
                         context,
                         target,
-                        working,
+                        working()?,
                         read.after.as_deref(),
                         &mut view,
                     )?;
@@ -557,7 +561,7 @@ impl Store {
             Action::Define(edit) => {
                 let value = edit.definition.ok_or(Error::Invalid)?;
                 let target = parse_target(value.target.as_ref())?;
-                let kind = tx.physical_access(context, target, working, true)?;
+                let kind = tx.physical_access(context, target, working()?, true)?;
                 definition_kind(kind, &value)?;
                 let data = definition_row(&value)?;
                 if tx.put(
@@ -579,8 +583,8 @@ impl Store {
             Action::Preview(preview) => {
                 let mut plan = preview.plan.ok_or(Error::Invalid)?;
                 materials::normalize(&mut plan)?;
-                tx.prepare_wiring_plan(context, &mut plan, working)?;
-                tx.validate_physical_draft(context, &plan, working, false)?;
+                tx.prepare_wiring_plan(context, &mut plan, working()?)?;
+                tx.validate_physical_draft(context, &plan, working()?, false)?;
                 if let Some(id) = &plan.id {
                     let existing = tx.load_physical_plan(
                         context,
@@ -588,14 +592,14 @@ impl Store {
                             id: id.clone(),
                             revision: plan.revision,
                         },
-                        working,
+                        working()?,
                         false,
                     )?;
                     reviews::check_saved_feedback(&plan, Some(&existing))?;
                 } else {
                     reviews::check_saved_feedback(&plan, None)?;
                 }
-                let decision = match tx.assess_physical(context, &plan, working) {
+                let decision = match tx.assess_physical(context, &plan, working()?) {
                     Ok(_) => crate::requirements::Decision::PASS,
                     Err(failure) => match failure.decision {
                         Some(decision) => decision,
@@ -608,17 +612,17 @@ impl Store {
             Action::Save(save) => {
                 let mut plan = save.plan.ok_or(Error::Invalid)?;
                 materials::normalize(&mut plan)?;
-                tx.prepare_wiring_plan(context, &mut plan, working)?;
-                let materials = tx.validate_physical_draft(context, &plan, working, true)?;
-                tx.refresh_plan_control(context, &mut plan, working, now)?;
+                tx.prepare_wiring_plan(context, &mut plan, working()?)?;
+                let materials = tx.validate_physical_draft(context, &plan, working()?, true)?;
+                tx.refresh_plan_control(context, &mut plan, working()?, now)?;
                 for p in placements(&plan) {
                     if let Some(item) = p.actual(&plan.materials)? {
-                        tx.physical_access(context, item, working, true)?;
+                        tx.physical_access(context, item, working()?, true)?;
                     }
                     tx.physical_access(
                         context,
                         parse_target(p.enclosure.as_ref())?,
-                        working,
+                        working()?,
                         true,
                     )?;
                 }
@@ -645,11 +649,11 @@ impl Store {
                             id: id.to_string(),
                             revision: plan.revision,
                         },
-                        working,
+                        working()?,
                         true,
                     )?;
                     let mut existing = existing;
-                    tx.refresh_plan_control(context, &mut existing, working, now)?;
+                    tx.refresh_plan_control(context, &mut existing, working()?, now)?;
                     if existing.state != api::PhysicalPlanState::Draft as i32 {
                         return Err(Error::Conflict);
                     }
@@ -707,25 +711,25 @@ impl Store {
                 view.plan = Some(plan);
             }
             Action::Load(key) => {
-                view.plan = Some(tx.load_physical_plan(context, &key, working, false)?);
+                view.plan = Some(tx.load_physical_plan(context, &key, working()?, false)?);
             }
             Action::Receive(receipt) => {
-                view.plan = Some(tx.receive_material(context, receipt, working, now)?);
+                view.plan = Some(tx.receive_material(context, receipt, working()?, now)?);
             }
             Action::Reserve(value) => {
                 let key = value.plan.ok_or(Error::Invalid)?;
                 view.plan =
-                    Some(tx.reserve_physical(context, &key, working, now, value.until_ms)?);
+                    Some(tx.reserve_physical(context, &key, working()?, now, value.until_ms)?);
             }
             Action::Complete(value) => {
-                view.plan = Some(tx.complete_physical_steps(context, value, working, now)?);
+                view.plan = Some(tx.complete_physical_steps(context, value, working()?, now)?);
             }
             Action::Cancel(key) => {
-                view.plan = Some(tx.cancel_physical(context, &key, working, now)?);
+                view.plan = Some(tx.cancel_physical(context, &key, working()?, now)?);
             }
         }
         if let Some(plan) = &mut view.plan {
-            tx.refresh_plan_control(context, plan, working, now)?;
+            tx.refresh_plan_control(context, plan, working()?, now)?;
         }
         tx.physical_labels(context, &mut view)?;
         view.revision = tx.commit()?;

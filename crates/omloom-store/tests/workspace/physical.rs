@@ -665,18 +665,39 @@ fn saved_plan_list_is_personal_bounded_and_read_only() -> TestResult {
     let item = create(&store, &actor, K::Device, "Equipment")?;
     let plan = draft(&store, &actor, item, rack)?;
     let before = store.usage()?;
-    let list = physical(
-        &store,
+    let list = store.workspace(
         &actor,
-        api::physical::Action::List(api::PhysicalPlanList {
-            limit: 1,
-            after: None,
-        }),
+        api::Request {
+            command: Some(Command::Physical(api::Physical {
+                action: Some(api::physical::Action::List(api::PhysicalPlanList {
+                    limit: 1,
+                    after: None,
+                })),
+            })),
+            working: None,
+        },
+        100,
     )?;
+    let Some(api::reply::Result::Physical(list)) = list.result else {
+        return Err(Error::Corrupt.into());
+    };
     assert_eq!(list.plans.len(), 1);
     assert_eq!(Some(&list.plans[0].id), plan.id.as_ref());
     assert!(list.plan.is_none());
     assert!(list.occupancy.is_empty());
+    assert!(matches!(
+        store.workspace(
+            &actor,
+            api::Request {
+                command: Some(Command::Physical(api::Physical {
+                    action: Some(api::physical::Action::Read(api::PhysicalRead::default())),
+                })),
+                working: None,
+            },
+            100
+        ),
+        Err(Error::Invalid)
+    ));
     let mut other = actor.clone();
     other.actor = "another-operator".into();
     assert!(
