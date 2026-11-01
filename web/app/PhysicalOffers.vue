@@ -21,6 +21,7 @@ async function save(revoke=false){await run(async()=>{
   const offer=editing.value===undefined?model.PhysicalOffer.create():model.PhysicalOffer.clone(editing.value);
   if(revoke)offer.revoked=true;
   else{
+    if(new TextEncoder().encode(recipient.value).byteLength>128)throw Error('Recipient identity must use at most 128 UTF-8 bytes.');
     const region=model.PhysicalVolume.create();for(const [i,axis] of axes.entries())region[axis]={startUm:coordinate(starts.value[i]!),lengthUm:micrometres(lengths.value[i]!)};
     Object.assign(offer,{enclosure:props.target,name:name.value,recipient:recipient.value,region,mass:mass.value,power:power.value,cooling:cooling.value});
   }

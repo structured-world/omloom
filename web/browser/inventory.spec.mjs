@@ -697,6 +697,11 @@ test('selected capacity offers can be inspected and revoked on desktop and phone
           await route.continue();
         };
         await page.route('**/omloom.workspace.v1.Workspace/Call',failCommittedRefresh);
+        await panel.getByLabel('Recipient identity',{exact:true}).fill('é'.repeat(70));
+        await panel.getByRole('button',{name:'Save reviewed offer',exact:true}).click();
+        await expect(panel.getByRole('alert')).toHaveText('Recipient identity must use at most 128 UTF-8 bytes.');
+        expect(writes).toBe(0);
+        await panel.getByLabel('Recipient identity',{exact:true}).fill('é'.repeat(64));
         await panel.getByRole('button',{name:'Save reviewed offer',exact:true}).click();
         await expect(panel.getByRole('status')).toHaveText('Profile saved. No capacity is reserved.');
         await expect(panel.getByRole('alert')).toContainText('The saved profile list could not be refreshed');
