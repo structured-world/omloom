@@ -12,7 +12,9 @@ const strengths:Record<model.PhysicalReplacementStrength,string>={
   [model.PhysicalReplacementStrength.ESTABLISHED_IDENTITY]:'Established same-part identity',
 };
 const screen=ref<'evidence'|'decision'|'result'>('evidence');
-watch(()=>props.feedback===undefined?undefined:`${props.feedback.decision}/${props.feedback.reason}/${props.feedback.basis}`,value=>{if(value!==undefined)screen.value='result';},{immediate:true});
+watch([()=>props.feedback===undefined?undefined:`${props.feedback.decision}/${props.feedback.reason}/${props.feedback.basis}`,()=>props.hypothesis!==undefined],([value,evidence],previous)=>{
+  if(value!==previous?.[0]||!evidence)screen.value=value===undefined?'evidence':'result';
+},{immediate:true});
 </script>
 <template><details class="replacement-review" :data-screen="screen"><summary>Replacement evidence and event decision</summary>
 <section class="evidence-screen">

@@ -323,11 +323,21 @@ test('replacement endpoint review follows shifted plan steps',async({browser})=>
         await planner.getByRole('button',{name:'Two replacement reviews · draft',exact:true}).click();
         const reviews=planner.locator('.replacement-review');
         await reviews.nth(0).getByText('Replacement evidence and event decision',{exact:true}).click();
+        if(width<600)await reviews.nth(0).getByRole('button',{name:'Review event judgment',exact:true}).click();
         await reviews.nth(0).getByRole('button',{name:'Explain current replacement hypothesis',exact:true}).click();
         await expect(reviews.nth(0).getByRole('heading',{name:'Established same-part identity',exact:true})).toBeVisible();
+        // Reusing a reviewed step widget for an unreviewed successor must restore its evidence screen.
+        if(width<600)await reviews.nth(0).getByRole('button',{name:'Continue to event decision',exact:true}).click();
+        await reviews.nth(0).getByRole('button',{name:'Confirm replacement event',exact:true}).click();
+        await expect(reviews.nth(0)).toHaveAttribute('data-screen','result');
+        // A newer inventory revision also clears cached evidence while the prior judgment remains.
+        if(width<600)await reviews.nth(0).getByRole('button',{name:'Review event judgment',exact:true}).click();
+        const currentScope=(await rpc({oneofKind:'read',read:m.Read.create({target:racks[0]})})).detail.item;
+        await rpc({oneofKind:'write',write:m.Write.create({target:racks[0],expected:currentScope.revision,kind:m.AssetKind.RACK,changes:[{name:'description',value:{oneofKind:'text',text:`Inventory refreshed for ${width}`}}]})});
         await reviews.nth(1).getByText('Replacement evidence and event decision',{exact:true}).click();
         await reviews.nth(1).getByRole('button',{name:'Explain current replacement hypothesis',exact:true}).click();
         await expect(reviews.nth(1).getByRole('heading',{name:'Contextual evidence',exact:true})).toBeVisible();
+        await expect(reviews.nth(0)).toHaveAttribute('data-screen','result');
         const mapping=planner.locator('.endpoint-mappings').first();
         await mapping.getByText('Review endpoint correspondence (26)',{exact:true}).click();
         await expect(mapping.getByRole('region',{name:'Previous endpoint coverage',exact:true})).toContainText('Previous 0 socket');
@@ -336,6 +346,7 @@ test('replacement endpoint review follows shifted plan steps',async({browser})=>
         await planner.getByRole('checkbox',{name:'Record physical work already performed outside Omloom',exact:true}).check();
         await planner.getByRole('checkbox',{name:'Physical transition performed',exact:true}).first().check();
         await planner.getByRole('button',{name:'Remove proposed step',exact:true}).first().click();
+        await expect(reviews).toHaveAttribute('data-screen','evidence');
         await expect(reviews.locator('h4')).toHaveCount(0);
         await expect(planner.getByRole('checkbox',{name:'Physical transition performed',exact:true})).not.toBeChecked();
         await expect(reviews.getByRole('button',{name:'Explain current replacement hypothesis',exact:true})).toBeDisabled();
