@@ -24,8 +24,11 @@ async function save(revoke=false){await run(async()=>{
     const region=model.PhysicalVolume.create();for(const [i,axis] of axes.entries())region[axis]={startUm:coordinate(starts.value[i]!),lengthUm:micrometres(lengths.value[i]!)};
     Object.assign(offer,{enclosure:props.target,name:name.value,recipient:recipient.value,region,mass:mass.value,power:power.value,cooling:cooling.value});
   }
-  await invoke({oneofKind:'offer',offer:{offer}});
-  edit();await load();notice.value=revoke?'Profile revoked. New availability disclosure is stopped.':'Profile saved. No capacity is reserved.';emit('changed');
+  const reply=await invoke({oneofKind:'offer',offer:{offer}});
+  notice.value=revoke?'Profile revoked. New availability disclosure is stopped.':'Profile saved. No capacity is reserved.';emit('changed');
+  const saved=reply.offers[0];if(!saved)throw Error('The saved profile response is incomplete. Reload before editing.');
+  edit(saved);
+  try{await load();}catch(e){error.value=`The saved profile list could not be refreshed: ${requestMessage(e)}`;}
 });}
 </script>
 <template><details class="physical-offers" :inert="inactive" @toggle="($event.target as HTMLDetailsElement).open&&!opened&&run(()=>load())"><summary>Offer selected capacity without occupant access</summary>

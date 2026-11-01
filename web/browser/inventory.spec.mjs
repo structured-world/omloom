@@ -688,8 +688,25 @@ test('selected capacity offers can be inspected and revoked on desktop and phone
         await panel.getByLabel('Recipient identity',{exact:true}).fill('fixture-operator');
         await panel.getByRole('button',{name:'Use current usable enclosure region',exact:true}).click();
         await expect(panel.getByLabel('Z length (mm)',{exact:true})).toHaveValue('1000');
+        let writes=0,parentReads=0,failRefresh=false;
+        const failCommittedRefresh=async route=>{
+          const bytes=route.request().postDataBuffer();const command=bytes?m.Request.fromBinary(bytes.subarray(5)).command:undefined;
+          if(command?.oneofKind==='physical'&&command.physical.action.oneofKind==='offer'){writes++;failRefresh=true;}
+          else if(command?.oneofKind==='physical'&&command.physical.action.oneofKind==='offers'&&failRefresh){failRefresh=false;await route.abort('failed');return;}
+          else if(writes>0&&command?.oneofKind==='query')parentReads++;
+          await route.continue();
+        };
+        await page.route('**/omloom.workspace.v1.Workspace/Call',failCommittedRefresh);
+        await panel.getByRole('button',{name:'Save reviewed offer',exact:true}).click();
+        await expect(panel.getByRole('status')).toHaveText('Profile saved. No capacity is reserved.');
+        await expect(panel.getByRole('alert')).toContainText('The saved profile list could not be refreshed');
+        await expect.poll(()=>parentReads).toBeGreaterThan(0);
+        expect(writes).toBe(1);
+        await expect(panel.getByLabel('Offer name',{exact:true})).toHaveValue(`Approved region ${width}`);
+        await page.unroute('**/omloom.workspace.v1.Workspace/Call',failCommittedRefresh);
         await panel.getByRole('button',{name:'Save reviewed offer',exact:true}).click();
         const edit=panel.getByRole('button',{name:`Edit offer: Approved region ${width}`,exact:true});await expect(edit).toBeEnabled();
+        await expect(panel.locator('code')).toHaveCount(1);
         const id=await panel.locator('code').textContent();expect(id).toMatch(/^[0-9a-f-]{36}$/);
         await page.getByText('Inspect offered capacity',{exact:true}).click();
         const access=page.locator('.availability-access');await access.getByLabel('Availability profile ID',{exact:true}).fill(id);
