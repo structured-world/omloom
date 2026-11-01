@@ -44,7 +44,7 @@ impl Tx<'_> {
             .contains(enclosure, self)?;
         let row = self.visible_asset(context, enclosure)?;
         let kind = number(&row, "kind")? as i32;
-        if !context.field(enclosure, kind, "physical_availability", true) {
+        if !context.field(enclosure, kind, "physical_availability", write) {
             return Err(Error::Denied);
         }
         if !matches!(

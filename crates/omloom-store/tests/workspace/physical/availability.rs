@@ -1,5 +1,45 @@
 use super::*;
 
+// Reading an owner's offer requires read permission, while publishing still requires write permission.
+#[test]
+fn read_only_publisher_can_list_but_not_modify_its_offers() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let rack = create(&store, &actor, K::Rack, "Published enclosure")?;
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(define(rack.clone())),
+        }),
+    )?;
+    let saved = offer(&store, &actor, &rack)?;
+    let mut reader = actor.clone();
+    reader.grants[0].writable = false;
+    reader.grants[0].write = Fields::Selected(vec![]);
+    let before = store.usage()?;
+    let listed = physical(
+        &store,
+        &reader,
+        api::physical::Action::Offers(api::PhysicalOffers {
+            enclosure: Some(rack),
+            after: None,
+        }),
+    )?;
+    assert_eq!(listed.offers, vec![saved.clone()]);
+    assert!(matches!(
+        physical(
+            &store,
+            &reader,
+            api::physical::Action::Offer(api::PhysicalOfferEdit { offer: Some(saved) })
+        ),
+        Err(Error::Denied)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // Recording a rack's dimensions does not establish that its unrecorded space is empty.
 #[test]
 fn dimensional_definition_alone_does_not_qualify_free_capacity() -> TestResult {
