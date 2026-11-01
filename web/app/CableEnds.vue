@@ -21,7 +21,8 @@ async function save(){if(busy.value||props.inactive)return;busy.value=true;error
   const selected=channels.value.trim()===''?[]:channels.value.split(',').map(value=>{const text=value.trim();if(!/^[1-9][0-9]{0,3}$/.test(text)||Number(text)>4096)throw Error('Use distinct channel numbers from 1 to 4096, separated by commas.');return Number(text);});
   if(selected.length>64||new Set(selected).size!==selected.length)throw Error('Use at most 64 distinct channels per end.');
   await invoke({oneofKind:'cableEnd',cableEnd:{cable:props.target,expected:editing.value?.revision,end:model.PhysicalCableEnd.create({key:structural.value,name:name.value,basis:basis.value,connector:connector.value===''?undefined:connector.value,mating:mating.value,channels:selected})}});
-  edit();view.value=await invoke({oneofKind:'cableEnds',cableEnds:{cable:props.target}});emit('changed');
+  edit();emit('changed');
+  try{view.value=await invoke({oneofKind:'cableEnds',cableEnds:{cable:props.target}});}catch(e){error.value='End definition saved. The saved cable ends could not be refreshed: '+String(e);}
 }catch(e){error.value=String(e);}finally{busy.value=false;}}
 </script>
 <template>

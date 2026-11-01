@@ -835,10 +835,11 @@ test('named cable ends preserve definitions on desktop and phone',async({browser
   // Ends belong to the retained cable, not the optic that may later be replaced.
   const dir=await mkdtemp(join(tmpdir(),'omloom-cable-ends-'));const server=await host(dir);
   try{
+    const {m,rpc}=await workspaceClient(server.url);
     for(const width of [1440,390]){
       const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600});
       try{
-        await page.goto(server.url);await create(page,`Retained cable ${width}`,'CABLE');
+        await page.goto(server.url);const cable=await create(page,`Retained cable ${width}`,'CABLE');
         await page.getByText('Usable enclosure space and physical constraints',{exact:true}).click();
         const facts=page.locator('.physical-facts');
         await facts.getByRole('textbox',{name:'Measurement or specification source',exact:true}).fill('Vendor-confirmed inseparable assembly');
@@ -862,7 +863,24 @@ test('named cable ends preserve definitions on desktop and phone',async({browser
         await expect(panel.getByRole('textbox',{name:'Structural end key',exact:true})).toBeDisabled();
         await expect(panel.getByRole('textbox',{name:'Known assembly channels',exact:true})).toHaveValue('1, 2');
         await panel.getByRole('textbox',{name:'End label',exact:true}).fill('Rack-facing end');
+        // A failed post-commit read must not hide the successful mutation or its parent refresh.
+        let writes=0,parentReads=0,failRefresh=false;
+        const failCommittedRefresh=async route=>{
+          const bytes=route.request().postDataBuffer();const command=bytes?m.Request.fromBinary(bytes.subarray(5)).command:undefined;
+          if(command?.oneofKind==='physical'&&command.physical.action.oneofKind==='cableEnd'){writes++;failRefresh=true;}
+          else if(command?.oneofKind==='physical'&&command.physical.action.oneofKind==='cableEnds'&&failRefresh){failRefresh=false;await route.abort('failed');return;}
+          else if(writes>0&&command?.oneofKind==='query')parentReads++;
+          await route.continue();
+        };
+        await page.route('**/omloom.workspace.v1.Workspace/Call',failCommittedRefresh);
         await panel.getByRole('button',{name:'Save end definition',exact:true}).click();
+        await expect(panel.getByRole('alert')).toContainText('End definition saved.');
+        await expect.poll(()=>parentReads).toBeGreaterThan(0);
+        expect(writes).toBe(1);
+        const stored=(await rpc({oneofKind:'physical',physical:{action:{oneofKind:'cableEnds',cableEnds:{cable:{assetId:cable.asset_id,incarnation:cable.incarnation}}}}})).physical.cableEnds;
+        expect(stored.find(end=>end.key==='A')?.name).toBe('Rack-facing end');
+        await page.unroute('**/omloom.workspace.v1.Workspace/Call',failCommittedRefresh);
+        await panel.getByRole('button',{name:'First end page',exact:true}).click();
         await expect(panel.getByRole('button',{name:'Edit end: Rack-facing end',exact:true})).toBeEnabled();
         await expect(panel.locator('li')).toHaveCount(2);
         expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
