@@ -251,6 +251,133 @@ fn resolved_resource_reuse_does_not_block_completion_recheck_or_cancellation() -
     Ok(())
 }
 
+// Deduplication removes orphan poses; only an unchanged binding keeps geometry, and undo restores both.
+#[test]
+fn identity_correction_reclaims_removed_binding_poses_and_undo_restores_them() -> TestResult {
+    for retained_installed in [true, false] {
+        let dir = tempfile::tempdir()?;
+        let store = Store::open(dir.path(), policy())?;
+        let actor = operator();
+        let rack = create(&store, &actor, K::Rack, "Shared physical enclosure")?;
+        let retained = create(&store, &actor, K::Device, "Retained identity")?;
+        let first = create(&store, &actor, K::Device, "First duplicate identity")?;
+        let second = if retained_installed {
+            retained.clone()
+        } else {
+            create(&store, &actor, K::Device, "Second duplicate identity")?
+        };
+        for target in [&first, &second] {
+            let plan = draft(&store, &actor, target.clone(), rack.clone()).expect("physical draft");
+            report_steps(&store, &actor, &plan, vec![0]).expect("physical actual report");
+        }
+        let poses = || {
+            store.diagnostic_database().execute_cypher_shared(
+            "MATCH (n:OmRow {parent:'physical-poses'}) RETURN n.key AS key, n.x_length AS x, n.y_length AS y, n.z_length AS z, n.actor AS actor ORDER BY n.key LIMIT 8", None, None, None, None
+        )
+        };
+        let before = poses()?.rows;
+        assert_eq!(before.len(), 2);
+        let correct = |request: api::IdentityCorrection| -> Result<api::reply::Result, Error> {
+            store
+                .workspace(
+                    &actor,
+                    api::Request {
+                        working: Some(api::WorkingContext {
+                            expected: Some(store.usage()?.revision),
+                            ..Default::default()
+                        }),
+                        command: Some(Command::CorrectIdentity(request)),
+                    },
+                    100,
+                )?
+                .result
+                .ok_or(Error::Corrupt)
+        };
+        let duplicates = if retained_installed {
+            vec![first]
+        } else {
+            vec![first, second]
+        };
+        let mut mappings = Vec::new();
+        for duplicate in duplicates {
+            mappings.push(api::IdentityMapping {
+                attachments: vec![binding(&store, &duplicate)?.relation_id],
+                duplicate: Some(duplicate),
+                retained: Some(retained.clone()),
+                fields: vec![api::IdentityFieldChoice {
+                    name: "name".into(),
+                    use_duplicate: false,
+                }],
+                ..Default::default()
+            });
+        }
+        let Reply::IdentityCorrection(preview) = correct(api::IdentityCorrection {
+            decision: api::IdentityDecision::DuplicateInstallation as i32,
+            mappings,
+            ..Default::default()
+        })
+        .expect("identity correction preview") else {
+            return Err(Error::Corrupt.into());
+        };
+        let Reply::IdentityCorrected(applied) = correct(api::IdentityCorrection {
+            preview: Some(preview.id),
+            ..Default::default()
+        })
+        .expect("identity correction apply") else {
+            return Err(Error::Corrupt.into());
+        };
+        let current = poses()?.rows;
+        assert_eq!(
+            current.len(),
+            usize::from(retained_installed),
+            "Only unchanged retained bindings keep their measured geometry"
+        );
+        let survivor = binding(&store, &retained)?;
+        if retained_installed {
+            assert_eq!(
+                current[0].get("key").and_then(|v| v.as_str()),
+                Some(format!("physical-pose/{}", survivor.relation_id).as_str())
+            );
+            assert!(before.contains(&current[0]));
+        }
+        let projected = physical(
+            &store,
+            &actor,
+            api::physical::Action::Read(api::PhysicalRead {
+                enclosure: Some(rack),
+                occupants: true,
+                after: None,
+            }),
+        )?;
+        assert_eq!(projected.occupancy.len(), 1);
+        let placement = projected.occupancy[0]
+            .placement
+            .as_ref()
+            .ok_or(Error::Corrupt)?;
+        assert_eq!(placement.item.as_ref(), Some(&retained));
+        assert_eq!(
+            placement.volume.is_some(),
+            retained_installed,
+            "A rewritten binding requires fresh geometry rather than transferring an old basis"
+        );
+        correct(api::IdentityCorrection {
+            undo: Some(applied.id),
+            ..Default::default()
+        })?;
+        let restored = poses()?.rows;
+        assert_eq!(
+            restored.len(),
+            2,
+            "Undo restores geometry after rebinding both original identities"
+        );
+        assert_eq!(
+            restored, before,
+            "Undo restores both poses and their original reporters"
+        );
+    }
+    Ok(())
+}
+
 // Large enclosures remain readable through bounded pages rather than failing the entire projection.
 #[test]
 fn occupancy_beyond_128_parts_returns_a_bounded_first_page() -> TestResult {
