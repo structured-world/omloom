@@ -498,6 +498,65 @@ fn ordered_socket_handoff_admits_two_cables_without_parallel_booking() -> TestRe
     Ok(())
 }
 
+// An AfterStep basis belongs to one exact cable end, not a neighboring end or cable.
+#[test]
+fn cable_chain_rejects_cross_end_and_cross_cable_bases_during_save() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let cable = create(&store, &actor, K::Cable, "First cable")?;
+    let other = create(&store, &actor, K::Cable, "Other cable")?;
+    for (cable, key) in [(&cable, "A"), (&cable, "B"), (&other, "A")] {
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::CableEnd(edit(cable, key)),
+        )?;
+    }
+    let end = physical(
+        &store,
+        &actor,
+        api::physical::Action::CableEnds(api::PhysicalCableEnds {
+            cable: Some(cable.clone()),
+            ..Default::default()
+        }),
+    )?
+    .cable_ends
+    .into_iter()
+    .find(|e| e.key == "A")
+    .ok_or(Error::Missing)?;
+    let base = wiring_plan(
+        &store,
+        &actor,
+        &cable,
+        end.revision,
+        api::physical_wiring::After::Loose(api::Empty {}),
+        api::PhysicalWiringIntent::Preserve,
+    )?;
+    for (cable, key) in [(cable, "B"), (other, "A")] {
+        let mut plan = base.clone();
+        let mut second = plan.steps[0].clone();
+        let Some(api::physical_step::Action::Wiring(wire)) = &mut second.action else {
+            return Err(Error::Corrupt.into());
+        };
+        wire.cable = Some(cable);
+        wire.end_key = key.into();
+        wire.basis = Some(api::physical_wiring::Basis::AfterStep(0));
+        plan.steps.push(second);
+        let before = store.usage()?;
+        assert!(matches!(
+            physical(
+                &store,
+                &actor,
+                api::physical::Action::Save(api::PhysicalSave { plan: Some(plan) })
+            ),
+            Err(Error::Invalid)
+        ));
+        assert_eq!(store.usage()?, before);
+    }
+    Ok(())
+}
+
 // Abandoning an unstarted dependent step needs no fictional output from its predecessor.
 #[test]
 fn cable_chain_cancellation_needs_no_effect_result() -> TestResult {
