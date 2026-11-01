@@ -17,8 +17,14 @@ function copyInputs(){for(const [i,axis] of axes.entries()){const extent=region.
 async function useEnvelope(){await run(async()=>{const view=await invoke({oneofKind:'read',read:{enclosure:props.target,occupants:false}});region.value=view.definitions[0]?.volume;copyInputs();if(!region.value)throw Error('Usable enclosure geometry is unknown.');});}
 function coordinate(text:string){return signedMicrometres(text);}
 async function save(revoke=false){await run(async()=>{
-  const region=model.PhysicalVolume.create();for(const [i,axis] of axes.entries())region[axis]={startUm:coordinate(starts.value[i]!),lengthUm:micrometres(lengths.value[i]!)};
-  await invoke({oneofKind:'offer',offer:{offer:model.PhysicalOffer.create({...editing.value,enclosure:props.target,name:name.value,recipient:recipient.value,region,mass:mass.value,power:power.value,cooling:cooling.value,revoked:revoke})}});
+  if(revoke&&!editing.value)throw Error('Select an existing offer before revoking it.');
+  const offer=editing.value===undefined?model.PhysicalOffer.create():model.PhysicalOffer.clone(editing.value);
+  if(revoke)offer.revoked=true;
+  else{
+    const region=model.PhysicalVolume.create();for(const [i,axis] of axes.entries())region[axis]={startUm:coordinate(starts.value[i]!),lengthUm:micrometres(lengths.value[i]!)};
+    Object.assign(offer,{enclosure:props.target,name:name.value,recipient:recipient.value,region,mass:mass.value,power:power.value,cooling:cooling.value});
+  }
+  await invoke({oneofKind:'offer',offer:{offer}});
   edit();await load();notice.value=revoke?'Profile revoked. New availability disclosure is stopped.':'Profile saved. No capacity is reserved.';emit('changed');
 });}
 </script>

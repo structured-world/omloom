@@ -695,11 +695,21 @@ test('selected capacity offers can be inspected and revoked on desktop and phone
         const access=page.locator('.availability-access');await access.getByLabel('Availability profile ID',{exact:true}).fill(id);
         await access.getByRole('button',{name:'Check offered region',exact:true}).click();
         await expect(access.getByRole('status')).toHaveText('Available within supplied constraints');
-        await edit.click();await panel.getByRole('button',{name:'Revoke this offer',exact:true}).click();
+        await edit.click();
+        await panel.getByLabel('X length (mm)',{exact:true}).fill('');
+        await panel.getByRole('button',{name:'Revoke this offer',exact:true}).click();
+        await expect(panel.getByRole('status')).toHaveText('Profile revoked. New availability disclosure is stopped.');
         await expect(panel).toContainText('Profile revoked. New availability disclosure is stopped.');
         await access.getByRole('button',{name:'Check offered region',exact:true}).click();
         await expect(access.getByRole('alert')).toHaveText('This request is unavailable or outside your current permissions.');
         await expect(access.getByRole('region',{name:'Offered availability'})).toHaveCount(0);
+        await edit.click();
+        await panel.getByLabel('Offer name',{exact:true}).fill(`Edited revoked region ${width}`);
+        await panel.getByRole('button',{name:'Save reviewed offer',exact:true}).click();
+        await expect(panel.getByRole('button',{name:`Edit offer: Edited revoked region ${width}`,exact:true})).toBeVisible();
+        const listed=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'offers',offers:{enclosure:{assetId:rack.asset_id,incarnation:rack.incarnation}}}})});
+        expect(listed.physical.offers).toHaveLength(1);
+        expect(listed.physical.offers[0].revoked).toBe(true);
         expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
       }finally{await page.close();}
     }
