@@ -697,6 +697,8 @@ pub(super) fn relation_projection(p: &Properties) -> Result<wire::Relation> {
 
 impl Tx<'_> {
     pub(super) fn require_structural_relation_edit(&self, relation: &wire::Relation) -> Result<()> {
+        // The descriptor and owner relation form one structure. Keeping the relation prevents
+        // generic archival or retyping from stranding a retired position descriptor.
         for endpoint in [relation.from.as_ref(), relation.to.as_ref()]
             .into_iter()
             .flatten()
