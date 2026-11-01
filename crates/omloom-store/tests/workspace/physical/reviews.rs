@@ -1,5 +1,155 @@
 use super::*;
 
+// Reordered or repeated roots describe the same disclosure scope and one current contribution.
+#[test]
+fn replacement_feedback_scope_canonicalizes_root_identity_sets() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let owner = create(&store, &actor, K::Device, "Enclosure")?;
+    let (slot, old) = mountable_component_fixture(&store, &actor, owner.clone(), "disk-bay")?;
+    let incoming = create(
+        &store,
+        &actor,
+        K::PhysicalComponent,
+        "Unqualified replacement",
+    )?;
+    let previous = binding(&store, &old)?;
+    let plan = replacement_plan(
+        &store,
+        &actor,
+        vec![api::PhysicalReplacement {
+            position: Some(slot.clone()),
+            previous: Some(old.clone()),
+            replacement: Some(incoming.clone()),
+            previous_binding: Some(previous.relation_id),
+            previous_revision: Some(previous.revision),
+            ..Default::default()
+        }],
+    )?;
+    let scoped = |actor: &Context,
+                  roots: Vec<wire::AssetRef>,
+                  action: api::physical::Action|
+     -> Result<api::PhysicalView, Error> {
+        let revision = physical(
+            &store,
+            actor,
+            api::physical::Action::List(api::PhysicalPlanList::default()),
+        )?
+        .revision;
+        let reply = store.workspace(
+            actor,
+            api::Request {
+                command: Some(Command::Physical(api::Physical {
+                    action: Some(action),
+                })),
+                working: Some(api::WorkingContext {
+                    roots,
+                    expected: Some(revision),
+                    ..Default::default()
+                }),
+            },
+            100,
+        )?;
+        match reply.result {
+            Some(Reply::Physical(view)) => Ok(view),
+            _ => Err(Error::Corrupt),
+        }
+    };
+    let roots = vec![owner.clone(), slot, old, incoming];
+    let inspect = |plan: &api::PhysicalPlan| api::PhysicalReplacementReview {
+        plan: Some(api::PhysicalPlanKey {
+            id: plan.id.clone().expect("saved plan"),
+            revision: plan.revision,
+        }),
+        step: 0,
+        ..Default::default()
+    };
+    let explanation = scoped(
+        &actor,
+        roots.clone(),
+        api::physical::Action::ReviewReplacement(inspect(&plan)),
+    )?;
+    let judgment = api::PhysicalReplacementReview {
+        decision: Some(api::PhysicalReplacementDecision::Confirmed as i32),
+        basis: Some(
+            explanation
+                .replacement_hypothesis
+                .ok_or(Error::Corrupt)?
+                .basis,
+        ),
+        ..inspect(&plan)
+    };
+    let accepted = scoped(
+        &actor,
+        roots.clone(),
+        api::physical::Action::ReviewReplacement(judgment),
+    )?
+    .plan
+    .ok_or(Error::Corrupt)?;
+    let mut reversed = roots.clone();
+    reversed.reverse();
+    let quality_action = || {
+        api::physical::Action::ReplacementQuality(api::PhysicalReplacementQualityQuery::default())
+    };
+    let before = store.usage()?;
+    let counts = scoped(&actor, reversed.clone(), quality_action())?;
+    assert_eq!(
+        counts
+            .replacement_quality
+            .iter()
+            .map(|v| v.count)
+            .sum::<u64>(),
+        1
+    );
+    assert_eq!(store.usage()?, before);
+    let explanation = scoped(
+        &actor,
+        reversed.clone(),
+        api::physical::Action::ReviewReplacement(inspect(&accepted)),
+    )?;
+    let corrected = api::PhysicalReplacementReview {
+        decision: Some(api::PhysicalReplacementDecision::Rejected as i32),
+        basis: Some(
+            explanation
+                .replacement_hypothesis
+                .ok_or(Error::Corrupt)?
+                .basis,
+        ),
+        ..inspect(&accepted)
+    };
+    scoped(
+        &actor,
+        reversed.clone(),
+        api::physical::Action::ReviewReplacement(corrected),
+    )?;
+    reversed.extend(roots.clone());
+    let counts = scoped(&actor, reversed, quality_action())?.replacement_quality;
+    assert_eq!(counts.iter().map(|v| v.count).sum::<u64>(), 1);
+    assert!(
+        counts
+            .iter()
+            .all(|v| v.decision == api::PhysicalReplacementDecision::Rejected as i32)
+    );
+    assert!(
+        scoped(&actor, vec![owner.clone()], quality_action())?
+            .replacement_quality
+            .is_empty()
+    );
+    let mut changed = actor.clone();
+    changed.authority_revision += 1;
+    assert!(
+        scoped(&changed, roots, quality_action())?
+            .replacement_quality
+            .is_empty()
+    );
+    assert!(matches!(
+        scoped(&actor, vec![owner; MAX_BULK + 1], quality_action()),
+        Err(Error::Limit)
+    ));
+    Ok(())
+}
+
 fn review(
     store: &Store,
     actor: &Context,

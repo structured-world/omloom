@@ -28,9 +28,20 @@ pub(super) fn check_saved_feedback(
     Ok(())
 }
 
-fn scope(context: &Context, working: &api::WorkingContext) -> String {
+fn scope(context: &Context, working: &api::WorkingContext) -> Result<String> {
     // Read scope, not authorship or write privileges, determines disclosure.
     // The host supplies grants and their revision; callers select only roots.
+    if working.roots.len() > MAX_BULK {
+        return Err(Error::Limit);
+    }
+    for root in &working.roots {
+        parse_target(Some(root))?;
+    }
+    // Validated canonical UUID text has the same pair ordering as the nominal identities.
+    let mut roots: Vec<_> = working.roots.iter().collect();
+    roots
+        .sort_unstable_by(|a, b| (&a.asset_id, &a.incarnation).cmp(&(&b.asset_id, &b.incarnation)));
+    roots.dedup();
     let mut hash = Sha256::new();
     hash.update(context.authority_revision.to_le_bytes());
     let mut grants: Vec<_> = context
@@ -43,10 +54,10 @@ fn scope(context: &Context, working: &api::WorkingContext) -> String {
     for grant in grants {
         hash.update(grant);
     }
-    for root in &working.roots {
+    for root in roots {
         hash.update(root.encode_to_vec());
     }
-    format!("{:x}", hash.finalize())
+    Ok(format!("{:x}", hash.finalize()))
 }
 fn parent(scope: &str) -> String {
     format!("replacement-quality/{scope}")
@@ -228,7 +239,7 @@ impl Tx<'_> {
         if key.revision == 0 || request.basis.as_ref() != Some(&hypothesis.basis) {
             return Err(Error::Conflict);
         }
-        let scope = scope(context, working);
+        let scope = scope(context, working)?;
         let old = replacement.feedback.as_ref();
         if let Some(old) = old {
             if old.scope != scope {
@@ -321,7 +332,7 @@ impl Tx<'_> {
         if request.after.as_ref().is_some_and(|s| s.len() > 256) {
             return Err(Error::Invalid);
         }
-        let parent = parent(&scope(context, working));
+        let parent = parent(&scope(context, working)?);
         let rows = self.query("MATCH (n:OmRow {parent:$parent}) WHERE n.expires>$now AND n.key>$after RETURN properties(n) AS p ORDER BY n.key LIMIT 26",
             params([("parent",text(parent)),("now",int(now)?),("after",text(request.after.as_deref().unwrap_or("")))]))?;
         let next = if rows.len() > 25 {
