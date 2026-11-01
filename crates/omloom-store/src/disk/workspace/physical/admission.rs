@@ -341,6 +341,7 @@ impl Tx<'_> {
         working: &api::WorkingContext,
     ) -> core::result::Result<Claims, Failure> {
         let mut claims = Claims::default();
+        let mut mass_limits = Vec::new();
         for replacement in replacement_steps(plan) {
             self.replacement_access(context, replacement, working, false)?;
             let destination = parse_target(replacement.position.as_ref())?;
@@ -376,6 +377,22 @@ impl Tx<'_> {
                 let target = self
                     .physical_definition(destination)?
                     .ok_or(Error::Incomplete)?;
+                if replacement.volume.is_none() {
+                    for (limit, demand) in [
+                        (target.capacity_mw, item.demand_mw),
+                        (target.cooling_capacity_mw, item.cooling_mw),
+                    ] {
+                        if let Some(limit) = limit {
+                            let demand = demand.ok_or(Error::Incomplete)?;
+                            if demand > limit {
+                                return Err(Failure::mismatch());
+                            }
+                        }
+                    }
+                    if let Some(limit) = target.max_mass_g {
+                        mass_limits.push((incoming, limit));
+                    }
+                }
                 if number(&destination_row, "kind")? == wire::AssetKind::PhysicalPosition as u64 {
                     let position = self
                         .get(&format!("position/{}", network::identity(destination)))?
@@ -443,6 +460,41 @@ impl Tx<'_> {
                     == wire::AssetKind::PhysicalPosition as u64
                 {
                     claims.positions.insert(position);
+                }
+            }
+        }
+        if !mass_limits.is_empty() {
+            let selected: BTreeSet<_> = mass_limits.iter().map(|(item, _)| *item).collect();
+            let keys = selected.iter().map(|item| text(asset_key(*item))).collect();
+            let metadata = self.query("UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN {asset:n.asset,incarnation:n.incarnation,kind:n.kind} AS p LIMIT 64", params([("keys", Value::Array(keys))]))?;
+            let metadata = metadata
+                .into_iter()
+                .map(|row| Ok((target(&row)?, row)))
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            for item in &selected {
+                let row = metadata.get(item).ok_or(Error::Conflict)?;
+                if !context.field(*item, number(row, "kind")? as i32, "weight", false) {
+                    return Err(Error::Denied.into());
+                }
+            }
+            let keys = selected
+                .iter()
+                .map(|item| text(format!("{}/intent/weight", asset_key(*item))))
+                .collect();
+            let rows = self.query(
+                "UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN properties(n) AS p LIMIT 64",
+                params([("keys", Value::Array(keys))]),
+            )?;
+            let rows = rows
+                .into_iter()
+                .map(|row| Ok((string(&row, "key")?, row)))
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            for (item, limit) in mass_limits {
+                let row = rows.get(&format!("{}/intent/weight", asset_key(item)));
+                let demand = equipment::row_loads(None, row, [true, false, false])?[0]
+                    .ok_or(Error::Incomplete)?;
+                if demand > limit {
+                    return Err(Failure::mismatch());
                 }
             }
         }
