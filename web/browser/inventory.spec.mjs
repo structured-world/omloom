@@ -490,6 +490,41 @@ test('material quantities stay plan-local and partial receiving survives reload 
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
 });
 
+test('oversized future envelopes cannot retain another unit geometry on desktop and phone',async({browser})=>{
+  // A failed conversion must show a useful error and clear the prior selectable reservation envelope.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-envelope-range-'));const server=await host(dir);
+  try{
+    const {m,rpc,revision}=await workspaceClient(server.url);
+    const rack=(await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.RACK,changes:[{name:'name',value:{oneofKind:'text',text:'Envelope scope'}}]})})).mutation.targets[0];
+    const specification=(value,scale)=>['width','height','depth'].map(name=>({name,value:{oneofKind:'equipment',equipment:{basis:'Explicit envelope fixture',assertion:{oneofKind:'quantity',quantity:{upper:value,unit:'mm',scale}}}}}));
+    await rpc({oneofKind:'physical',physical:{action:{oneofKind:'save',save:{plan:m.PhysicalPlan.create({name:'Bounded future units',materials:[
+      {name:'Usable dimensions',kind:m.AssetKind.DEVICE,quantity:1,specifications:specification(100000n,3)},
+      {name:'Oversized dimensions',kind:m.AssetKind.DEVICE,quantity:1,specifications:specification(9223372036854776n,0)}
+    ]})}}}});
+    for(const width of [1440,390]){
+      const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600});
+      try{
+        await page.goto(`${server.url}/#/?asset=${rack.assetId}&incarnation=${rack.incarnation}`);
+        await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
+        const planner=page.locator('.physical-planner');
+        await planner.getByRole('button',{name:'Bounded future units · draft',exact:true}).click();
+        await planner.getByText('Required materials and receiving (2 lines)',{exact:true}).click();
+        const add=planner.getByRole('button',{name:'Add planned placement',exact:true});
+        const before=await revision();
+        for(const number of [1,2]){
+          await planner.getByRole('button',{name:`Place a unit from requirement ${number}`,exact:true}).click();
+          await planner.getByRole('form',{name:'Place requested material',exact:true}).getByLabel('Unit to place',{exact:true}).fill('1');
+          await planner.getByRole('form',{name:'Place requested material',exact:true}).getByRole('button',{name:'Select requested unit for placement',exact:true}).click();
+          if(number===1)await expect(add).toBeEnabled();
+        }
+        await expect(planner.getByRole('alert')).toContainText('signed 64-bit micrometre range');
+        await expect(add).toBeDisabled();
+        expect(await revision()).toBe(before);
+      }finally{await page.close();}
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('future material layout reserves space before receiving and installs the selected real unit on desktop and phone',async({browser})=>{
   // A requested unit is a plan reference, not a fabricated asset or an installed body.
   const dir=await mkdtemp(join(tmpdir(),'omloom-future-layout-'));const server=await host(dir);

@@ -179,10 +179,14 @@ function dimensions(fields:model.Item['fields']):model.PhysicalVolume|undefined 
     const x=upper('width'),y=upper('height'),z=upper('depth');
     if(x&&y&&z)return {x,y,z};
 }
-function chooseFuture(unit:model.PhysicalMaterialUnit){
+async function chooseFuture(unit:model.PhysicalMaterialUnit){
   const material=plan.value?.materials[unit.material];if(!material)return;
-  ++selection;future.value=unit;equipment.value=undefined;equipmentVolume.value=dimensions(material.specifications);manualRegion.value=false;mode.value='placement';
-  for(const axis of axes)allocation.value[axis]={start:'',length:''};
+  await run(async()=>{
+    ++selection;future.value=undefined;equipment.value=undefined;equipmentVolume.value=undefined;
+    const body=dimensions(material.specifications);
+    future.value=unit;equipmentVolume.value=body;manualRegion.value=false;mode.value='placement';
+    for(const axis of axes)allocation.value[axis]={start:'',length:''};
+  });
 }
 function placementTarget(p:model.PhysicalPlacement){if(p.material){const m=plan.value?.materials[p.material.material];return m?.allocations.find(a=>a.unit===p.material!.unit)?.item;}return p.item;}
 function placementKey(p:model.PhysicalPlacement){return p.material?`material/${p.material.material}/${p.material.unit}`:key(p.item);}

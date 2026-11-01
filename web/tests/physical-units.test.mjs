@@ -50,3 +50,18 @@ test('equipment envelope uses the known upper bound and rounds outward',()=>{
   assert.equal(upperMicrometres({unit:'mm',scale:0}),undefined);
   assert.equal(upperMicrometres({upper:10n,unit:'g',scale:0}),undefined);
 });
+
+test('equipment envelope cannot scale a valid quantity past signed storage bounds',()=>{
+  // Unit conversion must reject an oversized reservation before serialization, without clamping it.
+  const maximum=(1n<<63n)-1n;
+  assert.throws(()=>upperMicrometres({upper:9223372036854776n,unit:'mm',scale:0}));
+  for(const scale of [0,1,2,3]){
+    const factor=10n**BigInt(3-scale),upper=maximum/factor;
+    assert.equal(upperMicrometres({upper,unit:'mm',scale}),upper*factor);
+    assert.throws(()=>upperMicrometres({upper:upper+1n,unit:'mm',scale}));
+  }
+  for(const scale of [4,5,6]){
+    const divisor=10n**BigInt(scale-3);
+    assert.equal(upperMicrometres({upper:maximum,unit:'mm',scale}),maximum/divisor+1n);
+  }
+});

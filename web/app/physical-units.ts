@@ -25,7 +25,12 @@ export function signedMicrometres(mm:string):bigint{return mm.startsWith('-')?-m
 export function upperMicrometres(quantity:{upper?:bigint;unit:string;scale:number}):bigint|undefined {
   if(quantity.upper===undefined||quantity.unit!=='mm')return undefined;
   if(!Number.isInteger(quantity.scale)||quantity.scale<0||quantity.scale>6||quantity.upper<0n)throw Error('Invalid equipment quantity.');
-  if(quantity.scale<=3)return quantity.upper*10n**BigInt(3-quantity.scale);
-  const divisor=10n**BigInt(quantity.scale-3);
-  return quantity.upper/divisor+(quantity.upper%divisor===0n?0n:1n);
+  let value:bigint;
+  if(quantity.scale<=3)value=quantity.upper*10n**BigInt(3-quantity.scale);
+  else{
+    const divisor=10n**BigInt(quantity.scale-3);
+    value=quantity.upper/divisor+(quantity.upper%divisor===0n?0n:1n);
+  }
+  if(value>signedMaximum)throw Error('The measurement exceeds the supported signed 64-bit micrometre range.');
+  return value;
 }
