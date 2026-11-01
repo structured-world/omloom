@@ -92,6 +92,7 @@ async function invoke(action:model.Physical['action']) {
   const response=await call({oneofKind:'physical',physical:{action}},working());
   if(response.oneofKind!=='physical')throw Error('Physical planning is unavailable.');
   if((action.oneofKind==='save'||action.oneofKind==='reserve'||action.oneofKind==='complete'||action.oneofKind==='cancel'||action.oneofKind==='receive'||action.oneofKind==='reviewReplacement')&&response.physical.revision!==revision.value)changed=true;
+  if(response.physical.revision!==revision.value){assessment.value=undefined;reviewHypotheses.value.clear();}
   revision.value=response.physical.revision;
   if(response.physical.plan)planItems.value=response.physical.items;
   return response.physical;
@@ -120,7 +121,9 @@ watch([()=>props.working.expected,()=>props.inactive,busy],async()=>{
   parentBasis=props.working.expected;
   // A current read can outrun its parent; it must not start a refresh loop.
   if(props.working.expected===view.value.revision)return;
-  await run(async()=>{assessment.value=undefined;reviewHypotheses.value.clear();await refresh(false);await summaries();});
+  const acknowledged=notice.value;
+  await run(async()=>{assessment.value=undefined;await refresh(false);await summaries();});
+  notice.value=acknowledged;
 });
 async function loadEnds(after?:string){const reply=await invoke({oneofKind:'cableEnds',cableEnds:{cable:props.target,after}});cableEnds.value=reply.cableEnds;endsNext.value=reply.next;}
 function addWiring(){
