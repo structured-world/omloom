@@ -9,6 +9,7 @@ fn replacement_feedback_scope_canonicalizes_root_identity_sets() -> TestResult {
     let store = Store::open(dir.path(), policy())?;
     let actor = operator();
     let owner = create(&store, &actor, K::Device, "Enclosure")?;
+    let extra = create(&store, &actor, K::Device, "Additional selected root")?;
     let (slot, old) = mountable_component_fixture(&store, &actor, owner.clone(), "disk-bay")?;
     let incoming = create(
         &store,
@@ -58,7 +59,7 @@ fn replacement_feedback_scope_canonicalizes_root_identity_sets() -> TestResult {
             _ => Err(Error::Corrupt),
         }
     };
-    let roots = vec![owner.clone(), slot, old, incoming];
+    let roots = vec![owner.clone(), slot, old, incoming, extra.clone()];
     let inspect = |plan: &api::PhysicalPlan| api::PhysicalReplacementReview {
         plan: Some(api::PhysicalPlanKey {
             id: plan.id.clone().expect("saved plan"),
@@ -161,7 +162,7 @@ fn replacement_feedback_scope_canonicalizes_root_identity_sets() -> TestResult {
     let mut changed = actor.clone();
     changed.authority_revision += 1;
     assert!(
-        scoped(&changed, roots, quality_action())?
+        scoped(&changed, roots.clone(), quality_action())?
             .replacement_quality
             .is_empty()
     );
@@ -169,6 +170,23 @@ fn replacement_feedback_scope_canonicalizes_root_identity_sets() -> TestResult {
         scoped(&actor, vec![owner; MAX_BULK + 1], quality_action()),
         Err(Error::Limit)
     ));
+    // Archival changes current visibility without changing the caller's grants or their hash.
+    let mut retired = store.asset(AssetRef::try_from(&extra)?)?;
+    let revision = retired.revision;
+    retired.revision += 1;
+    retired.adoption = wire::Adoption::Archived as i32;
+    store.save_asset(
+        &admit(wire::record::Body::Asset(retired)),
+        Some(revision),
+        "fixture",
+        100,
+    )?;
+    let before = store.usage()?;
+    assert!(matches!(
+        scoped(&actor, roots, quality_action()),
+        Err(Error::Missing)
+    ));
+    assert_eq!(store.usage()?, before);
     Ok(())
 }
 

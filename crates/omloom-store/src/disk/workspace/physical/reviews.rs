@@ -336,7 +336,12 @@ impl Tx<'_> {
         if request.after.as_ref().is_some_and(|s| s.len() > 256) {
             return Err(Error::Invalid);
         }
-        let parent = parent(&scope(context, working)?);
+        let scope = scope(context, working)?;
+        // Hashing bounds the selection; asset lifecycle changes need current visibility too.
+        for root in &working.roots {
+            self.visible_asset(context, parse_target(Some(root))?)?;
+        }
+        let parent = parent(&scope);
         let rows = self.query("MATCH (n:OmRow {parent:$parent}) WHERE n.expires>$now AND n.key>$after RETURN properties(n) AS p ORDER BY n.key LIMIT 26",
             params([("parent",text(parent)),("now",int(now)?),("after",text(request.after.as_deref().unwrap_or("")))]))?;
         let next = if rows.len() > 25 {
