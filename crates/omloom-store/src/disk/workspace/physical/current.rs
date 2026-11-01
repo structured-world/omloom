@@ -160,20 +160,21 @@ impl Tx<'_> {
         if !keys.is_empty() {
             for row in self.query("UNWIND $keys AS key MATCH (p:OmRow {key:key}) RETURN properties(p) AS p LIMIT 2048",params([("keys",Value::Array(keys))]))? {poses.insert(string(&row,"key")?,row);}
         }
+        let geometric_capacity = if geometry {
+            bindings.len() + pending.len()
+        } else {
+            0
+        };
         let mut output = PhysicalUse {
             definition,
-            volumes: Vec::with_capacity(if geometry {
-                bindings.len() + pending.len()
-            } else {
-                0
-            }),
-            conditional_removals: Vec::with_capacity(bindings.len()),
+            volumes: Vec::with_capacity(geometric_capacity),
+            conditional_removals: Vec::with_capacity(removed.len().min(bindings.len())),
             items: BTreeSet::new(),
             future_loads: Vec::new(),
             inspected,
         };
-        let mut bodies = Vec::with_capacity(bindings.len() + pending.len());
-        let mut removals = Vec::with_capacity(bindings.len() + pending.len());
+        let mut bodies = Vec::with_capacity(geometric_capacity);
+        let mut removals = Vec::with_capacity(geometric_capacity);
         for (id, item, removal) in bindings {
             output.items.insert(item);
             if !geometry {
@@ -226,10 +227,9 @@ impl Tx<'_> {
             if !geometry {
                 continue;
             }
-            bodies.push((
-                item,
-                volume(placement.volume.as_ref().ok_or(Error::Corrupt)?)?,
-            ));
+            // A capacity-only reservation cannot certify geometric availability.
+            let body = placement.volume.as_ref().ok_or(Error::Incomplete)?;
+            bodies.push((item, volume(body)?));
             removals.push(None);
         }
         if !future.is_empty() {

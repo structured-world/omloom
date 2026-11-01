@@ -195,3 +195,88 @@ fn unpositioned_replacements_include_other_plan_reservations() -> TestResult {
     ));
     Ok(())
 }
+
+// A real capacity-only hold has unknown geometry, not a corrupt placement record.
+#[test]
+fn unpositioned_hold_keeps_geometric_admission_unknown() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let (replacement, retained) = fixture(&store, &actor, K::Site, 1)?;
+    loads(&store, &actor, &retained, 0)?;
+    let site = replacement.position.clone().ok_or(Error::Corrupt)?;
+    let mut profile = define(site.clone());
+    profile.mounting = Some("floor-standing".into());
+    profile.capacity_mw = Some(100);
+    profile
+        .volume
+        .as_mut()
+        .ok_or(Error::Corrupt)?
+        .x
+        .as_mut()
+        .ok_or(Error::Corrupt)?
+        .length_um = 1_500_000;
+    profile.occupancy_coverage = profile.volume.map(Box::new);
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(profile),
+        }),
+    )?;
+    for (index, item) in [
+        replacement.previous.clone().ok_or(Error::Corrupt)?,
+        retained,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut plan = draft(&store, &actor, item, site.clone())?;
+        let Some(api::physical_step::Action::Placement(p)) = &mut plan.steps[0].action else {
+            return Err(Error::Corrupt.into());
+        };
+        p.volume
+            .as_mut()
+            .ok_or(Error::Corrupt)?
+            .x
+            .as_mut()
+            .ok_or(Error::Corrupt)?
+            .start_um = index as i64 * 500_000;
+        let plan = physical(
+            &store,
+            &actor,
+            api::physical::Action::Save(api::PhysicalSave { plan: Some(plan) }),
+        )?
+        .plan
+        .ok_or(Error::Corrupt)?;
+        report_steps(&store, &actor, &plan, vec![0])?;
+    }
+    let pending = replacement_plan(&store, &actor, vec![replacement])?;
+    reserve(&store, &actor, pending)?;
+    let third = create(&store, &actor, K::Device, "Geometric candidate")?;
+    equipment_dimensions(&store, &actor, &third)?;
+    loads(&store, &actor, &third, 0)?;
+    let mut proposal = draft(&store, &actor, third, site)?;
+    let Some(api::physical_step::Action::Placement(p)) = &mut proposal.steps[0].action else {
+        return Err(Error::Corrupt.into());
+    };
+    p.volume
+        .as_mut()
+        .ok_or(Error::Corrupt)?
+        .x
+        .as_mut()
+        .ok_or(Error::Corrupt)?
+        .start_um = 1_000_000;
+    let before = store.usage()?;
+    let preview = physical(
+        &store,
+        &actor,
+        api::physical::Action::Preview(api::PhysicalPreview {
+            plan: Some(proposal),
+        }),
+    )?;
+    assert_eq!(preview.state, api::RequirementState::Unknown as i32);
+    assert_eq!(preview.reason, api::RequirementReason::Missing as i32);
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
