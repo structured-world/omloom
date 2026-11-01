@@ -1271,6 +1271,18 @@ test('plan checkpoints gate successive installation on desktop and phone',async(
         await second.getByRole('combobox',{name:'Preceding step',exact:true}).selectOption('0',{timeout:5000});
         await second.getByRole('combobox',{name:'Continue when',exact:true}).selectOption(String(m.PlanTrigger.SATISFIED),{timeout:5000});
         await second.getByRole('button',{name:'Add prerequisite',exact:true}).click();
+        // A dependent condition cannot be removed, but reported-only prerequisites do not lock it.
+        const removeCheck=first.getByRole('button',{name:'Remove postcondition',exact:true});
+        await expect(removeCheck).toBeDisabled();
+        await expect(first).toContainText('Change dependent prerequisites before removing this postcondition.');
+        for(const when of [m.PlanTrigger.REPORTED,m.PlanTrigger.FAILED,m.PlanTrigger.SATISFIED]){
+          await second.getByRole('button',{name:'Remove prerequisite',exact:true}).click();
+          await expect(removeCheck).toBeEnabled();
+          await second.getByRole('combobox',{name:'Continue when',exact:true}).selectOption(String(when));
+          await second.getByRole('button',{name:'Add prerequisite',exact:true}).click();
+          if(when===m.PlanTrigger.REPORTED)await expect(removeCheck).toBeEnabled();
+          else await expect(removeCheck).toBeDisabled();
+        }
         await planner.getByRole('button',{name:'Save installation plan',exact:true}).click();
         await expect(planner.getByRole('status')).toHaveText('Plan saved. Nothing is reserved or installed.');
         await planner.getByLabel('Reserve until',{exact:true}).fill(new Date(Date.now()+600000).toISOString().slice(0,16));

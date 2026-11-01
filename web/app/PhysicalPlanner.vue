@@ -16,6 +16,14 @@ const view=ref(model.PhysicalView.create());
 const revision=ref(props.working.expected);
 const plans=ref<model.PhysicalPlanSummary[]>([]),next=ref<string>();
 const plan=ref<model.PhysicalPlan>(),name=ref(''),deadline=ref(''),discrepancy=ref('');
+const requiredPostconditions=computed(()=>{
+  const indexes=new Set<number>();
+  if(plan.value)for(const step of plan.value.steps){
+    if(!step.control)continue;
+    for(const edge of step.control.after)if(edge.when===model.PlanTrigger.SATISFIED||edge.when===model.PlanTrigger.FAILED)indexes.add(edge.step);
+  }
+  return indexes;
+});
 const savedCurrent=ref(false);
 function acceptPlan(value:model.PhysicalPlan|undefined){if(!value)throw Error('The saved plan was not returned. Reload before continuing.');plan.value=value;name.value=value.name;savedCurrent.value=true;}
 const assessment=ref<{state:number;reason:number;revision:bigint}>();
@@ -469,7 +477,7 @@ async function exportPlan(){await run(async()=>{
 </template>
 <small>{{model.PhysicalStepState[step.state]?.toLowerCase().replaceAll('_',' ')}}</small>
 <template v-if="step.action.oneofKind==='wiring'"><p>End {{step.action.wiring.endKey}}: {{step.action.wiring.after.oneofKind==='port'?'connect to '+(label(step.action.wiring.after.port)??'selected physical port'):step.action.wiring.after.oneofKind==='loose'?'confirmed loose':'attachment unknown'}}. Intent: {{model.PhysicalWiringIntent[step.action.wiring.intent]?.toLowerCase().replaceAll('_',' ')}}.</p><label v-if="installable&&![model.PhysicalStepState.RECORDED,model.PhysicalStepState.NOT_PERFORMED].includes(step.state)"><input v-model="selected" type="checkbox" :value="index" :disabled="notPerformed.includes(index)||(!actualReport&&step.readiness!==model.PlanReadiness.READY)"/>Cable-end outcome reported</label></template>
-<PlanStepControls :control="step.control" :index="index" :predecessors="predecessors(index)" :subject="subject(step)" :kind="subjectKind(step)" :working="working()" :editable="editable&&!busy" :readiness="step.readiness" :checked-state="step.checkedState" :checked-reason="step.checkedReason" @change="step.control=$event;step.readiness=model.PlanReadiness.UNSPECIFIED;step.checkedState=undefined;step.checkedReason=undefined"/>
+<PlanStepControls :control="step.control" :index="index" :check-required="requiredPostconditions.has(index)" :predecessors="predecessors(index)" :subject="subject(step)" :kind="subjectKind(step)" :working="working()" :editable="editable&&!busy" :readiness="step.readiness" :checked-state="step.checkedState" :checked-reason="step.checkedReason" @change="step.control=$event;step.readiness=model.PlanReadiness.UNSPECIFIED;step.checkedState=undefined;step.checkedReason=undefined"/>
 <label v-if="installable&&![model.PhysicalStepState.RECORDED,model.PhysicalStepState.NOT_PERFORMED].includes(step.state)"><input v-model="notPerformed" type="checkbox" :value="index" :disabled="selected.includes(index)"/>Confirmed not performed</label>
 <button v-if="editable" type="button" :disabled="busy" @click="removeStep(index)">Remove proposed step</button>
 </li></ol>
