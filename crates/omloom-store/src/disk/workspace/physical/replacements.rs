@@ -470,6 +470,7 @@ impl Tx<'_> {
     ) -> Result<()> {
         let mut positions = BTreeSet::new();
         let mut parts = BTreeSet::new();
+        let mut bindings = BTreeSet::new();
         let mut mapping_count = 0usize;
         for replacement in replacement_steps(plan) {
             if replacement.endpoints.len() > 64 - mapping_count {
@@ -521,7 +522,9 @@ impl Tx<'_> {
             }
             match (&replacement.previous_binding, replacement.previous_revision) {
                 (Some(id), Some(revision)) if replacement.previous.is_some() && revision != 0 => {
-                    RelationId::parse(id).map_err(|_| Error::Invalid)?;
+                    if !bindings.insert(RelationId::parse(id).map_err(|_| Error::Invalid)?) {
+                        return Err(Error::Invalid);
+                    }
                 }
                 (None, None) => {}
                 _ => return Err(Error::Invalid),

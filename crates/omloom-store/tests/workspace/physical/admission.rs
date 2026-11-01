@@ -1,5 +1,152 @@
 use super::*;
 
+// One predecessor cannot fund two distinct replacement steps or acquire their reservations.
+#[test]
+fn replacement_drafts_reject_duplicate_predecessor_bindings() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let owner = create(&store, &actor, K::Device, "Chassis")?;
+    let (source, old) = mountable_component_fixture(&store, &actor, owner.clone(), "first")?;
+    let destination = position_fixture(
+        &store,
+        &actor,
+        owner,
+        "second",
+        api::PhysicalComponentKind::Disk,
+    )?;
+    let previous = binding(&store, &old)?;
+    let mut steps = Vec::new();
+    for position in [&source, &destination] {
+        let incoming = create(
+            &store,
+            &actor,
+            K::PhysicalComponent,
+            "Distinct incoming part",
+        )?;
+        steps.push(api::PhysicalStep {
+            action: Some(api::physical_step::Action::Replacement(
+                api::PhysicalReplacement {
+                    position: Some(position.clone()),
+                    previous: Some(old.clone()),
+                    replacement: Some(incoming),
+                    source_position: Some(source.clone()),
+                    previous_binding: Some(previous.relation_id.clone()),
+                    previous_revision: Some(previous.revision),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        });
+    }
+    let plan = api::PhysicalPlan {
+        name: "Duplicate predecessor".into(),
+        steps,
+        ..Default::default()
+    };
+    let before = store.usage()?;
+    assert!(matches!(
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Save(api::PhysicalSave {
+                plan: Some(plan.clone())
+            })
+        ),
+        Err(Error::Invalid)
+    ));
+    assert!(matches!(
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Preview(api::PhysicalPreview { plan: Some(plan) })
+        ),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
+    assert_eq!(binding(&store, &old)?, previous);
+    Ok(())
+}
+
+// Generic relation and asset APIs cannot strand a structural position descriptor.
+#[test]
+fn structural_positions_reject_generic_retirement() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let owner = create(&store, &actor, K::Device, "Chassis")?;
+    for archived in [true, false] {
+        let position = position_fixture(
+            &store,
+            &actor,
+            owner.clone(),
+            if archived { "retired" } else { "retyped" },
+            api::PhysicalComponentKind::Disk,
+        )?;
+        let contains = store
+            .relations(AssetRef::try_from(&owner)?, 32)?
+            .into_iter()
+            .find(|r| {
+                r.to.as_ref() == Some(&position) && r.kind == wire::RelationKind::Contains as i32
+            })
+            .ok_or(Error::Corrupt)?;
+        assert!(matches!(
+            call(
+                &store,
+                &actor,
+                Command::Relation(api::Relationship {
+                    relation: Some(contains),
+                    remove: true,
+                }),
+            ),
+            Err(Error::Conflict)
+        ));
+        let mut asset = store.asset(AssetRef::try_from(&position)?)?;
+        let revision = asset.revision;
+        asset.revision += 1;
+        if archived {
+            asset.adoption = wire::Adoption::Archived as i32;
+        } else {
+            asset.kind = K::Device as i32;
+        }
+        assert!(matches!(
+            store.save_asset(
+                &admit(wire::record::Body::Asset(asset)),
+                Some(revision),
+                "fixture",
+                100,
+            ),
+            Err(Error::Conflict)
+        ));
+    }
+    let current = position_fixture(
+        &store,
+        &actor,
+        owner.clone(),
+        "current",
+        api::PhysicalComponentKind::Disk,
+    )?;
+    let before = store.usage()?;
+    let page = physical(
+        &store,
+        &actor,
+        api::physical::Action::Positions(api::PhysicalPositionQuery {
+            owner: Some(owner),
+            limit: 25,
+            ..Default::default()
+        }),
+    )?;
+    assert_eq!(page.positions.len(), 3);
+    assert!(
+        page.positions
+            .iter()
+            .any(|p| p.target.as_ref() == Some(&current))
+    );
+    assert!(page.next.is_none());
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 fn rack_replacement_fixture(
     store: &Store,
     actor: &Context,
