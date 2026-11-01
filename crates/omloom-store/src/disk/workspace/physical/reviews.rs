@@ -71,6 +71,22 @@ fn valid_decision(decision: i32, reason: i32) -> Result<()> {
     }
 }
 impl Tx<'_> {
+    pub(super) fn reconcile_saved_feedback(
+        &mut self,
+        previous: &api::PhysicalPlan,
+        current: &api::PhysicalPlan,
+        now: u64,
+    ) -> Result<()> {
+        for replacement in replacement_steps(previous) {
+            if let Some(feedback) = replacement.feedback.as_deref()
+                && !replacement_steps(current)
+                    .any(|value| value.feedback.as_deref() == Some(feedback))
+            {
+                self.quality_delta(feedback, false, now)?;
+            }
+        }
+        Ok(())
+    }
     fn replacement_hypothesis(
         &self,
         value: &api::PhysicalReplacement,

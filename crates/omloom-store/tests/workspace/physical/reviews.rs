@@ -78,7 +78,7 @@ fn replacement_feedback_is_atomic_scoped_and_expires_without_relabelling() -> Te
         hypothesis.strength,
         api::PhysicalReplacementStrength::Contextual as i32
     );
-    let accepted = review(
+    let mut accepted = review(
         &store,
         &actor,
         &plan,
@@ -119,6 +119,57 @@ fn replacement_feedback_is_atomic_scoped_and_expires_without_relabelling() -> Te
     .ok_or("plan")?;
     assert_eq!(repeated.revision, accepted.revision);
     assert_eq!(store.usage()?, usage);
+    // Removing and reintroducing a draft event replaces its contribution, never accumulates it.
+    let original_steps = accepted.steps.clone();
+    accepted.steps.clear();
+    accepted.materials.push(api::PhysicalMaterial {
+        name: "Remaining unplaced demand".into(),
+        quantity: 1,
+        kind: K::Device as i32,
+        ..Default::default()
+    });
+    let removed = physical(
+        &store,
+        &actor,
+        api::physical::Action::Save(api::PhysicalSave {
+            plan: Some(accepted),
+        }),
+    )?
+    .plan
+    .ok_or("plan")?;
+    assert!(quality(&store, &actor)?.is_empty());
+    let mut restored_event = removed;
+    restored_event.steps = original_steps;
+    let Some(api::physical_step::Action::Replacement(r)) = &mut restored_event.steps[0].action
+    else {
+        return Err("replacement".into());
+    };
+    r.feedback = None;
+    let restored_event = physical(
+        &store,
+        &actor,
+        api::physical::Action::Save(api::PhysicalSave {
+            plan: Some(restored_event),
+        }),
+    )?
+    .plan
+    .ok_or("plan")?;
+    accepted = review(
+        &store,
+        &actor,
+        &restored_event,
+        Some(api::PhysicalReplacementDecision::Confirmed),
+        Some(hypothesis.basis.clone()),
+    )?
+    .plan
+    .ok_or("plan")?;
+    assert_eq!(
+        quality(&store, &actor)?
+            .iter()
+            .map(|v| v.count)
+            .sum::<u64>(),
+        1
+    );
     let mut image = Vec::new();
     store.export(&mut image)?;
     let restored_dir = tempfile::tempdir()?;

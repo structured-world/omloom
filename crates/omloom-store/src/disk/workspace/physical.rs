@@ -654,6 +654,7 @@ impl Store {
                         view.revision = tx.commit()?;
                         return Ok(reply(api::reply::Result::Physical(view)));
                     }
+                    tx.reconcile_saved_feedback(&existing, &plan, now)?;
                 } else if plan.id.is_some() {
                     return Err(Error::Missing);
                 } else {
