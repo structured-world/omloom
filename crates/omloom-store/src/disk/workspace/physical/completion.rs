@@ -372,7 +372,16 @@ impl Tx<'_> {
                     .is_none()
                 || step.checked_state == Some(api::RequirementState::Satisfied as i32))
         });
-        let next = if terminal {
+        // Complete also refreshes postconditions; an unstarted plan must not become partial.
+        let reported = plan.steps.iter().any(|step| {
+            matches!(
+                api::PhysicalStepState::try_from(step.state),
+                Ok(api::PhysicalStepState::Recorded | api::PhysicalStepState::NotPerformed)
+            )
+        });
+        let next = if !reported {
+            state
+        } else if terminal {
             plan.reserved_until_ms = None;
             if plan
                 .steps

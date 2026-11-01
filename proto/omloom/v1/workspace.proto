@@ -2034,7 +2034,9 @@ message PhysicalReserve {
   uint64 until_ms = 2;
 }
 message PhysicalCompletion {
-  // Admitted plan and revision under which the operator performed manual work.
+  // Saved plan and reviewed revision for manual outcomes or a postcondition
+  // refresh. With no outcomes, checks are refreshed without repeating work;
+  // unchanged progress is not written, but newly satisfied goals can finish.
   PhysicalPlanKey plan = 1;
   // Selected zero-based step indexes actually completed, at most 64. Unselected
   // work remains unresolved; deadline and missing observation never complete it.

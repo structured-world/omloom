@@ -85,6 +85,55 @@ fn draft_actual_report_does_not_lock_other_steps() -> TestResult {
     Ok(())
 }
 
+// Empty refreshes do not claim work started, bump revisions or write audit/history rows.
+#[test]
+fn empty_completion_keeps_unstarted_plans_unchanged() -> TestResult {
+    for reserved in [true, false] {
+        let dir = tempfile::tempdir()?;
+        let store = Store::open(dir.path(), policy())?;
+        let actor = operator();
+        let rack = create(&store, &actor, K::Rack, "Unstarted enclosure")?;
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Define(api::PhysicalDefinitionEdit {
+                definition: Some(define(rack.clone())),
+            }),
+        )?;
+        let item = create(&store, &actor, K::Device, "Unstarted installation")?;
+        equipment_dimensions(&store, &actor, &item)?;
+        let mut plan = draft(&store, &actor, item, rack)?;
+        if reserved {
+            plan = reserve(&store, &actor, plan)?.plan.ok_or(Error::Corrupt)?;
+        }
+        for actual_state in [true, false] {
+            if !reserved && !actual_state {
+                continue;
+            }
+            let before = store.usage()?;
+            let refreshed = physical(
+                &store,
+                &actor,
+                api::physical::Action::Complete(api::PhysicalCompletion {
+                    plan: Some(api::PhysicalPlanKey {
+                        id: plan.id.clone().ok_or(Error::Corrupt)?,
+                        revision: plan.revision,
+                    }),
+                    actual_state,
+                    ..Default::default()
+                }),
+            )?
+            .plan
+            .ok_or(Error::Corrupt)?;
+            assert_eq!(refreshed.state, plan.state);
+            assert_eq!(refreshed.revision, plan.revision);
+            assert_eq!(refreshed.steps[0].state, plan.steps[0].state);
+            assert_eq!(store.usage()?, before);
+        }
+    }
+    Ok(())
+}
+
 // A resolved step's released lock may be reused without blocking the original plan's remaining work.
 #[test]
 fn resolved_resource_reuse_does_not_block_completion_recheck_or_cancellation() -> TestResult {
