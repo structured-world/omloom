@@ -22,6 +22,50 @@ the host must supply finite settings suitable for all of its namespaces.
 
 ## Layout and write contract
 
+Physical availability profiles store only a selected enclosure/incarnation,
+region, recipient, explicit constraint flags and current revision/revocation.
+At most 64 profiles belong to one enclosure, listed in pages of 25. Existing
+profiles may be edited; removal of the enclosure reclaims them. These are
+current disclosure configuration, independent of ordinary bounded audit detail.
+Availability is derived from authoritative bindings and reservation references;
+reads do not save occupancy snapshots or maintain a second capacity inventory.
+Declared physical clearance retains six current integer margins in the existing
+typed array column. Expanded service regions are derived in bounded batches
+for admission and selected availability, without another geometry inventory.
+Format 16 records an explicitly surveyed occupancy region as six current
+coordinates in the existing typed array layout. Older data acquires no assumed
+empty-space evidence during migration. This independent current assertion can
+cover less than the usable enclosure; increasing dimensions cannot extend it.
+Older hosts reject the new format instead of ignoring its admission semantics.
+Format 17 adds one current sourced assertion per physical profile that its
+upstream power dependencies are completely recorded. Missing remains unqualified.
+The existing typed relationship graph owns those dependencies; no second topology,
+path cache or evaluation history is stored. Requirement evaluation reads selected
+paths in one snapshot, within a shared 128-node/256-edge request allowance.
+Boundary selection cannot hide a known upstream dependency. Path disjointness
+does not qualify surviving capacity, live power or electrical safety.
+Serialized part lists and exports derive from current steps and permitted
+inventory fields, with no per-open export copy. Explicit unreceived material
+requirements instead belong to the saved plan: one row per selected line, bounded
+canonical specification fields, and sparse allocations for real received units.
+Quantity never creates inventory assets or rows per unreceived unit. Placement
+steps refer to a line and selected unit until its real allocation is known.
+Held geometry reads the owning immutable step and specifications, not a copied
+inventory or capacity ledger. Terminal material detail uses ordinary cleanup;
+actual occupancy and unresolved recovery work retain their independent lifetime.
+
+Replacement endpoint correspondence is bounded plan intent, not connectivity.
+One review consumes its small mapping payload as a whole; source and destination
+membership and declared channels are read in indexed batches. Current cable-end
+channel sets and assembly construction preserve one actual assembly identity.
+Current event dispositions remain on their owning step. Quality counters contain
+only scope hashes, bounded rule/class/decision categories and counts. Corrections
+replace the old contribution atomically. Fixed windows use the existing finite
+detail-retention policy and cleanup; expired detail never becomes a negative
+label. Changed authority partitions invalidate disclosure, and restored counters
+require reconciliation before being presented as current. No raw sample corpus,
+per-query persistence or second history store is introduced.
+
 The schema stores directly indexed current rows. Asset identity and accepted
 revision are separate from intended fields, provider mappings, current source
 claims and freshness. Source fields use scoped keys; omitted partial fields
@@ -124,8 +168,8 @@ envelope, but are **application accounting**, not total filesystem allocation.
 Pinned detail and unresolved work count against their budgets. Admission fails
 atomically when it cannot fit; it does not evict safety state.
 
-This unreleased storage format uses schema version 14. Supported versions 2
-through 13 upgrade in bounded restartable batches, including asset name/sort
+This unreleased storage format uses schema version 22. Supported versions 2
+through 21 upgrade in bounded restartable batches, including asset name/sort
 projections from accepted intent, normalized IP
 ordering and source-scoped current observation facts with separate freshness
 and accounting. No inventory history is added. The upgrade keeps restore fences

@@ -52,6 +52,7 @@ id!(SourceId);
 id!(AuthorityId);
 id!(RelationId);
 id!(OperationId);
+id!(PlanId);
 id!(ScanId);
 id!(TrustId);
 id!(CredentialBindingId);

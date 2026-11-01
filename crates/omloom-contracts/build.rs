@@ -23,6 +23,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         .boxed(".omloom.workspace.v1.Reply.result.detail")
         .boxed(".omloom.workspace.v1.Reply.result.vm_placement_review")
         .boxed(".omloom.workspace.v1.HostImport.report")
+        // Keep the request stack bound; allocate this volume only for an explicit coverage assertion.
+        .boxed(".omloom.workspace.v1.PhysicalDefinition.occupancy_coverage")
+        .boxed(".omloom.workspace.v1.PhysicalDefinition.rack_grid")
+        .boxed(".omloom.workspace.v1.PhysicalDefinition.clearance")
+        .boxed(".omloom.workspace.v1.PhysicalMaterial.physical")
+        .boxed(".omloom.workspace.v1.PhysicalReplacement.feedback")
         .file_descriptor_set_path(&descriptor)
         .compile_protos(&[workspace], &["../../proto"])?;
     let set = FileDescriptorSet::decode(fs::read(descriptor)?.as_slice())?;
@@ -67,8 +73,30 @@ fn main() -> Result<(), Box<dyn Error>> {
                     16
                 } else if (message.name() == "EvaluateRequirements" && field.name() == "nodes")
                     || (message.name() == "RequirementGroup" && field.name() == "members")
+                    || (message.name() == "PhysicalPlan" && field.name() == "steps")
+                    || (message.name() == "PhysicalView" && field.name() == "definitions")
+                    || (message.name() == "PhysicalCompletion"
+                        && matches!(field.name(), "completed_steps" | "not_performed_steps"))
+                    || (message.name() == "PhysicalPlan" && field.name() == "materials")
+                    || (message.name() == "PhysicalMaterial" && field.name() == "allocations")
+                    || (message.name() == "PhysicalReplacement" && field.name() == "endpoints")
+                    || (message.name() == "PhysicalEndpointMappings" && field.name() == "pairs")
+                    || (message.name() == "PhysicalCableEnd" && field.name() == "channels")
+                    || (message.name() == "PhysicalChannelSet" && field.name() == "channels")
+                    || (message.name() == "PhysicalDefinition" && field.name() == "channels")
                 {
                     64
+                } else if message.name() == "PhysicalMaterial" && field.name() == "specifications" {
+                    12
+                } else if message.name() == "PhysicalView"
+                    && matches!(
+                        field.name(),
+                        "occupancy" | "plans" | "positions" | "replacement_quality"
+                    )
+                {
+                    25
+                } else if message.name() == "PhysicalView" && field.name() == "items" {
+                    256
                 } else {
                     0
                 }

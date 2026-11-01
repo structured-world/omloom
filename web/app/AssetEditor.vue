@@ -23,7 +23,7 @@ const equipmentChanges = reactive<Record<string, import('./api').Field | undefin
 const equipmentValidity = reactive<Record<string,boolean>>({});
 const selectedEquipment = ref(props.item?.fields.filter(f=>equipmentNames.includes(f.name)).map(f=>f.name) ?? []);
 const equipmentToAdd = ref('');
-const equipmentFields = computed(()=>kind.value===AssetKind.DEVICE ? (props.item ? actions.value?.fields : choice.value?.fields)?.filter(f=>equipmentNames.includes(f)) ?? [] : []);
+const equipmentFields = computed(()=>(kind.value===AssetKind.DEVICE||kind.value===AssetKind.PHYSICAL_COMPONENT) ? (props.item ? actions.value?.fields : choice.value?.fields)?.filter(f=>equipmentNames.includes(f)) ?? [] : []);
 function addEquipment(){if(equipmentFields.value.includes(equipmentToAdd.value)&&!selectedEquipment.value.includes(equipmentToAdd.value))selectedEquipment.value.push(equipmentToAdd.value);equipmentToAdd.value='';}
 const modes = reactive<Record<string, string>>({});
 const error = ref(''); const busy = ref(false); const preparing = ref(true); const more = ref(false);

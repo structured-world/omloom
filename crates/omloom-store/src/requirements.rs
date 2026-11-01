@@ -69,6 +69,7 @@ pub struct Subject<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
     Current,
+    PostEffect,
     Predicted,
     ConcurrentIntent,
 }

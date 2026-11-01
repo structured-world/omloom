@@ -9,6 +9,35 @@ fn subject(id: &'static str) -> Subject<'static> {
         network: NetworkScope::Bound("lan"),
     }
 }
+
+// A previous healthy sample cannot certify a newly performed change merely by arriving late.
+#[test]
+fn post_effect_requirement_rejects_current_phase_evidence() {
+    let wanted = Requirement {
+        subject: subject("endpoint"),
+        semantic: "reachable",
+        vantage: "customer",
+        phase: Phase::PostEffect,
+        kind: EvidenceKind::Observation,
+        interval: None,
+    };
+    let evidence = Evidence {
+        requirement: Requirement {
+            phase: Phase::Current,
+            ..wanted
+        },
+        origin: Origin::DirectObservation,
+        observed_at: Some(10),
+        valid_until: Some(100),
+        coverage: None,
+        qualified: true,
+        decision: Decision::PASS,
+    };
+    assert_eq!(
+        fact(wanted, evidence, 20),
+        Decision::unknown(Reason::WrongEvidence)
+    );
+}
 fn leaf(id: &'static str, decision: Decision) -> Node<'static> {
     Node {
         subject: subject(id),

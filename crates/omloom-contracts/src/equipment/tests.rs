@@ -1,4 +1,28 @@
 use super::*;
+
+// Owned plans and the persisted encoding must share normalization, including retry order and fixed-point spelling.
+#[test]
+fn owned_claim_canonicalization_matches_encoding_and_is_idempotent() {
+    let mut value = possible();
+    let encoded = encode(&value).expect("valid claim");
+    canonicalize(&mut value).expect("valid owned claim");
+    assert_eq!(value.encode_to_vec(), encoded);
+    let previous = value.clone();
+    canonicalize(&mut value).expect("already canonical claim");
+    assert_eq!(value, previous);
+    let mut quantity = EquipmentClaim {
+        basis: "Recorded physical measurement".into(),
+        assertion: Some(equipment_claim::Assertion::Quantity(QuantityRange {
+            lower: Some(1200),
+            upper: None,
+            scale: 2,
+            unit: "mm".into(),
+        })),
+    };
+    let encoded = encode(&quantity).expect("valid measurement");
+    canonicalize(&mut quantity).expect("owned measurement");
+    assert_eq!(quantity.encode_to_vec(), encoded);
+}
 fn possible() -> EquipmentClaim {
     EquipmentClaim {
         basis: "Front label and visible bays".into(),
