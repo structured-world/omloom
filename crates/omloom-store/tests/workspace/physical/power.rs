@@ -236,11 +236,19 @@ fn recorded_step_evaluates_its_power_postcondition() -> TestResult {
         create(&store, &actor, K::PowerFeed, "Terminal feed A")?,
         create(&store, &actor, K::PowerFeed, "Terminal feed B")?,
     ];
-    for feed in &feeds {
+    let terminals = [
+        create(&store, &actor, K::PowerFeed, "Independent terminal A")?,
+        create(&store, &actor, K::PowerFeed, "Independent terminal B")?,
+    ];
+    for feed in feeds.iter().chain(&terminals) {
         survey(&store, &actor, feed)?;
     }
-    let expected = evaluate(&store, &actor, &feeds, &feeds)?;
-    assert_eq!(expected.state, api::RequirementState::Satisfied as i32);
+    supply(&store, &actor, &feeds[0], &terminals[0])?;
+    supply(&store, &actor, &feeds[1], &terminals[1])?;
+    assert_eq!(
+        evaluate(&store, &actor, &feeds, &terminals)?.state,
+        api::RequirementState::Satisfied as i32
+    );
     let mut plan = draft(&store, &actor, item, rack.clone())?;
     plan.steps[0].control = Some(api::PlanControl {
         check: Some(api::EvaluateRequirements {
@@ -249,7 +257,7 @@ fn recorded_step_evaluates_its_power_postcondition() -> TestResult {
                 expression: Some(api::requirement_node::Expression::PowerPaths(
                     api::PowerPathRequirement {
                         sources: feeds.to_vec(),
-                        boundaries: feeds.to_vec(),
+                        boundaries: terminals.to_vec(),
                     },
                 )),
             }],
@@ -264,6 +272,9 @@ fn recorded_step_evaluates_its_power_postcondition() -> TestResult {
     )?
     .plan
     .ok_or(Error::Corrupt)?;
+    supply(&store, &actor, &feeds[1], &terminals[0])?;
+    let expected = evaluate(&store, &actor, &feeds, &terminals)?;
+    assert_eq!(expected.state, api::RequirementState::Failed as i32);
     let recorded = physical(
         &store,
         &actor,
