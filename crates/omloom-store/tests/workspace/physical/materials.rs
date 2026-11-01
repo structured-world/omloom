@@ -200,6 +200,54 @@ fn future_reservations_account_for_other_plans_material_demands() -> TestResult 
     };
     let first = save_material_plan(&store, &actor, plan.clone())?;
     reserve(&store, &actor, first)?;
+    // A disjoint offered region cannot hide the load retained elsewhere in the enclosure.
+    let mut reduced = define(rack.clone());
+    reduced.max_mass_g = Some(5);
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(reduced),
+        }),
+    )?;
+    let mut offered_region = volume();
+    offered_region.y.as_mut().ok_or(Error::Missing)?.start_um = 1_000_000;
+    offered_region.y.as_mut().ok_or(Error::Missing)?.length_um = 1_000_000;
+    let offered = physical(
+        &store,
+        &actor,
+        api::physical::Action::Offer(api::PhysicalOfferEdit {
+            offer: Some(api::PhysicalOffer {
+                enclosure: Some(rack.clone()),
+                region: Some(offered_region),
+                recipient: "capacity-reader".into(),
+                name: "Disjoint remaining region".into(),
+                mass: true,
+                ..Default::default()
+            }),
+        }),
+    )?
+    .offers
+    .remove(0);
+    let before = store.usage()?;
+    let availability = physical(
+        &store,
+        &actor,
+        api::physical::Action::Availability(api::PhysicalOfferRead {
+            id: offered.id.ok_or(Error::Missing)?,
+        }),
+    )?;
+    assert_eq!(availability.state, api::RequirementState::Failed as i32);
+    assert_eq!(store.usage()?, before);
+    let mut restored = define(rack.clone());
+    restored.max_mass_g = Some(15);
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(restored),
+        }),
+    )?;
     plan.name = "Second future load".into();
     let Some(api::physical_step::Action::Placement(placement)) = &mut plan.steps[0].action else {
         return Err(Error::Corrupt.into());

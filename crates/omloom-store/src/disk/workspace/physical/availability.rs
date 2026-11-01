@@ -229,7 +229,10 @@ impl Tx<'_> {
                 if knowledge.state != State::Satisfied {
                     return Ok(knowledge);
                 }
-                let demand = self.physical_loads(&occupied.items, selected)?;
+                let mut demand = self.physical_loads(&occupied.items, selected)?;
+                for future in &occupied.future_loads {
+                    equipment::add_loads(&mut demand, *future)?;
+                }
                 for ((selected, limit), demand) in selected
                     .into_iter()
                     .zip([
