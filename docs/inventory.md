@@ -779,6 +779,11 @@ height does not supply these facts. Printed U selection follows this declaration
 and rounds allocation height outward to half-U increments without changing the
 equipment dimensions. Without the declaration, the geometric offset editor and
 explicit coordinate drafts remain available and do not claim printed rack units.
+Space reuse after a removal requires the corresponding prerequisite in the common
+plan. A future removal does not free current occupancy for an independent step.
+Uncertain overlap between old and new loads keeps capacity unqualified. Manual
+reports record work already performed, including discrepancies, and do not
+certify physical fit or dispatch another operation.
 
 Named ends belong to a retained cable. Their definition, accepted destination
 intent and reported attachment are distinct. A confirmed loose end releases its

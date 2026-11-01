@@ -219,10 +219,10 @@ impl Tx<'_> {
         context: &Context,
         plan: &api::PhysicalPlan,
         working: &api::WorkingContext,
+        graph: &flow::Analysis,
         claims: &mut admission::Claims,
     ) -> core::result::Result<(), admission::Failure> {
-        let graph = flow::analysis(&plan.steps)?;
-        check_planned_sockets(plan, &graph).map_err(|error| {
+        check_planned_sockets(plan, graph).map_err(|error| {
             if matches!(error, Error::Conflict) {
                 admission::Failure::mismatch()
             } else {

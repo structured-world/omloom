@@ -7,6 +7,7 @@ pub(super) fn pose_key(binding: &str) -> String {
 pub(super) struct PhysicalUse {
     pub definition: api::PhysicalDefinition,
     pub volumes: Vec<crate::physical::Region>,
+    pub conditional_removals: Vec<(usize, Option<crate::physical::Region>)>,
     pub items: BTreeSet<AssetRef>,
     pub inspected: usize,
 }
@@ -82,6 +83,7 @@ impl Tx<'_> {
         &self,
         enclosure: AssetRef,
         plan: &api::PhysicalPlan,
+        ancestors: &[u64; crate::plans::MAX_STEPS],
         remaining: usize,
     ) -> Result<PhysicalUse> {
         debug_assert!(remaining <= 2048);
@@ -112,19 +114,38 @@ impl Tx<'_> {
         if inspected > remaining {
             return Err(Error::Limit);
         }
-        let removed = replacement_steps(plan)
-            .filter_map(|r| r.previous_binding.as_deref())
-            .collect::<BTreeSet<_>>();
+        let mut removed = BTreeMap::new();
+        for (index, step) in plan.steps.iter().enumerate() {
+            if let Some(api::physical_step::Action::Replacement(r)) = &step.action
+                && let Some(binding) = r.previous_binding.as_deref()
+                && removed.insert(binding, index).is_some()
+            {
+                return Err(Error::Invalid);
+            }
+        }
         let mut bindings = Vec::with_capacity(current.len());
         for row in current {
             let id = binding_id(&row)?;
-            if !removed.contains(id.as_str()) {
-                bindings.push((id, target(&row)?));
+            let removal = removed.get(id.as_str()).copied();
+            if let Some(removal) = removal {
+                let mut always_before = true;
+                for (index, p) in placement_steps(plan) {
+                    if parse_target(p.enclosure.as_ref())? == enclosure
+                        && ancestors[index] & (1u64 << removal) == 0
+                    {
+                        always_before = false;
+                        break;
+                    }
+                }
+                if always_before {
+                    continue;
+                }
             }
+            bindings.push((id, target(&row)?, removal));
         }
         let mut keys = bindings
             .iter()
-            .map(|(id, _)| text(pose_key(id)))
+            .map(|(id, _, _)| text(pose_key(id)))
             .collect::<Vec<_>>();
         for row in &pending {
             keys.push(text(string(row, "claim")?));
@@ -135,15 +156,24 @@ impl Tx<'_> {
         }
         let mut output = PhysicalUse {
             definition,
-            volumes: Vec::new(),
+            volumes: Vec::with_capacity(bindings.len() + pending.len()),
+            conditional_removals: Vec::with_capacity(bindings.len()),
             items: BTreeSet::new(),
             inspected,
         };
         let mut bodies = Vec::with_capacity(bindings.len() + pending.len());
-        for (id, item) in bindings {
-            let pose = poses.get(&pose_key(&id)).ok_or(Error::Incomplete)?;
-            bodies.push((item, volume(&read_volume(pose)?.ok_or(Error::Corrupt)?)?));
+        let mut removals = Vec::with_capacity(bindings.len() + pending.len());
+        for (id, item, removal) in bindings {
             output.items.insert(item);
+            let Some(pose) = poses.get(&pose_key(&id)) else {
+                if let Some(removal) = removal {
+                    output.conditional_removals.push((removal, None));
+                    continue;
+                }
+                return Err(Error::Incomplete);
+            };
+            bodies.push((item, volume(&read_volume(pose)?.ok_or(Error::Corrupt)?)?));
+            removals.push(removal);
         }
         for reservation in pending {
             let claim = string(&reservation, "claim")?;
@@ -164,8 +194,19 @@ impl Tx<'_> {
                 volume(placement.volume.as_ref().ok_or(Error::Corrupt)?)?,
             ));
             output.items.insert(item);
+            removals.push(None);
         }
-        output.volumes = self.current_regions(&bodies, &output.items)?;
+        for (region, removal) in self
+            .current_regions(&bodies, &output.items)?
+            .into_iter()
+            .zip(removals)
+        {
+            if let Some(removal) = removal {
+                output.conditional_removals.push((removal, Some(region)));
+            } else {
+                output.volumes.push(region);
+            }
+        }
         Ok(output)
     }
     pub(super) fn store_physical_pose(

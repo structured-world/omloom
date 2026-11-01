@@ -1,6 +1,8 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 use std::collections::BTreeSet;
+#[path = "physical/admission.rs"]
+mod admission;
 #[path = "physical/availability.rs"]
 mod availability;
 #[path = "physical/cables.rs"]
@@ -1048,6 +1050,13 @@ fn whole_chassis_replacement_requires_explicit_rack_placement() -> TestResult {
                 volume: Some(volume()),
             },
         )),
+        control: Some(api::PlanControl {
+            after: vec![api::PlanDependency {
+                step: 0,
+                when: api::PlanTrigger::Reported as i32,
+            }],
+            ..Default::default()
+        }),
         ..Default::default()
     });
     let saved = physical(
@@ -1058,7 +1067,8 @@ fn whole_chassis_replacement_requires_explicit_rack_placement() -> TestResult {
     .plan
     .ok_or(Error::Corrupt)?;
     let admitted = reserve(&store, &actor, saved)?.plan.ok_or(Error::Corrupt)?;
-    let completed = report_steps(&store, &actor, &admitted, vec![0, 1])?;
+    let partial = report_steps(&store, &actor, &admitted, vec![0])?;
+    let completed = report_steps(&store, &actor, &partial, vec![1])?;
     assert_eq!(completed.state, api::PhysicalPlanState::Completed as i32);
     let view = physical(
         &store,

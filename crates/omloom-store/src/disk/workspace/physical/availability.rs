@@ -193,7 +193,12 @@ impl Tx<'_> {
             return Ok((offer, Decision::unknown(Reason::Stale)));
         }
         let assessment = (|| -> Result<Decision> {
-            let occupied = self.physical_use(enclosure, &api::PhysicalPlan::default(), 2048)?;
+            let occupied = self.physical_use(
+                enclosure,
+                &api::PhysicalPlan::default(),
+                &[0; crate::plans::MAX_STEPS],
+                2048,
+            )?;
             let definition = &occupied.definition;
             let region =
                 clearance::region(volume(offer.region.as_ref().ok_or(Error::Corrupt)?)?, None)?;

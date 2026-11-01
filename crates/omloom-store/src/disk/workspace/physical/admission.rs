@@ -106,11 +106,12 @@ impl Tx<'_> {
         working: &api::WorkingContext,
     ) -> core::result::Result<Claims, Failure> {
         let mut claims = self.check_replacement_capacity(context, plan, working)?;
-        self.assess_wiring(context, plan, working, &mut claims)?;
+        let graph = flow::analysis(&plan.steps)?;
+        self.assess_wiring(context, plan, working, &graph, &mut claims)?;
         let profiles = self.placement_profiles(plan)?;
         let mut enclosures = BTreeMap::<AssetRef, current::PhysicalUse>::new();
         let mut rows_read = 0;
-        for p in placements(plan) {
+        for (index, p) in placement_steps(plan) {
             let item = parse_target(p.item.as_ref())?;
             let enclosure = parse_target(p.enclosure.as_ref())?;
             let row = self.visible_asset(context, enclosure)?;
@@ -129,7 +130,8 @@ impl Tx<'_> {
                 return Err(Failure::mismatch());
             }
             if let std::collections::btree_map::Entry::Vacant(entry) = enclosures.entry(enclosure) {
-                let occupied = self.physical_use(enclosure, plan, 2048 - rows_read)?;
+                let occupied =
+                    self.physical_use(enclosure, plan, &graph.ancestors, 2048 - rows_read)?;
                 rows_read += occupied.inspected;
                 entry.insert(occupied);
             }
@@ -172,6 +174,18 @@ impl Tx<'_> {
                 crate::requirements::State::Failed => return Err(Failure::mismatch()),
                 crate::requirements::State::Unknown => return Err(Error::Incomplete.into()),
             }
+            for (removal, prior) in &occupied.conditional_removals {
+                if graph.ancestors[index] & (1u64 << removal) != 0 {
+                    continue;
+                }
+                let prior = prior.ok_or(Error::Incomplete)?;
+                if crate::physical::placement(envelope, Some(region), core::slice::from_ref(&prior))
+                    .state
+                    == crate::requirements::State::Failed
+                {
+                    return Err(Error::Conflict.into());
+                }
+            }
             require_coverage(definition, region)?;
             occupied.volumes.push(region);
             occupied.items.insert(item);
@@ -212,6 +226,11 @@ impl Tx<'_> {
                 if let Some(limit) = limit {
                     let demand = demand.ok_or(Error::Incomplete)?;
                     if demand > limit {
+                        // A conservative bound may include an old load and its successor.
+                        // Do not claim a measured overload when the plan lacks a common release phase.
+                        if !occupied.conditional_removals.is_empty() {
+                            return Err(Error::Incomplete.into());
+                        }
                         return Err(Failure::mismatch());
                     }
                 }
