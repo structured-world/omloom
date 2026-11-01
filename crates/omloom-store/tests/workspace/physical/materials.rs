@@ -113,6 +113,51 @@ fn future_unit_placement_reserves_before_receipt_and_records_only_real_inventory
     )?
     .plan
     .ok_or(Error::Missing)?;
+    let metadata = store.asset(AssetRef::try_from(&actual).map_err(|_| Error::Invalid)?)?;
+    call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            target: Some(actual.clone()),
+            kind: K::Device as i32,
+            expected: Some(metadata.revision),
+            changes: vec![equipment_quantity("height", 2_000_001, "mm", 3)],
+            ..Default::default()
+        }),
+    )?;
+    let before = store.usage()?;
+    assert!(matches!(
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Complete(api::PhysicalCompletion {
+                plan: Some(api::PhysicalPlanKey {
+                    id: received.id.clone().ok_or(Error::Missing)?,
+                    revision: received.revision
+                }),
+                completed_steps: vec![0],
+                ..Default::default()
+            })
+        ),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(
+        store.usage()?,
+        before,
+        "An oversized receipt cannot consume its reservation through normal completion"
+    );
+    let metadata = store.asset(AssetRef::try_from(&actual).map_err(|_| Error::Invalid)?)?;
+    call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            target: Some(actual.clone()),
+            kind: K::Device as i32,
+            expected: Some(metadata.revision),
+            changes: vec![equipment_quantity("height", 2_000_000, "mm", 3)],
+            ..Default::default()
+        }),
+    )?;
     let done = physical(
         &store,
         &actor,
@@ -359,7 +404,7 @@ fn received_units_replace_declared_loads_in_other_reservations() -> TestResult {
             ..Default::default()
         }),
     )?;
-    physical(
+    let received = physical(
         &store,
         &actor,
         api::physical::Action::Receive(api::PhysicalMaterialReceipt {
@@ -374,7 +419,9 @@ fn received_units_replace_declared_loads_in_other_reservations() -> TestResult {
                 basis: "Actual receipt, heavier than requested".into(),
             }),
         }),
-    )?;
+    )?
+    .plan
+    .ok_or(Error::Missing)?;
     proposal.materials[0]
         .specifications
         .retain(|f| f.name != "weight");
@@ -400,6 +447,41 @@ fn received_units_replace_declared_loads_in_other_reservations() -> TestResult {
         Err(Error::Conflict)
     ));
     assert_eq!(store.usage()?, before);
+    let completion = api::PhysicalCompletion {
+        plan: Some(api::PhysicalPlanKey {
+            id: received.id.clone().ok_or(Error::Missing)?,
+            revision: received.revision,
+        }),
+        completed_steps: vec![0],
+        ..Default::default()
+    };
+    assert!(matches!(
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Complete(completion.clone())
+        ),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(
+        store.usage()?,
+        before,
+        "Overload rejection must preserve the receipt and reservation atomically"
+    );
+    let actual = physical(
+        &store,
+        &actor,
+        api::physical::Action::Complete(api::PhysicalCompletion {
+            actual_state: true,
+            discrepancy: Some(
+                "Installed actual heavier unit; capacity requires reconciliation".into(),
+            ),
+            ..completion
+        }),
+    )?
+    .plan
+    .ok_or(Error::Missing)?;
+    assert_eq!(actual.state, api::PhysicalPlanState::Completed as i32);
     Ok(())
 }
 

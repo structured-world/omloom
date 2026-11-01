@@ -43,6 +43,27 @@ impl Tx<'_> {
         {
             return Err(Error::Conflict);
         }
+        // Consume this hold inside the same transaction so re-admission does not count it twice.
+        // Any rejected report rolls back the consumption together with all other effects.
+        self.clear_physical_reservation(plan, index)?;
+        if placement.material.is_some() && !report.actual_state {
+            let proposal = api::PhysicalPlan {
+                id: Some(plan.into()),
+                steps: vec![api::PhysicalStep {
+                    action: Some(api::physical_step::Action::Placement(
+                        api::PhysicalPlacement {
+                            item: Some(target_wire(item)),
+                            material: None,
+                            ..placement.clone()
+                        },
+                    )),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            self.assess_physical(context, &proposal, working)
+                .map_err(|failure| failure.error)?;
+        }
         let existing = self.installed_bindings(item)?;
         let binding = if let Some(existing) = existing.first() {
             if existing.to != placement.enclosure {
@@ -68,7 +89,6 @@ impl Tx<'_> {
             placement.volume.as_ref().ok_or(Error::Invalid)?,
             &context.actor,
         )?;
-        self.clear_physical_reservation(plan, index)?;
         Ok(())
     }
     pub(super) fn complete_physical_steps(

@@ -862,8 +862,13 @@ step; installation cannot be recorded while that unit remains unreceived.
 Explicit receipt or reuse links an adopted resource to one requested unit.
 Receipt may be partial and can continue after reservation. It neither installs
 the resource nor proves compatibility or health. Real allocations use the same
-serialized-part locks as plan steps. Cancellation releases unused materials but
-preserves holds for unresolved effects. An allocation already used by a step
+serialized-part locks as plan steps.
+Normal completion rechecks a received unit's actual dimensions and demands through
+the common physical admission mechanism, excluding only the hold being consumed.
+An explicit actual-state report remains available for work already performed;
+it does not establish compatibility or healthy service.
+Cancellation releases unused materials but preserves holds for unresolved effects.
+An allocation already used by a step
 cannot be silently replaced. Terminal BOM detail follows the existing finite
 cleanup lifecycle. Equal input, including equivalent quantity spellings, writes
 no additional revision or history.
