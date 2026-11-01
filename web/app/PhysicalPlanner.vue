@@ -21,12 +21,13 @@ function acceptPlan(value:model.PhysicalPlan|undefined){if(!value)throw Error('T
 const assessment=ref<{state:number;reason:number;revision:bigint}>();
 const reviewHypotheses=ref(new Map<number,model.PhysicalReplacementHypothesis>());
 const quality=ref<model.PhysicalReplacementQuality[]>(),qualityNext=ref<string>();
+function clearQuality(){quality.value=undefined;qualityNext.value=undefined;}
 watch(()=>plan.value?.id,()=>{reviewHypotheses.value.clear();});
 async function reviewReplacement(index:number,decision?:model.PhysicalReplacementDecision,reason=model.PhysicalReplacementReason.UNSPECIFIED,basis?:string){await run(async()=>{
   const reply=await invoke({oneofKind:'reviewReplacement',reviewReplacement:{plan:planKey('current'),step:index,decision,reason,basis}});
   acceptPlan(reply.plan);
   if(reply.replacementHypothesis)reviewHypotheses.value.set(index,reply.replacementHypothesis);
-  if(decision!==undefined){notice.value='Review decision recorded. Installation and endpoint decisions are unchanged.';quality.value=undefined;qualityNext.value=undefined;}
+  if(decision!==undefined){notice.value='Review decision recorded. Installation and endpoint decisions are unchanged.';clearQuality();}
 });}
 async function loadQuality(after?:string){await run(async()=>{const reply=await invoke({oneofKind:'replacementQuality',replacementQuality:{after}});quality.value=reply.replacementQuality;qualityNext.value=reply.next;});}
 watch([plan,name],()=>{assessment.value=undefined;savedCurrent.value=false;},{deep:true,flush:'sync'});
@@ -92,7 +93,7 @@ async function invoke(action:model.Physical['action']) {
   const response=await call({oneofKind:'physical',physical:{action}},working());
   if(response.oneofKind!=='physical')throw Error('Physical planning is unavailable.');
   if((action.oneofKind==='save'||action.oneofKind==='reserve'||action.oneofKind==='complete'||action.oneofKind==='cancel'||action.oneofKind==='receive'||action.oneofKind==='reviewReplacement')&&response.physical.revision!==revision.value)changed=true;
-  if(response.physical.revision!==revision.value){assessment.value=undefined;reviewHypotheses.value.clear();}
+  if(response.physical.revision!==revision.value){assessment.value=undefined;reviewHypotheses.value.clear();clearQuality();}
   revision.value=response.physical.revision;
   if(response.physical.plan)planItems.value=response.physical.items;
   return response.physical;

@@ -108,11 +108,13 @@ test('replacement judgments invalidate quality pagination on desktop and phone',
     for(const width of [1440,390])await draft(`Quality cursor ${width}`,{position:rack,previous:old,replacement:incoming});
     const reasons=[m.PhysicalReplacementReason.UNSPECIFIED,m.PhysicalReplacementReason.MOVED,m.PhysicalReplacementReason.ADDITIONAL,m.PhysicalReplacementReason.RESEATED,m.PhysicalReplacementReason.SOURCE_ERROR,m.PhysicalReplacementReason.WRONG_PREDECESSOR];
     const decisions=[m.PhysicalReplacementDecision.CONFIRMED,m.PhysicalReplacementDecision.REJECTED,m.PhysicalReplacementDecision.DEFERRED];
+    let external;
     for(let i=0;i<26;i++){
       const plan=await draft(`Retained quality ${i}`,{position:rack,previous:old,replacement:i<18?incoming:old,previousBinding:binding.relationId,previousRevision:binding.revision});
       const key={id:plan.id,revision:plan.revision};
       const hypothesis=(await rpc({oneofKind:'physical',physical:{action:{oneofKind:'reviewReplacement',reviewReplacement:{plan:key,step:0}}}})).physical.replacementHypothesis;
-      await rpc({oneofKind:'physical',physical:{action:{oneofKind:'reviewReplacement',reviewReplacement:{plan:key,step:0,decision:decisions[i%3],reason:reasons[Math.floor((i%18)/3)],basis:hypothesis.basis}}}});
+      const judged=await rpc({oneofKind:'physical',physical:{action:{oneofKind:'reviewReplacement',reviewReplacement:{plan:key,step:0,decision:decisions[i%3],reason:reasons[Math.floor((i%18)/3)],basis:hypothesis.basis}}}});
+      if(i===0)external=judged.physical.plan;
     }
     for(const width of [1440,390]){
       const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600});
@@ -135,6 +137,15 @@ test('replacement judgments invalidate quality pagination on desktop and phone',
         await expect(next).toHaveCount(0);
         await planner.getByRole('button',{name:'Load current review counts',exact:true}).click();
         await expect(planner.getByText(/evidence class 1 · confirmed/)).toBeVisible();
+        await expect(next).toBeVisible();
+        // Another writer advances the inventory while this panel still holds its old count page.
+        const externalKey={id:external.id,revision:external.revision};
+        const explanation=(await rpc({oneofKind:'physical',physical:{action:{oneofKind:'reviewReplacement',reviewReplacement:{plan:externalKey,step:0}}}})).physical.replacementHypothesis;
+        external=(await rpc({oneofKind:'physical',physical:{action:{oneofKind:'reviewReplacement',reviewReplacement:{plan:externalKey,step:0,decision:width===1440?m.PhysicalReplacementDecision.REJECTED:m.PhysicalReplacementDecision.CONFIRMED,basis:explanation.basis}}}})).physical.plan;
+        await planner.getByRole('button',{name:'First installed-part page',exact:true}).click();
+        await expect(next).toHaveCount(0);
+        await expect(planner.getByText(/evidence class 1 · confirmed/)).toHaveCount(0);
+        await planner.getByRole('button',{name:'Load current review counts',exact:true}).click();
         await expect(next).toBeVisible();
       }finally{await page.close();}
     }
