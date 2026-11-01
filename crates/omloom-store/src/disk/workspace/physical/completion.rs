@@ -185,7 +185,7 @@ impl Tx<'_> {
             .collect::<Vec<_>>();
         if !replacements.is_empty() {
             if !value.actual_state {
-                self.check_replacement_loads(context, &replacements, working)
+                self.check_replacement_class_and_loads(context, &replacements, working)
                     .map_err(|failure| failure.error)?;
             }
             self.record_physical_replacements(context, &replacements, &value, working, now)?;

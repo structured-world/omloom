@@ -402,18 +402,7 @@ impl Tx<'_> {
                     mass_limits.push(limit);
                 }
                 if number(&destination_row, "kind")? == wire::AssetKind::PhysicalPosition as u64 {
-                    let position = self
-                        .get(&format!("position/{}", network::identity(destination)))?
-                        .ok_or(Error::Corrupt)?;
-                    let expected = number(&position, "vint")?;
-                    if expected == api::PhysicalComponentKind::Unspecified as u64
-                        || item.component_kind == api::PhysicalComponentKind::Unspecified as i32
-                    {
-                        return Err(Error::Incomplete.into());
-                    }
-                    if expected != item.component_kind as u64 {
-                        return Err(Failure::mismatch());
-                    }
+                    self.require_position_class(destination, item.component_kind)?;
                 }
                 require_mounting(target.mounting.as_deref(), item.mounting.as_deref())?;
                 let target_volume = target
@@ -488,7 +477,27 @@ impl Tx<'_> {
         Ok(claims)
     }
 
-    pub(super) fn check_replacement_loads(
+    fn require_position_class(
+        &self,
+        destination: AssetRef,
+        incoming: i32,
+    ) -> core::result::Result<(), Failure> {
+        let position = self
+            .get(&format!("position/{}", network::identity(destination)))?
+            .ok_or(Error::Corrupt)?;
+        let expected = number(&position, "vint")?;
+        if expected == api::PhysicalComponentKind::Unspecified as u64
+            || incoming == api::PhysicalComponentKind::Unspecified as i32
+        {
+            return Err(Error::Incomplete.into());
+        }
+        if expected != incoming as u64 {
+            return Err(Failure::mismatch());
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_replacement_class_and_loads(
         &self,
         context: &Context,
         replacements: &[&api::PhysicalReplacement],
@@ -496,9 +505,6 @@ impl Tx<'_> {
     ) -> core::result::Result<(), Failure> {
         let mut mass_limits = Vec::new();
         for replacement in replacements {
-            if replacement.volume.is_some() {
-                continue;
-            }
             let Some(incoming) = replacement.replacement.as_ref() else {
                 continue;
             };
@@ -508,6 +514,14 @@ impl Tx<'_> {
             let item = self
                 .physical_definition(incoming)?
                 .ok_or(Error::Incomplete)?;
+            if number(&self.asset(destination)?, "kind")?
+                == wire::AssetKind::PhysicalPosition as u64
+            {
+                self.require_position_class(destination, item.component_kind)?;
+            }
+            if replacement.volume.is_some() {
+                continue;
+            }
             let target = self
                 .physical_definition(destination)?
                 .ok_or(Error::Incomplete)?;

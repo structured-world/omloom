@@ -1,5 +1,77 @@
 use super::*;
 
+// Corrected slot facts do not authorize an incompatible admitted reinstall or erase actual work.
+#[test]
+fn changed_slot_class_is_rechecked_before_admitted_component_binding() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let owner = create(&store, &actor, K::Device, "Enclosure")?;
+    let (position, item) = mountable_component_fixture(&store, &actor, owner.clone(), "disk-bay")?;
+    let old = binding(&store, &item)?;
+    let plan = replacement_plan(
+        &store,
+        &actor,
+        vec![api::PhysicalReplacement {
+            position: Some(position.clone()),
+            previous: Some(item.clone()),
+            replacement: Some(item.clone()),
+            previous_binding: Some(old.relation_id.clone()),
+            previous_revision: Some(old.revision),
+            ..Default::default()
+        }],
+    )?;
+    let plan = reserve(&store, &actor, plan)?.plan.ok_or(Error::Corrupt)?;
+    let descriptor = physical(
+        &store,
+        &actor,
+        api::physical::Action::Positions(api::PhysicalPositionQuery {
+            owner: Some(owner.clone()),
+            ..Default::default()
+        }),
+    )?
+    .positions
+    .into_iter()
+    .find(|p| p.target.as_ref() == Some(&position))
+    .ok_or(Error::Corrupt)?;
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Position(api::PhysicalPositionEdit {
+            owner: Some(owner),
+            structural_key: descriptor.structural_key,
+            name: "Power supply bay".into(),
+            component_kind: api::PhysicalComponentKind::PowerSupply as i32,
+            expected: Some(descriptor.revision),
+        }),
+    )?;
+    let mut report = api::PhysicalCompletion {
+        plan: Some(api::PhysicalPlanKey {
+            id: plan.id.ok_or(Error::Corrupt)?,
+            revision: plan.revision,
+        }),
+        completed_steps: vec![0],
+        ..Default::default()
+    };
+    let before = store.usage()?;
+    assert!(matches!(
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Complete(report.clone())
+        ),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.usage()?, before);
+    assert_eq!(binding(&store, &item)?, old);
+    report.actual_state = true;
+    report.discrepancy =
+        Some("Recorded work needs reconciliation with the corrected slot class".into());
+    physical(&store, &actor, api::physical::Action::Complete(report))?;
+    assert_eq!(binding(&store, &item)?.to, Some(position));
+    Ok(())
+}
+
 // Performed work remains recordable without consuming a different plan's future slot hold.
 #[test]
 fn actual_component_report_preserves_a_conflicting_future_reservation() -> TestResult {
