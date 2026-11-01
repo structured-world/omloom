@@ -49,6 +49,26 @@ fn endpoint_mapping_is_bounded_persistent_and_does_not_rewire() -> TestResult {
     let a = port(&store, &actor, &old, "Old port 1")?;
     let b = port(&store, &actor, &old, "Old port 2")?;
     let c = port(&store, &actor, &new, "New port 1")?;
+    let far_owner = create(&store, &actor, K::Device, "Far chassis")?;
+    let far = port(&store, &actor, &far_owner, "Far port")?;
+    let cable = create(&store, &actor, K::Cable, "Retained cable route")?;
+    for endpoint in [&a, &far] {
+        call(
+            &store,
+            &actor,
+            Command::Relation(api::Relationship {
+                relation: Some(wire::Relation {
+                    from: Some(cable.clone()),
+                    to: Some(endpoint.clone()),
+                    kind: wire::RelationKind::ConnectedTo as i32,
+                    ..Default::default()
+                }),
+                remove: false,
+            }),
+        )?;
+    }
+    let mut cable_bindings = store.relations(AssetRef::try_from(&cable)?, 32)?;
+    cable_bindings.sort_by(|a, b| a.relation_id.cmp(&b.relation_id));
     install_component(&store, &actor, position.clone(), old.clone())?;
     let previous = binding(&store, &old)?;
     let check = api::EvaluateRequirements {
@@ -129,6 +149,12 @@ fn endpoint_mapping_is_bounded_persistent_and_does_not_rewire() -> TestResult {
     ));
     let done = report_steps(&store, &actor, &plan, vec![0])?;
     assert_eq!(done.state, api::PhysicalPlanState::Completed as i32);
+    let mut after_cable = store.relations(AssetRef::try_from(&cable)?, 32)?;
+    after_cable.sort_by(|a, b| a.relation_id.cmp(&b.relation_id));
+    assert_eq!(
+        after_cable, cable_bindings,
+        "Mapping neither reparents the near cable attachment nor alters its far end"
+    );
     assert_eq!(binding(&store, &new)?.to, Some(position));
     let usage = store.usage()?;
     assert_eq!(
