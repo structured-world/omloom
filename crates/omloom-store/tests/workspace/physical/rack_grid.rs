@@ -29,6 +29,7 @@ fn rack_grid_survives_reopen_without_per_unit_records_or_repeat_writes() -> Test
         api::physical::Action::Read(api::PhysicalRead {
             enclosure: Some(rack),
             occupants: false,
+            after: None,
         }),
     )?;
     assert_eq!(read.definitions[0], facts);

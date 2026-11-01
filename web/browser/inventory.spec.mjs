@@ -52,6 +52,37 @@ async function workspaceClient(url) {
   return { m, rpc, revision };
 }
 
+test('installed parts are paged in desktop and phone physical planners',async({browser})=>{
+  // Large inventories expose bounded pages, including parts without drawable coordinates.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-occupant-pages-'));const server=await host(dir);
+  try{
+    const {m,rpc}=await workspaceClient(server.url);
+    async function resource(kind,name){return (await rpc({oneofKind:'write',write:m.Write.create({kind,changes:[{name:'name',value:{oneofKind:'text',text:name}}]})})).mutation.targets[0];}
+    const rack=await resource(m.AssetKind.RACK,'Paged enclosure');
+    for(let i=0;i<26;i++){
+      const part=await resource(m.AssetKind.DEVICE,`Paged installed part ${i}`);
+      await rpc({oneofKind:'relation',relation:m.Relationship.create({relation:{from:part,to:rack,kind:m.RelationKind.INSTALLED_IN}})});
+    }
+    for(const width of [1440,390]){
+      const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600});
+      try{
+        await page.goto(`${server.url}/#/?asset=${rack.assetId}&incarnation=${rack.incarnation}`);
+        await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
+        const planner=page.locator('.physical-planner');
+        await planner.getByText('Reported placement coordinates',{exact:true}).click();
+        const table=planner.getByRole('region',{name:'Reported coordinate table',exact:true});
+        await expect(table.locator('tbody tr')).toHaveCount(25);
+        await planner.getByRole('button',{name:'Next installed-part page',exact:true}).click();
+        await expect(table.locator('tbody tr')).toHaveCount(1);
+        await expect(planner.getByRole('button',{name:'Next installed-part page',exact:true})).toHaveCount(0);
+        await planner.getByRole('button',{name:'First installed-part page',exact:true}).click();
+        await expect(table.locator('tbody tr')).toHaveCount(25);
+        expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+      }finally{await page.close();}
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('binding postcondition picker reaches permitted relations beyond the first page',async({page})=>{
   // A binding outside the first authorized page must remain selectable, without loading the estate.
   const dir=await mkdtemp(join(tmpdir(),'omloom-binding-picker-'));const server=await host(dir);

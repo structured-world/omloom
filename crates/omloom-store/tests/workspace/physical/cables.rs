@@ -79,6 +79,7 @@ fn breakout_channels_have_two_ends_and_one_assembly_identity() -> TestResult {
         api::physical::Action::Read(api::PhysicalRead {
             enclosure: Some(cable),
             occupants: false,
+            after: None,
         }),
     )?;
     assert_eq!(

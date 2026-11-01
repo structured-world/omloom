@@ -773,6 +773,10 @@ horizontal axis and orders reported bodies from far to near; proposed placements
 remain explicit overlays. Switching faces changes no inventory coordinates.
 The reported coordinate table keeps exact values available, including geometry
 that cannot be drawn, in pages of 25 without loading neighboring infrastructure.
+Installed parts are fetched one server page at a time. Continuations are bound
+to the enclosure, working scope, permissions and inventory revision. A page is
+not a claim of complete occupancy or free capacity; admission checks all relevant
+current occupants and reservations independently of the displayed page.
 An optional sourced rail grid records its top Y coordinate, unit count, lowest
 printed number and numbering direction on the current rack profile. Cabinet
 height does not supply these facts. Printed U selection follows this declaration

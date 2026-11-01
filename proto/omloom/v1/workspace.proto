@@ -2000,6 +2000,10 @@ message PhysicalRead {
   // Explicit next-level installed-component projection. False reads only the
   // selected resource's facts, without traversing its children.
   bool occupants = 2;
+  // Server-returned continuation for the same selected enclosure, working scope,
+  // authority and inventory revision. Absent starts the first page of 25 parts.
+  // At most 256 UTF-8 bytes; requires occupants=true and grants no additional access.
+  optional string after = 3;
 }
 message PhysicalPlanKey {
   // Exact saved plan identity returned by its save command, not a capability.
@@ -2259,11 +2263,12 @@ message PhysicalView {
   RequirementState state = 4;
   // Machine-readable missing/conflicting basis without hidden occupant identities.
   RequirementReason reason = 5;
-  // Only permitted current occupants of the selected enclosure, maximum 128.
+  // One page of permitted current occupants of the selected enclosure, maximum 25.
   repeated PhysicalOccupancy occupancy = 6;
   // At most 25 owner-visible plan summaries, without child or occupancy hydration.
   repeated PhysicalPlanSummary plans = 7;
-  // Continuation for the same owner; it supplies no resource or plan authority.
+  // Continuation for the same selected query. Occupant pages bind enclosure,
+  // working scope, authority and revision. It supplies no resource or plan authority.
   optional string next = 8;
   // Currently permitted direct structural positions, at most 25 per query.
   repeated PhysicalPosition positions = 9;

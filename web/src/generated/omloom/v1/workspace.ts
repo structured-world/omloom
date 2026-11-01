@@ -4618,6 +4618,14 @@ export interface PhysicalRead {
      * @generated from protobuf field: bool occupants = 2
      */
     occupants: boolean;
+    /**
+     * Server-returned continuation for the same selected enclosure, working scope,
+     * authority and inventory revision. Absent starts the first page of 25 parts.
+     * At most 256 UTF-8 bytes; requires occupants=true and grants no additional access.
+     *
+     * @generated from protobuf field: optional string after = 3
+     */
+    after?: string;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.PhysicalPlanKey
@@ -5355,7 +5363,7 @@ export interface PhysicalView {
      */
     reason: RequirementReason;
     /**
-     * Only permitted current occupants of the selected enclosure, maximum 128.
+     * One page of permitted current occupants of the selected enclosure, maximum 25.
      *
      * @generated from protobuf field: repeated omloom.workspace.v1.PhysicalOccupancy occupancy = 6
      */
@@ -5367,7 +5375,8 @@ export interface PhysicalView {
      */
     plans: PhysicalPlanSummary[];
     /**
-     * Continuation for the same owner; it supplies no resource or plan authority.
+     * Continuation for the same selected query. Occupant pages bind enclosure,
+     * working scope, authority and revision. It supplies no resource or plan authority.
      *
      * @generated from protobuf field: optional string next = 8
      */
@@ -8982,7 +8991,8 @@ class PhysicalRead$Type extends MessageType<PhysicalRead> {
     constructor() {
         super("omloom.workspace.v1.PhysicalRead", [
             { no: 1, name: "enclosure", kind: "message", T: () => AssetRef },
-            { no: 2, name: "occupants", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+            { no: 2, name: "occupants", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 3, name: "after", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
         ]);
     }
 }

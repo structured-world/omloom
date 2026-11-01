@@ -302,6 +302,7 @@ impl Tx<'_> {
         context: &Context,
         enclosure: AssetRef,
         working: &api::WorkingContext,
+        after: Option<&str>,
         view: &mut api::PhysicalView,
     ) -> Result<()> {
         if let Some(focus) = working.focus.as_ref()
@@ -309,7 +310,22 @@ impl Tx<'_> {
         {
             return Ok(());
         }
+        let fingerprint =
+            assets::detail_page_fingerprint(context, working, enclosure, "physical-occupants");
+        let after = if let Some(cursor) = after {
+            let value = assets::page_position(
+                cursor,
+                view.revision,
+                &fingerprint,
+                context.authority_revision,
+            )?;
+            RelationId::parse(value).map_err(|_| Error::Invalid)?;
+            format!("relation/{value}")
+        } else {
+            String::new()
+        };
         let mut values = HashMap::from([
+            ("after".into(), text(after)),
             ("key".into(), text(asset_key(enclosure))),
             ("asset".into(), text(enclosure.asset.to_string())),
             (
@@ -320,9 +336,15 @@ impl Tx<'_> {
             ("adopted".into(), int(wire::Adoption::Adopted as u64)?),
         ]);
         let visible = assets::visible_clause_for(context, Some("physical"), &mut values, "a");
-        let rows=self.query(&format!("MATCH (p:OmRow {{key:$key}})<-[:OmRelationTo]-(r:OmRow) WHERE r.parent='relations' AND r.kind=$kind AND r.to_asset=$asset AND r.to_incarnation=$incarnation WITH r, 'asset/'+r.asset AS key MATCH (a:OmRow {{key:key}}) WHERE a.incarnation=r.incarnation AND a.adoption=$adopted AND {visible} RETURN {{binding:properties(r), item:properties(a)}} AS p LIMIT 129"),Some(values))?;
-        if rows.len() > 128 {
-            return Err(Error::Limit);
+        let mut rows=self.query(&format!("MATCH (p:OmRow {{key:$key}})<-[:OmRelationTo]-(r:OmRow) WHERE r.parent='relations' AND r.kind=$kind AND r.to_asset=$asset AND r.to_incarnation=$incarnation AND r.key>$after WITH r, 'asset/'+r.asset AS key MATCH (a:OmRow {{key:key}}) WHERE a.incarnation=r.incarnation AND a.adoption=$adopted AND {visible} RETURN {{binding:properties(r), item:properties(a)}} AS p ORDER BY r.key LIMIT 26"),Some(values))?;
+        if rows.len() > 25 {
+            rows.truncate(25);
+            view.next = Some(format!(
+                "{}:{fingerprint}:{}:{}",
+                view.revision,
+                context.authority_revision,
+                binding_id(map(&rows[24], "binding")?)?
+            ));
         }
         let mut poses = BTreeMap::new();
         let keys = rows

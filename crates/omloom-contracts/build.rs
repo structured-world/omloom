@@ -89,7 +89,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 } else if message.name() == "PhysicalMaterial" && field.name() == "specifications" {
                     12
                 } else if message.name() == "PhysicalView" && field.name() == "occupancy" {
-                    128
+                    25
                 } else if message.name() == "PhysicalView"
                     && matches!(field.name(), "plans" | "positions" | "replacement_quality")
                 {

@@ -210,7 +210,8 @@ fn availability_offer_hides_occupants_and_obeys_revoke() -> TestResult {
             &recipient,
             api::physical::Action::Read(api::PhysicalRead {
                 enclosure: Some(rack),
-                occupants: true
+                occupants: true,
+                after: None,
             })
         ),
         Err(Error::Denied)

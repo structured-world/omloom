@@ -52,6 +52,7 @@ fn changed_geometry_does_not_discard_an_attributed_manual_installation() -> Test
         api::physical::Action::Read(api::PhysicalRead {
             enclosure: Some(rack),
             occupants: true,
+            after: None,
         }),
     )?;
     assert_eq!(current.occupancy.len(), 1);

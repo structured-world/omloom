@@ -134,6 +134,7 @@ fn future_unit_placement_reserves_before_receipt_and_records_only_real_inventory
         api::physical::Action::Read(api::PhysicalRead {
             enclosure: Some(rack),
             occupants: true,
+            after: None,
         }),
     )?;
     assert_eq!(view.occupancy.len(), 1);

@@ -113,6 +113,46 @@ fn browse_clause(
     )
 }
 
+pub(super) fn detail_page_fingerprint(
+    context: &Context,
+    working: &api::WorkingContext,
+    target: AssetRef,
+    domain: &str,
+) -> String {
+    query_fingerprint(
+        &api::Query {
+            roots: working.roots.clone(),
+            focus: Some(target_wire(target)),
+            search: format!("{domain}/{:?}", working.focus),
+            ..Default::default()
+        },
+        context,
+    )
+}
+
+pub(super) fn page_position<'a>(
+    cursor: &'a str,
+    revision: u64,
+    fingerprint: &str,
+    authority: u64,
+) -> Result<&'a str> {
+    if cursor.len() > 256 {
+        return Err(Error::Invalid);
+    }
+    let mut parts = cursor.split(':');
+    if parts.next().and_then(|s| s.parse::<u64>().ok()) != Some(revision)
+        || parts.next() != Some(fingerprint)
+        || parts.next().and_then(|s| s.parse::<u64>().ok()) != Some(authority)
+    {
+        return Err(Error::Expired);
+    }
+    let position = parts.next().ok_or(Error::Expired)?;
+    if parts.next().is_some() {
+        return Err(Error::Expired);
+    }
+    Ok(position)
+}
+
 impl Tx<'_> {
     fn relation_page(
         &self,
@@ -122,27 +162,12 @@ impl Tx<'_> {
         cursor: Option<&str>,
     ) -> Result<RelationPage> {
         let revision = number(&self.root, "revision")?;
-        let query = api::Query {
-            roots: working.roots.clone(),
-            focus: Some(target_wire(target)),
-            search: format!("relations/{:?}", working.focus),
-            ..Default::default()
-        };
-        let fingerprint = query_fingerprint(&query, context);
+        let fingerprint = detail_page_fingerprint(context, working, target, "relations");
         let mut offset = 0;
         if let Some(cursor) = cursor {
-            if cursor.len() > 256 {
-                return Err(Error::Invalid);
-            }
-            let parts: Vec<_> = cursor.split(':').collect();
-            if parts.len() != 4
-                || parts[0].parse::<u64>().ok() != Some(revision)
-                || parts[1] != fingerprint
-                || parts[2].parse::<u64>().ok() != Some(context.authority_revision)
-            {
-                return Err(Error::Expired);
-            }
-            offset = parts[3].parse::<u64>().map_err(|_| Error::Invalid)?;
+            offset = page_position(cursor, revision, &fingerprint, context.authority_revision)?
+                .parse::<u64>()
+                .map_err(|_| Error::Invalid)?;
             if offset > 100_000 {
                 return Err(Error::Limit);
             }

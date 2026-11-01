@@ -51,6 +51,7 @@ fn current_and_reserved_clearance_cannot_be_consumed_by_another_body() -> TestRe
         api::physical::Action::Read(api::PhysicalRead {
             enclosure: Some(first.clone()),
             occupants: false,
+            after: None,
         }),
     )?;
     assert_eq!(read.definitions[0].clearance, facts.clearance);

@@ -535,6 +535,9 @@ impl Store {
                 }
             }
             Action::Read(read) => {
+                if read.after.is_some() && !read.occupants {
+                    return Err(Error::Invalid);
+                }
                 let target = parse_target(read.enclosure.as_ref())?;
                 tx.physical_access(context, target, working, false)?;
                 if let Some(value) = tx.physical_definition(target)? {
@@ -542,7 +545,13 @@ impl Store {
                 }
                 tx.physical_equipment_projection(context, target, &mut view)?;
                 if read.occupants {
-                    tx.read_physical_current(context, target, working, &mut view)?;
+                    tx.read_physical_current(
+                        context,
+                        target,
+                        working,
+                        read.after.as_deref(),
+                        &mut view,
+                    )?;
                 }
             }
             Action::Define(edit) => {

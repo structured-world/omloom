@@ -13,6 +13,7 @@ const props = defineProps<{target:AssetRef;kind:number;working:model.WorkingCont
 const emit=defineEmits<{changed:[]}>();
 const opened=ref(false),busy=ref(false),error=ref(''),notice=ref('');
 const view=ref(model.PhysicalView.create());
+const revision=ref(props.working.expected);
 const plans=ref<model.PhysicalPlanSummary[]>([]),next=ref<string>();
 const plan=ref<model.PhysicalPlan>(),name=ref(''),deadline=ref(''),discrepancy=ref('');
 const assessment=ref<{state:number;reason:number;revision:bigint}>();
@@ -64,11 +65,10 @@ const oldOccupancy=computed(()=>sourceView.value?.occupancy??view.value.occupanc
 const actualReport=ref(false),notPerformed=ref<number[]>([]);
 const unit=ref('1'),side=ref<Face>('front'),lane=ref('left'),selected=ref<number[]>([]);
 const elevation=ref<SVGSVGElement>();
-const coordinatesOpen=ref(false),coordinatePage=ref(0);
-watch(()=>view.value.occupancy,()=>{coordinatePage.value=0;});
-const coordinateRows=computed(()=>view.value.occupancy.slice(coordinatePage.value*25,(coordinatePage.value+1)*25));
+const coordinatesOpen=ref(false);
+const coordinateRows=computed(()=>view.value.occupancy);
 function coordinate(value:model.PhysicalExtent|undefined){return value===undefined?'Unavailable':`${millimetres(value.startUm)} + ${millimetres(value.lengthUm)}`;}
-const working=()=>model.WorkingContext.create({roots:props.working.roots,expected:view.value.revision});
+const working=()=>model.WorkingContext.create({roots:props.working.roots,expected:revision.value});
 const editable=computed(()=>plan.value===undefined||plan.value.state===model.PhysicalPlanState.DRAFT);
 const geometryEditable=computed(()=>mode.value==='placement'||(mode.value==='replacement'&&props.kind===K.RACK&&!removePart.value));
 const reservable=computed(()=>plan.value?.state===model.PhysicalPlanState.DRAFT);
@@ -89,8 +89,8 @@ const label=(target:AssetRef|undefined)=>target===undefined?undefined:labels.val
 async function invoke(action:model.Physical['action']) {
   const response=await call({oneofKind:'physical',physical:{action}},working());
   if(response.oneofKind!=='physical')throw Error('Physical planning is unavailable.');
-  if((action.oneofKind==='save'||action.oneofKind==='reserve'||action.oneofKind==='complete'||action.oneofKind==='cancel'||action.oneofKind==='receive'||action.oneofKind==='reviewReplacement')&&response.physical.revision!==view.value.revision)changed=true;
-  view.value.revision=response.physical.revision;
+  if((action.oneofKind==='save'||action.oneofKind==='reserve'||action.oneofKind==='complete'||action.oneofKind==='cancel'||action.oneofKind==='receive'||action.oneofKind==='reviewReplacement')&&response.physical.revision!==revision.value)changed=true;
+  revision.value=response.physical.revision;
   if(response.physical.plan)planItems.value=response.physical.items;
   return response.physical;
 }
@@ -105,8 +105,8 @@ async function summaries(after?:string) {
   const reply=await invoke({oneofKind:'list',list:{after,limit:25}});
   plans.value=reply.plans;next.value=reply.next;
 }
-async function refresh(resetGrid=true) {
-  const reply=await invoke({oneofKind:'read',read:{enclosure:props.target,occupants:true}});
+async function refresh(resetGrid=true,after?:string) {
+  const reply=await invoke({oneofKind:'read',read:{enclosure:props.target,occupants:true,after}});
   view.value=reply;
   if(resetGrid&&rackGrid.value)unit.value=String(rackGrid.value.firstUnit);
   if(props.kind===K.CABLE)await loadEnds();
@@ -182,6 +182,7 @@ async function chooseSource(item?:model.Item) {
   if(!item?.target)return;
   await run(async()=>{sourceView.value=await invoke({oneofKind:'read',read:{enclosure:item.target,occupants:true}});source.value=item.target;});
 }
+async function sourcePage(after?:string){if(!source.value)return;await run(async()=>{sourceView.value=await invoke({oneofKind:'read',read:{enclosure:source.value,occupants:true,after}});predecessor.value='';});}
 watch([moving,reseat,predecessor],([move,same,selected],[wasMoving,wasSame])=>{
   if(props.kind!==K.RACK)return;
   if(move||same){const items=sourceView.value?.items??view.value.items;void choose(items.find(item=>key(item.target)===selected));}
@@ -377,11 +378,13 @@ async function exportPlan(){await run(async()=>{
 <rect v-for="entry in plannedProjection" :key="placementKey(entry.p)" v-bind="entry.rect" class="proposed"><title>Planned placement: <template v-if="entry.name">{{entry.name}}</template><template v-else>Equipment name unavailable</template></title></rect>
 </svg>
 </template><p v-else>Known enclosure geometry is needed for an elevation. Available recorded coordinates and draft editing remain accessible.</p>
+<p>Showing one page of permitted installed parts, not a declaration of complete occupancy or free capacity.</p>
+<button type="button" :disabled="busy" @click="run(()=>refresh(false))">First installed-part page</button><button v-if="view.next" type="button" :disabled="busy" @click="run(()=>refresh(false,view.next))">Next installed-part page</button>
 <p v-if="reportedProjection.length<view.occupancy.length">Some placements have no drawable coordinates in this view. The coordinate table preserves their available facts.</p>
 <details v-if="view.occupancy.length" @toggle="coordinatesOpen=($event.target as HTMLDetailsElement).open"><summary>Reported placement coordinates</summary>
 <template v-if="coordinatesOpen"><p>Start + length in millimetres in the recorded enclosure frame. Changing the viewing face changes no physical coordinates.</p>
 <div class="coordinate-table" tabindex="0" role="region" aria-label="Reported coordinate table"><table><thead><tr><th>Equipment</th><th>X (mm)</th><th>Y (mm)</th><th>Z (mm)</th></tr></thead><tbody><tr v-for="(entry,index) in coordinateRows" :key="index"><th><template v-if="label(entry.placement?.item)">{{label(entry.placement?.item)}}</template><template v-else>Equipment name unavailable</template></th><td v-for="axis in axes" :key="axis">{{coordinate(entry.placement?.volume?.[axis])}}</td></tr></tbody></table></div>
-<div class="placement-controls"><button type="button" :disabled="coordinatePage===0" @click="coordinatePage--">Previous reported positions</button><button type="button" :disabled="(coordinatePage+1)*25>=view.occupancy.length" @click="coordinatePage++">Next reported positions</button></div></template>
+</template>
 </details>
 </section>
 <section aria-label="Installation plan editor">
@@ -395,6 +398,7 @@ async function exportPlan(){await run(async()=>{
 <template v-else-if="mode==='replacement'">
 <label class="outcome"><input v-model="moving" type="checkbox" @change="sourceView=undefined;source=undefined;predecessor=''"/>Move an established part from another enclosure</label>
 <PlacementSearch v-if="moving" kind="enclosure" :roots="working().roots" @select="chooseSource"/>
+<template v-if="moving&&source"><button type="button" :disabled="busy" @click="sourcePage()">First source-part page</button><button v-if="sourceView?.next" type="button" :disabled="busy" @click="sourcePage(sourceView.next)">Next source-part page</button></template>
 <label>Known predecessor or moving part<select v-model="predecessor"><option value="">Predecessor unresolved, not a declaration of an empty position</option><option v-for="occupant in oldOccupancy" :key="key(occupant.placement?.item)" :value="key(occupant.placement?.item)"><template v-if="label(occupant.placement?.item)">{{label(occupant.placement?.item)}}</template><template v-else>Component name unavailable</template></option></select></label>
 <template v-if="!moving">
 <label class="outcome"><input v-model="removePart" type="checkbox" @change="reseat=false"/>Remove the known part without installing another</label>

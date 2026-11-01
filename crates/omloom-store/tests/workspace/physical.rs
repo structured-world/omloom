@@ -15,6 +15,8 @@ mod endpoint_mappings;
 mod materials;
 #[path = "physical/mounting.rs"]
 mod mounting;
+#[path = "physical/occupancy.rs"]
+mod occupancy;
 #[path = "physical/power.rs"]
 mod power;
 #[path = "physical/rack_grid.rs"]
@@ -129,6 +131,7 @@ fn physical_definition_is_current_bounded_and_durable() -> TestResult {
         api::physical::Action::Read(api::PhysicalRead {
             enclosure: Some(rack.clone()),
             occupants: false,
+            after: None,
         }),
     )?;
     assert_eq!(state.definitions, vec![definition.clone()]);
@@ -141,6 +144,7 @@ fn physical_definition_is_current_bounded_and_durable() -> TestResult {
         api::physical::Action::Read(api::PhysicalRead {
             enclosure: Some(rack),
             occupants: false,
+            after: None,
         }),
     )?;
     assert_eq!(state.definitions, vec![definition]);
@@ -235,6 +239,7 @@ fn physical_field_denial_precedes_decoding_and_writes() -> TestResult {
             api::physical::Action::Read(api::PhysicalRead {
                 enclosure: Some(rack.clone()),
                 occupants: false,
+                after: None,
             })
         ),
         Err(Error::Denied)
@@ -362,6 +367,7 @@ fn physical_fact_projection_stays_shallow_and_filters_equipment_before_decoding(
         api::physical::Action::Read(api::PhysicalRead {
             enclosure: Some(rack.clone()),
             occupants: false,
+            after: None,
         }),
     )?;
     assert!(facts.occupancy.is_empty());
@@ -372,6 +378,7 @@ fn physical_fact_projection_stays_shallow_and_filters_equipment_before_decoding(
         api::physical::Action::Read(api::PhysicalRead {
             enclosure: Some(rack),
             occupants: true,
+            after: None,
         }),
     )?;
     assert_eq!(occupants.occupancy.len(), 1);
@@ -381,6 +388,7 @@ fn physical_fact_projection_stays_shallow_and_filters_equipment_before_decoding(
         api::physical::Action::Read(api::PhysicalRead {
             enclosure: Some(item.clone()),
             occupants: false,
+            after: None,
         }),
     )?;
     assert_eq!(
@@ -400,6 +408,7 @@ fn physical_fact_projection_stays_shallow_and_filters_equipment_before_decoding(
         api::physical::Action::Read(api::PhysicalRead {
             enclosure: Some(item),
             occupants: false,
+            after: None,
         }),
     )?;
     let names = selected.items[0]
@@ -581,6 +590,7 @@ fn completion_preserves_actual_occupancy_and_reuses_inventory_containment() -> T
         api::physical::Action::Read(api::PhysicalRead {
             enclosure: Some(rack.clone()),
             occupants: true,
+            after: None,
         }),
     )?;
     assert_eq!(view.occupancy.len(), 1);
@@ -607,6 +617,7 @@ fn completion_preserves_actual_occupancy_and_reuses_inventory_containment() -> T
         api::physical::Action::Read(api::PhysicalRead {
             enclosure: Some(rack),
             occupants: true,
+            after: None,
         }),
     )?;
     assert_eq!(view.occupancy.len(), 1);
@@ -621,6 +632,7 @@ fn completion_preserves_actual_occupancy_and_reuses_inventory_containment() -> T
                 .as_ref()
                 .and_then(|p| p.enclosure.clone()),
             occupants: true,
+            after: None,
         }),
     )?;
     assert_eq!(view.occupancy.len(), 1);
@@ -797,6 +809,7 @@ fn structural_positions_are_scoped_current_and_not_populated_implicitly() -> Tes
         api::physical::Action::Read(api::PhysicalRead {
             enclosure: position.target.clone(),
             occupants: true,
+            after: None,
         }),
     )?;
     assert!(read.occupancy.is_empty());
@@ -1090,6 +1103,7 @@ fn whole_chassis_replacement_requires_explicit_rack_placement() -> TestResult {
         api::physical::Action::Read(api::PhysicalRead {
             enclosure: Some(rack),
             occupants: true,
+            after: None,
         }),
     )?;
     assert_eq!(view.occupancy.len(), 1);
@@ -1794,6 +1808,7 @@ fn generic_relation_removal_removes_current_placement_and_pose() -> TestResult {
         api::physical::Action::Read(api::PhysicalRead {
             enclosure: Some(rack.clone()),
             occupants: true,
+            after: None,
         }),
     )?;
     assert!(
@@ -1819,6 +1834,7 @@ fn generic_relation_removal_removes_current_placement_and_pose() -> TestResult {
         api::physical::Action::Read(api::PhysicalRead {
             enclosure: Some(rack),
             occupants: true,
+            after: None,
         }),
     )?;
     assert!(after.occupancy.is_empty());
@@ -1854,6 +1870,7 @@ fn generic_relation_rebinding_invalidates_old_coordinates() -> TestResult {
         api::physical::Action::Read(api::PhysicalRead {
             enclosure: Some(rack),
             occupants: true,
+            after: None,
         }),
     )?;
     assert!(old.occupancy.is_empty());
@@ -1863,6 +1880,7 @@ fn generic_relation_rebinding_invalidates_old_coordinates() -> TestResult {
         api::physical::Action::Read(api::PhysicalRead {
             enclosure: Some(other.clone()),
             occupants: true,
+            after: None,
         }),
     )?;
     assert_eq!(destination.occupancy.len(), 1);
@@ -1935,6 +1953,7 @@ fn reservation_region_tracks_the_owning_step_until_explicit_resolution() -> Test
         api::physical::Action::Read(api::PhysicalRead {
             enclosure: Some(rack),
             occupants: true,
+            after: None,
         }),
     )?;
     assert_eq!(current.occupancy.len(), 1);
