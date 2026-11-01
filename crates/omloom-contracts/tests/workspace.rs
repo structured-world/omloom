@@ -1,6 +1,43 @@
 use omloom_contracts::{Error, Limits, MemoryBudget, decode_workspace, workspace as api};
 use prost::Message;
 
+// The evaluator's eight-reference bound must reject oversized frames before decoded allocation.
+#[test]
+fn power_path_reference_counts_are_bounded_before_decode() {
+    for sources in [true, false] {
+        for count in [8, 9] {
+            let refs = vec![Default::default(); count];
+            let mut paths = api::PowerPathRequirement::default();
+            if sources {
+                paths.sources = refs;
+            } else {
+                paths.boundaries = refs;
+            }
+            let bytes = api::Request {
+                command: Some(api::request::Command::EvaluateRequirements(
+                    api::EvaluateRequirements {
+                        nodes: vec![api::RequirementNode {
+                            expression: Some(api::requirement_node::Expression::PowerPaths(paths)),
+                        }],
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            }
+            .encode_to_vec();
+            let budget = MemoryBudget::new(16 * 1_048_576);
+            let decoded = decode_workspace(&bytes, Limits::default(), &budget);
+            if count == 9 {
+                assert!(matches!(decoded, Err(Error::Limit)));
+            } else {
+                assert!(decoded.is_ok());
+            }
+            drop(decoded);
+            assert_eq!(budget.used(), 0);
+        }
+    }
+}
+
 // Physical wire containers enforce repeated bounds before prost allocates their vectors.
 #[test]
 fn physical_channels_and_endpoint_maps_are_bounded_before_decode() {

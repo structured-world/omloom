@@ -71,6 +71,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                     && matches!(field.name(), "candidates" | "excluded")
                 {
                     16
+                } else if message.name() == "PowerPathRequirement"
+                    && matches!(field.name(), "sources" | "boundaries")
+                {
+                    8
                 } else if (message.name() == "EvaluateRequirements" && field.name() == "nodes")
                     || (message.name() == "RequirementGroup" && field.name() == "members")
                     || (message.name() == "PhysicalPlan" && field.name() == "steps")
