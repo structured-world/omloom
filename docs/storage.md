@@ -168,8 +168,8 @@ envelope, but are **application accounting**, not total filesystem allocation.
 Pinned detail and unresolved work count against their budgets. Admission fails
 atomically when it cannot fit; it does not evict safety state.
 
-This unreleased storage format uses schema version 14. Supported versions 2
-through 13 upgrade in bounded restartable batches, including asset name/sort
+This unreleased storage format uses schema version 22. Supported versions 2
+through 21 upgrade in bounded restartable batches, including asset name/sort
 projections from accepted intent, normalized IP
 ordering and source-scoped current observation facts with separate freshness
 and accounting. No inventory history is added. The upgrade keeps restore fences
