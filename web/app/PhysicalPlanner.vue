@@ -67,6 +67,8 @@ const sourceView=ref<model.PhysicalView>();
 const oldOccupancy=computed(()=>sourceView.value?.occupancy??view.value.occupancy);
 const actualReport=ref(false),notPerformed=ref<number[]>([]);
 const unit=ref('1'),side=ref<Face>('front'),lane=ref('left'),selected=ref<number[]>([]);
+function resetReport(){actualReport.value=false;selected.value=[];notPerformed.value=[];discrepancy.value='';}
+function newPlan(){plan.value=undefined;name.value='';resetReport();}
 const elevation=ref<SVGSVGElement>();
 const coordinatesOpen=ref(false);
 const coordinateRows=computed(()=>view.value.occupancy);
@@ -149,7 +151,7 @@ async function open() {
 async function load(saved:model.PhysicalPlanSummary) {
   await run(async()=>{
     const reply=await invoke({oneofKind:'load',load:{id:saved.id,revision:saved.revision}});
-    acceptPlan(reply.plan);selected.value=[];notPerformed.value=[];
+    acceptPlan(reply.plan);resetReport();
   });
 }
 let selection=0;
@@ -371,7 +373,7 @@ async function exportPlan(){await run(async()=>{
 <p v-if="assessment">Checked at inventory revision {{assessment.revision.toString()}}. Reservation checks the current state again; this is not authority or proof of installation.</p>
 <template v-if="opened">
 <section aria-label="Saved physical plans"><h3>My plans</h3>
-<button type="button" :disabled="busy" @click="plan=undefined;name='';selected=[]">New installation plan</button>
+<button type="button" :disabled="busy" @click="newPlan">New installation plan</button>
 <ul><li v-for="saved in plans" :key="saved.id"><button type="button" :disabled="busy" @click="load(saved)">{{saved.name}} · {{state(saved.state)}}</button></li></ul>
 <button v-if="next" type="button" :disabled="busy" @click="run(()=>summaries(next))">Next saved plans</button>
 </section>

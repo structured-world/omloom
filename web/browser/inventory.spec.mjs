@@ -152,6 +152,49 @@ test('replacement judgments invalidate quality pagination on desktop and phone',
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
 });
 
+test('physical report mode resets for new and loaded plans on desktop and phone',async({browser})=>{
+  // Explicit actual-work declarations and unsent notes belong to one plan, including when reloading its ID.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-report-mode-'));const server=await host(dir);
+  try{
+    const {m,rpc}=await workspaceClient(server.url);
+    async function resource(kind,name){return (await rpc({oneofKind:'write',write:m.Write.create({kind,changes:[{name:'name',value:{oneofKind:'text',text:name}}]})})).mutation.targets[0];}
+    const rack=await resource(m.AssetKind.RACK,'Report enclosure');
+    const old=await resource(m.AssetKind.DEVICE,'Report predecessor');
+    await rpc({oneofKind:'relation',relation:m.Relationship.create({relation:{from:old,to:rack,kind:m.RelationKind.INSTALLED_IN}})});
+    const binding=(await rpc({oneofKind:'read',read:m.Read.create({target:old})})).detail.relations.find(r=>r.kind===m.RelationKind.INSTALLED_IN);
+    expect(binding).toBeDefined();
+    for(const width of [1440,390])await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'save',save:{plan:m.PhysicalPlan.create({name:`Report mode ${width}`,steps:[{action:{oneofKind:'replacement',replacement:{position:rack,previous:old,previousBinding:binding.relationId,previousRevision:binding.revision}}}]})}}})});
+    for(const width of [1440,390]){
+      const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600});
+      try{
+        await page.goto(`${server.url}/#/?asset=${rack.assetId}&incarnation=${rack.incarnation}`);
+        await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
+        const planner=page.locator('.physical-planner');
+        const load=planner.getByRole('button',{name:`Report mode ${width} · draft`,exact:true});
+        await load.click();
+        const actual=planner.getByLabel('Record physical work already performed outside Omloom',{exact:true});
+        await actual.check();
+        await planner.getByLabel('Installation discrepancies',{exact:true}).fill('An unsent note for the loaded plan');
+        await load.click();
+        await expect(actual).not.toBeChecked();
+        await actual.check();
+        await expect(planner.getByLabel('Installation discrepancies',{exact:true})).toHaveValue('');
+        await planner.getByLabel('Installation discrepancies',{exact:true}).fill('An unsent note before starting another plan');
+        await planner.getByLabel('Confirmed not performed',{exact:true}).check();
+        await planner.getByRole('button',{name:'New installation plan',exact:true}).click();
+        await planner.getByRole('button',{name:'Replace, remove or move a part',exact:true}).click();
+        await planner.getByRole('combobox',{name:'Known predecessor or moving part',exact:true}).selectOption({label:'Report predecessor'});
+        await planner.getByLabel('Remove the known part without installing another',{exact:true}).check();
+        await planner.getByRole('button',{name:'Add reviewed physical transition',exact:true}).click();
+        await expect(actual).not.toBeChecked();
+        await actual.check();
+        await expect(planner.getByLabel('Installation discrepancies',{exact:true})).toHaveValue('');
+        await expect(planner.getByLabel('Confirmed not performed',{exact:true})).not.toBeChecked();
+      }finally{await page.close();}
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('replacement endpoint review follows shifted plan steps',async({browser})=>{
   // Removing a preceding step must reset decisions and reload the open previous-port page.
   const dir=await mkdtemp(join(tmpdir(),'omloom-shifted-replacement-'));const server=await host(dir);
