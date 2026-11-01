@@ -1,5 +1,27 @@
 use super::*;
 
+fn claim_endpoint(
+    set: &mut BTreeSet<(AssetRef, Option<u32>)>,
+    port: AssetRef,
+    channel: Option<u32>,
+) -> Result<()> {
+    if channel.is_none() {
+        if set
+            .range((port, None)..=(port, Some(4096)))
+            .next()
+            .is_some()
+        {
+            return Err(Error::Conflict);
+        }
+    } else if set.contains(&(port, None)) {
+        return Err(Error::Conflict);
+    }
+    if !set.insert((port, channel)) {
+        return Err(Error::Conflict);
+    }
+    Ok(())
+}
+
 pub(super) fn replacement_row(value: &api::PhysicalReplacement) -> Result<Properties> {
     let mut row = props([(
         "enclosure",
@@ -32,6 +54,26 @@ pub(super) fn replacement_row(value: &api::PhysicalReplacement) -> Result<Proper
     if let Some(volume) = &value.volume {
         write_volume(&mut row, volume)?;
     }
+    if !value.endpoints.is_empty() {
+        if value.endpoints.len() > 64 {
+            return Err(Error::Limit);
+        }
+        let mappings = api::PhysicalEndpointMappings {
+            pairs: value.endpoints.clone(),
+        };
+        if mappings.pairs.len() > 64 || mappings.encoded_len() > 16_384 {
+            return Err(Error::Limit);
+        }
+        // One bounded review consumes every pair together; none is indexed or
+        // duplicated into the authoritative wiring or endpoint inventory.
+        row.insert("payload".into(), Value::Binary(mappings.encode_to_vec()));
+    }
+    if let Some(feedback) = &value.feedback {
+        if feedback.encoded_len() > 512 {
+            return Err(Error::Limit);
+        }
+        row.insert("working".into(), Value::Binary(feedback.encode_to_vec()));
+    }
     Ok(row)
 }
 pub(super) fn read_replacement(row: &Properties) -> Result<api::PhysicalReplacement> {
@@ -57,6 +99,32 @@ pub(super) fn read_replacement(row: &Properties) -> Result<api::PhysicalReplacem
         previous_revision: row
             .get("expected")
             .map(|_| number(row, "expected"))
+            .transpose()?,
+        endpoints: if row.contains_key("payload") {
+            let bytes = binary(row, "payload")?;
+            if bytes.len() > 16_384 {
+                return Err(Error::Corrupt);
+            }
+            let mappings =
+                api::PhysicalEndpointMappings::decode(bytes).map_err(|_| Error::Corrupt)?;
+            if mappings.pairs.len() > 64 {
+                return Err(Error::Corrupt);
+            }
+            mappings.pairs
+        } else {
+            Vec::new()
+        },
+        feedback: row
+            .get("working")
+            .map(|_| -> Result<Box<api::PhysicalReplacementFeedback>> {
+                let bytes = binary(row, "working")?;
+                if bytes.len() > 512 {
+                    return Err(Error::Corrupt);
+                }
+                api::PhysicalReplacementFeedback::decode(bytes)
+                    .map(Box::new)
+                    .map_err(|_| Error::Corrupt)
+            })
             .transpose()?,
     })
 }
@@ -212,7 +280,162 @@ impl Tx<'_> {
                 return Err(Error::Denied);
             }
         }
+        self.endpoint_mapping_access(context, value, working, write)?;
         Ok(())
+    }
+    fn endpoint_mapping_access(
+        &self,
+        context: &Context,
+        value: &api::PhysicalReplacement,
+        working: &api::WorkingContext,
+        write: bool,
+    ) -> Result<()> {
+        if value.endpoints.len() > 64 {
+            return Err(Error::Limit);
+        }
+        let ports = self.mapping_ports(context, value, working, write)?;
+        let mut sources = BTreeSet::new();
+        let mut destinations = BTreeSet::new();
+        for pair in &value.endpoints {
+            let source = parse_target(pair.previous.as_ref())?;
+            for channel in [pair.previous_channel, pair.replacement_channel]
+                .into_iter()
+                .flatten()
+            {
+                if channel == 0 || channel > 4096 {
+                    return Err(Error::Invalid);
+                }
+            }
+            claim_endpoint(&mut sources, source, pair.previous_channel)?;
+            match api::PhysicalMappingDecision::try_from(pair.decision)
+                .map_err(|_| Error::Invalid)?
+            {
+                api::PhysicalMappingDecision::Unresolved
+                    if pair.replacement.is_none() && pair.replacement_channel.is_none() => {}
+                api::PhysicalMappingDecision::Accepted | api::PhysicalMappingDecision::Rejected
+                    if pair.replacement.is_some() => {}
+                _ => return Err(Error::Invalid),
+            }
+            if let Some(destination) = &pair.replacement {
+                let destination = parse_target(Some(destination))?;
+                if pair.decision == api::PhysicalMappingDecision::Accepted as i32 {
+                    claim_endpoint(&mut destinations, destination, pair.replacement_channel)?;
+                    for (port, channel) in [
+                        (source, pair.previous_channel),
+                        (destination, pair.replacement_channel),
+                    ] {
+                        if let Some(channel) = channel {
+                            let declared = ports.get(&port).is_some_and(|d| d.contains(&channel));
+                            if !declared {
+                                return Err(Error::Incomplete);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    fn mapping_ports(
+        &self,
+        context: &Context,
+        value: &api::PhysicalReplacement,
+        working: &api::WorkingContext,
+        write: bool,
+    ) -> Result<BTreeMap<AssetRef, Vec<u32>>> {
+        let mut owners: BTreeMap<AssetRef, BTreeSet<AssetRef>> = BTreeMap::new();
+        let mut ports = BTreeSet::new();
+        let mut channels = BTreeSet::new();
+        for pair in &value.endpoints {
+            for (owner, port, channel) in [
+                (
+                    value.previous.as_ref(),
+                    pair.previous.as_ref(),
+                    pair.previous_channel,
+                ),
+                (
+                    value.replacement.as_ref(),
+                    pair.replacement.as_ref(),
+                    pair.replacement_channel,
+                ),
+            ] {
+                if let Some(port) = port {
+                    let port = parse_target(Some(port))?;
+                    let owner = parse_target(owner)?;
+                    owners.entry(owner).or_default().insert(port);
+                    ports.insert(port);
+                    if channel.is_some() {
+                        channels.insert(port);
+                    }
+                }
+            }
+        }
+        if ports.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let selection = self.selection(context, working, write)?;
+        let keys = ports.iter().map(|p| text(asset_key(*p))).collect();
+        let mut values = HashMap::from([("keys".into(), Value::Array(keys))]);
+        let visible = assets::visible_clause_for(context, Some("physical"), &mut values, "a");
+        let rows=self.query(&format!("UNWIND $keys AS key MATCH (a:OmRow {{key:key}}) WHERE {visible} RETURN {{asset:a.asset,incarnation:a.incarnation,kind:a.kind,adoption:a.adoption}} AS p LIMIT 128"),Some(values))?;
+        if rows.len() != ports.len() {
+            return Err(Error::Denied);
+        }
+        for row in rows {
+            let target = target(&row)?;
+            if !ports.contains(&target) {
+                return Err(Error::Conflict);
+            }
+            selection.contains(target, self)?;
+            if Self::physical_metadata_access(context, target, &row, write)?
+                != wire::AssetKind::Port
+            {
+                return Err(Error::Invalid);
+            }
+            if !context.field(target, wire::AssetKind::Port as i32, "relations", false) {
+                return Err(Error::Denied);
+            }
+        }
+        // At most two actual suppliers, each with indexed endpoint probes in one
+        // statement. Check exact incarnations before accepting any supplied port.
+        for (owner, expected) in owners {
+            let rows=self.query("UNWIND $ports AS port MATCH (r:OmRow {to_asset:port}) WHERE r.parent='relations' AND r.kind=$kind AND r.asset=$owner AND r.incarnation=$incarnation AND r.to_incarnation IN $incarnations RETURN {asset:r.to_asset,incarnation:r.to_incarnation} AS p LIMIT 129",params([
+                ("ports",Value::Array(expected.iter().map(|p|text(p.asset.to_string())).collect())),
+                ("incarnations",Value::Array(expected.iter().map(|p|text(p.incarnation.to_string())).collect())),
+                ("kind",int(wire::RelationKind::HasPort as u64)?),("owner",text(owner.asset.to_string())),("incarnation",text(owner.incarnation.to_string())),
+            ]))?;
+            if rows.len() > 128 {
+                return Err(Error::Limit);
+            }
+            let mut found = BTreeSet::new();
+            for row in rows {
+                let target = target(&row)?;
+                if expected.contains(&target) {
+                    found.insert(target);
+                }
+            }
+            if found != expected {
+                return Err(Error::Invalid);
+            }
+        }
+        let mut result = BTreeMap::new();
+        if !channels.is_empty() {
+            let keys = channels
+                .iter()
+                .map(|p| text(format!("physical/{}", network::identity(*p))))
+                .collect();
+            for row in self.query(
+                "UNWIND $keys AS key MATCH (p:OmRow {key:key}) RETURN properties(p) AS p LIMIT 128",
+                params([("keys", Value::Array(keys))]),
+            )? {
+                let definition = definition(&row)?;
+                result.insert(
+                    parse_target(definition.target.as_ref())?,
+                    definition.channels,
+                );
+            }
+        }
+        Ok(result)
     }
     pub(super) fn check_replacements(
         &self,
@@ -223,7 +446,12 @@ impl Tx<'_> {
     ) -> Result<()> {
         let mut positions = BTreeSet::new();
         let mut parts = BTreeSet::new();
+        let mut mapping_count = 0usize;
         for replacement in replacement_steps(plan) {
+            if replacement.endpoints.len() > 64 - mapping_count {
+                return Err(Error::Limit);
+            }
+            mapping_count += replacement.endpoints.len();
             self.replacement_access(context, replacement, working, write)?;
             let position = parse_target(replacement.position.as_ref())?;
             if !positions.insert(position)

@@ -18,6 +18,8 @@ const depth = ref('');
 const known = ref(false);
 const maxMass=ref(''),demand=ref(''),capacity=ref(''),cooling=ref(''),coolingCapacity=ref(''),mounting=ref('');
 const componentKind=ref(model.PhysicalComponentKind.UNSPECIFIED);
+const assemblyKind=ref(model.PhysicalAssemblyKind.UNSPECIFIED);
+const channels=ref('');
 const mating=ref<model.PhysicalMating>();
 const clearanceKnown=ref(false);
 const occupancyKnown=ref(false);
@@ -48,6 +50,8 @@ async function load() {
     if (response.oneofKind !== 'physical') throw Error('Physical facts are unavailable.');
     revision.value = response.physical.revision;
     current.value = response.physical.definitions[0];
+    assemblyKind.value=current.value?.assemblyKind??model.PhysicalAssemblyKind.UNSPECIFIED;
+    channels.value=current.value?.channels.join(', ')??'';
     powerSourcesComplete.value=current.value?.powerSourcesComplete===true;
     const grid=current.value?.rackGrid;
     gridKnown.value=grid!==undefined;
@@ -91,6 +95,9 @@ async function save() {
     };
     const definition = model.PhysicalDefinition.create({...current.value,target:props.target,basis:basis.value,volume,componentKind:componentKind.value,maxMassG:quantity(maxMass.value),demandMw:quantity(demand.value),capacityMw:quantity(capacity.value),coolingMw:quantity(cooling.value),coolingCapacityMw:quantity(coolingCapacity.value),mounting:mounting.value===''?undefined:mounting.value});
     definition.mating=mating.value;
+    definition.assemblyKind=assemblyKind.value;
+    definition.channels=channels.value.trim()===''?[]:channels.value.split(',').map(value=>{const text=value.trim();if(!/^[1-9][0-9]{0,3}$/.test(text)||Number(text)>4096)throw Error('Use distinct sourced channel numbers from 1 to 4096.');return Number(text);});
+    if(definition.channels.length>64||new Set(definition.channels).size!==definition.channels.length)throw Error('Use at most 64 distinct sourced channels.');
     definition.powerSourcesComplete=powerSourcesComplete.value;
     definition.rackGrid=undefined;
     if(gridKnown.value){
@@ -161,7 +168,9 @@ async function save() {
     </details>
     </template>
     <button type="submit">Save physical facts</button>
+    <label v-if="kind===AssetKind.CABLE">Assembly construction<select v-model="assemblyKind"><option :value="model.PhysicalAssemblyKind.UNSPECIFIED">Unknown</option><option :value="model.PhysicalAssemblyKind.PASSIVE">Passive cable assembly</option><option :value="model.PhysicalAssemblyKind.DAC">DAC, inseparable end modules</option><option :value="model.PhysicalAssemblyKind.AOC">AOC, inseparable end modules</option></select></label>
     <MatingEditor v-if="kind===AssetKind.PORT" v-model="mating"/>
+    <label v-if="kind===AssetKind.PORT">Known supplied port channels<input v-model="channels" maxlength="384" placeholder="For example: 1, 2, 3, 4"/></label>
   </fieldset>
 </form>
 </details>

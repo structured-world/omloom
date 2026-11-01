@@ -26,7 +26,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         // Keep the request stack bound; allocate this volume only for an explicit coverage assertion.
         .boxed(".omloom.workspace.v1.PhysicalDefinition.occupancy_coverage")
         .boxed(".omloom.workspace.v1.PhysicalDefinition.rack_grid")
+        .boxed(".omloom.workspace.v1.PhysicalDefinition.clearance")
         .boxed(".omloom.workspace.v1.PhysicalMaterial.physical")
+        .boxed(".omloom.workspace.v1.PhysicalReplacement.feedback")
         .file_descriptor_set_path(&descriptor)
         .compile_protos(&[workspace], &["../../proto"])?;
     let set = FileDescriptorSet::decode(fs::read(descriptor)?.as_slice())?;
@@ -77,6 +79,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                         && matches!(field.name(), "completed_steps" | "not_performed_steps"))
                     || (message.name() == "PhysicalPlan" && field.name() == "materials")
                     || (message.name() == "PhysicalMaterial" && field.name() == "allocations")
+                    || (message.name() == "PhysicalReplacement" && field.name() == "endpoints")
+                    || (message.name() == "PhysicalEndpointMappings" && field.name() == "pairs")
+                    || (message.name() == "PhysicalCableEnd" && field.name() == "channels")
+                    || (message.name() == "PhysicalChannelSet" && field.name() == "channels")
+                    || (message.name() == "PhysicalDefinition" && field.name() == "channels")
                 {
                     64
                 } else if message.name() == "PhysicalMaterial" && field.name() == "specifications" {
@@ -84,7 +91,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 } else if message.name() == "PhysicalView" && field.name() == "occupancy" {
                     128
                 } else if message.name() == "PhysicalView"
-                    && matches!(field.name(), "plans" | "positions")
+                    && matches!(field.name(), "plans" | "positions" | "replacement_quality")
                 {
                     25
                 } else if message.name() == "PhysicalView" && field.name() == "items" {

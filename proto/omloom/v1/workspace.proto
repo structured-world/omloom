@@ -1433,7 +1433,22 @@ message RequirementNode {
     // Accepted dependency-path disjointness within explicit boundaries. This
     // does not certify live power, surviving capacity or electrical safety.
     PowerPathRequirement power_paths = 3;
+    // Exact accepted binding basis. Combines with other predicates in the
+    // shared graph; it never certifies observed signal or service availability.
+    BindingRequirement binding = 4;
   }
+}
+message BindingRequirement {
+  // User-selected relation UUID and revision from an authorized current read.
+  string relation_id = 1;
+  // Exact reviewed positive revision. A removed/recreated edge cannot satisfy it.
+  uint64 revision = 2;
+  // Both reviewed endpoints, required to check rights even if the edge is absent.
+  omloom.v1.AssetRef from = 3;
+  // Reviewed destination incarnation, never inferred from a label or position.
+  omloom.v1.AssetRef to = 4;
+  // Reviewed relationship meaning. A matching UUID cannot change its meaning.
+  omloom.v1.RelationKind kind = 5;
 }
 message EvaluateRequirements {
   // Resource whose selected requirements are being inspected in the working context.
@@ -1579,6 +1594,22 @@ message PhysicalDefinition {
   // Optional sourced rack rail grid, independent of cabinet dimensions or occupancy.
   // Missing permits coordinate-based drafts but supplies no rack unit numbering.
   optional PhysicalRackGrid rack_grid = 16;
+  // Sourced assembly construction, only on a Cable. DAC/AOC end modules belong
+  // to this one cable identity; no independently replaceable optics are implied.
+  PhysicalAssemblyKind assembly_kind = 17;
+  // Explicit sourced channel numbers supplied by this physical Port, at most
+  // 64 distinct values from 1 to 4096. Missing is unknown, never all lanes.
+  repeated uint32 channels = 18;
+}
+message PhysicalChannelSet {
+  // Bounded canonical channel set consumed as one physical definition.
+  repeated uint32 channels = 1;
+}
+enum PhysicalAssemblyKind {
+  PHYSICAL_ASSEMBLY_KIND_UNSPECIFIED = 0;
+  PHYSICAL_ASSEMBLY_KIND_PASSIVE = 1;
+  PHYSICAL_ASSEMBLY_KIND_DAC = 2;
+  PHYSICAL_ASSEMBLY_KIND_AOC = 3;
 }
 message PhysicalRackGrid {
   // User/source-measured top of the rail grid in enclosure Y micrometres.
@@ -1717,6 +1748,121 @@ message PhysicalReplacement {
   // geometry until reported; no old pose or physical proof is copied implicitly.
   // Report commits this pose with the new binding in the same transaction.
   optional PhysicalVolume volume = 7;
+  // Explicit reviewed endpoint correspondence, at most 64 pairs across a plan.
+  // It preserves intent only: no cable attachment, runtime identity, configuration
+  // or grants are copied. Unmapped and rejected ports remain explicit.
+  repeated PhysicalEndpointMapping endpoints = 8;
+  // Server-owned current review disposition. Echo unchanged on draft saves;
+  // only the review command may correct it. It never proves a physical effect.
+  optional PhysicalReplacementFeedback feedback = 9;
+}
+enum PhysicalReplacementDecision {
+  PHYSICAL_REPLACEMENT_DECISION_UNSPECIFIED = 0;
+  PHYSICAL_REPLACEMENT_DECISION_CONFIRMED = 1;
+  PHYSICAL_REPLACEMENT_DECISION_REJECTED = 2;
+  PHYSICAL_REPLACEMENT_DECISION_DEFERRED = 3;
+}
+enum PhysicalReplacementStrength {
+  PHYSICAL_REPLACEMENT_STRENGTH_UNSPECIFIED = 0;
+  PHYSICAL_REPLACEMENT_STRENGTH_LIMITED = 1;
+  PHYSICAL_REPLACEMENT_STRENGTH_CONTEXTUAL = 2;
+  PHYSICAL_REPLACEMENT_STRENGTH_ESTABLISHED_IDENTITY = 3;
+}
+enum PhysicalReplacementReason {
+  PHYSICAL_REPLACEMENT_REASON_UNSPECIFIED = 0;
+  PHYSICAL_REPLACEMENT_REASON_MOVED = 1;
+  PHYSICAL_REPLACEMENT_REASON_ADDITIONAL = 2;
+  PHYSICAL_REPLACEMENT_REASON_RESEATED = 3;
+  PHYSICAL_REPLACEMENT_REASON_SOURCE_ERROR = 4;
+  PHYSICAL_REPLACEMENT_REASON_WRONG_PREDECESSOR = 5;
+}
+message PhysicalReplacementFeedback {
+  // Operator judgment, independent of endpoint correspondence and installation.
+  PhysicalReplacementDecision decision = 1;
+  // Optional bounded correction category; no free-text sample corpus.
+  PhysicalReplacementReason reason = 2;
+  // Server fingerprint of the reviewed current evidence, not an identity proof.
+  string basis = 3;
+  // Server-owned correction-window deadline. Expiry never creates a new alert.
+  uint64 until_ms = 4;
+  // Versioned explainable rule, currently 1. No calibrated probability is claimed.
+  uint32 rule = 5;
+  // Server evidence class: 1 limited, 2 contextual, 3 established same-part identity.
+  PhysicalReplacementStrength strength = 6;
+  // Server component class used for the bounded quality bucket, not model inference.
+  PhysicalComponentKind component_kind = 7;
+  // Server opaque disclosure partition. Neither its possession nor a matching
+  // actor name grants access; current complete scope is checked on each request.
+  string scope = 8;
+}
+message PhysicalReplacementReview {
+  // Existing plan and exact revision; no review is implicitly an installation.
+  PhysicalPlanKey plan = 1;
+  // Zero-based replacement step, not an arbitrary resource query.
+  uint32 step = 2;
+  // Absent means read-only explanation. Present explicitly records/corrects
+  // one judgment, requiring the returned basis and current plan revision.
+  optional PhysicalReplacementDecision decision = 3;
+  // Optional bounded reason; supplied only with a decision.
+  PhysicalReplacementReason reason = 4;
+  // Server-returned evidence fingerprint echoed for a conditional decision.
+  optional string basis = 5;
+}
+message PhysicalReplacementHypothesis {
+  // Current evidence fingerprint for an explicit conditional review command.
+  string basis = 1;
+  // Version of the deterministic explanation rules, not a learned predictor.
+  uint32 rule = 2;
+  // Evidence-strength class, independent of compatibility and service health.
+  PhysicalReplacementStrength strength = 3;
+  // Server explanation of the evidence and plausible alternatives.
+  string explanation = 4;
+}
+message PhysicalReplacementQuality {
+  // Component class, rule and strength partition of actual reviewed judgments.
+  PhysicalComponentKind component_kind = 1;
+  // Versioned deterministic rule; counts do not establish predictor accuracy.
+  uint32 rule = 2;
+  // Evidence class, not a calibrated probability.
+  PhysicalReplacementStrength strength = 3;
+  // Current judgment class; deferred is unlabelled, never a negative example.
+  PhysicalReplacementDecision decision = 4;
+  // Bounded reason category, without identities, topology or raw evidence.
+  PhysicalReplacementReason reason = 5;
+  // Number of current contributions, replaced atomically on correction.
+  uint64 count = 6;
+  // End of this finite correction/aggregate window, not a permanent dataset.
+  uint64 until_ms = 7;
+}
+message PhysicalReplacementQualityQuery {
+  // Previous server-returned bucket key. It supplies no disclosure permission.
+  optional string after = 1;
+}
+message PhysicalEndpointMapping {
+  // Existing physical port directly supplied by the previous component.
+  omloom.v1.AssetRef previous = 1;
+  // User-selected port directly supplied by the incoming component. Absent
+  // means unresolved; names, numbering and likelihood never supply this value.
+  optional omloom.v1.AssetRef replacement = 2;
+  // Operator's mapping judgment, independent of accepting the replacement event.
+  PhysicalMappingDecision decision = 3;
+  // Explicit source lane for a breakout; absent selects the entire port.
+  // It must exist in the current sourced port definition before acceptance.
+  optional uint32 previous_channel = 4;
+  // Explicit destination lane, absent selects the entire destination port.
+  // A whole-port allocation and its lane allocations cannot coexist.
+  optional uint32 replacement_channel = 5;
+}
+enum PhysicalMappingDecision {
+  PHYSICAL_MAPPING_DECISION_UNSPECIFIED = 0;
+  PHYSICAL_MAPPING_DECISION_UNRESOLVED = 1;
+  PHYSICAL_MAPPING_DECISION_ACCEPTED = 2;
+  PHYSICAL_MAPPING_DECISION_REJECTED = 3;
+}
+message PhysicalEndpointMappings {
+  // Bounded mappings consumed together by one replacement review, never an
+  // alternative authoritative connectivity graph or an execution receipt.
+  repeated PhysicalEndpointMapping pairs = 1;
 }
 enum PhysicalStepState {
   PHYSICAL_STEP_STATE_UNSPECIFIED = 0;
@@ -1952,6 +2098,11 @@ message Physical {
     PhysicalOffers offers = 16;
     // Record one received/reused unit without installing it or completing a step.
     PhysicalMaterialReceipt receive = 17;
+    // Explain or explicitly judge a replacement using current scoped evidence.
+    PhysicalReplacementReview review_replacement = 18;
+    // Bounded quality buckets for the exact current complete disclosure scope.
+    // No topology is traversed and no narrower/global aggregate is inferred.
+    PhysicalReplacementQualityQuery replacement_quality = 19;
   }
 }
 message PhysicalCableEnd {
@@ -1980,6 +2131,11 @@ message PhysicalCableEnd {
   optional omloom.v1.AssetRef intended_port = 8;
   // Optional declared connector mating contract; a display label is insufficient.
   optional PhysicalMating mating = 9;
+  // Explicit operator/source-declared internal channel numbers, at most 64
+  // distinct positive values up to 4096 in this cable's namespace. Equal numbers
+  // at two ends describe one passive path; absent numbers leave it unknown.
+  // Breakout uses several numbered paths in one assembly, never cloned cables.
+  repeated uint32 channels = 10;
 }
 message PhysicalCableAttachment {
   // Actual port incarnation supplied by the accepted inventory binding.
@@ -2089,6 +2245,10 @@ message PhysicalOffers {
   optional string after = 2;
 }
 message PhysicalView {
+  // Explicitly requested current replacement hypothesis, without durable writes.
+  optional PhysicalReplacementHypothesis replacement_hypothesis = 14;
+  // At most 25 bounded quality buckets under the exact contributing scope.
+  repeated PhysicalReplacementQuality replacement_quality = 15;
   // Current application revision under which the projection was produced.
   uint64 revision = 1;
   // Permitted current definitions for this bounded selection only.

@@ -4,6 +4,8 @@ import { call, input, key, model, AssetKind as K, type AssetRef } from './api';
 import PlacementSearch from './PlacementSearch.vue';
 import PlanStepControls from './PlanStepControls.vue';
 import PhysicalMaterials from './PhysicalMaterials.vue';
+import EndpointMappings from './EndpointMappings.vue';
+import ReplacementReview from './ReplacementReview.vue';
 import { millimetres,micrometres,signedMicrometres,upperMicrometres } from './physical-units';
 import {frameSize,projectElevation,depthOrder,type Face} from './physical-elevation';
 import {rackAllocation,rackUnitAt,adjacentRackUnit} from './rack-grid';
@@ -14,6 +16,16 @@ const view=ref(model.PhysicalView.create());
 const plans=ref<model.PhysicalPlanSummary[]>([]),next=ref<string>();
 const plan=ref<model.PhysicalPlan>(),name=ref(''),deadline=ref(''),discrepancy=ref('');
 const assessment=ref<{state:number;reason:number;revision:bigint}>();
+const reviewHypotheses=ref(new Map<number,model.PhysicalReplacementHypothesis>());
+const quality=ref<model.PhysicalReplacementQuality[]>(),qualityNext=ref<string>();
+watch(()=>plan.value?.id,()=>{reviewHypotheses.value.clear();});
+async function reviewReplacement(index:number,decision?:model.PhysicalReplacementDecision,reason=model.PhysicalReplacementReason.UNSPECIFIED,basis?:string){await run(async()=>{
+  const reply=await invoke({oneofKind:'reviewReplacement',reviewReplacement:{plan:planKey(),step:index,decision,reason,basis}});
+  plan.value=reply.plan;
+  if(reply.replacementHypothesis)reviewHypotheses.value.set(index,reply.replacementHypothesis);
+  if(decision!==undefined){notice.value='Review decision recorded. Installation and endpoint decisions are unchanged.';quality.value=undefined;}
+});}
+async function loadQuality(after?:string){await run(async()=>{const reply=await invoke({oneofKind:'replacementQuality',replacementQuality:{after}});quality.value=reply.replacementQuality;qualityNext.value=reply.next;});}
 watch([plan,name],()=>{assessment.value=undefined;},{deep:true});
 const assessmentText=computed(()=>{
   if(!assessment.value)return '';
@@ -77,7 +89,7 @@ const label=(target:AssetRef|undefined)=>target===undefined?undefined:labels.val
 async function invoke(action:model.Physical['action']) {
   const response=await call({oneofKind:'physical',physical:{action}},working());
   if(response.oneofKind!=='physical')throw Error('Physical planning is unavailable.');
-  if((action.oneofKind==='save'||action.oneofKind==='reserve'||action.oneofKind==='complete'||action.oneofKind==='cancel'||action.oneofKind==='receive')&&response.physical.revision!==view.value.revision)changed=true;
+  if((action.oneofKind==='save'||action.oneofKind==='reserve'||action.oneofKind==='complete'||action.oneofKind==='cancel'||action.oneofKind==='receive'||action.oneofKind==='reviewReplacement')&&response.physical.revision!==view.value.revision)changed=true;
   view.value.revision=response.physical.revision;
   if(response.physical.plan)planItems.value=response.physical.items;
   return response.physical;
@@ -305,6 +317,7 @@ function rackKeyboard(event:KeyboardEvent){
 }
 const placementRows=computed(()=>plan.value?.steps.flatMap((step,index)=>step.action.oneofKind==='placement'?[{p:step.action.placement,index,state:step.state}]:[])??[]);
 const replacementRows=computed(()=>plan.value?.steps.flatMap((step,index)=>step.action.oneofKind==='replacement'?[{r:step.action.replacement,index,state:step.state}]:[])??[]);
+const mappingCount=computed(()=>replacementRows.value.reduce((count,row)=>count+row.r.endpoints.length,0));
 function outstanding(state:number){return state!==model.PhysicalStepState.RECORDED&&state!==model.PhysicalStepState.NOT_PERFORMED;}
 const local=computed(()=>[
   ...placementRows.value.filter(row=>outstanding(row.state)&&key(row.p.enclosure)===key(props.target)).map(row=>row.p),
@@ -420,6 +433,8 @@ async function exportPlan(){await run(async()=>{
 <template v-for="axis in axes" :key="axis"><small v-if="step.action.placement.volume?.[axis]">{{axis.toUpperCase()}} allocation: {{millimetres(step.action.placement.volume[axis]!.startUm)}} mm + {{millimetres(step.action.placement.volume[axis]!.lengthUm)}} mm</small></template>
 </template>
 <template v-if="step.action.oneofKind==='replacement'">
+<EndpointMappings :replacement="step.action.replacement" :editable="editable&&!busy" :remaining="64-mappingCount" :items="planItems" @change="step.action.replacement.endpoints=$event" @selected="selectedMaterial"/>
+<ReplacementReview :hypothesis="reviewHypotheses.get(index)" :feedback="step.action.replacement.feedback" :disabled="busy" :saved="!!plan.id" @inspect="reviewReplacement(index)" @judge="(decision,reason,basis)=>reviewReplacement(index,decision,reason,basis)"/>
 <p><template v-if="step.action.replacement.previous">Previous: <span v-if="label(step.action.replacement.previous)">{{label(step.action.replacement.previous)}}</span><span v-else>Component name unavailable</span>.</template><template v-else>Predecessor unresolved.</template> <template v-if="step.action.replacement.replacement">Incoming: <span v-if="label(step.action.replacement.replacement)">{{label(step.action.replacement.replacement)}}</span><span v-else>Component name unavailable</span>.</template><template v-else>Removal without an incoming part.</template></p>
 <label v-if="installable&&![model.PhysicalStepState.RECORDED,model.PhysicalStepState.NOT_PERFORMED].includes(step.state)"><input v-model="selected" type="checkbox" :value="index" :disabled="notPerformed.includes(index)||(!actualReport&&step.readiness!==model.PlanReadiness.READY)"/>Physical transition performed</label>
 </template>
@@ -435,6 +450,9 @@ async function exportPlan(){await run(async()=>{
 <form v-if="installable" @submit.prevent="complete"><label>Installation discrepancies<textarea v-model="discrepancy" maxlength="2048"/></label><p>Record only physical outcomes actually known. Incompatibility may remain a discrepancy; this report does not verify wiring or service. Other reservations remain unresolved.</p><button :disabled="busy||(!selected.length&&!notPerformed.length)" type="submit">Record selected installation</button></form>
 <button v-if="plan.state!==model.PhysicalPlanState.COMPLETED&&plan.state!==model.PhysicalPlanState.CANCELLED" :disabled="busy" type="button" @click="cancel">Stop remaining work</button>
 </template>
+<details><summary>Local replacement review quality</summary><p>Counts describe reviewed judgments in the current finite window, not predictor accuracy or recall. Deferred judgments are unlabelled. Unreviewed events and selection bias are not measured. The complete contributing read authorization and selected scope are required, including for an independent auditor.</p><button type="button" :disabled="busy" @click="loadQuality()">Load current review counts</button>
+<p v-if="quality?.length===0">No retained judgments in this contributing scope.</p>
+<ul v-if="quality"><li v-for="(bucket,index) in quality" :key="index">{{model.PhysicalComponentKind[bucket.componentKind]?.toLowerCase().replaceAll('_',' ')}} · rule {{bucket.rule}} · evidence class {{bucket.strength}} · {{model.PhysicalReplacementDecision[bucket.decision]?.toLowerCase()}} · {{model.PhysicalReplacementReason[bucket.reason]?.toLowerCase().replaceAll('_',' ')}}: {{bucket.count.toString()}} reviewed. Window ends {{new Date(Number(bucket.untilMs)).toLocaleString()}}.</li></ul><button v-if="qualityNext" :disabled="busy" type="button" @click="loadQuality(qualityNext)">Next review count buckets</button></details>
 </section></div>
 </template>
 </details>

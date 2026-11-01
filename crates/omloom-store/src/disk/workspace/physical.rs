@@ -17,6 +17,7 @@ mod positions;
 mod rack_grid;
 mod replacements;
 mod reservations;
+mod reviews;
 mod wiring;
 
 #[derive(Clone, Copy)]
@@ -256,6 +257,14 @@ fn definition_row(value: &api::PhysicalDefinition) -> Result<Properties> {
     Ok(data)
 }
 fn definition_kind(kind: wire::AssetKind, value: &api::PhysicalDefinition) -> Result<()> {
+    if !value.channels.is_empty() && kind != wire::AssetKind::Port {
+        return Err(Error::Invalid);
+    }
+    if value.assembly_kind != api::PhysicalAssemblyKind::Unspecified as i32
+        && kind != wire::AssetKind::Cable
+    {
+        return Err(Error::Invalid);
+    }
     if (value.rack_grid.is_some() && kind != wire::AssetKind::Rack)
         || (value.power_sources_complete
             && !matches!(
@@ -276,6 +285,7 @@ fn definition_kind(kind: wire::AssetKind, value: &api::PhysicalDefinition) -> Re
     Ok(())
 }
 fn definition_facts(value: &api::PhysicalDefinition) -> Result<Properties> {
+    api::PhysicalAssemblyKind::try_from(value.assembly_kind).map_err(|_| Error::Invalid)?;
     api::PhysicalComponentKind::try_from(value.component_kind).map_err(|_| Error::Invalid)?;
     if value.basis.is_empty()
         || value.basis.len() > 512
@@ -288,8 +298,22 @@ fn definition_facts(value: &api::PhysicalDefinition) -> Result<Properties> {
         return Err(Error::Invalid);
     }
     let mut data = props([("basis", text(&value.basis))]);
+    if !value.channels.is_empty() {
+        if value.channels.len() > 64 {
+            return Err(Error::Limit);
+        }
+        let mut channels = value.channels.clone();
+        cables::normalize_channels(&mut channels)?;
+        data.insert(
+            "query".into(),
+            Value::Binary(api::PhysicalChannelSet { channels }.encode_to_vec()),
+        );
+    }
     if value.component_kind != api::PhysicalComponentKind::Unspecified as i32 {
         data.insert("vint".into(), int(value.component_kind as u64)?);
+    }
+    if value.assembly_kind != api::PhysicalAssemblyKind::Unspecified as i32 {
+        data.insert("vtype".into(), int(value.assembly_kind as u64)?);
     }
     if let Some(v) = &value.volume {
         write_volume(&mut data, v)?;
@@ -309,7 +333,7 @@ fn definition_facts(value: &api::PhysicalDefinition) -> Result<Properties> {
         data.insert("mounting".into(), text(mounting));
     }
     connector::store(&mut data, value.mating.as_ref())?;
-    clearance::write(&mut data, value.clearance.as_ref())?;
+    clearance::write(&mut data, value.clearance.as_deref())?;
     coverage::write(&mut data, value.occupancy_coverage.as_deref())?;
     rack_grid::write(&mut data, value.rack_grid.as_deref(), value.volume.as_ref())?;
     if value.power_sources_complete {
@@ -338,6 +362,28 @@ fn definition_facts_read(data: &Properties) -> Result<api::PhysicalDefinition> {
     };
     Ok(api::PhysicalDefinition {
         target: None,
+        channels: data
+            .get("query")
+            .map(|_| -> Result<Vec<u32>> {
+                let bytes = binary(data, "query")?;
+                if bytes.len() > 256 {
+                    return Err(Error::Corrupt);
+                }
+                let mut channels = api::PhysicalChannelSet::decode(bytes)
+                    .map_err(|_| Error::Corrupt)?
+                    .channels;
+                cables::normalize_channels(&mut channels).map_err(|_| Error::Corrupt)?;
+                Ok(channels)
+            })
+            .transpose()?
+            .unwrap_or_default(),
+        assembly_kind: if data.contains_key("vtype") {
+            let kind = i32::try_from(number(data, "vtype")?).map_err(|_| Error::Corrupt)?;
+            api::PhysicalAssemblyKind::try_from(kind).map_err(|_| Error::Corrupt)?;
+            kind
+        } else {
+            api::PhysicalAssemblyKind::Unspecified as i32
+        },
         volume: read_volume(data)?,
         basis: string(data, "basis")?,
         component_kind,
@@ -351,7 +397,7 @@ fn definition_facts_read(data: &Properties) -> Result<api::PhysicalDefinition> {
             .map(|_| string(data, "mounting"))
             .transpose()?,
         mating: connector::read(data)?,
-        clearance: clearance::read(data)?,
+        clearance: clearance::read(data)?.map(Box::new),
         occupancy_coverage: coverage::read(data)?.map(Box::new),
         power_sources_complete: match data.get("approved") {
             None => false,
@@ -419,6 +465,16 @@ impl Store {
             ..Default::default()
         };
         match request.action.ok_or(Error::Invalid)? {
+            Action::ReviewReplacement(value) => {
+                let (plan, hypothesis) = tx.review_replacement(context, value, working, now)?;
+                view.plan = Some(plan);
+                view.replacement_hypothesis = Some(hypothesis);
+            }
+            Action::ReplacementQuality(value) => {
+                let (buckets, next) = tx.replacement_quality(context, value, working, now)?;
+                view.replacement_quality = buckets;
+                view.next = next;
+            }
             Action::Offer(value) => view
                 .offers
                 .push(tx.save_physical_offer(context, value, working, now)?),
@@ -517,7 +573,7 @@ impl Store {
                 tx.prepare_wiring_plan(context, &mut plan, working)?;
                 tx.validate_physical_draft(context, &plan, working, false)?;
                 if let Some(id) = &plan.id {
-                    tx.load_physical_plan(
+                    let existing = tx.load_physical_plan(
                         context,
                         &api::PhysicalPlanKey {
                             id: id.clone(),
@@ -526,6 +582,9 @@ impl Store {
                         working,
                         false,
                     )?;
+                    reviews::check_saved_feedback(&plan, Some(&existing))?;
+                } else {
+                    reviews::check_saved_feedback(&plan, None)?;
                 }
                 let decision = match tx.assess_physical(context, &plan, working) {
                     Ok(_) => crate::requirements::Decision::PASS,
@@ -554,7 +613,6 @@ impl Store {
                         true,
                     )?;
                 }
-                tx.check_replacements(context, &plan, working, true)?;
                 let id = match &plan.id {
                     Some(id) => PlanId::parse(id).map_err(|_| Error::Invalid)?,
                     None => PlanId::generate(),
@@ -588,6 +646,7 @@ impl Store {
                     }
                     previous_count = existing.steps.len();
                     previous_material_count = existing.materials.len();
+                    reviews::check_saved_feedback(&plan, Some(&existing))?;
                     plan.state = api::PhysicalPlanState::Draft as i32;
                     if existing == plan {
                         view.plan = Some(existing);
@@ -597,6 +656,8 @@ impl Store {
                     }
                 } else if plan.id.is_some() {
                     return Err(Error::Missing);
+                } else {
+                    reviews::check_saved_feedback(&plan, None)?;
                 }
                 plan.id = Some(id.to_string());
                 plan.state = api::PhysicalPlanState::Draft as i32;
@@ -736,7 +797,7 @@ impl Tx<'_> {
             }
             volume(p.volume.as_ref().ok_or(Error::Invalid)?)?;
         }
-        self.check_replacements(context, plan, working, false)?;
+        self.check_replacements(context, plan, working, write)?;
         Ok(materials)
     }
 }

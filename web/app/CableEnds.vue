@@ -7,6 +7,7 @@ const emit=defineEmits<{changed:[]}>();
 const view=ref(model.PhysicalView.create()),opened=ref(false),busy=ref(false),error=ref('');
 const editing=ref<model.PhysicalCableEnd>(),structural=ref(''),name=ref(''),basis=ref(''),connector=ref('');
 const mating=ref<model.PhysicalMating>();
+const channels=ref('');
 function label(port:AssetRef|undefined){const item=view.value.items.find(i=>key(i.target)===key(port));return item?input(item.fields.find(f=>f.name==='name')):undefined;}
 async function invoke(action:model.Physical['action']) {
   const result=await call({oneofKind:'physical',physical:{action}},{...props.working,expected:view.value.revision});
@@ -15,9 +16,11 @@ async function invoke(action:model.Physical['action']) {
   return result.physical;
 }
 async function load(after?:string){if(busy.value||props.inactive)return;busy.value=true;error.value='';try{view.value=await invoke({oneofKind:'cableEnds',cableEnds:{cable:props.target,after}});opened.value=true;}catch(e){error.value=String(e);}finally{busy.value=false;}}
-function edit(end?:model.PhysicalCableEnd){editing.value=end;structural.value=end?.key??'';name.value=end?.name??'';basis.value=end?.basis??'';connector.value=end?.connector??'';mating.value=end?.mating===undefined?undefined:model.PhysicalMating.clone(end.mating);}
+function edit(end?:model.PhysicalCableEnd){editing.value=end;structural.value=end?.key??'';name.value=end?.name??'';basis.value=end?.basis??'';connector.value=end?.connector??'';mating.value=end?.mating===undefined?undefined:model.PhysicalMating.clone(end.mating);channels.value=end===undefined?'':end.channels.join(', ');}
 async function save(){if(busy.value||props.inactive)return;busy.value=true;error.value='';try{
-  await invoke({oneofKind:'cableEnd',cableEnd:{cable:props.target,expected:editing.value?.revision,end:model.PhysicalCableEnd.create({key:structural.value,name:name.value,basis:basis.value,connector:connector.value===''?undefined:connector.value,mating:mating.value})}});
+  const selected=channels.value.trim()===''?[]:channels.value.split(',').map(value=>{const text=value.trim();if(!/^[1-9][0-9]{0,3}$/.test(text)||Number(text)>4096)throw Error('Use distinct channel numbers from 1 to 4096, separated by commas.');return Number(text);});
+  if(selected.length>64||new Set(selected).size!==selected.length)throw Error('Use at most 64 distinct channels per end.');
+  await invoke({oneofKind:'cableEnd',cableEnd:{cable:props.target,expected:editing.value?.revision,end:model.PhysicalCableEnd.create({key:structural.value,name:name.value,basis:basis.value,connector:connector.value===''?undefined:connector.value,mating:mating.value,channels:selected})}});
   edit();view.value=await invoke({oneofKind:'cableEnds',cableEnds:{cable:props.target}});emit('changed');
 }catch(e){error.value=String(e);}finally{busy.value=false;}}
 </script>
@@ -36,6 +39,7 @@ async function save(){if(busy.value||props.inactive)return;busy.value=true;error
 <label>End label<input v-model="name" required maxlength="128" :disabled="busy" /></label>
 <label>End definition source<input v-model="basis" required maxlength="512" :disabled="busy" /></label>
 <label>Connector designation, if known<input v-model="connector" maxlength="128" :disabled="busy" /></label>
+<label>Known assembly channels<input v-model="channels" maxlength="384" :disabled="busy" placeholder="For example: 1, 2, 3, 4"/></label><p>Equal channel numbers at two ends describe one internal path in this cable. A breakout has several ends in the same assembly. Empty means unknown, not all channels. This does not establish polarity, speed or live service.</p>
 <MatingEditor v-model="mating"/>
 <button :disabled="busy">Save end definition</button><button v-if="editing" type="button" :disabled="busy" @click="edit()">Start a different end</button>
 </fieldset>

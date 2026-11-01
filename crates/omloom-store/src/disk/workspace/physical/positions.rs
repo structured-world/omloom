@@ -191,6 +191,14 @@ impl Tx<'_> {
             targets.insert(parse_target(placement.enclosure.as_ref())?);
         }
         for replacement in view.plan.iter().flat_map(replacement_steps) {
+            for pair in &replacement.endpoints {
+                for port in [pair.previous.as_ref(), pair.replacement.as_ref()]
+                    .into_iter()
+                    .flatten()
+                {
+                    targets.insert(parse_target(Some(port))?);
+                }
+            }
             for item in [
                 replacement.position.as_ref(),
                 replacement.source_position.as_ref(),

@@ -1,6 +1,54 @@
 use omloom_contracts::{Error, Limits, MemoryBudget, decode_workspace, workspace as api};
 use prost::Message;
 
+// Physical wire containers enforce repeated bounds before prost allocates their vectors.
+#[test]
+fn physical_channels_and_endpoint_maps_are_bounded_before_decode() {
+    let budget = MemoryBudget::new(16 * 1_048_576);
+    let channels = api::Request {
+        working: None,
+        command: Some(api::request::Command::Physical(api::Physical {
+            action: Some(api::physical::Action::Define(api::PhysicalDefinitionEdit {
+                definition: Some(api::PhysicalDefinition {
+                    channels: vec![1; 65],
+                    ..Default::default()
+                }),
+            })),
+        })),
+    }
+    .encode_to_vec();
+    assert!(matches!(
+        decode_workspace(&channels, Limits::default(), &budget),
+        Err(Error::Limit)
+    ));
+    assert_eq!(budget.used(), 0);
+    let mappings = api::Request {
+        working: None,
+        command: Some(api::request::Command::Physical(api::Physical {
+            action: Some(api::physical::Action::Save(api::PhysicalSave {
+                plan: Some(api::PhysicalPlan {
+                    steps: vec![api::PhysicalStep {
+                        action: Some(api::physical_step::Action::Replacement(
+                            api::PhysicalReplacement {
+                                endpoints: vec![Default::default(); 65],
+                                ..Default::default()
+                            },
+                        )),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            })),
+        })),
+    }
+    .encode_to_vec();
+    assert!(matches!(
+        decode_workspace(&mappings, Limits::default(), &budget),
+        Err(Error::Limit)
+    ));
+    assert_eq!(budget.used(), 0);
+}
+
 // Omitted wire input cannot implicitly request an exclusive allocation.
 #[test]
 fn network_sharing_requires_an_explicit_mechanism() {

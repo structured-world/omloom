@@ -3413,8 +3413,52 @@ export interface RequirementNode {
          */
         powerPaths: PowerPathRequirement;
     } | {
+        oneofKind: "binding";
+        /**
+         * Exact accepted binding basis. Combines with other predicates in the
+         * shared graph; it never certifies observed signal or service availability.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.BindingRequirement binding = 4
+         */
+        binding: BindingRequirement;
+    } | {
         oneofKind: undefined;
     };
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.BindingRequirement
+ */
+export interface BindingRequirement {
+    /**
+     * User-selected relation UUID and revision from an authorized current read.
+     *
+     * @generated from protobuf field: string relation_id = 1
+     */
+    relationId: string;
+    /**
+     * Exact reviewed positive revision. A removed/recreated edge cannot satisfy it.
+     *
+     * @generated from protobuf field: uint64 revision = 2
+     */
+    revision: bigint;
+    /**
+     * Both reviewed endpoints, required to check rights even if the edge is absent.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef from = 3
+     */
+    from?: AssetRef;
+    /**
+     * Reviewed destination incarnation, never inferred from a label or position.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef to = 4
+     */
+    to?: AssetRef;
+    /**
+     * Reviewed relationship meaning. A matching UUID cannot change its meaning.
+     *
+     * @generated from protobuf field: omloom.v1.RelationKind kind = 5
+     */
+    kind: RelationKind;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.EvaluateRequirements
@@ -3714,6 +3758,31 @@ export interface PhysicalDefinition {
      * @generated from protobuf field: optional omloom.workspace.v1.PhysicalRackGrid rack_grid = 16
      */
     rackGrid?: PhysicalRackGrid;
+    /**
+     * Sourced assembly construction, only on a Cable. DAC/AOC end modules belong
+     * to this one cable identity; no independently replaceable optics are implied.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalAssemblyKind assembly_kind = 17
+     */
+    assemblyKind: PhysicalAssemblyKind;
+    /**
+     * Explicit sourced channel numbers supplied by this physical Port, at most
+     * 64 distinct values from 1 to 4096. Missing is unknown, never all lanes.
+     *
+     * @generated from protobuf field: repeated uint32 channels = 18
+     */
+    channels: number[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalChannelSet
+ */
+export interface PhysicalChannelSet {
+    /**
+     * Bounded canonical channel set consumed as one physical definition.
+     *
+     * @generated from protobuf field: repeated uint32 channels = 1
+     */
+    channels: number[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.PhysicalRackGrid
@@ -4017,6 +4086,248 @@ export interface PhysicalReplacement {
      * @generated from protobuf field: optional omloom.workspace.v1.PhysicalVolume volume = 7
      */
     volume?: PhysicalVolume;
+    /**
+     * Explicit reviewed endpoint correspondence, at most 64 pairs across a plan.
+     * It preserves intent only: no cable attachment, runtime identity, configuration
+     * or grants are copied. Unmapped and rejected ports remain explicit.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.PhysicalEndpointMapping endpoints = 8
+     */
+    endpoints: PhysicalEndpointMapping[];
+    /**
+     * Server-owned current review disposition. Echo unchanged on draft saves;
+     * only the review command may correct it. It never proves a physical effect.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.PhysicalReplacementFeedback feedback = 9
+     */
+    feedback?: PhysicalReplacementFeedback;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalReplacementFeedback
+ */
+export interface PhysicalReplacementFeedback {
+    /**
+     * Operator judgment, independent of endpoint correspondence and installation.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalReplacementDecision decision = 1
+     */
+    decision: PhysicalReplacementDecision;
+    /**
+     * Optional bounded correction category; no free-text sample corpus.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalReplacementReason reason = 2
+     */
+    reason: PhysicalReplacementReason;
+    /**
+     * Server fingerprint of the reviewed current evidence, not an identity proof.
+     *
+     * @generated from protobuf field: string basis = 3
+     */
+    basis: string;
+    /**
+     * Server-owned correction-window deadline. Expiry never creates a new alert.
+     *
+     * @generated from protobuf field: uint64 until_ms = 4
+     */
+    untilMs: bigint;
+    /**
+     * Versioned explainable rule, currently 1. No calibrated probability is claimed.
+     *
+     * @generated from protobuf field: uint32 rule = 5
+     */
+    rule: number;
+    /**
+     * Server evidence class: 1 limited, 2 contextual, 3 established same-part identity.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalReplacementStrength strength = 6
+     */
+    strength: PhysicalReplacementStrength;
+    /**
+     * Server component class used for the bounded quality bucket, not model inference.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalComponentKind component_kind = 7
+     */
+    componentKind: PhysicalComponentKind;
+    /**
+     * Server opaque disclosure partition. Neither its possession nor a matching
+     * actor name grants access; current complete scope is checked on each request.
+     *
+     * @generated from protobuf field: string scope = 8
+     */
+    scope: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalReplacementReview
+ */
+export interface PhysicalReplacementReview {
+    /**
+     * Existing plan and exact revision; no review is implicitly an installation.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalPlanKey plan = 1
+     */
+    plan?: PhysicalPlanKey;
+    /**
+     * Zero-based replacement step, not an arbitrary resource query.
+     *
+     * @generated from protobuf field: uint32 step = 2
+     */
+    step: number;
+    /**
+     * Absent means read-only explanation. Present explicitly records/corrects
+     * one judgment, requiring the returned basis and current plan revision.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.PhysicalReplacementDecision decision = 3
+     */
+    decision?: PhysicalReplacementDecision;
+    /**
+     * Optional bounded reason; supplied only with a decision.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalReplacementReason reason = 4
+     */
+    reason: PhysicalReplacementReason;
+    /**
+     * Server-returned evidence fingerprint echoed for a conditional decision.
+     *
+     * @generated from protobuf field: optional string basis = 5
+     */
+    basis?: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalReplacementHypothesis
+ */
+export interface PhysicalReplacementHypothesis {
+    /**
+     * Current evidence fingerprint for an explicit conditional review command.
+     *
+     * @generated from protobuf field: string basis = 1
+     */
+    basis: string;
+    /**
+     * Version of the deterministic explanation rules, not a learned predictor.
+     *
+     * @generated from protobuf field: uint32 rule = 2
+     */
+    rule: number;
+    /**
+     * Evidence-strength class, independent of compatibility and service health.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalReplacementStrength strength = 3
+     */
+    strength: PhysicalReplacementStrength;
+    /**
+     * Server explanation of the evidence and plausible alternatives.
+     *
+     * @generated from protobuf field: string explanation = 4
+     */
+    explanation: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalReplacementQuality
+ */
+export interface PhysicalReplacementQuality {
+    /**
+     * Component class, rule and strength partition of actual reviewed judgments.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalComponentKind component_kind = 1
+     */
+    componentKind: PhysicalComponentKind;
+    /**
+     * Versioned deterministic rule; counts do not establish predictor accuracy.
+     *
+     * @generated from protobuf field: uint32 rule = 2
+     */
+    rule: number;
+    /**
+     * Evidence class, not a calibrated probability.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalReplacementStrength strength = 3
+     */
+    strength: PhysicalReplacementStrength;
+    /**
+     * Current judgment class; deferred is unlabelled, never a negative example.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalReplacementDecision decision = 4
+     */
+    decision: PhysicalReplacementDecision;
+    /**
+     * Bounded reason category, without identities, topology or raw evidence.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalReplacementReason reason = 5
+     */
+    reason: PhysicalReplacementReason;
+    /**
+     * Number of current contributions, replaced atomically on correction.
+     *
+     * @generated from protobuf field: uint64 count = 6
+     */
+    count: bigint;
+    /**
+     * End of this finite correction/aggregate window, not a permanent dataset.
+     *
+     * @generated from protobuf field: uint64 until_ms = 7
+     */
+    untilMs: bigint;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalReplacementQualityQuery
+ */
+export interface PhysicalReplacementQualityQuery {
+    /**
+     * Previous server-returned bucket key. It supplies no disclosure permission.
+     *
+     * @generated from protobuf field: optional string after = 1
+     */
+    after?: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalEndpointMapping
+ */
+export interface PhysicalEndpointMapping {
+    /**
+     * Existing physical port directly supplied by the previous component.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef previous = 1
+     */
+    previous?: AssetRef;
+    /**
+     * User-selected port directly supplied by the incoming component. Absent
+     * means unresolved; names, numbering and likelihood never supply this value.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef replacement = 2
+     */
+    replacement?: AssetRef;
+    /**
+     * Operator's mapping judgment, independent of accepting the replacement event.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalMappingDecision decision = 3
+     */
+    decision: PhysicalMappingDecision;
+    /**
+     * Explicit source lane for a breakout; absent selects the entire port.
+     * It must exist in the current sourced port definition before acceptance.
+     *
+     * @generated from protobuf field: optional uint32 previous_channel = 4
+     */
+    previousChannel?: number;
+    /**
+     * Explicit destination lane, absent selects the entire destination port.
+     * A whole-port allocation and its lane allocations cannot coexist.
+     *
+     * @generated from protobuf field: optional uint32 replacement_channel = 5
+     */
+    replacementChannel?: number;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalEndpointMappings
+ */
+export interface PhysicalEndpointMappings {
+    /**
+     * Bounded mappings consumed together by one replacement review, never an
+     * alternative authoritative connectivity graph or an execution receipt.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.PhysicalEndpointMapping pairs = 1
+     */
+    pairs: PhysicalEndpointMapping[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.PlanDependency
@@ -4616,6 +4927,23 @@ export interface Physical {
          */
         receive: PhysicalMaterialReceipt;
     } | {
+        oneofKind: "reviewReplacement";
+        /**
+         * Explain or explicitly judge a replacement using current scoped evidence.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PhysicalReplacementReview review_replacement = 18
+         */
+        reviewReplacement: PhysicalReplacementReview;
+    } | {
+        oneofKind: "replacementQuality";
+        /**
+         * Bounded quality buckets for the exact current complete disclosure scope.
+         * No topology is traversed and no narrower/global aggregate is inferred.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PhysicalReplacementQualityQuery replacement_quality = 19
+         */
+        replacementQuality: PhysicalReplacementQualityQuery;
+    } | {
         oneofKind: undefined;
     };
 }
@@ -4693,6 +5021,15 @@ export interface PhysicalCableEnd {
      * @generated from protobuf field: optional omloom.workspace.v1.PhysicalMating mating = 9
      */
     mating?: PhysicalMating;
+    /**
+     * Explicit operator/source-declared internal channel numbers, at most 64
+     * distinct positive values up to 4096 in this cable's namespace. Equal numbers
+     * at two ends describe one passive path; absent numbers leave it unknown.
+     * Breakout uses several numbered paths in one assembly, never cloned cables.
+     *
+     * @generated from protobuf field: repeated uint32 channels = 10
+     */
+    channels: number[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.PhysicalCableAttachment
@@ -4975,6 +5312,18 @@ export interface PhysicalOffers {
  * @generated from protobuf message omloom.workspace.v1.PhysicalView
  */
 export interface PhysicalView {
+    /**
+     * Explicitly requested current replacement hypothesis, without durable writes.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.PhysicalReplacementHypothesis replacement_hypothesis = 14
+     */
+    replacementHypothesis?: PhysicalReplacementHypothesis;
+    /**
+     * At most 25 bounded quality buckets under the exact contributing scope.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.PhysicalReplacementQuality replacement_quality = 15
+     */
+    replacementQuality: PhysicalReplacementQuality[];
     /**
      * Current application revision under which the projection was produced.
      *
@@ -6243,6 +6592,27 @@ export enum RequirementResolution {
     OWNER_ACTION = 3
 }
 /**
+ * @generated from protobuf enum omloom.workspace.v1.PhysicalAssemblyKind
+ */
+export enum PhysicalAssemblyKind {
+    /**
+     * @generated from protobuf enum value: PHYSICAL_ASSEMBLY_KIND_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_ASSEMBLY_KIND_PASSIVE = 1;
+     */
+    PASSIVE = 1,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_ASSEMBLY_KIND_DAC = 2;
+     */
+    DAC = 2,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_ASSEMBLY_KIND_AOC = 3;
+     */
+    AOC = 3
+}
+/**
  * @generated from protobuf enum omloom.workspace.v1.PhysicalRackDirection
  */
 export enum PhysicalRackDirection {
@@ -6320,6 +6690,98 @@ export enum PhysicalComponentKind {
      * @generated from protobuf enum value: PHYSICAL_COMPONENT_KIND_ASSEMBLY = 8;
      */
     ASSEMBLY = 8
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.PhysicalReplacementDecision
+ */
+export enum PhysicalReplacementDecision {
+    /**
+     * @generated from protobuf enum value: PHYSICAL_REPLACEMENT_DECISION_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_REPLACEMENT_DECISION_CONFIRMED = 1;
+     */
+    CONFIRMED = 1,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_REPLACEMENT_DECISION_REJECTED = 2;
+     */
+    REJECTED = 2,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_REPLACEMENT_DECISION_DEFERRED = 3;
+     */
+    DEFERRED = 3
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.PhysicalReplacementStrength
+ */
+export enum PhysicalReplacementStrength {
+    /**
+     * @generated from protobuf enum value: PHYSICAL_REPLACEMENT_STRENGTH_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_REPLACEMENT_STRENGTH_LIMITED = 1;
+     */
+    LIMITED = 1,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_REPLACEMENT_STRENGTH_CONTEXTUAL = 2;
+     */
+    CONTEXTUAL = 2,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_REPLACEMENT_STRENGTH_ESTABLISHED_IDENTITY = 3;
+     */
+    ESTABLISHED_IDENTITY = 3
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.PhysicalReplacementReason
+ */
+export enum PhysicalReplacementReason {
+    /**
+     * @generated from protobuf enum value: PHYSICAL_REPLACEMENT_REASON_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_REPLACEMENT_REASON_MOVED = 1;
+     */
+    MOVED = 1,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_REPLACEMENT_REASON_ADDITIONAL = 2;
+     */
+    ADDITIONAL = 2,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_REPLACEMENT_REASON_RESEATED = 3;
+     */
+    RESEATED = 3,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_REPLACEMENT_REASON_SOURCE_ERROR = 4;
+     */
+    SOURCE_ERROR = 4,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_REPLACEMENT_REASON_WRONG_PREDECESSOR = 5;
+     */
+    WRONG_PREDECESSOR = 5
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.PhysicalMappingDecision
+ */
+export enum PhysicalMappingDecision {
+    /**
+     * @generated from protobuf enum value: PHYSICAL_MAPPING_DECISION_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_MAPPING_DECISION_UNRESOLVED = 1;
+     */
+    UNRESOLVED = 1,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_MAPPING_DECISION_ACCEPTED = 2;
+     */
+    ACCEPTED = 2,
+    /**
+     * @generated from protobuf enum value: PHYSICAL_MAPPING_DECISION_REJECTED = 3;
+     */
+    REJECTED = 3
 }
 /**
  * @generated from protobuf enum omloom.workspace.v1.PhysicalStepState
@@ -7967,7 +8429,8 @@ class RequirementNode$Type extends MessageType<RequirementNode> {
         super("omloom.workspace.v1.RequirementNode", [
             { no: 1, name: "field", kind: "message", oneof: "expression", T: () => FieldRequirement },
             { no: 2, name: "group", kind: "message", oneof: "expression", T: () => RequirementGroup },
-            { no: 3, name: "power_paths", kind: "message", oneof: "expression", T: () => PowerPathRequirement }
+            { no: 3, name: "power_paths", kind: "message", oneof: "expression", T: () => PowerPathRequirement },
+            { no: 4, name: "binding", kind: "message", oneof: "expression", T: () => BindingRequirement }
         ]);
     }
 }
@@ -7975,6 +8438,22 @@ class RequirementNode$Type extends MessageType<RequirementNode> {
  * @generated MessageType for protobuf message omloom.workspace.v1.RequirementNode
  */
 export const RequirementNode = new RequirementNode$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class BindingRequirement$Type extends MessageType<BindingRequirement> {
+    constructor() {
+        super("omloom.workspace.v1.BindingRequirement", [
+            { no: 1, name: "relation_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 3, name: "from", kind: "message", T: () => AssetRef },
+            { no: 4, name: "to", kind: "message", T: () => AssetRef },
+            { no: 5, name: "kind", kind: "enum", T: () => ["omloom.v1.RelationKind", RelationKind, "RELATION_KIND_"] }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.BindingRequirement
+ */
+export const BindingRequirement = new BindingRequirement$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class EvaluateRequirements$Type extends MessageType<EvaluateRequirements> {
     constructor() {
@@ -8085,7 +8564,9 @@ class PhysicalDefinition$Type extends MessageType<PhysicalDefinition> {
             { no: 13, name: "clearance", kind: "message", T: () => PhysicalClearance },
             { no: 14, name: "occupancy_coverage", kind: "message", T: () => PhysicalVolume },
             { no: 15, name: "power_sources_complete", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
-            { no: 16, name: "rack_grid", kind: "message", T: () => PhysicalRackGrid }
+            { no: 16, name: "rack_grid", kind: "message", T: () => PhysicalRackGrid },
+            { no: 17, name: "assembly_kind", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalAssemblyKind", PhysicalAssemblyKind, "PHYSICAL_ASSEMBLY_KIND_"] },
+            { no: 18, name: "channels", kind: "scalar", repeat: 1 /*RepeatType.PACKED*/, T: 13 /*ScalarType.UINT32*/ }
         ]);
     }
 }
@@ -8093,6 +8574,18 @@ class PhysicalDefinition$Type extends MessageType<PhysicalDefinition> {
  * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalDefinition
  */
 export const PhysicalDefinition = new PhysicalDefinition$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalChannelSet$Type extends MessageType<PhysicalChannelSet> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalChannelSet", [
+            { no: 1, name: "channels", kind: "scalar", repeat: 1 /*RepeatType.PACKED*/, T: 13 /*ScalarType.UINT32*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalChannelSet
+ */
+export const PhysicalChannelSet = new PhysicalChannelSet$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class PhysicalRackGrid$Type extends MessageType<PhysicalRackGrid> {
     constructor() {
@@ -8234,7 +8727,9 @@ class PhysicalReplacement$Type extends MessageType<PhysicalReplacement> {
             { no: 4, name: "previous_binding", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 5, name: "previous_revision", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 6, name: "source_position", kind: "message", T: () => AssetRef },
-            { no: 7, name: "volume", kind: "message", T: () => PhysicalVolume }
+            { no: 7, name: "volume", kind: "message", T: () => PhysicalVolume },
+            { no: 8, name: "endpoints", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalEndpointMapping },
+            { no: 9, name: "feedback", kind: "message", T: () => PhysicalReplacementFeedback }
         ]);
     }
 }
@@ -8242,6 +8737,114 @@ class PhysicalReplacement$Type extends MessageType<PhysicalReplacement> {
  * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalReplacement
  */
 export const PhysicalReplacement = new PhysicalReplacement$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalReplacementFeedback$Type extends MessageType<PhysicalReplacementFeedback> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalReplacementFeedback", [
+            { no: 1, name: "decision", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalReplacementDecision", PhysicalReplacementDecision, "PHYSICAL_REPLACEMENT_DECISION_"] },
+            { no: 2, name: "reason", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalReplacementReason", PhysicalReplacementReason, "PHYSICAL_REPLACEMENT_REASON_"] },
+            { no: 3, name: "basis", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "until_ms", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 5, name: "rule", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 6, name: "strength", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalReplacementStrength", PhysicalReplacementStrength, "PHYSICAL_REPLACEMENT_STRENGTH_"] },
+            { no: 7, name: "component_kind", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalComponentKind", PhysicalComponentKind, "PHYSICAL_COMPONENT_KIND_"] },
+            { no: 8, name: "scope", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalReplacementFeedback
+ */
+export const PhysicalReplacementFeedback = new PhysicalReplacementFeedback$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalReplacementReview$Type extends MessageType<PhysicalReplacementReview> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalReplacementReview", [
+            { no: 1, name: "plan", kind: "message", T: () => PhysicalPlanKey },
+            { no: 2, name: "step", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 3, name: "decision", kind: "enum", opt: true, T: () => ["omloom.workspace.v1.PhysicalReplacementDecision", PhysicalReplacementDecision, "PHYSICAL_REPLACEMENT_DECISION_"] },
+            { no: 4, name: "reason", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalReplacementReason", PhysicalReplacementReason, "PHYSICAL_REPLACEMENT_REASON_"] },
+            { no: 5, name: "basis", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalReplacementReview
+ */
+export const PhysicalReplacementReview = new PhysicalReplacementReview$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalReplacementHypothesis$Type extends MessageType<PhysicalReplacementHypothesis> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalReplacementHypothesis", [
+            { no: 1, name: "basis", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "rule", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 3, name: "strength", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalReplacementStrength", PhysicalReplacementStrength, "PHYSICAL_REPLACEMENT_STRENGTH_"] },
+            { no: 4, name: "explanation", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalReplacementHypothesis
+ */
+export const PhysicalReplacementHypothesis = new PhysicalReplacementHypothesis$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalReplacementQuality$Type extends MessageType<PhysicalReplacementQuality> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalReplacementQuality", [
+            { no: 1, name: "component_kind", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalComponentKind", PhysicalComponentKind, "PHYSICAL_COMPONENT_KIND_"] },
+            { no: 2, name: "rule", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 3, name: "strength", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalReplacementStrength", PhysicalReplacementStrength, "PHYSICAL_REPLACEMENT_STRENGTH_"] },
+            { no: 4, name: "decision", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalReplacementDecision", PhysicalReplacementDecision, "PHYSICAL_REPLACEMENT_DECISION_"] },
+            { no: 5, name: "reason", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalReplacementReason", PhysicalReplacementReason, "PHYSICAL_REPLACEMENT_REASON_"] },
+            { no: 6, name: "count", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 7, name: "until_ms", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalReplacementQuality
+ */
+export const PhysicalReplacementQuality = new PhysicalReplacementQuality$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalReplacementQualityQuery$Type extends MessageType<PhysicalReplacementQualityQuery> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalReplacementQualityQuery", [
+            { no: 1, name: "after", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalReplacementQualityQuery
+ */
+export const PhysicalReplacementQualityQuery = new PhysicalReplacementQualityQuery$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalEndpointMapping$Type extends MessageType<PhysicalEndpointMapping> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalEndpointMapping", [
+            { no: 1, name: "previous", kind: "message", T: () => AssetRef },
+            { no: 2, name: "replacement", kind: "message", T: () => AssetRef },
+            { no: 3, name: "decision", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalMappingDecision", PhysicalMappingDecision, "PHYSICAL_MAPPING_DECISION_"] },
+            { no: 4, name: "previous_channel", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ },
+            { no: 5, name: "replacement_channel", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalEndpointMapping
+ */
+export const PhysicalEndpointMapping = new PhysicalEndpointMapping$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalEndpointMappings$Type extends MessageType<PhysicalEndpointMappings> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalEndpointMappings", [
+            { no: 1, name: "pairs", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalEndpointMapping }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalEndpointMappings
+ */
+export const PhysicalEndpointMappings = new PhysicalEndpointMappings$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class PlanDependency$Type extends MessageType<PlanDependency> {
     constructor() {
@@ -8494,7 +9097,9 @@ class Physical$Type extends MessageType<Physical> {
             { no: 14, name: "offer", kind: "message", oneof: "action", T: () => PhysicalOfferEdit },
             { no: 15, name: "availability", kind: "message", oneof: "action", T: () => PhysicalOfferRead },
             { no: 16, name: "offers", kind: "message", oneof: "action", T: () => PhysicalOffers },
-            { no: 17, name: "receive", kind: "message", oneof: "action", T: () => PhysicalMaterialReceipt }
+            { no: 17, name: "receive", kind: "message", oneof: "action", T: () => PhysicalMaterialReceipt },
+            { no: 18, name: "review_replacement", kind: "message", oneof: "action", T: () => PhysicalReplacementReview },
+            { no: 19, name: "replacement_quality", kind: "message", oneof: "action", T: () => PhysicalReplacementQualityQuery }
         ]);
     }
 }
@@ -8514,7 +9119,8 @@ class PhysicalCableEnd$Type extends MessageType<PhysicalCableEnd> {
             { no: 6, name: "connected", kind: "message", oneof: "attachment", T: () => PhysicalCableAttachment },
             { no: 7, name: "loose", kind: "message", oneof: "attachment", T: () => Empty },
             { no: 8, name: "intended_port", kind: "message", T: () => AssetRef },
-            { no: 9, name: "mating", kind: "message", T: () => PhysicalMating }
+            { no: 9, name: "mating", kind: "message", T: () => PhysicalMating },
+            { no: 10, name: "channels", kind: "scalar", repeat: 1 /*RepeatType.PACKED*/, T: 13 /*ScalarType.UINT32*/ }
         ]);
     }
 }
@@ -8647,6 +9253,8 @@ export const PhysicalOffers = new PhysicalOffers$Type();
 class PhysicalView$Type extends MessageType<PhysicalView> {
     constructor() {
         super("omloom.workspace.v1.PhysicalView", [
+            { no: 14, name: "replacement_hypothesis", kind: "message", T: () => PhysicalReplacementHypothesis },
+            { no: 15, name: "replacement_quality", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalReplacementQuality },
             { no: 1, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 2, name: "definitions", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalDefinition },
             { no: 3, name: "plan", kind: "message", T: () => PhysicalPlan },

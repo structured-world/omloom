@@ -1,6 +1,7 @@
 //! Current selected facts enter the common evaluator through this restricted query.
 use super::*;
 use crate::requirements::{self as core, knowledge as k};
+mod binding;
 mod power;
 
 impl k::Alternatives for wire::EquipmentAlternatives {
@@ -193,6 +194,13 @@ fn semantic_keys(nodes: &[api::RequirementNode]) -> Result<Vec<String>> {
             hash.update(canonical.encode_to_vec());
             digests[index] = Some(hash.finalize().into());
         }
+        if let Some(api::requirement_node::Expression::Binding(condition)) = &node.expression {
+            binding::validate(condition)?;
+            let mut hash = Sha256::new();
+            hash.update(b"binding");
+            hash.update(condition.encode_to_vec());
+            digests[index] = Some(hash.finalize().into());
+        }
         if let Some(api::requirement_node::Expression::Field(condition)) = &node.expression {
             let mut condition = condition.clone();
             if let Some(wire::Field {
@@ -372,6 +380,9 @@ impl Tx<'_> {
                 Some(api::requirement_node::Expression::PowerPaths(condition)) => {
                     power::validate(condition)?;
                 }
+                Some(api::requirement_node::Expression::Binding(condition)) => {
+                    binding::validate(condition)?;
+                }
                 None => return Err(Error::Invalid),
             }
         }
@@ -396,6 +407,7 @@ impl Tx<'_> {
             };
             let decision = match node.expression.as_ref().ok_or(Error::Invalid)? {
                 api::requirement_node::Expression::Field(_)
+                | api::requirement_node::Expression::Binding(_)
                 | api::requirement_node::Expression::PowerPaths(_) => {
                     core::Decision::unknown(core::Reason::Missing)
                 }
@@ -450,7 +462,8 @@ impl Tx<'_> {
                         },
                     )
                 }
-                api::requirement_node::Expression::PowerPaths(_) => (
+                api::requirement_node::Expression::PowerPaths(_)
+                | api::requirement_node::Expression::Binding(_) => (
                     core::Subject {
                         namespace: "requirement",
                         resource: &keys[index],
@@ -523,6 +536,16 @@ impl Tx<'_> {
                         )?
                     } else {
                         power::validate(condition)?;
+                        core::Decision::unknown(core::Reason::Missing)
+                    };
+                    node.expression = core::Expression::Fact(decision);
+                }
+                if let Some(api::requirement_node::Expression::Binding(condition)) =
+                    &request.nodes[index].expression
+                {
+                    let decision = if phase.is_some() {
+                        tx.requirement_binding(context, condition, working)?
+                    } else {
                         core::Decision::unknown(core::Reason::Missing)
                     };
                     node.expression = core::Expression::Fact(decision);

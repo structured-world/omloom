@@ -44,8 +44,27 @@ path cache or evaluation history is stored. Requirement evaluation reads selecte
 paths in one snapshot, within a shared 128-node/256-edge request allowance.
 Boundary selection cannot hide a known upstream dependency. Path disjointness
 does not qualify surviving capacity, live power or electrical safety.
-Plan material lists and exports likewise derive from current admitted steps and
-permitted inventory fields, with no persisted bill or per-open export copy.
+Serialized part lists and exports derive from current steps and permitted
+inventory fields, with no per-open export copy. Explicit unreceived material
+requirements instead belong to the saved plan: one row per selected line, bounded
+canonical specification fields, and sparse allocations for real received units.
+Quantity never creates inventory assets or rows per unreceived unit. Placement
+steps refer to a line and selected unit until its real allocation is known.
+Held geometry reads the owning immutable step and specifications, not a copied
+inventory or capacity ledger. Terminal material detail uses ordinary cleanup;
+actual occupancy and unresolved recovery work retain their independent lifetime.
+
+Replacement endpoint correspondence is bounded plan intent, not connectivity.
+One review consumes its small mapping payload as a whole; source and destination
+membership and declared channels are read in indexed batches. Current cable-end
+channel sets and assembly construction preserve one actual assembly identity.
+Current event dispositions remain on their owning step. Quality counters contain
+only scope hashes, bounded rule/class/decision categories and counts. Corrections
+replace the old contribution atomically. Fixed windows use the existing finite
+detail-retention policy and cleanup; expired detail never becomes a negative
+label. Changed authority partitions invalidate disclosure, and restored counters
+require reconciliation before being presented as current. No raw sample corpus,
+per-query persistence or second history store is introduced.
 
 The schema stores directly indexed current rows. Asset identity and accepted
 revision are separate from intended fields, provider mappings, current source

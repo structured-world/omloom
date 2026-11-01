@@ -13,6 +13,80 @@ fn edit(cable: &wire::AssetRef, key: &str) -> api::PhysicalCableEndEdit {
         expected: None,
     }
 }
+
+// A breakout remains one adopted assembly with explicit internal paths, not cloned cables.
+#[test]
+fn breakout_channels_have_two_ends_and_one_assembly_identity() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let cable = create(&store, &actor, K::Cable, "DAC breakout assembly")?;
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(api::PhysicalDefinition {
+                target: Some(cable.clone()),
+                basis: "Vendor-declared inseparable copper assembly".into(),
+                assembly_kind: api::PhysicalAssemblyKind::Dac as i32,
+                ..Default::default()
+            }),
+        }),
+    )?;
+    for (key, channels) in [
+        ("trunk", vec![1, 2, 3, 4]),
+        ("leg-1", vec![1]),
+        ("leg-2", vec![2]),
+        ("leg-3", vec![3]),
+        ("leg-4", vec![4]),
+    ] {
+        let mut value = edit(&cable, key);
+        value.end.as_mut().ok_or("end")?.channels = channels;
+        physical(&store, &actor, api::physical::Action::CableEnd(value))?;
+    }
+    let before = store.usage()?;
+    let mut invalid = edit(&cable, "duplicate-leg");
+    invalid.end.as_mut().ok_or("end")?.channels = vec![1];
+    assert!(matches!(
+        physical(&store, &actor, api::physical::Action::CableEnd(invalid)),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.usage()?, before);
+    let current = ends(&store, &actor, &cable, None)?.cable_ends;
+    assert_eq!(current.len(), 5);
+    assert!(
+        current.iter().all(|e| e.attachment.is_none()),
+        "Channel declarations do not invent actual wiring"
+    );
+    let mut identical = edit(&cable, "trunk");
+    let trunk = current.iter().find(|e| e.key == "trunk").ok_or("trunk")?;
+    identical.expected = Some(trunk.revision);
+    identical.end.as_mut().ok_or("end")?.channels = vec![4, 3, 2, 1];
+    let saved = physical(&store, &actor, api::physical::Action::CableEnd(identical))?;
+    assert_eq!(saved.cable_ends[0].revision, trunk.revision);
+    assert_eq!(
+        store.usage()?,
+        before,
+        "Reordering the same channel set is not a change"
+    );
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    let current = ends(&store, &actor, &cable, None)?.cable_ends;
+    assert_eq!(current.iter().map(|e| e.channels.len()).sum::<usize>(), 8);
+    let profile = physical(
+        &store,
+        &actor,
+        api::physical::Action::Read(api::PhysicalRead {
+            enclosure: Some(cable),
+            occupants: false,
+        }),
+    )?;
+    assert_eq!(
+        profile.definitions[0].assembly_kind,
+        api::PhysicalAssemblyKind::Dac as i32
+    );
+    Ok(())
+}
 fn ends(
     store: &Store,
     actor: &Context,

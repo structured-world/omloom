@@ -9,6 +9,8 @@ mod availability;
 mod cables;
 #[path = "physical/clearance.rs"]
 mod clearance;
+#[path = "physical/endpoint_mappings.rs"]
+mod endpoint_mappings;
 #[path = "physical/materials.rs"]
 mod materials;
 #[path = "physical/mounting.rs"]
@@ -17,6 +19,8 @@ mod mounting;
 mod power;
 #[path = "physical/rack_grid.rs"]
 mod rack_grid;
+#[path = "physical/reviews.rs"]
+mod reviews;
 
 fn volume() -> api::PhysicalVolume {
     let extent = |length| {
@@ -1757,6 +1761,8 @@ fn two_known_parts_swap_positions_without_changing_their_identities() -> TestRes
             previous_binding: Some(old.relation_id),
             previous_revision: Some(old.revision),
             volume: None,
+            endpoints: Vec::new(),
+            feedback: None,
         });
     }
     let plan = replacement_plan(&store, &actor, changes)?;

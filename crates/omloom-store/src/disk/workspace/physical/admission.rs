@@ -191,7 +191,7 @@ impl Tx<'_> {
                 .flatten();
             let margin = match item {
                 Some(_) => margins.as_ref(),
-                None => declared.and_then(|p| p.clearance.as_ref()),
+                None => declared.and_then(|p| p.clearance.as_deref()),
             };
             let region = clearance::region(proposed, margin)?;
             match crate::physical::placement(envelope, Some(region), &occupied.volumes).state {
@@ -415,7 +415,7 @@ impl Tx<'_> {
                     y: locate(target_volume.y, item_volume.y)?,
                     z: locate(target_volume.z, item_volume.z)?,
                 };
-                let region = clearance::region(located, item.clearance.as_ref())?;
+                let region = clearance::region(located, item.clearance.as_deref())?;
                 if crate::physical::placement(Some(target_volume), Some(region), &[]).state
                     != crate::requirements::State::Satisfied
                 {

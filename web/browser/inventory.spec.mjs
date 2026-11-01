@@ -344,6 +344,10 @@ test('space reuse follows reviewed removal prerequisites on desktop and phone',a
         const current=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'read',read:{enclosure:rack,occupants:true}}})});
         expect(current.physical.occupancy.map(o=>o.placement.item)).toEqual([incoming]);
         // Reusing the established spare is one atomic replacement, not a separate move/pose step.
+        for(const [owner,name] of [[incoming,`Previous socket ${width}`],[old,`Incoming socket ${width}`]]){
+          const created=await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.PORT,changes:[{name:'name',value:{oneofKind:'text',text:name}}]})});
+          await rpc({oneofKind:'relation',relation:m.Relationship.create({relation:{from:owner,to:created.mutation.targets[0],kind:m.RelationKind.HAS_PORT}})});
+        }
         await planner.getByRole('button',{name:'New installation plan',exact:true}).click();
         await planner.getByLabel('Installation plan name',{exact:true}).fill(`Atomic enclosure replacement ${width}`);
         await planner.getByRole('button',{name:'Replace, remove or move a part',exact:true}).click();
@@ -356,6 +360,25 @@ test('space reuse follows reviewed removal prerequisites on desktop and phone',a
         await expect(planner.getByRole('region',{name:'Step 1 controls',exact:true})).toBeVisible();
         await expect(planner.getByRole('region',{name:'Step 2 controls',exact:true})).toHaveCount(0);
         await expect(planner.locator('rect.proposed')).toHaveCount(1);
+        await planner.getByText('Review endpoint correspondence (0)',{exact:true}).click();
+        const previousPort=planner.getByRole('region',{name:'Previous component port',exact:true});
+        const incomingPort=planner.getByRole('region',{name:'Incoming component port',exact:true});
+        await previousPort.getByRole('combobox',{name:'Find port',exact:true}).fill(`Previous socket ${width}`);
+        await previousPort.getByRole('option',{name:`Use port: Previous socket ${width}`,exact:true}).click();
+        await incomingPort.getByRole('combobox',{name:'Find port',exact:true}).fill(`Incoming socket ${width}`);
+        await incomingPort.getByRole('option',{name:`Use port: Incoming socket ${width}`,exact:true}).click();
+        await planner.getByRole('combobox',{name:'Endpoint decision',exact:true}).selectOption(String(m.PhysicalMappingDecision.ACCEPTED));
+        await planner.getByRole('button',{name:'Apply endpoint decision to draft',exact:true}).click();
+        await expect(planner.locator('.endpoint-mappings')).toContainText(`Incoming socket ${width} · accepted`);
+        const checkpoint=planner.getByRole('region',{name:'Step 1 controls',exact:true});
+        await checkpoint.getByText('Check an exact physical or logical binding',{exact:true}).click();
+        await checkpoint.getByRole('button',{name:'Load permitted current bindings',exact:true}).click();
+        const bindingChoice=checkpoint.getByRole('combobox',{name:'Required current binding',exact:true});
+        await expect(bindingChoice.locator('option')).toHaveCount(2);
+        const bindingId=await bindingChoice.locator('option').evaluateAll(options=>options.map(o=>o.value).find(Boolean));
+        expect(bindingId).toBeDefined();await bindingChoice.selectOption(bindingId);
+        await checkpoint.getByRole('button',{name:'Use binding as postcondition',exact:true}).click();
+        await expect(checkpoint.getByRole('list',{name:'Configured postcondition',exact:true})).toContainText('Required exact binding revision');
         await planner.getByRole('button',{name:'Check physical requirements',exact:true}).click();
         await expect(planner.getByRole('status')).toHaveText('Declared physical constraints satisfied. Nothing was saved or reserved.');
         await planner.getByRole('button',{name:'Save installation plan',exact:true}).click();
@@ -367,9 +390,61 @@ test('space reuse follows reviewed removal prerequisites on desktop and phone',a
         const replaced=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'read',read:{enclosure:rack,occupants:true}}})});
         expect(replaced.physical.occupancy.map(o=>o.placement.item)).toEqual([old]);
         expect(replaced.physical.occupancy[0].placement.volume).toEqual(volume);
+        const qualityBefore=await rpc({oneofKind:'physical',physical:{action:{oneofKind:'replacementQuality',replacementQuality:{}}}});
+        const priorCount=qualityBefore.physical.replacementQuality.filter(b=>b.decision===m.PhysicalReplacementDecision.CONFIRMED&&b.strength===m.PhysicalReplacementStrength.LIMITED).reduce((sum,b)=>sum+b.count,0n);
+        await planner.getByText('Replacement evidence and event decision',{exact:true}).click();
+        await planner.getByRole('button',{name:'Explain current replacement hypothesis',exact:true}).click();
+        if(width<600)await planner.getByRole('button',{name:'Continue to event decision',exact:true}).click();
+        await planner.getByRole('button',{name:'Not sure / later',exact:true}).click();
+        await expect(planner.getByRole('status')).toHaveText('Review decision recorded. Installation and endpoint decisions are unchanged.');
+        if(width<600)await planner.getByRole('button',{name:'Review event judgment',exact:true}).click();
+        await planner.getByRole('button',{name:'Confirm replacement event',exact:true}).click();
+        await expect(planner.locator('.replacement-review')).toContainText('Current attributed judgment: confirmed');
+        await planner.getByText('Local replacement review quality',{exact:true}).click();
+        await planner.getByRole('button',{name:'Load current review counts',exact:true}).click();
+        await expect(planner.getByText(new RegExp(`confirmed.*${priorCount+1n} reviewed`))).toBeVisible();
         expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+        await planner.screenshot({path:join('test-results',`physical-replacement-${width}.png`)});
       }finally{await page.close();}
     }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
+test('acknowledged partial physical work and remaining reservations survive a process crash',async()=>{
+  // Kill after the acknowledged commit, then retry and cancel without freeing unresolved work.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-physical-crash-'));let server=await host(dir);
+  try{
+    let {m,rpc}=await workspaceClient(server.url);
+    const create=async(kind,name)=>(await rpc({oneofKind:'write',write:m.Write.create({kind,changes:[{name:'name',value:{oneofKind:'text',text:name}}]})})).mutation.targets[0];
+    const rack=await create(m.AssetKind.RACK,'Crash recovery enclosure');
+    const parts=[];for(const name of ['Installed part','Unresolved spare','Conflicting spare'])parts.push(await create(m.AssetKind.DEVICE,name));
+    const volume={x:{startUm:0n,lengthUm:500000n},y:{startUm:0n,lengthUm:44450n},z:{startUm:0n,lengthUm:1000000n}};
+    await rpc({oneofKind:'physical',physical:{action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target:rack,basis:'Measured fixture enclosure and recorded occupants',volume,occupancyCoverage:volume,mounting:'Fixture rails'})}}}});
+    for(const target of parts){
+      const item=(await rpc({oneofKind:'read',read:m.Read.create({target})})).detail.item;
+      const changes=[['width',250000n],['height',44450n],['depth',1000000n]].map(([name,value])=>({name,value:{oneofKind:'equipment',equipment:{basis:'Measured fixture body',assertion:{oneofKind:'quantity',quantity:{lower:value,upper:value,unit:'mm',scale:3}}}}}));
+      await rpc({oneofKind:'write',write:m.Write.create({target,expected:item.revision,kind:m.AssetKind.DEVICE,changes})});
+      await rpc({oneofKind:'physical',physical:{action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target,basis:'Qualified fixture rails',mounting:'Fixture rails'})}}}});
+    }
+    let plan=(await rpc({oneofKind:'physical',physical:{action:{oneofKind:'save',save:{plan:m.PhysicalPlan.create({name:'Recover partial installation',steps:parts.slice(0,2).map((item,index)=>({action:{oneofKind:'placement',placement:{item,enclosure:rack,volume:{...volume,x:{startUm:BigInt(index)*250000n,lengthUm:250000n}}}}}))})}}}})).physical.plan;
+    plan=(await rpc({oneofKind:'physical',physical:{action:{oneofKind:'reserve',reserve:{plan:{id:plan.id,revision:plan.revision},untilMs:BigInt(Date.now()+600000)}}}})).physical.plan;
+    const admitted={id:plan.id,revision:plan.revision};
+    await rpc({oneofKind:'physical',physical:{action:{oneofKind:'complete',complete:{plan:admitted,completedSteps:[0]}}}});
+    await server.crash();server=await host(dir);({m,rpc}=await workspaceClient(server.url));
+    plan=(await rpc({oneofKind:'physical',physical:{action:{oneofKind:'load',load:{id:admitted.id,revision:0n}}}})).physical.plan;
+    expect(plan.state).toBe(m.PhysicalPlanState.PARTIAL);
+    expect(plan.steps.map(s=>s.state)).toEqual([m.PhysicalStepState.RECORDED,m.PhysicalStepState.RESERVED]);
+    const occupied=(await rpc({oneofKind:'physical',physical:{action:{oneofKind:'read',read:{enclosure:rack,occupants:true}}}})).physical.occupancy;
+    expect(occupied.map(o=>o.placement.item)).toEqual([parts[0]]);
+    await expect(rpc({oneofKind:'physical',physical:{action:{oneofKind:'complete',complete:{plan:admitted,completedSteps:[0]}}}})).rejects.toThrow();
+    plan=(await rpc({oneofKind:'physical',physical:{action:{oneofKind:'cancel',cancel:{id:plan.id,revision:plan.revision}}}})).physical.plan;
+    const proposal=m.PhysicalPlan.create({name:'Cannot consume unresolved recovery space',steps:[{action:{oneofKind:'placement',placement:{item:parts[2],enclosure:rack,volume:{...volume,x:{startUm:250000n,lengthUm:250000n}}}}}]});
+    const blocked=(await rpc({oneofKind:'physical',physical:{action:{oneofKind:'preview',preview:{plan:proposal}}}})).physical;
+    expect(blocked.state).toBe(m.RequirementState.FAILED);
+    const done=(await rpc({oneofKind:'physical',physical:{action:{oneofKind:'complete',complete:{plan:{id:plan.id,revision:plan.revision},notPerformedSteps:[1]}}}})).physical.plan;
+    expect(done.steps.map(s=>s.state)).toEqual([m.PhysicalStepState.RECORDED,m.PhysicalStepState.NOT_PERFORMED]);
+    const released=(await rpc({oneofKind:'physical',physical:{action:{oneofKind:'preview',preview:{plan:proposal}}}})).physical;
+    expect(released.state).toBe(m.RequirementState.SATISFIED);
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
 });
 
@@ -381,6 +456,12 @@ test('named cable ends preserve definitions on desktop and phone',async({browser
       const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600});
       try{
         await page.goto(server.url);await create(page,`Retained cable ${width}`,'CABLE');
+        await page.getByText('Usable enclosure space and physical constraints',{exact:true}).click();
+        const facts=page.locator('.physical-facts');
+        await facts.getByRole('textbox',{name:'Measurement or specification source',exact:true}).fill('Vendor-confirmed inseparable assembly');
+        await facts.getByRole('combobox',{name:'Assembly construction',exact:true}).selectOption({label:'AOC, inseparable end modules'});
+        await facts.getByRole('button',{name:'Save physical facts',exact:true}).click();
+        await expect(page.locator('.notice[role="status"]')).toHaveText('Physical facts saved.×');
         const panel=page.getByRole('region',{name:'Cable ends',exact:true});
         await panel.getByRole('button',{name:'Inspect named cable ends',exact:true}).click();
         for(const key of ['A','B']){
@@ -388,6 +469,7 @@ test('named cable ends preserve definitions on desktop and phone',async({browser
           await panel.getByRole('textbox',{name:'End label',exact:true}).fill(`End ${key}`);
           await panel.getByRole('textbox',{name:'End definition source',exact:true}).fill('Labels read from the retained cable');
           await panel.getByRole('textbox',{name:'Connector designation, if known',exact:true}).fill('LC/UPC duplex');
+          await panel.getByRole('textbox',{name:'Known assembly channels',exact:true}).fill('1, 2');
           await panel.getByRole('button',{name:'Save end definition',exact:true}).click();
           await expect(panel.getByRole('button',{name:`Edit end: End ${key}`,exact:true})).toBeEnabled();
         }
@@ -395,6 +477,7 @@ test('named cable ends preserve definitions on desktop and phone',async({browser
         await expect(panel.locator('li')).toHaveCount(2);
         await panel.getByRole('button',{name:'Edit end: End A',exact:true}).click();
         await expect(panel.getByRole('textbox',{name:'Structural end key',exact:true})).toBeDisabled();
+        await expect(panel.getByRole('textbox',{name:'Known assembly channels',exact:true})).toHaveValue('1, 2');
         await panel.getByRole('textbox',{name:'End label',exact:true}).fill('Rack-facing end');
         await panel.getByRole('button',{name:'Save end definition',exact:true}).click();
         await expect(panel.getByRole('button',{name:'Edit end: Rack-facing end',exact:true})).toBeEnabled();

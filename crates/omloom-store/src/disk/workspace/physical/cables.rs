@@ -35,7 +35,47 @@ fn end(row: &Properties) -> Result<api::PhysicalCableEnd> {
         attachment: None,
         intended_port: None,
         mating: connector::read(row)?,
+        channels: read_channels(row)?,
     })
+}
+pub(super) fn normalize_channels(channels: &mut [u32]) -> Result<()> {
+    if channels.len() > 64 {
+        return Err(Error::Limit);
+    }
+    channels.sort_unstable();
+    let mut previous = 0;
+    for channel in channels {
+        if *channel <= previous || *channel > 4096 {
+            return Err(Error::Invalid);
+        }
+        previous = *channel;
+    }
+    Ok(())
+}
+fn read_channels(row: &Properties) -> Result<Vec<u32>> {
+    let Some(Value::Array(values)) = row.get("counts") else {
+        if row.contains_key("counts") {
+            return Err(Error::Corrupt);
+        }
+        return Ok(Vec::new());
+    };
+    if values.len() > 64 {
+        return Err(Error::Corrupt);
+    }
+    let mut result = Vec::with_capacity(values.len());
+    let mut previous = 0;
+    for value in values {
+        let Value::Int(value) = value else {
+            return Err(Error::Corrupt);
+        };
+        let value = u32::try_from(*value).map_err(|_| Error::Corrupt)?;
+        if value <= previous || value > 4096 {
+            return Err(Error::Corrupt);
+        }
+        result.push(value);
+        previous = value;
+    }
+    Ok(result)
 }
 impl Tx<'_> {
     pub(super) fn save_cable_end(
@@ -49,7 +89,8 @@ impl Tx<'_> {
         if self.physical_access(context, cable, working, true)? != wire::AssetKind::Cable {
             return Err(Error::Invalid);
         }
-        let proposed = value.end.ok_or(Error::Invalid)?;
+        let mut proposed = value.end.ok_or(Error::Invalid)?;
+        normalize_channels(&mut proposed.channels)?;
         if proposed.attachment.is_some() || proposed.intended_port.is_some() {
             return Err(Error::Invalid);
         }
@@ -81,6 +122,7 @@ impl Tx<'_> {
                 && previous.basis == proposed.basis
                 && previous.connector == proposed.connector
                 && previous.mating == proposed.mating
+                && previous.channels == proposed.channels
             {
                 return Ok(previous);
             }
@@ -91,6 +133,33 @@ impl Tx<'_> {
             )?;
             if existing.len() >= 64 {
                 return Err(Error::Limit);
+            }
+        }
+        if !proposed.channels.is_empty() {
+            // At most 64 real end definitions, not one inventory object per lane.
+            // A physical channel has at most two ends even in a breakout assembly.
+            let rows = self.query(
+                "MATCH (n:OmRow {parent:$parent}) RETURN properties(n) AS p LIMIT 65",
+                params([("parent", text(&parent))]),
+            )?;
+            if rows.len() > 64 {
+                return Err(Error::Corrupt);
+            }
+            let mut counts = BTreeMap::new();
+            for row in rows {
+                if string(&row, "key")? == key {
+                    continue;
+                }
+                for channel in read_channels(&row)? {
+                    *counts.entry(channel).or_insert(0usize) += 1;
+                }
+            }
+            if proposed
+                .channels
+                .iter()
+                .any(|channel| counts.get(channel).is_some_and(|count| *count >= 2))
+            {
+                return Err(Error::Conflict);
             }
         }
         let revision = match prior.as_ref() {
@@ -112,6 +181,20 @@ impl Tx<'_> {
             row.remove("meaning");
         }
         connector::store(&mut row, proposed.mating.as_ref())?;
+        if proposed.channels.is_empty() {
+            row.remove("counts");
+        } else {
+            row.insert(
+                "counts".into(),
+                Value::Array(
+                    proposed
+                        .channels
+                        .iter()
+                        .map(|v| Value::Int(i64::from(*v)))
+                        .collect(),
+                ),
+            );
+        }
         self.put(&key, &parent, Class::Inventory, row)?;
         self.audit(
             &format!("{}/{}", cable.asset, proposed.key),

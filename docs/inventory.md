@@ -803,6 +803,34 @@ cannot promise a free socket to two ends at once. Retries and reads do not appen
 connection histories. Endpoint visibility and relationship rights are checked
 before displaying or changing the attachment.
 
+One DAC or AOC is one adopted cable assembly, including inseparable end modules.
+Record only its real named ends and known internal channel numbers. Breakout
+legs share that assembly identity; each declared channel has at most two ends.
+Missing channel data is unknown. These declarations do not certify polarity,
+speed, signal continuity or service health.
+
+Replacement plans retain explicit endpoint judgments separately from the
+component event. Unmapped ports remain visible when a smaller replacement has
+fewer ports. Whole-port and individual-channel allocations cannot overlap;
+accepted breakout lanes require a current sourced port-channel declaration.
+Correspondence does not transfer configuration, grants, credentials or wiring.
+An exact-binding postcondition uses the common requirement evaluator and fails
+when its reviewed relation is removed, recreated or changed.
+
+The replacement review explains its current evidence using versioned rules and
+strength labels, without invented probabilities. Confirm, reject and defer are
+attributed judgments, not installation reports. Current decisions contribute
+once to fixed-window local quality counts; correcting a decision replaces its
+contribution atomically. Deferral is unlabelled, not a negative example. Counts
+are available under the complete contributing read-grant and working scope,
+including read-only auditors. Changing authority or field access invalidates
+that projection.
+The configured detail-retention period bounds the correction/count window;
+expired counts use ordinary bounded cleanup. Minimal current disposition stays
+with active plan work to prevent recounting unchanged evidence, and terminal
+plan detail follows its existing lifecycle. No raw training corpus or automatic
+retraining is created. Acceptance counts do not establish accuracy or recall.
+
 An optional sourced mating contract identifies one exact declared interface and
 its complementary sides. Matching connector labels alone cannot establish fit;
 different contract revisions remain unqualified. The declaration checks only

@@ -32,10 +32,10 @@ fn current_and_reserved_clearance_cannot_be_consumed_by_another_body() -> TestRe
     let facts = api::PhysicalDefinition {
         target: Some(first.clone()),
         basis: "Measured required side connector access".into(),
-        clearance: Some(api::PhysicalClearance {
+        clearance: Some(Box::new(api::PhysicalClearance {
             after_x_um: 500_000,
             ..Default::default()
-        }),
+        })),
         ..Default::default()
     };
     physical(
