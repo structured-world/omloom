@@ -52,7 +52,6 @@ fn draft_actual_report_does_not_lock_other_steps() -> TestResult {
                 not_performed_steps: if decline { vec![1] } else { vec![] },
                 actual_state: true,
                 discrepancy: Some("Only the first installation was performed".into()),
-                ..Default::default()
             }),
         )?
         .plan
