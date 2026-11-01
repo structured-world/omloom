@@ -1,5 +1,90 @@
 use super::*;
 
+// Reporting performed work must not acquire unreported or declined assets held by another plan.
+#[test]
+fn draft_actual_report_does_not_lock_other_steps() -> TestResult {
+    for decline in [false, true] {
+        let dir = tempfile::tempdir()?;
+        let store = Store::open(dir.path(), policy())?;
+        let actor = operator();
+        let a = create(&store, &actor, K::Rack, "Reported enclosure")?;
+        let b = create(&store, &actor, K::Rack, "Other enclosure")?;
+        for rack in [&a, &b] {
+            physical(
+                &store,
+                &actor,
+                api::physical::Action::Define(api::PhysicalDefinitionEdit {
+                    definition: Some(define(rack.clone())),
+                }),
+            )?;
+        }
+        let first = create(&store, &actor, K::Device, "Performed installation")?;
+        let second = create(&store, &actor, K::Device, "Separately reserved item")?;
+        for item in [&first, &second] {
+            equipment_dimensions(&store, &actor, item)?;
+        }
+        let mut plan = draft(&store, &actor, first.clone(), a.clone())?;
+        let mut step = plan.steps[0].clone();
+        let Some(api::physical_step::Action::Placement(p)) = &mut step.action else {
+            return Err(Error::Corrupt.into());
+        };
+        p.item = Some(second.clone());
+        p.enclosure = Some(b.clone());
+        plan.steps.push(step);
+        let plan = physical(
+            &store,
+            &actor,
+            api::physical::Action::Save(api::PhysicalSave { plan: Some(plan) }),
+        )?
+        .plan
+        .ok_or(Error::Corrupt)?;
+        let other = draft(&store, &actor, second.clone(), b.clone())?;
+        reserve(&store, &actor, other)?;
+        let reported = physical(
+            &store,
+            &actor,
+            api::physical::Action::Complete(api::PhysicalCompletion {
+                plan: Some(api::PhysicalPlanKey {
+                    id: plan.id.ok_or(Error::Corrupt)?,
+                    revision: plan.revision,
+                }),
+                completed_steps: vec![0],
+                not_performed_steps: if decline { vec![1] } else { vec![] },
+                actual_state: true,
+                discrepancy: Some("Only the first installation was performed".into()),
+                ..Default::default()
+            }),
+        )?
+        .plan
+        .ok_or(Error::Corrupt)?;
+        assert_eq!(
+            reported.steps[0].state,
+            api::PhysicalStepState::Recorded as i32
+        );
+        assert_eq!(
+            reported.steps[1].state,
+            if decline {
+                api::PhysicalStepState::NotPerformed
+            } else {
+                api::PhysicalStepState::Planned
+            } as i32
+        );
+        assert_eq!(binding(&store, &first)?.to, Some(a));
+        let third = draft(&store, &actor, second, b)?;
+        let before = store.usage()?;
+        assert!(matches!(
+            reserve(&store, &actor, third),
+            Err(Error::Conflict)
+        ));
+        assert_eq!(
+            store.usage()?,
+            before,
+            "The other reservation remains authoritative"
+        );
+    }
+    Ok(())
+}
+
 // A resolved step's released lock may be reused without blocking the original plan's remaining work.
 #[test]
 fn resolved_resource_reuse_does_not_block_completion_recheck_or_cancellation() -> TestResult {

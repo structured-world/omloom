@@ -199,7 +199,12 @@ impl Tx<'_> {
             }
         }
         if value.actual_state && state == api::PhysicalPlanState::Draft {
-            for step in &plan.steps {
+            // Unreported and declined work must not acquire resources belonging to other plans.
+            for (&index, &done) in &selected {
+                if !done {
+                    continue;
+                }
+                let step = &plan.steps[index as usize];
                 match step.action.as_ref().ok_or(Error::Corrupt)? {
                     api::physical_step::Action::Placement(p) => {
                         if let Some(item) = Placement::from(p).actual(&plan.materials)? {
