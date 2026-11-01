@@ -7,8 +7,9 @@ const emit=defineEmits<{change:[pairs:model.PhysicalEndpointMapping[]];selected:
 const old=ref<model.Item>(),incoming=ref<model.Item>();
 const oldChannel=ref(''),incomingChannel=ref(''),selectionEpoch=ref(0);
 const inventory=ref<model.Page>(),inventoryBusy=ref(false),inventoryError=ref('');
+const panel=ref<HTMLDetailsElement>();
 let generation=0;
-watch(()=>key(props.replacement.previous),()=>{generation++;inventory.value=undefined;inventoryBusy.value=false;});
+watch(()=>key(props.replacement.previous),()=>{generation++;inventory.value=undefined;inventoryBusy.value=false;if(panel.value?.open)void loadPorts();});
 async function loadPorts(cursor?:string){
   if(!props.replacement.previous||inventoryBusy.value)return;
   const turn=++generation;inventoryBusy.value=true;inventoryError.value='';
@@ -20,7 +21,7 @@ async function loadPorts(cursor?:string){
 const byPort=computed(()=>{const result=new Map<string,model.PhysicalEndpointMapping[]>();for(const pair of props.replacement.endpoints){const id=key(pair.previous);let rows=result.get(id);if(rows===undefined){rows=[];result.set(id,rows);}rows.push(pair);}return result;});
 function coverage(item:model.Item){const pairs=byPort.value.get(key(item.target));if(pairs===undefined)return 'Unmapped / not reviewed';if(pairs.some(p=>p.previousChannel!==undefined))return `${pairs.length} channel decisions; other channels remain unqualified`;return model.PhysicalMappingDecision[pairs[0]!.decision]?.toLowerCase();}
 const decision=ref(model.PhysicalMappingDecision.UNRESOLVED),error=ref(''),page=ref(0);
-watch(()=>[key(props.replacement.previous),key(props.replacement.replacement)],()=>{old.value=undefined;incoming.value=undefined;});
+watch([()=>key(props.replacement.previous),()=>key(props.replacement.replacement)],()=>{old.value=undefined;incoming.value=undefined;page.value=0;oldChannel.value='';incomingChannel.value='';selectionEpoch.value++;});
 const rows=computed(()=>props.replacement.endpoints.slice(page.value*25,(page.value+1)*25));
 function name(target:AssetRef|undefined){const item=props.items.find(i=>key(i.target)===key(target));return item===undefined?'Port name unavailable':input(item.fields.find(f=>f.name==='name'));}
 function select(side:'previous'|'replacement',item?:model.Item){if(side==='previous')old.value=item;else incoming.value=item;if(item)emit('selected',item);}
@@ -43,7 +44,7 @@ function apply(){
 }
 </script>
 <template>
-<details class="endpoint-mappings" @toggle="($event.target as HTMLDetailsElement).open&&!inventory&&loadPorts()"><summary>Review endpoint correspondence ({{replacement.endpoints.length}})</summary>
+<details ref="panel" class="endpoint-mappings" @toggle="($event.target as HTMLDetailsElement).open&&!inventory&&loadPorts()"><summary>Review endpoint correspondence ({{replacement.endpoints.length}})</summary>
 <p>Accepting the component replacement does not accept a port pair. A correspondence retains intent only. Cable attachment, compatibility, configuration and service verification require their own steps and evidence. Ports not reviewed here remain unmapped.</p>
 <section aria-label="Previous endpoint coverage"><p v-if="inventoryBusy" role="status">Loading this page of previous ports…</p><p v-if="inventoryError" role="alert">{{inventoryError}}</p><template v-if="inventory"><p>{{inventory.total.toString()}} authorized direct ports. This is not coverage of hidden hardware.</p><ul><li v-for="item in inventory.items" :key="key(item.target)"><strong>{{input(item.fields.find(f=>f.name==='name'))}}</strong> · {{coverage(item)}}</li></ul></template><button type="button" :disabled="inventoryBusy" @click="loadPorts()">First previous-port page</button><button v-if="inventory?.next" type="button" :disabled="inventoryBusy" @click="loadPorts(inventory.next)">Next previous-port page</button></section>
 <fieldset v-if="editable&&replacement.previous&&replacement.replacement"><legend>One endpoint decision</legend>

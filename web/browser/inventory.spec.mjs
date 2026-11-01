@@ -52,6 +52,50 @@ async function workspaceClient(url) {
   return { m, rpc, revision };
 }
 
+test('replacement endpoint review follows shifted plan steps',async({browser})=>{
+  // Removing a preceding step must reset decisions and reload the open previous-port page.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-shifted-replacement-'));const server=await host(dir);
+  try{
+    const {m,rpc}=await workspaceClient(server.url);
+    async function resource(kind,name){return (await rpc({oneofKind:'write',write:m.Write.create({kind,changes:[{name:'name',value:{oneofKind:'text',text:name}}]})})).mutation.targets[0];}
+    const racks=[],steps=[];
+    for(let i=0;i<2;i++){
+      const rack=await resource(m.AssetKind.RACK,`Review enclosure ${i}`);racks.push(rack);
+      const old=await resource(m.AssetKind.DEVICE,`Review previous ${i}`);
+      const incoming=i===0?old:await resource(m.AssetKind.DEVICE,'Review distinct incoming');
+      await rpc({oneofKind:'relation',relation:m.Relationship.create({relation:{from:old,to:rack,kind:m.RelationKind.INSTALLED_IN}})});
+      const detail=await rpc({oneofKind:'read',read:m.Read.create({target:old})});
+      const binding=detail.detail.relations.find(r=>r.kind===m.RelationKind.INSTALLED_IN);
+      expect(binding).toBeDefined();const endpoints=[];
+      for(let j=0;j<(i===0?26:1);j++){
+        const port=await resource(m.AssetKind.PORT,`Previous ${i} socket ${j}`);
+        await rpc({oneofKind:'relation',relation:m.Relationship.create({relation:{from:old,to:port,kind:m.RelationKind.HAS_PORT}})});
+        endpoints.push({previous:port,decision:m.PhysicalMappingDecision.UNRESOLVED});
+      }
+      steps.push({action:{oneofKind:'replacement',replacement:{position:rack,previous:old,replacement:incoming,previousBinding:binding.relationId,previousRevision:binding.revision,endpoints}}});
+    }
+    const saved=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'save',save:{plan:m.PhysicalPlan.create({name:'Two replacement reviews',steps})}}})});
+    expect(saved.oneofKind).toBe('physical');
+    for(const width of [1440,390]){
+      const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600});
+      try{
+        await page.goto(`${server.url}/#/?asset=${racks[0].assetId}&incarnation=${racks[0].incarnation}`);
+        await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
+        const planner=page.locator('.physical-planner');
+        await planner.getByRole('button',{name:'Two replacement reviews · draft',exact:true}).click();
+        const mapping=planner.locator('.endpoint-mappings').first();
+        await mapping.getByText('Review endpoint correspondence (26)',{exact:true}).click();
+        await expect(mapping.getByRole('region',{name:'Previous endpoint coverage',exact:true})).toContainText('Previous 0 socket');
+        await mapping.getByRole('button',{name:'Next endpoint decisions',exact:true}).click();
+        await expect(mapping.getByRole('button',{name:'Remove endpoint decision 26',exact:true})).toBeVisible();
+        await planner.getByRole('button',{name:'Remove proposed step',exact:true}).first().click();
+        await expect(mapping.getByRole('region',{name:'Previous endpoint coverage',exact:true})).toContainText('Previous 1 socket 0');
+        await expect(mapping.getByRole('button',{name:'Remove endpoint decision 1',exact:true})).toBeVisible();
+      }finally{await page.close();}
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('installed parts are paged in desktop and phone physical planners',async({browser})=>{
   // Large inventories expose bounded pages, including parts without drawable coordinates.
   const dir=await mkdtemp(join(tmpdir(),'omloom-occupant-pages-'));const server=await host(dir);
