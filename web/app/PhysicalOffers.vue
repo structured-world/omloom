@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import {ref} from 'vue';
 import {call,model,requestMessage,type AssetRef} from './api';
-import {micrometres,millimetres} from './physical-units';
+import {micrometres,millimetres,signedMicrometres} from './physical-units';
 const props=defineProps<{target:AssetRef;working:model.WorkingContext;inactive:boolean}>();
 const emit=defineEmits<{changed:[]}>();
 const opened=ref(false),busy=ref(false),error=ref(''),notice=ref(''),revision=ref<bigint>();
@@ -15,7 +15,7 @@ async function load(after?:string){const view=await invoke({oneofKind:'offers',o
 function edit(offer?:model.PhysicalOffer){editing.value=offer;name.value=offer?.name??'';recipient.value=offer?.recipient??'';mass.value=offer?.mass??false;power.value=offer?.power??false;cooling.value=offer?.cooling??false;region.value=offer?.region===undefined?undefined:model.PhysicalVolume.clone(offer.region);copyInputs();}
 function copyInputs(){for(const [i,axis] of axes.entries()){const extent=region.value?.[axis];starts.value[i]=extent?millimetres(extent.startUm):'';lengths.value[i]=extent?millimetres(extent.lengthUm):'';}}
 async function useEnvelope(){await run(async()=>{const view=await invoke({oneofKind:'read',read:{enclosure:props.target,occupants:false}});region.value=view.definitions[0]?.volume;copyInputs();if(!region.value)throw Error('Usable enclosure geometry is unknown.');});}
-function coordinate(text:string){if(text==='0')return 0n;return text.startsWith('-')?-micrometres(text.slice(1)):micrometres(text);}
+function coordinate(text:string){return signedMicrometres(text);}
 async function save(revoke=false){await run(async()=>{
   const region=model.PhysicalVolume.create();for(const [i,axis] of axes.entries())region[axis]={startUm:coordinate(starts.value[i]!),lengthUm:micrometres(lengths.value[i]!)};
   await invoke({oneofKind:'offer',offer:{offer:model.PhysicalOffer.create({...editing.value,enclosure:props.target,name:name.value,recipient:recipient.value,region,mass:mass.value,power:power.value,cooling:cooling.value,revoked:revoke})}});
@@ -29,7 +29,7 @@ async function save(revoke=false){await run(async()=>{
 <form @submit.prevent="save()"><fieldset :disabled="busy"><legend>{{editing?'Edit reviewed disclosure':'Create a region disclosure'}}</legend>
 <label>Offer name<input v-model="name" required maxlength="160"/></label><label>Recipient identity<input v-model="recipient" required maxlength="128"/></label>
 <button type="button" @click="useEnvelope">Use current usable enclosure region</button>
-<div v-for="(axis,index) in axes" :key="axis" class="axis"><label>{{axis.toUpperCase()}} origin (mm)<input v-model="starts[index]" required maxlength="18" inputmode="decimal"/></label><label>{{axis.toUpperCase()}} length (mm)<input v-model="lengths[index]" required maxlength="17" inputmode="decimal"/></label></div>
+<div v-for="(axis,index) in axes" :key="axis" class="axis"><label>{{axis.toUpperCase()}} origin (mm)<input v-model="starts[index]" required maxlength="21" inputmode="decimal"/></label><label>{{axis.toUpperCase()}} length (mm)<input v-model="lengths[index]" required maxlength="20" inputmode="decimal"/></label></div>
 <label class="check"><input v-model="mass" type="checkbox"/>Disclose the enclosure mass admission result</label><label class="check"><input v-model="power" type="checkbox"/>Disclose the enclosure power admission result</label><label class="check"><input v-model="cooling" type="checkbox"/>Disclose the enclosure cooling admission result</label>
 <button>Save reviewed offer</button><button v-if="editing&&!editing.revoked" type="button" @click="save(true)">Revoke this offer</button><button v-if="editing" type="button" @click="edit()">New offer</button>
 </fieldset></form></template></details></template>

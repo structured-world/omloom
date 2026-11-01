@@ -12,9 +12,19 @@ test('physical entry preserves exact decimal units without floating point roundi
 });
 test('physical entry rejects zero, overflow length and unsupported precision before submission', () => {
   // Missing/invalid dimensions must not acquire an implicit zero or rounded envelope.
-  for (const input of ['', '0', '-1', '1.0001', '01', '1e3', 'Infinity', ' 1', '99999999999999']) {
+  for (const input of ['', '0', '-1', '1.0001', '01', '1e3', 'Infinity', ' 1', '9223372036854775.808']) {
     assert.throws(()=>micrometres(input));
   }
+});
+test('physical entry covers the complete signed storage coordinate range',()=>{
+  // Existing endpoint values must round-trip without rejecting valid magnitudes or accepting overflow.
+  const maximum=(1n<<63n)-1n,minimum=-(1n<<63n);
+  assert.equal(micrometres(millimetres(maximum)),maximum);
+  assert.equal(signedMicrometres(millimetres(minimum)),minimum);
+  assert.equal(signedMicrometres(millimetres(maximum)),maximum);
+  assert.throws(()=>signedMicrometres(millimetres(minimum-1n)));
+  assert.throws(()=>micrometres(millimetres(maximum+1n)));
+  assert.equal(micrometres('99999999999999'),99999999999999000n);
 });
 test('physical offsets retain the sign for submillimetre clearances', () => {
   // Clearance envelopes may start outside the chassis; their offset is never a dimension input.

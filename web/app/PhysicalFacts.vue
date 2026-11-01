@@ -133,15 +133,15 @@ async function save() {
     <label v-if="[AssetKind.DEVICE,AssetKind.PHYSICAL_COMPONENT].includes(kind)">Known physical class<select v-model="componentKind"><option v-for="kind in componentKinds" :key="kind" :value="kind">{{model.PhysicalComponentKind[kind]?.toLowerCase().replaceAll('_',' ')}}</option></select></label>
     <label class="check"><input v-model="known" type="checkbox" />Usable enclosure dimensions are known</label>
     <template v-if="known">
-      <label>Width (mm)<input v-model="width" inputmode="decimal" required maxlength="17" /></label>
-      <label>Height (mm)<input v-model="height" inputmode="decimal" required maxlength="17" /></label>
-      <label>Depth (mm)<input v-model="depth" inputmode="decimal" required maxlength="17" /></label>
+      <label>Width (mm)<input v-model="width" inputmode="decimal" required maxlength="20" /></label>
+      <label>Height (mm)<input v-model="height" inputmode="decimal" required maxlength="20" /></label>
+      <label>Depth (mm)<input v-model="depth" inputmode="decimal" required maxlength="20" /></label>
     </template>
     <p v-else>Unknown dimensions cannot establish physical fit.</p>
     <details v-if="kind===AssetKind.RACK"><summary>Mounting rail grid</summary>
       <p>The rail grid is independent of cabinet height and occupancy. Record its source above. Unit numbers do not instantiate inventory slots.</p>
       <label class="check"><input v-model="gridKnown" type="checkbox"/>Rack rail grid and numbering are known</label>
-      <template v-if="gridKnown"><label>Rail grid top Y (mm)<input v-model="gridTop" required inputmode="decimal" maxlength="18"/></label>
+      <template v-if="gridKnown"><label>Rail grid top Y (mm)<input v-model="gridTop" required inputmode="decimal" maxlength="21"/></label>
       <label>Rail unit count<input v-model="gridCount" required inputmode="numeric" maxlength="10"/></label>
       <label>Lowest printed U<input v-model="gridFirst" required inputmode="numeric" maxlength="10"/></label>
       <label>Rack numbering direction<select v-model="gridDirection"><option :value="model.PhysicalRackDirection.UNSPECIFIED">Choose the sourced direction</option><option :value="model.PhysicalRackDirection.TOP_DOWN">Top to bottom</option><option :value="model.PhysicalRackDirection.BOTTOM_UP">Bottom to top</option></select></label></template>
@@ -150,7 +150,7 @@ async function save() {
       <p>Dimensions and model slots do not prove empty space. Explicitly record the region whose current occupants are all represented in inventory. Other regions remain unqualified; saving this statement moves no equipment and releases no reservation. Include the review source in the source field above.</p>
       <label class="check"><input v-model="occupancyKnown" type="checkbox"/>Current occupancy is completely recorded in this region</label>
       <template v-if="occupancyKnown"><button type="button" @click="copySurvey">Copy entered usable region</button>
-      <template v-for="axis in axes" :key="axis"><label>{{axis.toUpperCase()}} occupancy start (mm)<input v-model="survey[axis].start" required inputmode="decimal" maxlength="18"/></label><label>{{axis.toUpperCase()}} occupancy length (mm)<input v-model="survey[axis].length" required inputmode="decimal" maxlength="17"/></label></template></template>
+      <template v-for="axis in axes" :key="axis"><label>{{axis.toUpperCase()}} occupancy start (mm)<input v-model="survey[axis].start" required inputmode="decimal" maxlength="21"/></label><label>{{axis.toUpperCase()}} occupancy length (mm)<input v-model="survey[axis].length" required inputmode="decimal" maxlength="20"/></label></template></template>
     </details>
     <details><summary>Capacity and mounting facts</summary>
       <p>Empty means unknown. Zero is an explicit sourced value. Dimensions alone do not establish power, cooling or mounting compatibility.</p>
@@ -164,7 +164,7 @@ async function save() {
     <details v-if="[AssetKind.DEVICE,AssetKind.PHYSICAL_COMPONENT].includes(kind)"><summary>Equipment service and connector clearance</summary>
       <p>Declare all six margins in the enclosing coordinate frame, including explicit zeros. These are selected equipment requirements, not proof of an outside aisle or cable route.</p>
       <label class="check"><input v-model="clearanceKnown" type="checkbox"/>Required clearance measurements are known</label>
-      <template v-if="clearanceKnown"><label v-for="face in faces" :key="face.key">{{face.label}} clearance (mm)<input v-model="margins[face.key]" inputmode="decimal" required maxlength="17"/></label></template>
+      <template v-if="clearanceKnown"><label v-for="face in faces" :key="face.key">{{face.label}} clearance (mm)<input v-model="margins[face.key]" inputmode="decimal" required maxlength="20"/></label></template>
     </details>
     </template>
     <button type="submit">Save physical facts</button>
