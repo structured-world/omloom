@@ -393,6 +393,20 @@ fn cross_model_mapping_preserves_unmapped_ports_and_requires_declared_breakout_l
     )?;
     let old = create(&store, &actor, K::Device, "48-port switch")?;
     let new = create(&store, &actor, K::Device, "24-port replacement")?;
+    call(
+        &store,
+        &actor,
+        Command::Relation(api::Relationship {
+            relation: Some(wire::Relation {
+                from: Some(old.clone()),
+                to: Some(position.clone()),
+                kind: wire::RelationKind::InstalledIn as i32,
+                ..Default::default()
+            }),
+            remove: false,
+        }),
+    )?;
+    let previous = binding(&store, &old)?;
     let mut old_ports = Vec::new();
     let mut new_ports = Vec::new();
     for index in 0..48 {
@@ -431,6 +445,8 @@ fn cross_model_mapping_preserves_unmapped_ports_and_requires_declared_breakout_l
         position: Some(position),
         previous: Some(old),
         replacement: Some(new),
+        previous_binding: Some(previous.relation_id),
+        previous_revision: Some(previous.revision),
         endpoints: old_ports
             .iter()
             .enumerate()

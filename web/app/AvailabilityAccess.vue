@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import {ref} from 'vue';
+import {ref,watch} from 'vue';
 import {call,model,requestMessage} from './api';
 import {millimetres} from './physical-units';
 const id=ref(''),busy=ref(false),error=ref(''),view=ref<model.PhysicalView>();
-async function read(){if(busy.value)return;busy.value=true;error.value='';view.value=undefined;try{
+let generation=0;
+watch(id,()=>{generation++;view.value=undefined;error.value='';},{flush:'sync'});
+async function read(){if(busy.value)return;busy.value=true;error.value='';view.value=undefined;const request=generation;try{
   const result=await call({oneofKind:'physical',physical:{action:{oneofKind:'availability',availability:{id:id.value}}}},model.WorkingContext.create());
+  if(request!==generation)return;
   if(result.oneofKind!=='physical')throw Error('Availability is unavailable.');view.value=result.physical;
-}catch(e){error.value=requestMessage(e);}finally{busy.value=false;}}
+}catch(e){if(request===generation)error.value=requestMessage(e);}finally{busy.value=false;}}
 </script>
 <template><details class="availability-access"><summary>Inspect offered capacity</summary>
 <p>A profile identifies an explicitly shared region. Its ID grants no access. Availability is advisory; reservation always checks the current state.</p>

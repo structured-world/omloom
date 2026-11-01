@@ -1,5 +1,36 @@
 use super::*;
 
+// A common upstream is a counterexample only after that subject is authorized, not merely discovered.
+#[test]
+fn hidden_shared_power_upstream_is_restricted_without_target_disclosure() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let a = create(&store, &actor, K::PowerFeed, "Visible feed A")?;
+    let b = create(&store, &actor, K::PowerFeed, "Visible feed B")?;
+    let hidden = create(&store, &actor, K::Device, "Hidden shared upstream")?;
+    for item in [&a, &b, &hidden] {
+        survey(&store, &actor, item)?;
+    }
+    supply(&store, &actor, &a, &hidden)?;
+    supply(&store, &actor, &b, &hidden)?;
+    let mut limited = actor.clone();
+    limited.grants[0].scope =
+        Scope::Targets(vec![AssetRef::try_from(&a)?, AssetRef::try_from(&b)?]);
+    let sources = [a, b];
+    let before = store.usage()?;
+    for boundaries in [Vec::new(), vec![hidden.clone()]] {
+        let result = evaluate(&store, &limited, &sources, &boundaries)?;
+        assert_eq!(result.reason, api::RequirementReason::Restricted as i32);
+        assert!(result.results.iter().all(|v| v.target.is_none()));
+    }
+    let allowed = evaluate(&store, &actor, &sources, &[])?;
+    assert_eq!(allowed.state, api::RequirementState::Failed as i32);
+    assert_eq!(allowed.results[0].target.as_ref(), Some(&hidden));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 fn survey(store: &Store, actor: &Context, resource: &wire::AssetRef) -> TestResult {
     let definition = api::PhysicalDefinition {
         target: Some(resource.clone()),

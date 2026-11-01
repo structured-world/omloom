@@ -4,6 +4,7 @@ import { call,input,key,model,type AssetRef } from './api';
 const props=defineProps<{target:AssetRef;working:model.WorkingContext}>();
 const emit=defineEmits<{open:[target:AssetRef];changed:[]}>();
 const view=ref(model.PhysicalView.create()),opened=ref(false),busy=ref(false),error=ref('');
+const pages=ref<(string|undefined)[]>([undefined]);
 const structural=ref(''),name=ref(''),kind=ref(model.PhysicalComponentKind.UNSPECIFIED),editing=ref<model.PhysicalPosition>();
 const roles=Object.values(model.PhysicalComponentKind).filter((v):v is number=>typeof v==='number');
 const role=(value:number)=>model.PhysicalComponentKind[value]?.toLowerCase().replaceAll('_',' ');
@@ -13,9 +14,12 @@ async function request(action:model.Physical['action']) {
   if(response.oneofKind!=='physical')throw Error('Physical positions are unavailable.');
   return response.physical;
 }
-async function load(after?:string) {
+async function load(after?:string,backward=false) {
   if(busy.value)return;busy.value=true;error.value='';
-  try{view.value=await request({oneofKind:'positions',positions:{owner:props.target,after,limit:25}});opened.value=true;}catch(e){error.value=String(e);}finally{busy.value=false;}
+  try{
+    view.value=await request({oneofKind:'positions',positions:{owner:props.target,after,limit:25}});opened.value=true;
+    if(backward)pages.value.pop();else if(after===undefined)pages.value=[undefined];else pages.value.push(after);
+  }catch(e){error.value=String(e);}finally{busy.value=false;}
 }
 function edit(position?:model.PhysicalPosition){editing.value=position;structural.value=position?.structuralKey??'';name.value=title(position?.target)??'';kind.value=position?.componentKind??model.PhysicalComponentKind.UNSPECIFIED;}
 async function save() {
@@ -34,6 +38,7 @@ async function save() {
 <button v-if="position.target" type="button" :disabled="busy" @click="emit('open',position.target)"><span v-if="title(position.target)">{{title(position.target)}}</span><span v-else>Position name unavailable</span></button>
 <small>{{position.structuralKey}} · {{role(position.componentKind)}}</small><button type="button" :disabled="busy" @click="edit(position)">Edit position</button>
 </li></ul>
+<button v-if="pages.length>1" type="button" :disabled="busy" @click="load(pages[pages.length-2],true)">Previous component positions</button>
 <button v-if="view.next" type="button" :disabled="busy" @click="load(view.next)">Next component positions</button>
 <button type="button" :disabled="busy" @click="edit()">New structural position</button>
 <form @submit.prevent="save"><fieldset :disabled="busy">

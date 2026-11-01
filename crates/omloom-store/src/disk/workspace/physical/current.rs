@@ -329,11 +329,8 @@ impl Tx<'_> {
         after: Option<&str>,
         view: &mut api::PhysicalView,
     ) -> Result<()> {
-        if let Some(focus) = working.focus.as_ref()
-            && parse_target(Some(focus))? != enclosure
-        {
-            return Ok(());
-        }
+        // The caller already admits this explicit enclosure through physical_access,
+        // including direct-child scope checks; occupants remain independently filtered below.
         let fingerprint =
             assets::detail_page_fingerprint(context, working, enclosure, "physical-occupants");
         let offset = if let Some(cursor) = after {

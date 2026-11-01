@@ -215,6 +215,8 @@ fn finish_collection(report: Result<api::HostReport>, path: &Path) -> Result<()>
     let report = match report {
         Ok(report) => report,
         Err(reason) => {
+            // Source-format failures also leave collection incomplete. Frame validation
+            // and publication below remain fatal; qualification tests reject parser regressions.
             println!("Collection unavailable: {reason}. No report was written.");
             return Ok(());
         }

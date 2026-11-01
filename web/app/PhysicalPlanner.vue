@@ -228,6 +228,7 @@ function proposePreviousAllocation(){
 function addReplacement() {
   error.value='';
   try{
+    if(moving.value&&!source.value)throw Error('Choose the source enclosure before choosing the established part.');
     const old=oldOccupancy.value.find(o=>key(o.placement?.item)===predecessor.value);
     if(moving.value&&!old)throw Error('Choose the established part and its source position.');
     const replacement=moving.value||reseat.value?old?.placement?.item:removePart.value?undefined:equipment.value?.target;
@@ -389,6 +390,7 @@ async function exportPlan(){await run(async()=>{
 <section aria-label="Saved physical plans"><h3>My plans</h3>
 <button type="button" :disabled="busy" @click="newPlan">New installation plan</button>
 <ul><li v-for="saved in plans" :key="saved.id"><button type="button" :disabled="busy" @click="load(saved)">{{saved.name}} · {{state(saved.state)}}</button></li></ul>
+<button type="button" :disabled="busy" @click="run(()=>summaries())">First saved plans</button>
 <button v-if="next" type="button" :disabled="busy" @click="run(()=>summaries(next))">Next saved plans</button>
 </section>
 <div class="plan-layout">

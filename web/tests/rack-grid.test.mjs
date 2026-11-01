@@ -7,6 +7,13 @@ const outfile=resolve('dist/presentation/rack-grid.mjs');
 await build({stdin:{contents:"export * from './web/app/rack-grid.ts'; export {PhysicalRackDirection as D} from './web/src/generated/omloom/v1/workspace.ts';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',packages:'external',outfile});
 const {rackAllocation,rackUnitAt,adjacentRackUnit,railGrid,D}=await import(pathToFileURL(outfile).href);
 const grid={topUm:30000n,unitCount:42,firstUnit:10,direction:D.BOTTOM_UP};
+test('top-down pointer drops preserve the selected lower half unit',()=>{
+  // Dropping a half-U body below the middle rail must not shift it into the upper half.
+  const down={...grid,direction:D.TOP_DOWN};
+  assert.equal(rackUnitAt(down,52225n,22225n),'10.5');
+  assert.deepEqual(rackAllocation(down,rackUnitAt(down,52225n,22225n),22225n),{startUm:52225n,lengthUm:22225n});
+  assert.equal(rackUnitAt(down,52224n,22225n),'10');
+});
 test('printed rack units use the declared rail offset and numbering direction',()=>{
   // Cabinet dimensions do not locate the rails; bottom U10 and top U51 differ.
   assert.deepEqual(rackAllocation(grid,'10',44450n),{startUm:1852450n,lengthUm:44450n});

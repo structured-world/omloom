@@ -1,5 +1,136 @@
 use super::*;
 
+// A caller cannot hold scarce resources beyond the test host's finite reservation window.
+#[test]
+fn physical_reservation_deadline_is_bounded_by_host_policy() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let mut configured = policy();
+    configured.physical_reservation_max_ms = 1000;
+    let store = Store::open(dir.path(), configured)?;
+    let actor = operator();
+    let rack = create(&store, &actor, K::Rack, "Reservation enclosure")?;
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(define(rack.clone())),
+        }),
+    )?;
+    let item = create(&store, &actor, K::Device, "Reserved equipment")?;
+    equipment_dimensions(&store, &actor, &item)?;
+    let plan = draft(&store, &actor, item, rack)?;
+    let before = store.usage()?;
+    for until in [1_101, i64::MAX as u64] {
+        let result = physical(
+            &store,
+            &actor,
+            api::physical::Action::Reserve(api::PhysicalReserve {
+                plan: Some(api::PhysicalPlanKey {
+                    id: plan.id.clone().ok_or(Error::Corrupt)?,
+                    revision: plan.revision,
+                }),
+                until_ms: until,
+            }),
+        );
+        assert!(
+            matches!(result, Err(Error::Invalid)),
+            "Deadline {until} must be refused"
+        );
+        assert_eq!(store.usage()?, before);
+    }
+    let reserved = physical(
+        &store,
+        &actor,
+        api::physical::Action::Reserve(api::PhysicalReserve {
+            plan: Some(api::PhysicalPlanKey {
+                id: plan.id.ok_or(Error::Corrupt)?,
+                revision: plan.revision,
+            }),
+            until_ms: 1100,
+        }),
+    )?
+    .plan
+    .ok_or(Error::Corrupt)?;
+    assert_eq!(reserved.reserved_until_ms, Some(1100));
+    let Some(api::physical_step::Action::Placement(placement)) = &reserved.steps[0].action else {
+        return Err(Error::Corrupt.into());
+    };
+    let competing = draft(
+        &store,
+        &actor,
+        placement.item.clone().ok_or(Error::Corrupt)?,
+        placement.enclosure.clone().ok_or(Error::Corrupt)?,
+    )?;
+    let before = store.usage()?;
+    drop(store);
+    let mut configured = policy();
+    configured.physical_reservation_max_ms = 999;
+    let store = Store::open(dir.path(), configured)?;
+    assert_eq!(
+        store.usage()?,
+        before,
+        "Changing a new-admission limit does not rewrite existing reservation or accounting state"
+    );
+    let result = store.workspace(
+        &actor,
+        api::Request {
+            working: Some(api::WorkingContext {
+                expected: Some(before.revision),
+                ..Default::default()
+            }),
+            command: Some(Command::Physical(api::Physical {
+                action: Some(api::physical::Action::Reserve(api::PhysicalReserve {
+                    plan: Some(api::PhysicalPlanKey {
+                        id: competing.id.ok_or(Error::Corrupt)?,
+                        revision: competing.revision,
+                    }),
+                    until_ms: 2000,
+                })),
+            })),
+        },
+        1101,
+    );
+    assert!(
+        matches!(result, Err(Error::Conflict)),
+        "Expiry does not prove unresolved work was not performed"
+    );
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// A named predecessor requires the exact reviewed binding, even when saving a draft.
+#[test]
+fn replacement_predecessor_requires_its_binding_and_revision() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let owner = create(&store, &actor, K::Device, "Component owner")?;
+    let (position, old) = mountable_component_fixture(&store, &actor, owner, "drive/1")?;
+    let previous = binding(&store, &old)?;
+    let before = store.usage()?;
+    for (id, revision) in [
+        (None, None),
+        (Some(previous.relation_id.clone()), None),
+        (None, Some(previous.revision)),
+        (Some(previous.relation_id.clone()), Some(0)),
+    ] {
+        let result = replacement_plan(
+            &store,
+            &actor,
+            vec![api::PhysicalReplacement {
+                position: Some(position.clone()),
+                previous: Some(old.clone()),
+                previous_binding: id,
+                previous_revision: revision,
+                ..Default::default()
+            }],
+        );
+        assert!(matches!(result, Err(Error::Invalid)));
+        assert_eq!(store.usage()?, before);
+    }
+    Ok(())
+}
+
 // One predecessor cannot fund two distinct replacement steps or acquire their reservations.
 #[test]
 fn replacement_drafts_reject_duplicate_predecessor_bindings() -> TestResult {

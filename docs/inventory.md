@@ -764,8 +764,15 @@ responsibility editor. The new host never silently becomes the owner.
 Physical plans use the same accepted inventory, revision checks and requirement
 evaluation as ordinary resource work. Saving a draft does not reserve capacity
 or report installation. Reservation and attributed manual completion are separate
-commands. Completed effects survive cancellation of remaining work. A required
-postcondition can remain unknown after work is reported; an old observation is
+commands. Completed effects survive cancellation of remaining work.
+
+Reservation requests must fit the host's configured `physical_reservation_max_ms`
+duration. The development host sets a 24-hour ceiling. This new-admission setting
+does not change the durable quota/retention identity or invalidate accepted holds.
+An expired deadline alone does not prove reserved work was not performed;
+unresolved holds require explicit reconciliation before reuse.
+
+A required postcondition can remain unknown after work is reported; an old observation is
 not automatically evidence of the new result.
 
 Recorded power-path separation is another condition in that same evaluator.

@@ -16,8 +16,14 @@ fn policy_rejects_missing_or_unrepresentable_bounds() {
             bytes: 1_048_576,
         },
         batch_rows: 1,
+        physical_reservation_max_ms: 1000,
     };
     assert!(policy.valid());
+    policy.physical_reservation_max_ms = 0;
+    assert!(!policy.valid());
+    policy.physical_reservation_max_ms = u64::MAX;
+    assert!(!policy.valid());
+    policy.physical_reservation_max_ms = 1000;
     policy.classes[0].bytes = 0;
     assert!(!policy.valid());
     policy.classes[0].bytes = 1024;

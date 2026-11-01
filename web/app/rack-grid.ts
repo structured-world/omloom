@@ -24,7 +24,7 @@ export function rackUnitAt(grid:PhysicalRackGrid,y:bigint,height:bigint){
   const rail=railGrid(grid);
   if(y<rail.start||y>=rail.end)return undefined;
   const row=(y-rail.start)/pitch;
-  const position=grid.direction===Direction.TOP_DOWN?rail.first+row*2n:rail.first+rail.halves-row*2n-heightInHalves(height);
+  const position=grid.direction===Direction.TOP_DOWN?rail.first+(y-rail.start)/half:rail.first+rail.halves-row*2n-heightInHalves(height);
   if(position<rail.first)return undefined;
   const unit=printed(position);
   rackAllocation(grid,unit,height);

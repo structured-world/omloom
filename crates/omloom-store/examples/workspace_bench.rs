@@ -19,6 +19,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }; CLASSES],
         total_bytes: 256 * 1_048_576,
         detail_age_ms: 60_000,
+        physical_reservation_max_ms: 60_000,
         review_age_ms: 60_000,
         review_per_source: Budget {
             rows: 512,

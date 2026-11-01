@@ -1,5 +1,51 @@
 use super::*;
 
+// An explicit next-level read must work for a permitted child without opening deeper scopes.
+#[test]
+fn focused_parent_allows_explicit_child_occupancy_read() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let owner = create(&store, &actor, K::Device, "Focused chassis")?;
+    let (slot, item) = mountable_component_fixture(&store, &actor, owner.clone(), "drive/1")?;
+    let read = |enclosure| {
+        store.workspace(
+            &actor,
+            api::Request {
+                working: Some(api::WorkingContext {
+                    focus: Some(owner.clone()),
+                    expected: Some(store.usage()?.revision),
+                    ..Default::default()
+                }),
+                command: Some(Command::Physical(api::Physical {
+                    action: Some(api::physical::Action::Read(api::PhysicalRead {
+                        enclosure: Some(enclosure),
+                        occupants: true,
+                        after: None,
+                    })),
+                })),
+            },
+            100,
+        )
+    };
+    let response = read(slot)?;
+    let Some(Reply::Physical(view)) = response.result else {
+        return Err(Error::Corrupt.into());
+    };
+    assert_eq!(view.occupancy.len(), 1);
+    assert_eq!(
+        view.occupancy[0]
+            .placement
+            .as_ref()
+            .ok_or(Error::Corrupt)?
+            .item
+            .as_ref(),
+        Some(&item)
+    );
+    assert!(matches!(read(item), Err(Error::Denied)));
+    Ok(())
+}
+
 // Reporting performed work must not acquire unreported or declined assets held by another plan.
 #[test]
 fn draft_actual_report_does_not_lock_other_steps() -> TestResult {

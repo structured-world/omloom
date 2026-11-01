@@ -159,6 +159,9 @@ impl Tx<'_> {
         if key.revision == 0 || until <= now {
             return Err(Error::Invalid);
         }
+        if until - now > self.store.policy.physical_reservation_max_ms {
+            return Err(Error::Invalid);
+        }
         int(until)?;
         let mut plan = self.load_physical_plan(context, key, working, true)?;
         if plan.state != api::PhysicalPlanState::Draft as i32 {

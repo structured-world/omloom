@@ -92,7 +92,10 @@ impl Runner {
                 let (&(source, payload), rest) =
                     inputs.split_first().ok_or("Unexpected fixture command")?;
                 *inputs = rest;
-                if executable != "powershell.exe" || !args.iter().any(|arg| arg.contains(source)) {
+                if executable != source
+                    && (executable != "powershell.exe"
+                        || !args.iter().any(|arg| arg.contains(source)))
+                {
                     return Err("Unexpected fixture source".into());
                 }
                 out = Vec::with_capacity(limit + 1);

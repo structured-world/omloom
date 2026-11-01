@@ -13,6 +13,7 @@ fn format_thirteen_keeps_definite_fields_without_hypothesis_rows()
         }; CLASSES],
         total_bytes: 32 * 1_048_576,
         detail_age_ms: 1000,
+        physical_reservation_max_ms: 1000,
         review_age_ms: 500,
         review_per_source: crate::Budget {
             rows: 128,

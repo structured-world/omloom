@@ -135,6 +135,8 @@ impl Tx<'_> {
                 .iter()
                 .filter_map(|b| indices.get(b).copied())
                 .collect();
+            // All nodes through end, including newly discovered parents, are authorized above.
+            // A visible counterexample needs no traversal of its private upstream network.
             let partial = graph::Graph {
                 complete: &complete[..nodes.len()],
                 edges: &edges,

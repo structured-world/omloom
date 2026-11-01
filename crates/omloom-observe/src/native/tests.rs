@@ -1,5 +1,103 @@
 use super::*;
 
+// A supported complete Windows response preserves separate hardware and installation identities.
+#[test]
+fn valid_windows_identity_preserves_its_typed_claims() -> Result<()> {
+    let identity = windows_identity(
+        r#"{"source":"ABCDEF12-3456-7890-ABCD-EF1234567890","boot":"boot-session","name":"Windows fixture","hardware":"12345678-1234-1234-1234-123456789ABC"}"#,
+    )?;
+    assert_eq!(identity.platform, "windows");
+    assert_eq!(identity.name, "Windows fixture");
+    assert_eq!(identity.boot, "boot-session");
+    assert_eq!(identity.source, "ABCDEF12-3456-7890-ABCD-EF1234567890");
+    let hardware = identity.hardware.ok_or("hardware claim")?;
+    assert_eq!(hardware.kind, api::HostIdentityKind::HardwareUuid as i32);
+    assert_eq!(hardware.namespace, "smbios/system-uuid");
+    assert_eq!(
+        hardware.digest,
+        crate::digest("12345678-1234-1234-1234-123456789abc")
+    );
+    assert_eq!(
+        identity.installation.kind,
+        api::HostIdentityKind::InstallationId as i32
+    );
+    assert_eq!(identity.installation.namespace, "windows/machine-guid");
+    assert_eq!(
+        identity.installation.digest,
+        crate::digest("abcdef12-3456-7890-abcd-ef1234567890")
+    );
+    Ok(())
+}
+
+// Readable macOS/Linux source paths must retain verified coverage even on hosts running another OS.
+#[tokio::test]
+async fn readable_unix_socket_and_route_sources_remain_verified() -> Result<()> {
+    const MAC: &[(&str, &str)] = &[
+        (
+            "/usr/sbin/lsof",
+            "p17\ncweb\nf1\ntIPv4\nn*:443\nTST=LISTEN\n",
+        ),
+        (
+            "/usr/sbin/netstat",
+            "Proto Recv-Q Send-Q Local Address Foreign Address (state)\ntcp4 0 0 *.443 *.* LISTEN\n",
+        ),
+        (
+            "/usr/sbin/netstat",
+            "Proto Recv-Q Send-Q Local Address Foreign Address (state)\nudp4 0 0 *.5353 *.*\n",
+        ),
+        (
+            "/usr/sbin/netstat",
+            "Destination Gateway Flags Netif\n192.0.2/24 192.0.2.1 UG en0\n",
+        ),
+        (
+            "/usr/sbin/netstat",
+            "Destination Gateway Flags Netif\n2001:db8::/64 fe80::1 UG en0\n",
+        ),
+    ];
+    const LINUX: &[(&str, &str)] = &[
+        ("ss", "tcp LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n"),
+        ("ss", "tcp LISTEN 0 128 [::]:443 [::]:*\n"),
+        (
+            "ip",
+            r#"[{"dst":"192.0.2.0/24","gateway":"192.0.2.1","dev":"eth0"}]"#,
+        ),
+        ("ip", r#"[{"dst":"2001:db8::/64","dev":"eth0"}]"#),
+    ];
+    for (platform, inputs) in [("macos", MAC), ("linux", LINUX)] {
+        let mut report = api::HostReport {
+            platform: platform.into(),
+            boot_basis: "fixture-boot".into(),
+            network: Some(api::HostNetwork::default()),
+            ..Default::default()
+        };
+        let mut runner = Runner::scripted(inputs, 16 * 1024 * 1024);
+        let sockets = sockets(&mut runner, &mut report).await;
+        result(&mut report, "sockets", sockets, "Readable fixture");
+        let routes = routes(&mut runner, &mut report).await;
+        result(&mut report, "routes", routes, "Readable fixture");
+        for module in ["sockets", "routes"] {
+            assert_eq!(
+                report
+                    .coverage
+                    .iter()
+                    .find(|v| v.module == module)
+                    .ok_or("coverage")?
+                    .status,
+                "verified",
+                "{platform}/{module}"
+            );
+        }
+        assert!(!report.binds.is_empty());
+        let network = report.network.ok_or("network")?;
+        assert!(network.routes_complete);
+        assert_eq!(network.routes.len(), 2);
+        assert_eq!(network.routes[0].family, "IPv4");
+        assert_eq!(network.routes[1].family, "IPv6");
+        assert_eq!(runner.budget().0, inputs.len());
+    }
+    Ok(())
+}
+
 // Readable Windows tables must produce verified coverage and preserve their endpoint/route values.
 #[tokio::test]
 async fn readable_windows_tables_have_verified_coverage() -> Result<()> {

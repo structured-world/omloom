@@ -527,7 +527,7 @@ impl Tx<'_> {
                         return Err(Error::Invalid);
                     }
                 }
-                (None, None) => {}
+                (None, None) if replacement.previous.is_none() => {}
                 _ => return Err(Error::Invalid),
             }
             if replacement.source_position.is_some() && replacement.previous.is_none() {

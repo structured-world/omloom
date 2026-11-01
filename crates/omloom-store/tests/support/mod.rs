@@ -20,6 +20,7 @@ pub fn policy() -> Policy {
             bytes: 2 * 1_048_576,
         },
         batch_rows: 128,
+        physical_reservation_max_ms: 86_400_000,
     }
 }
 pub fn text_field(name: &str, value: &str) -> wire::Field {

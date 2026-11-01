@@ -266,6 +266,27 @@ fn unavailable_collection_does_not_publish_or_fail_the_command() {
     );
 }
 
+// An unsupported source format is incomplete collection, independent of the stricter qualification classifier.
+#[test]
+fn malformed_source_output_does_not_publish_or_replace_a_report() {
+    let dir = tempfile::tempdir().expect("output directory");
+    let path = dir.path().join("report.pb");
+    let outcome = || -> Result<api::HostReport> {
+        Err("Invalid structured command output; source: Windows identity".into())
+    };
+    assert!(!source_unavailable(
+        outcome().as_ref().expect_err("source error")
+    ));
+    finish_collection(outcome(), &path).expect("incomplete collection");
+    assert!(!path.exists());
+    std::fs::write(&path, b"retained report").expect("prior report");
+    finish_collection(outcome(), &path).expect("incomplete collection");
+    assert_eq!(
+        std::fs::read(&path).expect("retained report"),
+        b"retained report"
+    );
+}
+
 // Source unavailability cannot turn storage/publication failures into success.
 #[test]
 fn collection_publication_failures_remain_errors() {
