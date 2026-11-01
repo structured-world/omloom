@@ -312,20 +312,22 @@ impl Tx<'_> {
         }
         let fingerprint =
             assets::detail_page_fingerprint(context, working, enclosure, "physical-occupants");
-        let after = if let Some(cursor) = after {
+        let offset = if let Some(cursor) = after {
             let value = assets::page_position(
                 cursor,
                 view.revision,
                 &fingerprint,
                 context.authority_revision,
             )?;
-            RelationId::parse(value).map_err(|_| Error::Invalid)?;
-            format!("relation/{value}")
+            value.parse::<u64>().map_err(|_| Error::Invalid)?
         } else {
-            String::new()
+            0
         };
+        if offset > 100_000 {
+            return Err(Error::Limit);
+        }
         let mut values = HashMap::from([
-            ("after".into(), text(after)),
+            ("offset".into(), int(offset)?),
             ("key".into(), text(asset_key(enclosure))),
             ("asset".into(), text(enclosure.asset.to_string())),
             (
@@ -336,14 +338,14 @@ impl Tx<'_> {
             ("adopted".into(), int(wire::Adoption::Adopted as u64)?),
         ]);
         let visible = assets::visible_clause_for(context, Some("physical"), &mut values, "a");
-        let mut rows=self.query(&format!("MATCH (p:OmRow {{key:$key}})<-[:OmRelationTo]-(r:OmRow) WHERE r.parent='relations' AND r.kind=$kind AND r.to_asset=$asset AND r.to_incarnation=$incarnation AND r.key>$after WITH r, 'asset/'+r.asset AS key MATCH (a:OmRow {{key:key}}) WHERE a.incarnation=r.incarnation AND a.adoption=$adopted AND {visible} RETURN {{binding:properties(r), item:properties(a)}} AS p ORDER BY r.key LIMIT 26"),Some(values))?;
+        let mut rows=self.query(&format!("MATCH (p:OmRow {{key:$key}})<-[:OmRelationTo]-(r:OmRow) WHERE r.parent='relations' AND r.kind=$kind AND r.to_asset=$asset AND r.to_incarnation=$incarnation WITH r, 'asset/'+r.asset AS key MATCH (a:OmRow {{key:key}}) WHERE a.incarnation=r.incarnation AND a.adoption=$adopted AND {visible} RETURN {{binding:properties(r), item:properties(a)}} AS p ORDER BY p.binding.key SKIP $offset LIMIT 26"),Some(values))?;
         if rows.len() > 25 {
             rows.truncate(25);
             view.next = Some(format!(
                 "{}:{fingerprint}:{}:{}",
                 view.revision,
                 context.authority_revision,
-                binding_id(map(&rows[24], "binding")?)?
+                offset + 25
             ));
         }
         let mut poses = BTreeMap::new();
@@ -407,7 +409,11 @@ impl Tx<'_> {
                     .get("actor")
                     .map(|_| string(relation, "actor"))
                     .transpose()?,
-                revision: number(relation, "revision")?,
+                revision: if binding.is_some() {
+                    number(relation, "revision")?
+                } else {
+                    0
+                },
                 binding,
                 pose_revision: pose.map(|row| number(row, "revision")).transpose()?,
                 pose_reported_by: pose.map(|row| string(row, "actor")).transpose()?,

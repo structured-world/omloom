@@ -66,6 +66,32 @@ fn occupancy_beyond_128_parts_returns_a_bounded_first_page() -> TestResult {
     }
     assert_eq!(sizes, vec![25, 25, 25, 25, 25, 4]);
     assert_eq!(seen.len(), 129);
+    let mut restricted = actor.clone();
+    restricted.grants[0].read = Fields::Selected(vec!["physical".into(), "name".into()]);
+    let private_page = physical(
+        &store,
+        &restricted,
+        api::physical::Action::Read(api::PhysicalRead {
+            enclosure: Some(rack.clone()),
+            occupants: true,
+            after: None,
+        }),
+    )?;
+    assert_eq!(
+        private_page
+            .next
+            .as_deref()
+            .and_then(|v| v.rsplit(':').next())
+            .and_then(|v| v.parse::<usize>().ok()),
+        Some(25),
+        "Continuation must not disclose a withheld binding ID"
+    );
+    assert!(
+        private_page
+            .occupancy
+            .iter()
+            .all(|v| v.binding.is_none() && v.revision == 0)
+    );
     assert_eq!(store.usage()?, before);
     let mut changed = actor.clone();
     changed.authority_revision += 1;

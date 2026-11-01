@@ -4763,7 +4763,8 @@ export interface PhysicalOccupancy {
      */
     reportedBy?: string;
     /**
-     * Exact accepted physical binding revision used to invalidate old evidence.
+     * Server-returned accepted physical binding revision, used to invalidate old
+     * evidence. Zero when binding is withheld by either endpoint's relationship grant.
      *
      * @generated from protobuf field: uint64 revision = 3
      */

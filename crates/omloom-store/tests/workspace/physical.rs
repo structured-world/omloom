@@ -376,7 +376,7 @@ fn physical_fact_projection_stays_shallow_and_filters_equipment_before_decoding(
         &store,
         &actor,
         api::physical::Action::Read(api::PhysicalRead {
-            enclosure: Some(rack),
+            enclosure: Some(rack.clone()),
             occupants: true,
             after: None,
         }),
@@ -402,6 +402,22 @@ fn physical_fact_projection_stays_shallow_and_filters_equipment_before_decoding(
     let mut restricted = actor.clone();
     restricted.grants[0].read =
         Fields::Selected(vec!["physical".into(), "name".into(), "height".into()]);
+    let redacted = physical(
+        &store,
+        &restricted,
+        api::physical::Action::Read(api::PhysicalRead {
+            enclosure: Some(rack),
+            occupants: true,
+            after: None,
+        }),
+    )?;
+    assert_eq!(redacted.occupancy.len(), 1);
+    assert!(redacted.occupancy[0].binding.is_none());
+    assert_eq!(
+        redacted.occupancy[0].revision, 0,
+        "A withheld binding must not expose its revision"
+    );
+    assert!(occupants.occupancy[0].revision > 0);
     let selected = physical(
         &store,
         &restricted,

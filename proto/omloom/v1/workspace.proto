@@ -2054,7 +2054,8 @@ message PhysicalOccupancy {
   PhysicalPlacement placement = 1;
   // Attribution of the manual installation, not proof of live service or wiring.
   optional string reported_by = 2;
-  // Exact accepted physical binding revision used to invalidate old evidence.
+  // Server-returned accepted physical binding revision, used to invalidate old
+  // evidence. Zero when binding is withheld by either endpoint's relationship grant.
   uint64 revision = 3;
   // Exact current installed binding, disclosed only with relationship access on
   // both endpoints. Absence supplies no permission to guess its identity/revision.
