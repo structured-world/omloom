@@ -332,6 +332,24 @@ fn cross_model_mapping_preserves_unmapped_ports_and_requires_declared_breakout_l
         }),
     )?;
     assert!(replacement_plan(&store, &actor, vec![replacement.clone()]).is_ok());
+    replacement.endpoints[0].replacement_channel = Some(3);
+    assert!(matches!(
+        replacement_plan(&store, &actor, vec![replacement.clone()]),
+        Err(Error::Incomplete)
+    ));
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(api::PhysicalDefinition {
+                target: Some(new_ports[0].clone()),
+                basis: "Vendor-qualified destination breakout channels".into(),
+                channels: vec![3],
+                ..Default::default()
+            }),
+        }),
+    )?;
+    assert!(replacement_plan(&store, &actor, vec![replacement.clone()]).is_ok());
     replacement.endpoints[1].previous_channel = None;
     assert!(
         matches!(

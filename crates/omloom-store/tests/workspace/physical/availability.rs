@@ -320,3 +320,72 @@ fn availability_offer_is_revisioned_bounded_and_not_a_bearer_grant() -> TestResu
     assert_eq!(stale.reason, api::RequirementReason::Stale as i32);
     Ok(())
 }
+
+// Continuations cover every offer; revocation never frees the finite profile admission budget.
+#[test]
+fn offer_pages_and_creation_limit_include_revoked_profiles() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let rack = create(&store, &actor, K::Rack, "Bounded profiles")?;
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(define(rack.clone())),
+        }),
+    )?;
+    let mut created = Vec::new();
+    for _ in 0..26 {
+        created.push(offer(&store, &actor, &rack)?);
+    }
+    let first = physical(
+        &store,
+        &actor,
+        api::physical::Action::Offers(api::PhysicalOffers {
+            enclosure: Some(rack.clone()),
+            after: None,
+        }),
+    )?;
+    assert_eq!(first.offers.len(), 25);
+    assert_eq!(
+        first.next,
+        first.offers.last().and_then(|value| value.id.clone())
+    );
+    let second = physical(
+        &store,
+        &actor,
+        api::physical::Action::Offers(api::PhysicalOffers {
+            enclosure: Some(rack.clone()),
+            after: first.next,
+        }),
+    )?;
+    assert_eq!(second.offers.len(), 1);
+    assert!(second.next.is_none());
+    let mut ids: Vec<_> = first
+        .offers
+        .iter()
+        .chain(&second.offers)
+        .map(|value| value.id.clone())
+        .collect();
+    ids.sort();
+    let mut expected: Vec<_> = created.iter().map(|value| value.id.clone()).collect();
+    expected.sort();
+    assert_eq!(ids, expected);
+    for _ in 26..64 {
+        offer(&store, &actor, &rack)?;
+    }
+    let mut revoked = created.remove(0);
+    revoked.revoked = true;
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Offer(api::PhysicalOfferEdit {
+            offer: Some(revoked),
+        }),
+    )?;
+    let usage = store.usage()?;
+    assert!(matches!(offer(&store, &actor, &rack), Err(Error::Limit)));
+    assert_eq!(store.usage()?, usage);
+    Ok(())
+}

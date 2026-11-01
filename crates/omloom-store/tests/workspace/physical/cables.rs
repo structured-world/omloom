@@ -235,6 +235,32 @@ fn cable_attachment_intent_and_unknown_capacity_remain_independent() -> TestResu
             .len(),
         1
     );
+    // Unknown keeps the established socket occupied against another cable's reservation.
+    let competitor = create(&store, &actor, K::Cable, "Competing cable")?;
+    let mut competing_end = edit(&competitor, "A");
+    competing_end.end.as_mut().ok_or(Error::Corrupt)?.mating =
+        Some(mating(api::PhysicalMatingRole::SideA));
+    let competing_end = physical(
+        &store,
+        &actor,
+        api::physical::Action::CableEnd(competing_end),
+    )?
+    .cable_ends
+    .remove(0);
+    let competing = wiring_plan(
+        &store,
+        &actor,
+        &competitor,
+        competing_end.revision,
+        api::physical_wiring::After::Port(port.clone()),
+        api::PhysicalWiringIntent::Preserve,
+    )?;
+    let usage = store.usage()?;
+    assert!(matches!(
+        reserve(&store, &actor, competing),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.usage()?, usage);
     let loose = wiring_plan(
         &store,
         &actor,
@@ -322,6 +348,85 @@ fn cable_plan_rejects_parallel_double_booking() -> TestResult {
         Err(Error::Conflict)
     ));
     assert_eq!(store.usage()?, usage);
+    Ok(())
+}
+
+// A reported disconnect releases its socket for another cable only along the explicit dependency.
+#[test]
+fn ordered_socket_handoff_admits_two_cables_without_parallel_booking() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let port = create(&store, &actor, K::Port, "Handoff socket")?;
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(api::PhysicalDefinition {
+                target: Some(port.clone()),
+                basis: "Measured socket".into(),
+                mating: Some(mating(api::PhysicalMatingRole::SideB)),
+                ..Default::default()
+            }),
+        }),
+    )?;
+    let mut steps = Vec::new();
+    for name in ["First cable", "Next cable"] {
+        let cable = create(&store, &actor, K::Cable, name)?;
+        let mut end = edit(&cable, "A");
+        end.end.as_mut().ok_or(Error::Corrupt)?.mating =
+            Some(mating(api::PhysicalMatingRole::SideA));
+        let end = physical(&store, &actor, api::physical::Action::CableEnd(end))?
+            .cable_ends
+            .remove(0);
+        let mut plan = wiring_plan(
+            &store,
+            &actor,
+            &cable,
+            end.revision,
+            api::physical_wiring::After::Port(port.clone()),
+            api::PhysicalWiringIntent::Preserve,
+        )?;
+        if steps.is_empty() {
+            let mut disconnect = plan.steps[0].clone();
+            let Some(api::physical_step::Action::Wiring(w)) = &mut disconnect.action else {
+                return Err(Error::Corrupt.into());
+            };
+            w.basis = Some(api::physical_wiring::Basis::AfterStep(0));
+            w.after = Some(api::physical_wiring::After::Loose(api::Empty {}));
+            steps.append(&mut plan.steps);
+            steps.push(disconnect);
+        } else {
+            plan.steps[0].control = Some(api::PlanControl {
+                after: vec![api::PlanDependency {
+                    step: 1,
+                    when: api::PlanTrigger::Reported as i32,
+                }],
+                ..Default::default()
+            });
+            steps.append(&mut plan.steps);
+        }
+    }
+    let plan = physical(
+        &store,
+        &actor,
+        api::physical::Action::Save(api::PhysicalSave {
+            plan: Some(api::PhysicalPlan {
+                name: "Ordered socket handoff".into(),
+                steps,
+                ..Default::default()
+            }),
+        }),
+    )?
+    .plan
+    .ok_or(Error::Corrupt)?;
+    assert_eq!(
+        reserve(&store, &actor, plan)?
+            .plan
+            .ok_or(Error::Corrupt)?
+            .state,
+        api::PhysicalPlanState::Reserved as i32
+    );
     Ok(())
 }
 

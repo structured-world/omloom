@@ -52,6 +52,43 @@ async function workspaceClient(url) {
   return { m, rpc, revision };
 }
 
+test('binding postcondition picker reaches permitted relations beyond the first page',async({page})=>{
+  // A binding outside the first authorized page must remain selectable, without loading the estate.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-binding-picker-'));const server=await host(dir);
+  try{
+    const {m,rpc}=await workspaceClient(server.url);
+    async function resource(kind,name){const result=await rpc({oneofKind:'write',write:m.Write.create({kind,changes:[{name:'name',value:{oneofKind:'text',text:name}}]})});return result.mutation.targets[0];}
+    const rack=await resource(m.AssetKind.RACK,'Binding picker rack');
+    const device=await resource(m.AssetKind.DEVICE,'Binding picker subject');
+    const ids=[];
+    for(let i=0;i<26;i++){
+      const port=await resource(m.AssetKind.PORT,`Binding picker port ${i}`);
+      const result=await rpc({oneofKind:'relation',relation:m.Relationship.create({relation:{from:device,to:port,kind:m.RelationKind.HAS_PORT}})});
+      expect(result.oneofKind).toBe('mutation');
+    }
+    const first=await rpc({oneofKind:'read',read:m.Read.create({target:device})});
+    const second=await rpc({oneofKind:'read',read:m.Read.create({target:device,relationsCursor:first.detail.relationsNext})});
+    ids.push(...second.detail.relations.map(r=>r.relationId));expect(ids).toHaveLength(1);
+    const extent={startUm:0n,lengthUm:1000n};
+    await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'save',save:{plan:m.PhysicalPlan.create({name:'Paged binding review',steps:[{action:{oneofKind:'placement',placement:{item:device,enclosure:rack,volume:{x:extent,y:extent,z:extent}}}}]})}}})});
+    await page.goto(`${server.url}/#/?asset=${rack.assetId}&incarnation=${rack.incarnation}`);
+    await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
+    const planner=page.locator('.physical-planner');
+    await planner.getByRole('button',{name:'Paged binding review · draft',exact:true}).click();
+    await planner.getByText('Check an exact physical or logical binding',{exact:true}).click();
+    await planner.getByRole('button',{name:'Load permitted current bindings',exact:true}).click();
+    const choice=planner.getByRole('combobox',{name:'Required current binding',exact:true});
+    await expect(choice.locator('option')).toHaveCount(26);
+    await expect(planner.getByRole('button',{name:'Next binding page',exact:true})).toBeVisible({timeout:2000});
+    await planner.getByRole('button',{name:'Next binding page',exact:true}).click();
+    await expect(choice.locator('option')).toHaveCount(2);
+    await choice.selectOption(ids[0]);
+    await expect(planner.getByRole('button',{name:'Next binding page',exact:true})).toHaveCount(0);
+    await planner.getByRole('button',{name:'Use binding as postcondition',exact:true}).click();
+    await expect(planner.getByRole('list',{name:'Configured postcondition',exact:true})).toContainText('Required exact binding revision');
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('material quantities stay plan-local and partial receiving survives reload on desktop and phone',async({browser})=>{
   // Real UI/API keeps unreceived demand out of inventory and current physical occupancy.
   const dir=await mkdtemp(join(tmpdir(),'omloom-material-receiving-'));const server=await host(dir);
