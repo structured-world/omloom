@@ -1,5 +1,261 @@
 use super::*;
 
+fn rack_replacement_fixture(
+    store: &Store,
+    actor: &Context,
+) -> Result<api::PhysicalReplacement, Error> {
+    let rack = create(store, actor, K::Rack, "Replacement enclosure")?;
+    let old = create(store, actor, K::Device, "Previous chassis")?;
+    let incoming = create(store, actor, K::Device, "Incoming chassis")?;
+    for item in [&old, &incoming] {
+        equipment_dimensions(store, actor, item)?;
+        let mut profile = define(item.clone());
+        profile.mounting = Some("rack-19".into());
+        profile.demand_mw = Some(20);
+        profile.cooling_mw = Some(20);
+        physical(
+            store,
+            actor,
+            api::physical::Action::Define(api::PhysicalDefinitionEdit {
+                definition: Some(profile),
+            }),
+        )?;
+    }
+    let mut enclosure = define(rack.clone());
+    enclosure.mounting = Some("rack-19".into());
+    enclosure.capacity_mw = Some(20);
+    enclosure.cooling_capacity_mw = Some(20);
+    physical(
+        store,
+        actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(enclosure),
+        }),
+    )?;
+    let installed = draft(store, actor, old.clone(), rack.clone())?;
+    report_steps(store, actor, &installed, vec![0])?;
+    let previous = binding(store, &old)?;
+    Ok(api::PhysicalReplacement {
+        position: Some(rack),
+        previous: Some(old),
+        replacement: Some(incoming),
+        previous_binding: Some(previous.relation_id),
+        previous_revision: Some(previous.revision),
+        volume: Some(volume()),
+        ..Default::default()
+    })
+}
+
+// Replacement allocations pass the same requested-coordinate checks as ordinary placements.
+#[test]
+fn replacement_preview_and_reservation_reject_outside_coordinates() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let base = rack_replacement_fixture(&store, &actor)?;
+    for axis in 0..3 {
+        for displacement in [-1, 1] {
+            let mut replacement = base.clone();
+            let pose = replacement.volume.as_mut().ok_or(Error::Corrupt)?;
+            let extent = match axis {
+                0 => &mut pose.x,
+                1 => &mut pose.y,
+                _ => &mut pose.z,
+            };
+            extent.as_mut().ok_or(Error::Corrupt)?.start_um = displacement;
+            let plan = replacement_plan(&store, &actor, vec![replacement])?;
+            let before = store.usage()?;
+            let preview = physical(
+                &store,
+                &actor,
+                api::physical::Action::Preview(api::PhysicalPreview {
+                    plan: Some(plan.clone()),
+                }),
+            )?;
+            assert_eq!(preview.state, api::RequirementState::Failed as i32);
+            assert!(matches!(
+                reserve(&store, &actor, plan),
+                Err(Error::Conflict)
+            ));
+            assert_eq!(store.usage()?, before);
+        }
+    }
+    Ok(())
+}
+
+// Reservation is not proof that current enclosure budgets still admit the incoming body.
+#[test]
+fn rack_replacement_completion_rechecks_current_capacity() -> TestResult {
+    assert_rack_replacement_readmission("power")?;
+    assert_rack_replacement_readmission("cooling")
+}
+
+// A once-valid proposed pose must not become accepted occupancy after the enclosure shrinks.
+#[test]
+fn rack_replacement_completion_rechecks_current_envelope() -> TestResult {
+    assert_rack_replacement_readmission("envelope")
+}
+
+fn assert_rack_replacement_readmission(change: &str) -> TestResult {
+    for actual_state in [false, true] {
+        let dir = tempfile::tempdir()?;
+        let store = Store::open(dir.path(), policy())?;
+        let actor = operator();
+        let replacement = rack_replacement_fixture(&store, &actor)?;
+        let old = replacement.previous.clone().ok_or(Error::Corrupt)?;
+        let previous = binding(&store, &old)?;
+        let plan = replacement_plan(&store, &actor, vec![replacement.clone()])?;
+        let plan = reserve(&store, &actor, plan)?.plan.ok_or(Error::Corrupt)?;
+        let mut enclosure = define(replacement.position.clone().ok_or(Error::Corrupt)?);
+        enclosure.mounting = Some("rack-19".into());
+        enclosure.capacity_mw = (change == "power").then_some(10);
+        enclosure.cooling_capacity_mw = (change == "cooling").then_some(10);
+        if change == "envelope" {
+            enclosure
+                .volume
+                .as_mut()
+                .ok_or(Error::Corrupt)?
+                .x
+                .as_mut()
+                .ok_or(Error::Corrupt)?
+                .length_um = 100_000;
+        }
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Define(api::PhysicalDefinitionEdit {
+                definition: Some(enclosure),
+            }),
+        )?;
+        let mut completion = api::PhysicalCompletion {
+            plan: Some(api::PhysicalPlanKey {
+                id: plan.id.ok_or(Error::Corrupt)?,
+                revision: plan.revision,
+            }),
+            completed_steps: vec![0],
+            ..Default::default()
+        };
+        let before = store.usage()?;
+        assert!(matches!(
+            physical(
+                &store,
+                &actor,
+                api::physical::Action::Complete(completion.clone())
+            ),
+            Err(Error::Conflict)
+        ));
+        assert_eq!(store.usage()?, before);
+        assert_eq!(binding(&store, &old)?, previous);
+        completion.actual_state = actual_state;
+        if actual_state {
+            completion.discrepancy = Some(
+                "Performed replacement does not meet the revised enclosure constraints".into(),
+            );
+        } else {
+            let mut restored = define(replacement.position.clone().ok_or(Error::Corrupt)?);
+            restored.mounting = Some("rack-19".into());
+            restored.capacity_mw = Some(20);
+            restored.cooling_capacity_mw = Some(20);
+            physical(
+                &store,
+                &actor,
+                api::physical::Action::Define(api::PhysicalDefinitionEdit {
+                    definition: Some(restored),
+                }),
+            )?;
+        }
+        physical(&store, &actor, api::physical::Action::Complete(completion))?;
+        assert_eq!(
+            binding(
+                &store,
+                replacement.replacement.as_ref().ok_or(Error::Corrupt)?
+            )?
+            .to,
+            replacement.position
+        );
+    }
+    Ok(())
+}
+
+// Changed mounting or usable space cannot be bypassed by completing a reserved slot replacement.
+#[test]
+fn component_completion_rechecks_current_mounting_and_envelope() -> TestResult {
+    for change in ["mounting", "envelope"] {
+        let dir = tempfile::tempdir()?;
+        let store = Store::open(dir.path(), policy())?;
+        let actor = operator();
+        let owner = create(&store, &actor, K::Device, "Enclosure")?;
+        let (position, item) = mountable_component_fixture(&store, &actor, owner, "drive")?;
+        let old = binding(&store, &item)?;
+        let plan = replacement_plan(
+            &store,
+            &actor,
+            vec![api::PhysicalReplacement {
+                position: Some(position.clone()),
+                previous: Some(item.clone()),
+                replacement: Some(item.clone()),
+                previous_binding: Some(old.relation_id.clone()),
+                previous_revision: Some(old.revision),
+                ..Default::default()
+            }],
+        )?;
+        let plan = reserve(&store, &actor, plan)?.plan.ok_or(Error::Corrupt)?;
+        let mut slot = define(position.clone());
+        slot.mounting = Some(
+            if change == "mounting" {
+                "different-carrier"
+            } else {
+                "drive-carrier-v1"
+            }
+            .into(),
+        );
+        if change == "envelope" {
+            slot.volume
+                .as_mut()
+                .ok_or(Error::Corrupt)?
+                .x
+                .as_mut()
+                .ok_or(Error::Corrupt)?
+                .length_um = 100_000;
+        }
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Define(api::PhysicalDefinitionEdit {
+                definition: Some(slot),
+            }),
+        )?;
+        let mut completion = api::PhysicalCompletion {
+            plan: Some(api::PhysicalPlanKey {
+                id: plan.id.ok_or(Error::Corrupt)?,
+                revision: plan.revision,
+            }),
+            completed_steps: vec![0],
+            ..Default::default()
+        };
+        let before = store.usage()?;
+        assert!(
+            matches!(
+                physical(
+                    &store,
+                    &actor,
+                    api::physical::Action::Complete(completion.clone())
+                ),
+                Err(Error::Conflict)
+            ),
+            "{change}"
+        );
+        assert_eq!(store.usage()?, before);
+        assert_eq!(binding(&store, &item)?, old);
+        completion.actual_state = true;
+        completion.discrepancy =
+            Some("Recorded work does not meet the revised slot specification".into());
+        physical(&store, &actor, api::physical::Action::Complete(completion))?;
+        assert_eq!(binding(&store, &item)?.to, Some(position));
+    }
+    Ok(())
+}
+
 // Corrected slot facts do not authorize an incompatible admitted reinstall or erase actual work.
 #[test]
 fn changed_slot_class_is_rechecked_before_admitted_component_binding() -> TestResult {

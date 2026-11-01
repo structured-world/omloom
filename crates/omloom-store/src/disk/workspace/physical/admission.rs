@@ -382,6 +382,14 @@ impl Tx<'_> {
             }
             self.replacement_basis(replacement)
                 .map_err(Failure::basis)?;
+            self.require_replacement_space(replacement, &removed, destination_kind)
+                .map_err(|error| {
+                    if matches!(error, Error::Conflict) {
+                        Failure::mismatch()
+                    } else {
+                        error.into()
+                    }
+                })?;
             if replacement.previous.is_none() {
                 let position = self
                     .get(&format!("position/{}", network::identity(destination)))?
@@ -462,14 +470,6 @@ impl Tx<'_> {
                     claims.positions.insert(source);
                 }
             }
-            self.require_replacement_space(replacement, &removed, destination_kind)
-                .map_err(|error| {
-                    if matches!(error, Error::Conflict) {
-                        Failure::mismatch()
-                    } else {
-                        error.into()
-                    }
-                })?;
         }
         self.check_replacement_masses(context, &mass_limits)?;
         Ok(claims)
@@ -493,41 +493,6 @@ impl Tx<'_> {
             return Err(Failure::mismatch());
         }
         Ok(())
-    }
-
-    pub(super) fn check_replacement_class_and_loads(
-        &self,
-        context: &Context,
-        replacements: &[&api::PhysicalReplacement],
-        working: &api::WorkingContext,
-    ) -> core::result::Result<(), Failure> {
-        let mut mass_limits = Vec::new();
-        for replacement in replacements {
-            let Some(incoming) = replacement.replacement.as_ref() else {
-                continue;
-            };
-            self.replacement_access(context, replacement, working, false)?;
-            let incoming = parse_target(Some(incoming))?;
-            let destination = parse_target(replacement.position.as_ref())?;
-            let item = self
-                .physical_definition(incoming)?
-                .ok_or(Error::Incomplete)?;
-            if number(&self.asset(destination)?, "kind")?
-                == wire::AssetKind::PhysicalPosition as u64
-            {
-                self.require_position_class(destination, item.component_kind)?;
-            }
-            if replacement.volume.is_some() {
-                continue;
-            }
-            let target = self
-                .physical_definition(destination)?
-                .ok_or(Error::Incomplete)?;
-            if let Some(limit) = component_load_limits(incoming, &target, &item)? {
-                mass_limits.push(limit);
-            }
-        }
-        self.check_replacement_masses(context, &mass_limits)
     }
 
     fn check_replacement_masses(

@@ -6,6 +6,57 @@ pub(super) struct PlacementEffect<'a> {
 }
 
 impl Tx<'_> {
+    fn readmit_physical_replacements(
+        &mut self,
+        context: &Context,
+        plan: &api::PhysicalPlan,
+        selected: &BTreeMap<u32, bool>,
+        working: &api::WorkingContext,
+    ) -> Result<()> {
+        let id = plan.id.as_deref().ok_or(Error::Corrupt)?;
+        let mut proposal = api::PhysicalPlan {
+            id: Some(id.into()),
+            ..Default::default()
+        };
+        let mut indexes = [None; crate::plans::MAX_STEPS];
+        for (&index, &done) in selected {
+            let step = &plan.steps[index as usize];
+            if !done || step.state == api::PhysicalStepState::Recorded as i32 {
+                continue;
+            }
+            let Some(api::physical_step::Action::Replacement(replacement)) = &step.action else {
+                continue;
+            };
+            if replacement.volume.is_some() {
+                let row = self
+                    .get(&reservations::reservation_key(id, index as usize))?
+                    .ok_or(Error::Conflict)?;
+                if string(&row, "claim")? != format!("plan/{id}/{index}") {
+                    return Err(Error::Corrupt);
+                }
+                self.clear_physical_reservation(id, index as usize)?;
+            }
+            indexes[index as usize] = Some(proposal.steps.len() as u32);
+            proposal.steps.push(step.clone());
+        }
+        // External prerequisites were checked on the original graph. Preserve ordering among
+        // this atomic batch, without replaying recorded steps or counting its holds twice.
+        for step in &mut proposal.steps {
+            if let Some(control) = &mut step.control {
+                control.after.retain_mut(|dependency| {
+                    if let Some(index) = indexes[dependency.step as usize] {
+                        dependency.step = index;
+                        true
+                    } else {
+                        false
+                    }
+                });
+            }
+        }
+        self.assess_physical(context, &proposal, working)
+            .map_err(|failure| failure.error)?;
+        Ok(())
+    }
     pub(super) fn installed_bindings(&self, item: AssetRef) -> Result<Vec<wire::Relation>> {
         let rows=self.query("MATCH (a:OmRow {key:$key})-[:OmRelationFrom]->(r:OmRow) WHERE r.kind=$kind RETURN properties(r) AS p LIMIT 2",params([("key",text(asset_key(item))),("kind",int(wire::RelationKind::InstalledIn as u64)?)]))?;
         if rows.len() > 1 {
@@ -186,8 +237,7 @@ impl Tx<'_> {
             .collect::<Vec<_>>();
         if !replacements.is_empty() {
             if !value.actual_state {
-                self.check_replacement_class_and_loads(context, &replacements, working)
-                    .map_err(|failure| failure.error)?;
+                self.readmit_physical_replacements(context, &plan, &selected, working)?;
             }
             self.record_physical_replacements(context, &replacements, &value, working, now)?;
         }
