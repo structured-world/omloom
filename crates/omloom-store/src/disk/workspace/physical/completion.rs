@@ -46,7 +46,7 @@ impl Tx<'_> {
         // Consume this hold inside the same transaction so re-admission does not count it twice.
         // Any rejected report rolls back the consumption together with all other effects.
         self.clear_physical_reservation(plan, index)?;
-        if placement.material.is_some() && !report.actual_state {
+        if !report.actual_state {
             let proposal = api::PhysicalPlan {
                 id: Some(plan.into()),
                 steps: vec![api::PhysicalStep {

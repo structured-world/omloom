@@ -257,7 +257,7 @@ fn changed_geometry_does_not_discard_an_attributed_manual_installation() -> Test
             definition: Some(updated),
         }),
     )?;
-    let report = api::PhysicalCompletion {
+    let mut report = api::PhysicalCompletion {
         plan: Some(api::PhysicalPlanKey {
             id: plan.id.ok_or(Error::Corrupt)?,
             revision: plan.revision,
@@ -268,6 +268,17 @@ fn changed_geometry_does_not_discard_an_attributed_manual_installation() -> Test
         ),
         ..Default::default()
     };
+    let before = store.usage()?;
+    assert!(matches!(
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Complete(report.clone())
+        ),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.usage()?, before);
+    report.actual_state = true;
     physical(&store, &actor, api::physical::Action::Complete(report))?;
     let current = physical(
         &store,
@@ -290,6 +301,57 @@ fn changed_geometry_does_not_discard_an_attributed_manual_installation() -> Test
             .length_um,
         1
     );
+    Ok(())
+}
+
+// A serialized item cannot reuse an obsolete fit decision after its measured dimensions change.
+#[test]
+fn reserved_direct_item_is_readmitted_after_equipment_dimensions_change() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let rack = create(&store, &actor, K::Rack, "Enclosure")?;
+    let item = create(&store, &actor, K::Device, "Serialized server")?;
+    equipment_dimensions(&store, &actor, &item)?;
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(define(rack.clone())),
+        }),
+    )?;
+    let plan = draft(&store, &actor, item.clone(), rack)?;
+    let plan = reserve(&store, &actor, plan)?.plan.ok_or(Error::Corrupt)?;
+    let current = store.asset(AssetRef::try_from(&item)?)?;
+    call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            target: Some(item.clone()),
+            expected: Some(current.revision),
+            kind: current.kind,
+            changes: vec![equipment_quantity("width", 3_000_000, "mm", 3)],
+            ..Default::default()
+        }),
+    )?;
+    let before = store.usage()?;
+    assert!(matches!(
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Complete(api::PhysicalCompletion {
+                plan: Some(api::PhysicalPlanKey {
+                    id: plan.id.ok_or(Error::Corrupt)?,
+                    revision: plan.revision
+                }),
+                completed_steps: vec![0],
+                ..Default::default()
+            })
+        ),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.usage()?, before);
+    assert!(store.relations(AssetRef::try_from(&item)?, 32)?.is_empty());
     Ok(())
 }
 
