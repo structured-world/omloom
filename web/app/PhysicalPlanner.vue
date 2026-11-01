@@ -410,7 +410,7 @@ async function exportPlan(){await run(async()=>{
 <template v-if="!moving">
 <label class="outcome"><input v-model="removePart" type="checkbox" @change="reseat=false"/>Remove the known part without installing another</label>
 <label class="outcome"><input v-model="reseat" type="checkbox" @change="removePart=false"/>Reinsert the same established part</label>
-<PlacementSearch v-if="!removePart&&!reseat" :kind="kind===K.RACK?'equipment':'component'" :roots="working().roots" @select="choose"/>
+<PlacementSearch v-if="!removePart&&!reseat" :kind="kind===K.PHYSICAL_POSITION?'component':'equipment'" :roots="working().roots" @select="choose"/>
 </template>
 <p>The position and retained logical intent survive. Cable attachments, physical evidence, credentials and grants are not transferred to the incoming part.</p>
 </template>
