@@ -317,6 +317,7 @@ fn equipment_internal_space_does_not_shrink_its_required_external_envelope() -> 
                     item: Some(item),
                     enclosure: Some(rack),
                     volume: Some(small),
+                    material: None,
                 },
             )),
             ..Default::default()
@@ -429,6 +430,7 @@ fn read_only_actor_cannot_save_physical_draft() -> TestResult {
                     item: Some(item),
                     enclosure: Some(rack),
                     volume: Some(volume()),
+                    material: None,
                 },
             )),
             ..Default::default()
@@ -473,6 +475,7 @@ fn draft(
                             item: Some(item),
                             enclosure: Some(rack),
                             volume: Some(volume()),
+                            material: None,
                         },
                     )),
                     ..Default::default()
@@ -1132,6 +1135,7 @@ fn abandoning_required_work_does_not_complete_the_goal() -> TestResult {
                 item: Some(b.clone()),
                 enclosure: Some(rack_b),
                 volume: Some(volume()),
+                material: None,
             },
         )),
         ..Default::default()
@@ -1222,6 +1226,7 @@ fn plan_steps_recheck_shared_requirements_before_advancing() -> TestResult {
                 item: Some(b),
                 enclosure: Some(rack_b),
                 volume: Some(volume()),
+                material: None,
             },
         )),
         ..Default::default()

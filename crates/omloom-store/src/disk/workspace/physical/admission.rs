@@ -118,7 +118,13 @@ impl Tx<'_> {
         let mut enclosures = BTreeMap::<AssetRef, current::PhysicalUse>::new();
         let mut rows_read = 0;
         for (index, p) in placement_steps(plan) {
-            let item = parse_target(p.item.as_ref())?;
+            let item = p.actual(&plan.materials)?;
+            let material = p.requirement(&plan.materials)?;
+            let declared = if item.is_none() {
+                material.and_then(|m| m.physical.as_deref())
+            } else {
+                None
+            };
             let enclosure = parse_target(p.enclosure.as_ref())?;
             let row = self.visible_asset(context, enclosure)?;
             if !context.field(
@@ -129,11 +135,14 @@ impl Tx<'_> {
             ) {
                 return Err(Error::Denied.into());
             }
-            claims.parts.insert(item);
-            if !self.installed_bindings(item)?.is_empty()
-                && !replacement_steps(plan).any(|r| r.previous.as_ref() == p.item.as_ref())
-            {
-                return Err(Failure::mismatch());
+            if let Some(item) = item {
+                claims.parts.insert(item);
+                let reference = p.reference(&plan.materials)?;
+                if !self.installed_bindings(item)?.is_empty()
+                    && !replacement_steps(plan).any(|r| r.previous.as_ref() == reference)
+                {
+                    return Err(Failure::mismatch());
+                }
             }
             if let std::collections::btree_map::Entry::Vacant(entry) = enclosures.entry(enclosure) {
                 let occupied =
@@ -149,12 +158,18 @@ impl Tx<'_> {
                     .and_then(|row| row.get("mounting"))
                     .and_then(Value::as_str)
             };
-            if mounting(&enclosure).is_some() || mounting(&item).is_some() {
-                require_mounting(mounting(&enclosure), mounting(&item))?;
+            let item_mounting = match item {
+                Some(item) => mounting(&item),
+                None => declared.and_then(|p| p.mounting.as_deref()),
+            };
+            if mounting(&enclosure).is_some() || item_mounting.is_some() {
+                require_mounting(mounting(&enclosure), item_mounting)?;
             }
-            let item_volume = self
-                .equipment_envelope(context, item)?
-                .ok_or(Error::Incomplete)?;
+            let item_volume = match item {
+                Some(item) => self.equipment_envelope(context, item)?,
+                None => equipment::declared_envelope(material.ok_or(Error::Invalid)?)?,
+            }
+            .ok_or(Error::Incomplete)?;
             let requested = p.volume.as_ref().ok_or(Error::Invalid)?;
             for (actual, proposed) in [
                 (&item_volume.x, &requested.x),
@@ -169,12 +184,16 @@ impl Tx<'_> {
             }
             let envelope = definition.volume.as_ref().map(volume).transpose()?;
             let proposed = volume(requested)?;
-            let margins = profiles
-                .get(&item)
+            let margins = item
+                .and_then(|item| profiles.get(&item))
                 .map(clearance::read)
                 .transpose()?
                 .flatten();
-            let region = clearance::region(proposed, margins.as_ref())?;
+            let margin = match item {
+                Some(_) => margins.as_ref(),
+                None => declared.and_then(|p| p.clearance.as_ref()),
+            };
+            let region = clearance::region(proposed, margin)?;
             match crate::physical::placement(envelope, Some(region), &occupied.volumes).state {
                 crate::requirements::State::Satisfied => {}
                 crate::requirements::State::Failed => return Err(Failure::mismatch()),
@@ -194,7 +213,21 @@ impl Tx<'_> {
             }
             require_coverage(definition, region)?;
             occupied.volumes.push(region);
-            occupied.items.insert(item);
+            if let Some(item) = item {
+                occupied.items.insert(item);
+            } else {
+                let needed = [
+                    definition.max_mass_g.is_some(),
+                    definition.capacity_mw.is_some(),
+                    definition.cooling_capacity_mw.is_some(),
+                ];
+                if needed.iter().any(|v| *v) {
+                    occupied.future_loads.push(equipment::declared_loads(
+                        material.ok_or(Error::Invalid)?,
+                        needed,
+                    )?);
+                }
+            }
         }
         // Constraint disclosure never includes hidden occupants or their individual demands.
         for (enclosure, occupied) in &enclosures {
@@ -219,15 +252,20 @@ impl Tx<'_> {
                     if parse_target(placement.enclosure.as_ref())? != *enclosure {
                         continue;
                     }
-                    let item = parse_target(placement.item.as_ref())?;
+                    let Some(item) = placement.actual(&plan.materials)? else {
+                        continue;
+                    };
                     let root = self.visible_asset(context, item)?;
                     if !context.field(item, number(&root, "kind")? as i32, "weight", false) {
                         return Err(Error::Denied.into());
                     }
                 }
             }
-            let demands =
+            let mut demands =
                 self.physical_loads(&occupied.items, limits.map(|value| value.is_some()))?;
+            for demand in &occupied.future_loads {
+                equipment::add_loads(&mut demands, *demand)?;
+            }
             for (limit, demand) in limits.into_iter().zip(demands) {
                 if let Some(limit) = limit {
                     let demand = demand.ok_or(Error::Incomplete)?;
@@ -261,7 +299,9 @@ impl Tx<'_> {
         }
         let mut selected = BTreeSet::new();
         for placement in placements(plan) {
-            selected.insert(parse_target(placement.item.as_ref())?);
+            if let Some(item) = placement.actual(&plan.materials)? {
+                selected.insert(item);
+            }
             selected.insert(parse_target(placement.enclosure.as_ref())?);
         }
         if selected.is_empty() {

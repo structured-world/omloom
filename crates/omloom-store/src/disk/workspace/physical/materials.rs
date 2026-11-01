@@ -171,7 +171,12 @@ impl Tx<'_> {
             let old = parse_target(item)?;
             for step in &plan.steps {
                 let used = match step.action.as_ref().ok_or(Error::Corrupt)? {
-                    api::physical_step::Action::Placement(p) => p.item.as_ref() == item,
+                    api::physical_step::Action::Placement(p) => {
+                        p.item.as_ref() == item
+                            || p.material.as_ref().is_some_and(|u| {
+                                u.material == receipt.material && u.unit == previous.unit
+                            })
+                    }
                     api::physical_step::Action::Replacement(r) => {
                         r.previous.as_ref() == item || r.replacement.as_ref() == item
                     }

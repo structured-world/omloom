@@ -22,6 +22,7 @@ mod wiring;
 #[derive(Clone, Copy)]
 struct Placement<'a> {
     item: &'a Option<wire::AssetRef>,
+    material: Option<&'a api::PhysicalMaterialUnit>,
     enclosure: &'a Option<wire::AssetRef>,
     volume: &'a Option<api::PhysicalVolume>,
 }
@@ -29,9 +30,49 @@ impl<'a> From<&'a api::PhysicalPlacement> for Placement<'a> {
     fn from(value: &'a api::PhysicalPlacement) -> Self {
         Self {
             item: &value.item,
+            material: value.material.as_ref(),
             enclosure: &value.enclosure,
             volume: &value.volume,
         }
+    }
+}
+impl<'a> Placement<'a> {
+    fn requirement(
+        &self,
+        materials: &'a [api::PhysicalMaterial],
+    ) -> Result<Option<&'a api::PhysicalMaterial>> {
+        match (self.item.is_some(), self.material) {
+            (true, None) => Ok(None),
+            (false, Some(unit)) => {
+                let material = materials
+                    .get(unit.material as usize)
+                    .ok_or(Error::Invalid)?;
+                if unit.unit >= material.quantity {
+                    return Err(Error::Invalid);
+                }
+                Ok(Some(material))
+            }
+            _ => Err(Error::Invalid),
+        }
+    }
+    fn reference(
+        &self,
+        materials: &'a [api::PhysicalMaterial],
+    ) -> Result<Option<&'a wire::AssetRef>> {
+        let Some(material) = self.requirement(materials)? else {
+            return Ok(self.item.as_ref());
+        };
+        let unit = self.material.ok_or(Error::Invalid)?.unit;
+        Ok(material
+            .allocations
+            .iter()
+            .find(|a| a.unit == unit)
+            .and_then(|a| a.item.as_ref()))
+    }
+    fn actual(&self, materials: &'a [api::PhysicalMaterial]) -> Result<Option<AssetRef>> {
+        self.reference(materials)?
+            .map(|r| parse_target(Some(r)))
+            .transpose()
     }
 }
 fn step_placement(step: &api::PhysicalStep) -> Option<Placement<'_>> {
@@ -40,6 +81,7 @@ fn step_placement(step: &api::PhysicalStep) -> Option<Placement<'_>> {
         Some(api::physical_step::Action::Replacement(value)) if value.volume.is_some() => {
             Some(Placement {
                 item: &value.replacement,
+                material: None,
                 enclosure: &value.position,
                 volume: &value.volume,
             })
@@ -69,14 +111,23 @@ fn step_row(step: &api::PhysicalStep) -> Result<Properties> {
             let mut row = props([
                 ("action", text("placement")),
                 (
-                    "item",
-                    text(network::identity(parse_target(p.item.as_ref())?)),
-                ),
-                (
                     "enclosure",
                     text(network::identity(parse_target(p.enclosure.as_ref())?)),
                 ),
             ]);
+            match (&p.item, &p.material) {
+                (Some(item), None) => {
+                    row.insert(
+                        "item".into(),
+                        text(network::identity(parse_target(Some(item))?)),
+                    );
+                }
+                (None, Some(unit)) => {
+                    row.insert("vint".into(), int(u64::from(unit.material))?);
+                    row.insert("generation".into(), int(u64::from(unit.unit))?);
+                }
+                _ => return Err(Error::Invalid),
+            }
             write_volume(&mut row, p.volume.as_ref().ok_or(Error::Invalid)?)?;
             row
         }
@@ -106,7 +157,25 @@ fn read_step(row: &Properties) -> Result<api::PhysicalStep> {
     }
     let action = match string(row, "action")?.as_str() {
         "placement" => api::physical_step::Action::Placement(api::PhysicalPlacement {
-            item: Some(target_wire(lifecycle::reference(&string(row, "item")?)?)),
+            item: row
+                .get("item")
+                .map(|_| {
+                    string(row, "item")
+                        .and_then(|s| lifecycle::reference(&s))
+                        .map(target_wire)
+                })
+                .transpose()?,
+            material: row
+                .get("vint")
+                .map(|_| -> Result<api::PhysicalMaterialUnit> {
+                    Ok(api::PhysicalMaterialUnit {
+                        material: u32::try_from(number(row, "vint")?)
+                            .map_err(|_| Error::Corrupt)?,
+                        unit: u32::try_from(number(row, "generation")?)
+                            .map_err(|_| Error::Corrupt)?,
+                    })
+                })
+                .transpose()?,
             enclosure: Some(target_wire(lifecycle::reference(&string(
                 row,
                 "enclosure",
@@ -475,7 +544,9 @@ impl Store {
                 let materials = tx.validate_physical_draft(context, &plan, working, true)?;
                 tx.refresh_plan_control(context, &mut plan, working, now)?;
                 for p in placements(&plan) {
-                    tx.physical_access(context, parse_target(p.item.as_ref())?, working, true)?;
+                    if let Some(item) = p.actual(&plan.materials)? {
+                        tx.physical_access(context, item, working, true)?;
+                    }
                     tx.physical_access(
                         context,
                         parse_target(p.enclosure.as_ref())?,
@@ -615,6 +686,7 @@ impl Tx<'_> {
             return Err(Error::Invalid);
         }
         let mut items = BTreeSet::new();
+        let mut units = BTreeSet::new();
         if !plan.steps.is_empty() {
             flow::analysis(&plan.steps)?;
         }
@@ -640,12 +712,24 @@ impl Tx<'_> {
             }
         }
         for p in placements(plan) {
-            let item = parse_target(p.item.as_ref())?;
+            let item = p.actual(&plan.materials)?;
             let enclosure = parse_target(p.enclosure.as_ref())?;
-            if item == enclosure || !items.insert(item) {
+            if let Some(unit) = p.material
+                && !units.insert((unit.material, unit.unit))
+            {
                 return Err(Error::Invalid);
             }
-            let item_kind = self.physical_access(context, item, working, false)?;
+            let item_kind = if let Some(item) = item {
+                if item == enclosure || !items.insert(item) {
+                    return Err(Error::Invalid);
+                }
+                self.physical_access(context, item, working, false)?
+            } else {
+                wire::AssetKind::try_from(
+                    p.requirement(&plan.materials)?.ok_or(Error::Invalid)?.kind,
+                )
+                .map_err(|_| Error::Invalid)?
+            };
             let enclosure_kind = self.physical_access(context, enclosure, working, false)?;
             if !inventory::compatible(item_kind, enclosure_kind, wire::RelationKind::InstalledIn) {
                 return Err(Error::Invalid);

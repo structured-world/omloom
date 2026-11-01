@@ -112,6 +112,7 @@ fn replacement_space_credit_requires_the_shared_plan_prerequisite() -> TestResul
                         item: Some(incoming.clone()),
                         enclosure: Some(rack.clone()),
                         volume: Some(volume()),
+                        material: None,
                     },
                 )),
                 ..Default::default()
@@ -169,6 +170,7 @@ fn replacement_space_credit_requires_the_shared_plan_prerequisite() -> TestResul
                 item: Some(parallel.clone()),
                 enclosure: Some(rack),
                 volume: Some(neighboring),
+                material: None,
             },
         )),
         ..Default::default()

@@ -9,6 +9,7 @@ pub(super) struct PhysicalUse {
     pub volumes: Vec<crate::physical::Region>,
     pub conditional_removals: Vec<(usize, Option<crate::physical::Region>)>,
     pub items: BTreeSet<AssetRef>,
+    pub future_loads: Vec<[Option<u64>; 3]>,
     pub inspected: usize,
 }
 fn map<'a>(row: &'a Properties, name: &str) -> Result<&'a Properties> {
@@ -160,6 +161,7 @@ impl Tx<'_> {
             volumes: Vec::with_capacity(bindings.len() + pending.len()),
             conditional_removals: Vec::with_capacity(bindings.len()),
             items: BTreeSet::new(),
+            future_loads: Vec::new(),
             inspected,
         };
         let mut bodies = Vec::with_capacity(bindings.len() + pending.len());
@@ -176,6 +178,12 @@ impl Tx<'_> {
             bodies.push((item, volume(&read_volume(pose)?.ok_or(Error::Corrupt)?)?));
             removals.push(removal);
         }
+        let needed = [
+            output.definition.max_mass_g.is_some(),
+            output.definition.capacity_mw.is_some(),
+            output.definition.cooling_capacity_mw.is_some(),
+        ];
+        let mut future = Vec::new();
         for reservation in pending {
             let claim = string(&reservation, "claim")?;
             let row = poses.get(&claim).ok_or(Error::Corrupt)?;
@@ -186,6 +194,18 @@ impl Tx<'_> {
             let placement = step_placement(&step).ok_or(Error::Corrupt)?;
             if parse_target(placement.enclosure.as_ref())? != enclosure {
                 return Err(Error::Corrupt);
+            }
+            if let Some(unit) = placement.material {
+                if placement.item.is_some() {
+                    return Err(Error::Corrupt);
+                }
+                let plan = claim.rsplit_once('/').ok_or(Error::Corrupt)?.0;
+                future.push((
+                    format!("{plan}/materials/{}", unit.material),
+                    unit.unit,
+                    volume(placement.volume.as_ref().ok_or(Error::Corrupt)?)?,
+                ));
+                continue;
             }
             let item = parse_target(placement.item.as_ref())?;
             bodies.push((
@@ -204,6 +224,40 @@ impl Tx<'_> {
                 output.conditional_removals.push((removal, Some(region)));
             } else {
                 output.volumes.push(region);
+            }
+        }
+        if !future.is_empty() {
+            let mut keys = BTreeSet::new();
+            for (key, _, _) in &future {
+                keys.insert(key.as_str());
+            }
+            let mut selected = Vec::with_capacity(keys.len() * (1 + usize::from(needed[0])));
+            for key in keys {
+                selected.push(text(key));
+                if needed[0] {
+                    selected.push(text(format!("{key}/field/weight")));
+                }
+            }
+            let rows=self.query("UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN properties(n) AS p LIMIT 4096",params([("keys",Value::Array(selected))]))?;
+            let rows = rows
+                .into_iter()
+                .map(|row| Ok((string(&row, "key")?, row)))
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            for (key, unit, body) in future {
+                let profile = rows.get(&key).ok_or(Error::Corrupt)?;
+                if u64::from(unit) >= number(profile, "count")? {
+                    return Err(Error::Corrupt);
+                }
+                output
+                    .volumes
+                    .push(clearance::region(body, clearance::read(profile)?.as_ref())?);
+                if needed.iter().any(|v| *v) {
+                    output.future_loads.push(equipment::row_loads(
+                        Some(profile),
+                        rows.get(&format!("{key}/field/weight")),
+                        needed,
+                    )?);
+                }
             }
         }
         Ok(output)
@@ -310,6 +364,7 @@ impl Tx<'_> {
             };
             view.occupancy.push(api::PhysicalOccupancy {
                 placement: Some(api::PhysicalPlacement {
+                    material: None,
                     item: Some(target_wire(target)),
                     enclosure: Some(target_wire(enclosure)),
                     volume: pose.map(read_volume).transpose()?.flatten(),

@@ -23,7 +23,17 @@ const assessmentText=computed(()=>{
 });
 const planItems=ref<model.Item[]>([]);
 const emptyMaterials:model.PhysicalMaterial[]=[];
-function updateMaterials(materials:model.PhysicalMaterial[]){plan.value=model.PhysicalPlan.create({...plan.value,name:name.value,state:model.PhysicalPlanState.DRAFT,materials});}
+const future=ref<model.PhysicalMaterialUnit>();
+const materialUses=computed(()=>{const units:model.PhysicalMaterialUnit[]=[];for(const step of plan.value?.steps??[])if(step.action.oneofKind==='placement'&&step.action.placement.material)units.push(step.action.placement.material);return units;});
+watch(()=>plan.value?.id,()=>{future.value=undefined;});
+function updateMaterials(materials:model.PhysicalMaterial[]){future.value=undefined;plan.value=model.PhysicalPlan.create({...plan.value,name:name.value,state:model.PhysicalPlanState.DRAFT,materials});}
+function removeMaterial(index:number){
+  if(!plan.value)return;
+  if(materialUses.value.some(u=>u.material===index)){error.value='Remove the material’s planned placements before removing its requirement.';return;}
+  plan.value.materials=plan.value.materials.filter((_,i)=>i!==index);
+  for(const unit of materialUses.value)if(unit.material>index)unit.material--;
+  future.value=undefined;
+}
 function selectedMaterial(item:model.Item){const index=planItems.value.findIndex(old=>key(old.target)===key(item.target));if(index===-1)planItems.value.push(item);else planItems.value[index]=item;}
 async function receiveMaterial(material:number,allocation:model.PhysicalMaterialAllocation){await run(async()=>{
   const reply=await invoke({oneofKind:'receive',receive:{plan:planKey(),material,allocation}});
@@ -117,7 +127,7 @@ async function load(saved:model.PhysicalPlanSummary) {
 }
 let selection=0;
 async function choose(item?:model.Item) {
-  const generation=++selection;equipment.value=undefined;equipmentVolume.value=undefined;manualRegion.value=false;
+  const generation=++selection;future.value=undefined;equipment.value=undefined;equipmentVolume.value=undefined;manualRegion.value=false;
   for(const axis of axes)allocation.value[axis]={start:'',length:''};
   if(!item?.target)return;
   await run(async()=>{
@@ -125,16 +135,27 @@ async function choose(item?:model.Item) {
     if(generation!==selection)return;
     equipment.value=item;
     const fields=reply.items.find(candidate=>key(candidate.target)===key(item.target))?.fields;
+    if(fields)equipmentVolume.value=dimensions(fields);
+  });
+}
+function dimensions(fields:model.Item['fields']):model.PhysicalVolume|undefined {
     const upper=(name:string)=>{
-      const field=fields?.find(field=>field.name===name);
+      const field=fields.find(field=>field.name===name);
       if(field?.value.oneofKind!=='equipment'||field.value.equipment.assertion.oneofKind!=='quantity')return undefined;
       const value=upperMicrometres(field.value.equipment.assertion.quantity);
       return value===undefined||value===0n?undefined:{startUm:0n,lengthUm:value};
     };
     const x=upper('width'),y=upper('height'),z=upper('depth');
-    if(x&&y&&z)equipmentVolume.value={x,y,z};
-  });
+    if(x&&y&&z)return {x,y,z};
 }
+function chooseFuture(unit:model.PhysicalMaterialUnit){
+  const material=plan.value?.materials[unit.material];if(!material)return;
+  ++selection;future.value=unit;equipment.value=undefined;equipmentVolume.value=dimensions(material.specifications);manualRegion.value=false;mode.value='placement';
+  for(const axis of axes)allocation.value[axis]={start:'',length:''};
+}
+function placementTarget(p:model.PhysicalPlacement){if(p.material){const m=plan.value?.materials[p.material.material];return m?.allocations.find(a=>a.unit===p.material!.unit)?.item;}return p.item;}
+function placementKey(p:model.PhysicalPlacement){return p.material?`material/${p.material.material}/${p.material.unit}`:key(p.item);}
+function placementTitle(p:model.PhysicalPlacement){if(p.material){const m=plan.value?.materials[p.material.material];if(m)return `${m.name} · requested unit ${p.material.unit+1}`;return undefined;}return label(p.item);}
 async function chooseSource(item?:model.Item) {
   source.value=undefined;sourceView.value=undefined;predecessor.value='';
   if(!item?.target)return;
@@ -181,14 +202,14 @@ function addReplacement() {
 function add() {
   error.value='';
   try{
-    if(!equipment.value?.target)throw Error('Choose the known equipment first.');
+    if(!equipment.value?.target&&!future.value)throw Error('Choose existing equipment or a requested material unit first.');
     const proposed=proposedVolume();
-    const placement=model.PhysicalPlacement.create({item:equipment.value.target,enclosure:props.target,volume:proposed});
+    const placement=model.PhysicalPlacement.create({item:future.value?undefined:equipment.value?.target,material:future.value,enclosure:props.target,volume:proposed});
     const steps=plan.value?.steps??[];
     if(steps.length>=64)throw Error('One plan supports at most 64 physical steps.');
-    if(steps.some(s=>s.action.oneofKind==='placement'&&key(s.action.placement.item)===key(placement.item)))throw Error('This equipment is already in the plan.');
+    if(steps.some(s=>s.action.oneofKind==='placement'&&placementKey(s.action.placement)===placementKey(placement)))throw Error('This equipment or requested unit is already in the plan.');
     plan.value=model.PhysicalPlan.create({...plan.value,name:name.value,state:model.PhysicalPlanState.DRAFT,steps:[...steps,model.PhysicalStep.create({state:model.PhysicalStepState.PLANNED,action:{oneofKind:'placement',placement}})]});
-    if(!planItems.value.some(i=>key(i.target)===key(equipment.value?.target)))planItems.value.push(equipment.value);
+    if(equipment.value&&!planItems.value.some(i=>key(i.target)===key(equipment.value?.target)))planItems.value.push(equipment.value);
   }catch(e){error.value=String(e);}
 }
 function addAtCoordinates(){if(mode.value==='placement')add();else if(mode.value==='replacement')addReplacement();}
@@ -226,7 +247,7 @@ async function complete() {
   });
 }
 async function recheck(){await run(async()=>{await refresh();const reply=await invoke({oneofKind:'complete',complete:model.PhysicalCompletion.create({plan:planKey()})});plan.value=reply.plan;notice.value='Postconditions rechecked. No physical work was repeated.';});}
-function subject(step:model.PhysicalStep){return step.action.oneofKind==='placement'?step.action.placement.item:step.action.oneofKind==='replacement'?step.action.replacement.replacement??step.action.replacement.previous:step.action.oneofKind==='wiring'?step.action.wiring.cable:undefined;}
+function subject(step:model.PhysicalStep){return step.action.oneofKind==='placement'?placementTarget(step.action.placement):step.action.oneofKind==='replacement'?step.action.replacement.replacement??step.action.replacement.previous:step.action.oneofKind==='wiring'?step.action.wiring.cable:undefined;}
 function subjectKind(step:model.PhysicalStep){const target=subject(step);return planItems.value.find(i=>key(i.target)===key(target))?.kind;}
 function predecessors(index:number){return plan.value?.steps.slice(0,index).map(step=>({title:label(subject(step))===undefined?'Equipment name unavailable':label(subject(step))!,hasCheck:step.control?.check!==undefined}))??[];}
 function removeStep(index:number){
@@ -244,13 +265,13 @@ function projections(placements:Iterable<model.PhysicalPlacement>){
   const frame=envelope.value;
   const result:{p:model.PhysicalPlacement;rect:{x:number;y:number;width:number;height:number};depth:bigint;name:string|undefined}[]=[];
   if(!frame)return result;
-  for(const p of placements){if(!p.volume)continue;const projection=projectElevation(frame,p.volume,side.value);if(projection)result.push({p,...projection,name:label(p.item)});}
+  for(const p of placements){if(!p.volume)continue;const projection=projectElevation(frame,p.volume,side.value);if(projection)result.push({p,...projection,name:placementTitle(p)});}
   return result.sort(depthOrder);
 }
 function* reportedPlacements(){for(const entry of view.value.occupancy)if(entry.placement)yield entry.placement;}
 const reportedProjection=computed(()=>projections(reportedPlacements()));
 function dropEquipment(event:DragEvent){
-  if(!editable.value||manualRegion.value||!equipmentVolume.value||!elevation.value||event.dataTransfer?.getData('application/x-omloom-equipment')!==key(equipment.value?.target))return;
+  if(!editable.value||manualRegion.value||!equipmentVolume.value||!elevation.value||event.dataTransfer?.getData('application/x-omloom-equipment')!==selectedKey())return;
   const svg=elevation.value,transform=svg.getScreenCTM();
   if(!transform)return;
   const point=new DOMPoint(event.clientX,event.clientY).matrixTransform(transform.inverse());
@@ -270,7 +291,8 @@ function dropEquipment(event:DragEvent){
   lane.value=fromFront<drawingValue.width/2?'left':'right';
   addAtCoordinates();
 }
-function dragEquipment(event:DragEvent){if(event.dataTransfer&&equipment.value?.target){event.dataTransfer.effectAllowed='copy';event.dataTransfer.setData('application/x-omloom-equipment',key(equipment.value.target));}}
+function selectedKey(){return future.value?`material/${future.value.material}/${future.value.unit}`:key(equipment.value?.target);}
+function dragEquipment(event:DragEvent){if(event.dataTransfer&&(equipment.value?.target||future.value)){event.dataTransfer.effectAllowed='copy';event.dataTransfer.setData('application/x-omloom-equipment',selectedKey());}}
 function rackKeyboard(event:KeyboardEvent){
   if(!editable.value||manualRegion.value)return;
   if(event.key==='Enter'){event.preventDefault();addAtCoordinates();return;}
@@ -283,16 +305,17 @@ function rackKeyboard(event:KeyboardEvent){
 }
 const placementRows=computed(()=>plan.value?.steps.flatMap((step,index)=>step.action.oneofKind==='placement'?[{p:step.action.placement,index,state:step.state}]:[])??[]);
 const replacementRows=computed(()=>plan.value?.steps.flatMap((step,index)=>step.action.oneofKind==='replacement'?[{r:step.action.replacement,index,state:step.state}]:[])??[]);
+function outstanding(state:number){return state!==model.PhysicalStepState.RECORDED&&state!==model.PhysicalStepState.NOT_PERFORMED;}
 const local=computed(()=>[
-  ...placementRows.value.filter(row=>key(row.p.enclosure)===key(props.target)).map(row=>row.p),
-  ...replacementRows.value.filter(row=>row.r.volume&&key(row.r.position)===key(props.target)).map(row=>model.PhysicalPlacement.create({item:row.r.replacement,enclosure:row.r.position,volume:row.r.volume})),
+  ...placementRows.value.filter(row=>outstanding(row.state)&&key(row.p.enclosure)===key(props.target)).map(row=>row.p),
+  ...replacementRows.value.filter(row=>outstanding(row.state)&&row.r.volume&&key(row.r.position)===key(props.target)).map(row=>model.PhysicalPlacement.create({item:row.r.replacement,enclosure:row.r.position,volume:row.r.volume})),
 ]);
 const plannedProjection=computed(()=>projections(local.value));
 const bill=computed(()=>{
   const items=new Map<string,{target:AssetRef;steps:model.PhysicalStep[]}>();
   for(const step of plan.value?.steps??[]){
     const targets:AssetRef[]=[];
-    if(step.action.oneofKind==='placement'&&step.action.placement.item)targets.push(step.action.placement.item);
+    if(step.action.oneofKind==='placement'){const target=placementTarget(step.action.placement);if(target)targets.push(target);}
     if(step.action.oneofKind==='replacement'&&step.action.replacement.replacement)targets.push(step.action.replacement.replacement);
     if(step.action.oneofKind==='wiring'&&step.action.wiring.cable)targets.push(step.action.wiring.cable);
     for(const target of targets){let line=items.get(key(target));if(!line){line={target,steps:[]};items.set(key(target),line);}line.steps.push(step);}
@@ -329,7 +352,7 @@ async function exportPlan(){await run(async()=>{
 <svg ref="elevation" role="group" tabindex="0" aria-label="Rack physical placement" :viewBox="`${drawing.x} ${drawing.y} ${drawing.width} ${drawing.height}`" @dragover.prevent @drop.prevent="dropEquipment" @keydown="rackKeyboard">
 <rect :x="drawing.x" :y="drawing.y" :width="drawing.width" :height="drawing.height" class="rack"/>
 <rect v-for="entry in reportedProjection" :key="key(entry.p.item)" v-bind="entry.rect" class="installed"><title>Reported installation: <template v-if="entry.name">{{entry.name}}</template><template v-else>Equipment name unavailable</template></title></rect>
-<rect v-for="entry in plannedProjection" :key="key(entry.p.item)" v-bind="entry.rect" class="proposed"><title>Planned placement: <template v-if="entry.name">{{entry.name}}</template><template v-else>Equipment name unavailable</template></title></rect>
+<rect v-for="entry in plannedProjection" :key="placementKey(entry.p)" v-bind="entry.rect" class="proposed"><title>Planned placement: <template v-if="entry.name">{{entry.name}}</template><template v-else>Equipment name unavailable</template></title></rect>
 </svg>
 </template><p v-else>Known enclosure geometry is needed for an elevation. Available recorded coordinates and draft editing remain accessible.</p>
 <p v-if="reportedProjection.length<view.occupancy.length">Some placements have no drawable coordinates in this view. The coordinate table preserves their available facts.</p>
@@ -340,7 +363,7 @@ async function exportPlan(){await run(async()=>{
 </details>
 </section>
 <section aria-label="Installation plan editor">
-<PhysicalMaterials :materials="plan?.materials??emptyMaterials" :items="planItems" :working="working()" :editable="editable" :receivable="editable||plan?.state===model.PhysicalPlanState.RESERVED||plan?.state===model.PhysicalPlanState.PARTIAL" :busy="busy" @update="updateMaterials" @receive="receiveMaterial" @selected="selectedMaterial"/>
+<PhysicalMaterials :materials="plan?.materials??emptyMaterials" :uses="materialUses" :items="planItems" :working="working()" :editable="editable" :receivable="editable||plan?.state===model.PhysicalPlanState.RESERVED||plan?.state===model.PhysicalPlanState.PARTIAL" :can-place="kind===K.RACK" :busy="busy" @update="updateMaterials" @receive="receiveMaterial" @selected="selectedMaterial" @place="chooseFuture" @remove="removeMaterial"/>
 <form v-if="editable" @submit.prevent="save"><fieldset :disabled="busy">
 <label>Installation plan name<input v-model="name" required maxlength="160" /></label>
 <div class="placement-controls"><button v-if="kind===K.RACK" type="button" :aria-pressed="mode==='placement'" @click="mode='placement'">Plan rack placement</button><button v-if="kind!==K.CABLE" type="button" :aria-pressed="mode==='replacement'" @click="mode='replacement'">Replace, remove or move a part</button></div>
@@ -369,6 +392,7 @@ async function exportPlan(){await run(async()=>{
 </template>
 <template v-if="geometryEditable">
 <p v-if="equipment">Selected: {{itemName(equipment)}}. {{equipmentVolume?'Accepted upper-bound dimensions available.':'Accepted dimension bounds are unknown or unavailable.'}}</p>
+<p v-if="future&&plan?.materials[future.material]">Selected requested material: {{plan.materials[future.material]!.name}}, unit {{future.unit+1}}. {{equipmentVolume?'Declared upper-bound dimensions available.':'Declare a draft allocation; material dimensions remain unknown.'}} This is not an adopted asset.</p>
 <button v-if="mode==='replacement'&&!moving&&predecessor" type="button" @click="proposePreviousAllocation">Use previous allocation as a proposal</button>
 <label v-if="equipment"><input v-model="manualRegion" type="checkbox"/>Use an explicit plan-only allocation</label>
 <template v-if="manualRegion"><p>This is proposed space, not new equipment facts. Unknown source dimensions or occupancy keep fit unqualified. Confirm the recorded position and envelope when reporting actual installation.</p>
@@ -379,7 +403,7 @@ async function exportPlan(){await run(async()=>{
 <label>Side<select v-model="side"><option value="front">Front</option><option value="rear">Rear</option></select></label>
 <label>Horizontal position<select v-model="lane"><option value="left">Left from front</option><option value="right">Right from front</option></select></label></div></template>
 </template>
-<button v-if="mode==='placement'" type="button" :disabled="!equipment?.target||(!manualRegion&&!equipmentVolume)" @click="add">Add planned placement</button>
+<button v-if="mode==='placement'" type="button" :disabled="(!equipment?.target&&!future)||(!manualRegion&&!equipmentVolume)" @click="add">Add planned placement</button>
 <button v-else-if="mode==='replacement'" type="button" @click="addReplacement">Add reviewed physical transition</button>
 <button type="button" :disabled="!plan?.steps.length" @click="preview">Check physical requirements</button>
 <button type="submit" :disabled="!plan||(!plan.steps.length&&!plan.materials.length)">Save installation plan</button>
@@ -390,8 +414,9 @@ async function exportPlan(){await run(async()=>{
 <button v-if="plan.id" type="button" :disabled="busy" @click="exportPlan">Export authorized plan and materials</button></section>
 <ol class="planned-items"><li v-for="(step,index) in plan.steps" :key="index">
 <template v-if="step.action.oneofKind==='placement'">
-<label v-if="installable&&![model.PhysicalStepState.RECORDED,model.PhysicalStepState.NOT_PERFORMED].includes(step.state)"><input v-model="selected" type="checkbox" :value="index" :disabled="notPerformed.includes(index)||(!actualReport&&step.readiness!==model.PlanReadiness.READY)"/>Actually installed: <span v-if="label(step.action.placement.item)">{{label(step.action.placement.item)}}</span><span v-else>Equipment name unavailable</span></label>
-<span v-else-if="label(step.action.placement.item)">{{label(step.action.placement.item)}}</span><span v-else>Equipment name unavailable</span>
+<label v-if="installable&&![model.PhysicalStepState.RECORDED,model.PhysicalStepState.NOT_PERFORMED].includes(step.state)"><input v-model="selected" type="checkbox" :value="index" :disabled="!placementTarget(step.action.placement)||notPerformed.includes(index)||(!actualReport&&step.readiness!==model.PlanReadiness.READY)"/>Actually installed: <span v-if="placementTitle(step.action.placement)">{{placementTitle(step.action.placement)}}</span><span v-else>Equipment name unavailable</span></label>
+<span v-else-if="placementTitle(step.action.placement)">{{placementTitle(step.action.placement)}}</span><span v-else>Equipment name unavailable</span>
+<p v-if="step.action.placement.material&&!placementTarget(step.action.placement)">Receive or select the actual requested unit before reporting installation.</p>
 <template v-for="axis in axes" :key="axis"><small v-if="step.action.placement.volume?.[axis]">{{axis.toUpperCase()}} allocation: {{millimetres(step.action.placement.volume[axis]!.startUm)}} mm + {{millimetres(step.action.placement.volume[axis]!.lengthUm)}} mm</small></template>
 </template>
 <template v-if="step.action.oneofKind==='replacement'">

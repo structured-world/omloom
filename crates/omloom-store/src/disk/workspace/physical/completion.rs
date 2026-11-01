@@ -1,5 +1,10 @@
 use super::*;
 
+pub(super) struct PlacementEffect<'a> {
+    pub(super) proposal: &'a api::PhysicalPlacement,
+    pub(super) item: AssetRef,
+}
+
 impl Tx<'_> {
     pub(super) fn installed_bindings(&self, item: AssetRef) -> Result<Vec<wire::Relation>> {
         let rows=self.query("MATCH (a:OmRow {key:$key})-[:OmRelationFrom]->(r:OmRow) WHERE r.kind=$kind RETURN properties(r) AS p LIMIT 2",params([("key",text(asset_key(item))),("kind",int(wire::RelationKind::InstalledIn as u64)?)]))?;
@@ -11,14 +16,15 @@ impl Tx<'_> {
     pub(super) fn record_physical_placement(
         &mut self,
         context: &Context,
-        placement: &api::PhysicalPlacement,
+        effect: PlacementEffect<'_>,
         report: &api::PhysicalCompletion,
         index: usize,
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<()> {
         let plan = report.plan.as_ref().ok_or(Error::Invalid)?.id.as_str();
-        let item = parse_target(placement.item.as_ref())?;
+        let placement = effect.proposal;
+        let item = effect.item;
         let enclosure = parse_target(placement.enclosure.as_ref())?;
         self.physical_access(context, item, working, true)?;
         self.physical_access(context, enclosure, working, true)?;
@@ -124,7 +130,9 @@ impl Tx<'_> {
             for step in &plan.steps {
                 match step.action.as_ref().ok_or(Error::Corrupt)? {
                     api::physical_step::Action::Placement(p) => {
-                        self.lock_physical_part(parse_target(p.item.as_ref())?, &key.id)?
+                        if let Some(item) = Placement::from(p).actual(&plan.materials)? {
+                            self.lock_physical_part(item, &key.id)?;
+                        }
                     }
                     api::physical_step::Action::Replacement(r) => {
                         for part in [r.previous.as_ref(), r.replacement.as_ref()]
@@ -193,6 +201,16 @@ impl Tx<'_> {
                     }
                     _ => None,
                 };
+                let placement_item = if done {
+                    match plan.steps[index as usize].action.as_ref() {
+                        Some(api::physical_step::Action::Placement(p)) => {
+                            Placement::from(p).actual(&plan.materials)?
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
                 let step = &mut plan.steps[index as usize];
                 let action = step.action.as_mut().ok_or(Error::Corrupt)?;
                 let desired = if done {
@@ -214,7 +232,10 @@ impl Tx<'_> {
                         api::physical_step::Action::Placement(p) => self
                             .record_physical_placement(
                                 context,
-                                p,
+                                PlacementEffect {
+                                    proposal: p,
+                                    item: placement_item.ok_or(Error::Incomplete)?,
+                                },
                                 &value,
                                 index as usize,
                                 working,

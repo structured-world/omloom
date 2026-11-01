@@ -39,6 +39,15 @@ impl Tx<'_> {
         if count > 64 {
             return Err(Error::Corrupt);
         }
+        let materials = self.load_materials(
+            &key,
+            if row.contains_key("material_count") {
+                usize::try_from(number(&row, "material_count")?).map_err(|_| Error::Corrupt)?
+            } else {
+                0
+            },
+            number(&row, "class")? == Class::Detail as u64,
+        )?;
         let mut steps = Vec::with_capacity(count as usize);
         for i in 0..count {
             let p = self.get(&format!("{key}/{i}"))?.ok_or(if terminal {
@@ -49,7 +58,9 @@ impl Tx<'_> {
             let step = read_step(&p)?;
             match step.action.as_ref().ok_or(Error::Corrupt)? {
                 api::physical_step::Action::Placement(p) => {
-                    self.physical_access(context, parse_target(p.item.as_ref())?, working, write)?;
+                    if let Some(item) = Placement::from(p).actual(&materials)? {
+                        self.physical_access(context, item, working, write)?;
+                    }
                     self.physical_access(
                         context,
                         parse_target(p.enclosure.as_ref())?,
@@ -70,15 +81,7 @@ impl Tx<'_> {
             id: Some(request.id.clone()),
             name: string(&row, "name")?,
             steps,
-            materials: self.load_materials(
-                &key,
-                if row.contains_key("material_count") {
-                    usize::try_from(number(&row, "material_count")?).map_err(|_| Error::Corrupt)?
-                } else {
-                    0
-                },
-                number(&row, "class")? == Class::Detail as u64,
-            )?,
+            materials,
             state,
             revision: number(&row, "revision")?,
             reserved_until_ms: if row.contains_key("until") {

@@ -3919,7 +3919,8 @@ export interface PhysicalPositionQuery {
  */
 export interface PhysicalPlacement {
     /**
-     * Existing adopted part/device incarnation, not a model identifier or future serial.
+     * Existing adopted part/device incarnation. Exactly one of item or material
+     * is supplied; a future material never acquires a fabricated asset identity.
      *
      * @generated from protobuf field: omloom.v1.AssetRef item = 1
      */
@@ -3932,12 +3933,37 @@ export interface PhysicalPlacement {
     enclosure?: AssetRef;
     /**
      * Proposed position/envelope in receiving enclosure coordinates. Admission
-     * checks dimensions against the item's current sourced definition; this input
-     * cannot shrink actual equipment to make it fit. Unknown dimensions stay unvalidated.
+     * checks actual current dimensions or an unreceived unit's declared specification;
+     * it cannot shrink the body to make it fit. Unknown dimensions stay unvalidated.
      *
      * @generated from protobuf field: omloom.workspace.v1.PhysicalVolume volume = 3
      */
     volume?: PhysicalVolume;
+    /**
+     * User-selected requested unit in this plan's materials. Its allocation, when
+     * received, supplies the real item; callers never send both derived identities.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalMaterialUnit material = 4
+     */
+    material?: PhysicalMaterialUnit;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalMaterialUnit
+ */
+export interface PhysicalMaterialUnit {
+    /**
+     * Zero-based requirement line in the same saved or transient plan.
+     *
+     * @generated from protobuf field: uint32 material = 1
+     */
+    material: number;
+    /**
+     * Zero-based unit below that line's quantity. Selecting one unit creates
+     * one proposed placement, never placements for the line's entire quantity.
+     *
+     * @generated from protobuf field: uint32 unit = 2
+     */
+    unit: number;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.PhysicalReplacement
@@ -8176,7 +8202,8 @@ class PhysicalPlacement$Type extends MessageType<PhysicalPlacement> {
         super("omloom.workspace.v1.PhysicalPlacement", [
             { no: 1, name: "item", kind: "message", T: () => AssetRef },
             { no: 2, name: "enclosure", kind: "message", T: () => AssetRef },
-            { no: 3, name: "volume", kind: "message", T: () => PhysicalVolume }
+            { no: 3, name: "volume", kind: "message", T: () => PhysicalVolume },
+            { no: 4, name: "material", kind: "message", T: () => PhysicalMaterialUnit }
         ]);
     }
 }
@@ -8184,6 +8211,19 @@ class PhysicalPlacement$Type extends MessageType<PhysicalPlacement> {
  * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalPlacement
  */
 export const PhysicalPlacement = new PhysicalPlacement$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalMaterialUnit$Type extends MessageType<PhysicalMaterialUnit> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalMaterialUnit", [
+            { no: 1, name: "material", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 2, name: "unit", kind: "scalar", T: 13 /*ScalarType.UINT32*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalMaterialUnit
+ */
+export const PhysicalMaterialUnit = new PhysicalMaterialUnit$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class PhysicalReplacement$Type extends MessageType<PhysicalReplacement> {
     constructor() {

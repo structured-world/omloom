@@ -107,6 +107,71 @@ test('material quantities stay plan-local and partial receiving survives reload 
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
 });
 
+test('future material layout reserves space before receiving and installs the selected real unit on desktop and phone',async({browser})=>{
+  // A requested unit is a plan reference, not a fabricated asset or an installed body.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-future-layout-'));const server=await host(dir);
+  try{
+    const {m,rpc}=await workspaceClient(server.url);
+    for(const width of [1440,390]){
+      const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600,timezoneId:'UTC'});
+      try{
+        await page.goto(server.url);
+        const item=await create(page,`Actual receiving unit ${width}`);
+        const rack=await create(page,`Future layout rack ${width}`,'RACK');
+        const target={assetId:item.asset_id,incarnation:item.incarnation};
+        const existing=await rpc({oneofKind:'read',read:m.Read.create({target})});
+        const changes=[['width',440000n],['height',44450n],['depth',500000n]].map(([name,value])=>({name,value:{oneofKind:'equipment',equipment:{basis:'Measured fixture model specification',assertion:{oneofKind:'quantity',quantity:{lower:value,upper:value,unit:'mm',scale:3}}}}}));
+        await rpc({oneofKind:'write',write:m.Write.create({target,expected:existing.detail.item.revision,kind:m.AssetKind.DEVICE,changes})});
+        const [x,y,z]=[482600n,1866900n,1000000n].map(lengthUm=>({startUm:0n,lengthUm}));
+        const enclosure={assetId:rack.asset_id,incarnation:rack.incarnation};
+        await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target:enclosure,basis:'Measured fixture enclosure and complete recorded occupancy',volume:{x,y,z},occupancyCoverage:{x,y,z}})}}})});
+        await page.reload();await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
+        const planner=page.locator('.physical-planner');
+        await planner.getByText('Required materials and receiving (0 lines)',{exact:true}).click();
+        await planner.getByRole('button',{name:'Add material requirement',exact:true}).click();
+        const edit=planner.getByRole('form',{name:'Material requirement editor',exact:true});
+        await edit.getByLabel('Material requirement name',{exact:true}).fill(`Required future server ${width}`);
+        await edit.getByLabel('Required quantity',{exact:true}).fill('2');
+        await edit.getByText('Reuse an explicit physical specification',{exact:true}).click();
+        await edit.getByRole('combobox',{name:'Find material',exact:true}).fill(`Actual receiving unit ${width}`);
+        await edit.getByRole('option',{name:`Use material: Actual receiving unit ${width}`,exact:true}).click();
+        await edit.getByRole('button',{name:'Use selected resource as specification',exact:true}).click();
+        await expect(edit.getByRole('button',{name:'Apply material requirement',exact:true})).toBeEnabled();
+        await edit.getByRole('button',{name:'Apply material requirement',exact:true}).click();
+        await planner.getByLabel('Installation plan name',{exact:true}).fill(`Future installation ${width}`);
+        await planner.getByRole('button',{name:'Place a unit from requirement 1',exact:true}).click();
+        const selection=planner.getByRole('form',{name:'Place requested material',exact:true});
+        await selection.getByLabel('Unit to place',{exact:true}).fill('2');
+        await selection.getByRole('button',{name:'Select requested unit for placement',exact:true}).click();
+        await planner.getByRole('button',{name:'Add planned placement',exact:true}).click();
+        await expect(planner.locator('rect.proposed')).toHaveCount(1);
+        await expect(planner).toContainText(`Required future server ${width} · requested unit 2`);
+        await planner.getByRole('button',{name:'Save installation plan',exact:true}).click();
+        await expect(planner.getByRole('status')).toHaveText('Plan saved. Nothing is reserved or installed.');
+        await planner.getByLabel('Reserve until',{exact:true}).fill(new Date(Date.now()+3600000).toISOString().slice(0,16));
+        await planner.getByRole('button',{name:'Check and reserve capacity',exact:true}).click();
+        await expect(planner.getByRole('status')).toContainText('Capacity reserved');
+        const installed=planner.getByRole('checkbox',{name:`Actually installed: Required future server ${width} · requested unit 2`,exact:true});
+        await expect(installed).toBeDisabled();
+        await planner.getByRole('button',{name:'Receive or reuse a unit for requirement 1',exact:true}).click();
+        const receiving=planner.getByRole('form',{name:'Material receiving',exact:true});
+        await receiving.getByLabel('Requested unit number',{exact:true}).fill('2');
+        await receiving.getByRole('combobox',{name:'Find material',exact:true}).fill(`Actual receiving unit ${width}`);
+        await receiving.getByRole('option',{name:`Use material: Actual receiving unit ${width}`,exact:true}).click();
+        await receiving.getByLabel('Receipt or reuse basis',{exact:true}).fill('Actual unit received for the reserved placement');
+        await receiving.getByRole('button',{name:'Record actual material allocation',exact:true}).click();
+        await expect(installed).toBeEnabled();await installed.check();
+        await planner.getByRole('button',{name:'Record selected installation',exact:true}).click();
+        await expect(planner.locator('rect.installed')).toHaveCount(1);
+        await expect(planner.locator('rect.proposed')).toHaveCount(0);
+        const current=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'read',read:{enclosure,occupants:true}}})});
+        expect(current.physical.occupancy.map(o=>o.placement.item)).toEqual([target]);
+        expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+      }finally{await page.close();}
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('recorded power paths use explicit boundaries and expose a visible shared UPS on desktop and phone',async({browser},testInfo)=>{
   // Actual current graph changes invalidate separation; incomplete boundaries never certify power.
   const dir=await mkdtemp(join(tmpdir(),'omloom-power-paths-'));const server=await host(dir);

@@ -5,13 +5,14 @@ import {equipmentFields} from './equipment-fields';
 import type {Field} from '../src/generated/omloom/v1/contracts';
 import PlacementSearch from './PlacementSearch.vue';
 import EquipmentField from './EquipmentField.vue';
-const props=defineProps<{materials:model.PhysicalMaterial[];items:model.Item[];working:model.WorkingContext;editable:boolean;receivable:boolean;busy:boolean}>();
-const emit=defineEmits<{update:[materials:model.PhysicalMaterial[]];receive:[material:number,allocation:model.PhysicalMaterialAllocation];selected:[item:model.Item]}>();
+const props=defineProps<{materials:model.PhysicalMaterial[];uses:model.PhysicalMaterialUnit[];items:model.Item[];working:model.WorkingContext;editable:boolean;receivable:boolean;canPlace:boolean;busy:boolean}>();
+const emit=defineEmits<{update:[materials:model.PhysicalMaterial[]];remove:[material:number];place:[unit:model.PhysicalMaterialUnit];receive:[material:number,allocation:model.PhysicalMaterialAllocation];selected:[item:model.Item]}>();
 const opened=ref(false),editing=ref(false),index=ref<number>(),error=ref(''),loading=ref(false);
 const draft=ref(model.PhysicalMaterial.create()),quantity=ref(''),field=ref(equipmentFields[0]!),valid=ref(true);
 const source=ref<model.Item>(),receiving=ref<number>(),unit=ref(''),basis=ref('');
+const placing=ref<number>(),placementUnit=ref('');
 const page=ref(0);
-watch(()=>props.materials,()=>{editing.value=false;receiving.value=undefined;page.value=0;});
+watch(()=>props.materials,()=>{editing.value=false;receiving.value=undefined;placing.value=undefined;page.value=0;});
 const rows=computed(()=>props.materials.slice(page.value*25,(page.value+1)*25));
 const names=computed(()=>{
   const result=new Map<string,string>();
@@ -19,8 +20,8 @@ const names=computed(()=>{
   return result;
 });
 const kinds=[K.DEVICE,K.PHYSICAL_COMPONENT,K.RACK,K.CABLE];
-function start(line?:number){receiving.value=undefined;index.value=line;draft.value=line===undefined?model.PhysicalMaterial.create({kind:K.DEVICE}):model.PhysicalMaterial.clone(props.materials[line]!);quantity.value=line===undefined?'':String(draft.value.quantity);field.value=equipmentFields[0]!;source.value=undefined;valid.value=true;editing.value=true;error.value='';}
-function startReceiving(line:number){editing.value=false;receiving.value=line;source.value=undefined;unit.value='';basis.value='';}
+function start(line?:number){placing.value=undefined;receiving.value=undefined;index.value=line;draft.value=line===undefined?model.PhysicalMaterial.create({kind:K.DEVICE}):model.PhysicalMaterial.clone(props.materials[line]!);quantity.value=line===undefined?'':String(draft.value.quantity);field.value=equipmentFields[0]!;source.value=undefined;valid.value=true;editing.value=true;error.value='';}
+function startReceiving(line:number){placing.value=undefined;editing.value=false;receiving.value=line;source.value=undefined;unit.value='';basis.value='';}
 function integer(value:string,max:number){if(!/^\d+$/.test(value))throw Error('Enter a whole positive count.');const n=Number(value);if(!Number.isSafeInteger(n)||n<1||n>max)throw Error(`Enter a count between 1 and ${max}.`);return n;}
 function claim(value:Field|undefined){draft.value.specifications=draft.value.specifications.filter(f=>f.name!==field.value);if(value)draft.value.specifications.push(value);}
 async function copySpecification(){
@@ -44,6 +45,7 @@ function commit(){error.value='';try{
   if(!valid.value)throw Error('Complete or remove the selected specification.');
   const count=integer(quantity.value,4294967295);
   if(draft.value.allocations.some(a=>a.unit>=count))throw Error('The quantity cannot exclude an allocated unit.');
+  if(index.value!==undefined&&props.uses.some(u=>u.material===index.value&&u.unit>=count))throw Error('Remove the affected planned placement before reducing its requested quantity.');
   const value=model.PhysicalMaterial.create({...draft.value,quantity:count});
   const next=props.materials.slice();
   if(index.value===undefined){if(next.length>=64)throw Error('One plan supports at most 64 material lines.');next.push(value);}else next[index.value]=value;
@@ -64,6 +66,13 @@ function receive(line:number){error.value='';try{
   receiving.value=undefined;
 }catch(e){error.value=String(e);}}
 function resource(target:model.PhysicalMaterialAllocation['item']){return names.value.get(key(target));}
+function place(){error.value='';try{
+  const index=placing.value;const material=index===undefined?undefined:props.materials[index];
+  if(index===undefined||!material)throw Error('Choose a current material requirement.');
+  const unit=integer(placementUnit.value,material.quantity)-1;
+  if(props.uses.some(u=>u.material===index&&u.unit===unit))throw Error('This requested unit already has a planned placement.');
+  emit('place',model.PhysicalMaterialUnit.create({material:index,unit}));placing.value=undefined;
+}catch(e){error.value=String(e);}}
 </script>
 <template>
 <details class="material-demand" @toggle="opened=($event.target as HTMLDetailsElement).open">
@@ -79,10 +88,15 @@ function resource(target:model.PhysicalMaterialAllocation['item']){return names.
 <dl><template v-for="f in material.specifications" :key="f.name"><dt>{{f.name.replaceAll('_',' ')}}</dt><dd>{{input(f)}}</dd></template></dl>
 <ul><li v-for="a in material.allocations" :key="a.unit">Unit {{a.unit+1}}: <template v-if="resource(a.item)">{{resource(a.item)}}</template><template v-else>Resource name unavailable</template> · {{a.basis}}</li></ul>
 <button v-if="editable" type="button" @click="start(page*25+offset)">Edit requirement {{page*25+offset+1}}</button>
-<button v-if="editable" type="button" @click="emit('update',materials.filter((_,i)=>i!==page*25+offset));page=0">Remove requirement {{page*25+offset+1}}</button>
+<button v-if="editable" type="button" @click="emit('remove',page*25+offset)">Remove requirement {{page*25+offset+1}}</button>
+<button v-if="editable&&canPlace&&material.kind===K.DEVICE" type="button" @click="placing=page*25+offset;placementUnit='';editing=false;receiving=undefined">Place a unit from requirement {{page*25+offset+1}}</button>
 <button v-if="receivable" type="button" @click="startReceiving(page*25+offset)">Receive or reuse a unit for requirement {{page*25+offset+1}}</button>
 </li></ol>
 <div><button type="button" :disabled="page===0" @click="page--">Previous materials</button><button type="button" :disabled="(page+1)*25>=materials.length" @click="page++">Next materials</button></div>
+<form v-if="placing!==undefined&&editable" aria-label="Place requested material" @submit.prevent="place">
+<label>Unit to place<input v-model="placementUnit" required inputmode="numeric"/></label>
+<button type="submit">Select requested unit for placement</button><button type="button" @click="placing=undefined">Close requested placement</button>
+</form>
 <form v-if="editing&&editable" aria-label="Material requirement editor" @submit.prevent="commit">
 <label>Material requirement name<input v-model="draft.name" required maxlength="160"/></label>
 <label>Required quantity<input v-model="quantity" type="text" inputmode="numeric" required/></label>

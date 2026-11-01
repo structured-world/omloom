@@ -50,10 +50,9 @@ impl Tx<'_> {
             };
             match step.action.as_ref().ok_or(Error::Corrupt)? {
                 api::physical_step::Action::Placement(p) => {
-                    keys.insert(format!(
-                        "physical-lock/{}",
-                        network::identity(parse_target(p.item.as_ref())?)
-                    ));
+                    if let Some(item) = Placement::from(p).actual(&plan.materials)? {
+                        keys.insert(format!("physical-lock/{}", network::identity(item)));
+                    }
                 }
                 api::physical_step::Action::Replacement(r) => {
                     for item in [r.previous.as_ref(), r.replacement.as_ref()]
@@ -87,11 +86,15 @@ impl Tx<'_> {
             }
         }
         // Keep unused BOM units for accepted future work, never after its cancellation.
-        let future_work = !pending.is_empty()
-            && matches!(
-                api::PhysicalPlanState::try_from(plan.state),
-                Ok(api::PhysicalPlanState::Reserved | api::PhysicalPlanState::Partial)
-            );
+        let future_work = plan.steps.iter().any(|s| {
+            !matches!(
+                api::PhysicalStepState::try_from(s.state),
+                Ok(api::PhysicalStepState::Recorded | api::PhysicalStepState::NotPerformed)
+            )
+        }) && matches!(
+            api::PhysicalPlanState::try_from(plan.state),
+            Ok(api::PhysicalPlanState::Reserved | api::PhysicalPlanState::Partial)
+        );
         for allocation in plan.materials.iter().flat_map(|m| &m.allocations) {
             let key = format!(
                 "physical-lock/{}",

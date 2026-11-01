@@ -12,6 +12,9 @@ fn upper(row: Option<&Properties>, scale: u32) -> Result<Option<u64>> {
     let Some(wire::equipment_claim::Assertion::Quantity(quantity)) = claim.assertion else {
         return Ok(None);
     };
+    quantity_upper(&quantity, scale)
+}
+fn quantity_upper(quantity: &wire::QuantityRange, scale: u32) -> Result<Option<u64>> {
     let Some(value) = quantity.upper else {
         return Ok(None);
     };
@@ -25,6 +28,109 @@ fn upper(row: Option<&Properties>, scale: u32) -> Result<Option<u64>> {
         value / divisor + u64::from(value % divisor != 0)
     };
     Ok(Some(value))
+}
+pub(super) fn declared_envelope(
+    material: &api::PhysicalMaterial,
+) -> Result<Option<api::PhysicalVolume>> {
+    let mut axes = [None; 3];
+    for (index, name) in ["width", "height", "depth"].iter().enumerate() {
+        let Some(field) = material.specifications.iter().find(|f| f.name == *name) else {
+            continue;
+        };
+        if let Some(field::Value::Equipment(claim)) = &field.value
+            && let Some(wire::equipment_claim::Assertion::Quantity(q)) = &claim.assertion
+        {
+            axes[index] = quantity_upper(q, 3)?;
+        }
+    }
+    envelope(axes)
+}
+fn envelope(axes: [Option<u64>; 3]) -> Result<Option<api::PhysicalVolume>> {
+    let [Some(x), Some(y), Some(z)] = axes else {
+        return Ok(None);
+    };
+    if x == 0 || y == 0 || z == 0 {
+        return Ok(None);
+    }
+    let axis = |length_um| {
+        Some(api::PhysicalExtent {
+            start_um: 0,
+            length_um,
+        })
+    };
+    Ok(Some(api::PhysicalVolume {
+        x: axis(x),
+        y: axis(y),
+        z: axis(z),
+    }))
+}
+pub(super) fn declared_loads(
+    material: &api::PhysicalMaterial,
+    needed: [bool; 3],
+) -> Result<[Option<u64>; 3]> {
+    let weight = if needed[0] {
+        match material
+            .specifications
+            .iter()
+            .find(|f| f.name == "weight")
+            .and_then(|f| f.value.as_ref())
+        {
+            Some(field::Value::Equipment(c)) => match &c.assertion {
+                Some(wire::equipment_claim::Assertion::Quantity(q)) => quantity_upper(q, 0)?,
+                _ => None,
+            },
+            _ => None,
+        }
+    } else {
+        None
+    };
+    Ok([
+        weight,
+        if needed[1] {
+            material.physical.as_ref().and_then(|p| p.demand_mw)
+        } else {
+            None
+        },
+        if needed[2] {
+            material.physical.as_ref().and_then(|p| p.cooling_mw)
+        } else {
+            None
+        },
+    ])
+}
+pub(super) fn row_loads(
+    profile: Option<&Properties>,
+    weight: Option<&Properties>,
+    needed: [bool; 3],
+) -> Result<[Option<u64>; 3]> {
+    let quantity = |name| {
+        profile
+            .filter(|p| p.contains_key(name))
+            .map(|p| number(p, name))
+            .transpose()
+    };
+    Ok([
+        if needed[0] { upper(weight, 0)? } else { None },
+        if needed[1] {
+            quantity("demand_mw")?
+        } else {
+            None
+        },
+        if needed[2] {
+            quantity("cooling_mw")?
+        } else {
+            None
+        },
+    ])
+}
+pub(super) fn add_loads(total: &mut [Option<u64>; 3], values: [Option<u64>; 3]) -> Result<()> {
+    for (sum, value) in total.iter_mut().zip(values) {
+        *sum = match (*sum, value) {
+            (Some(a), Some(b)) => Some(a.checked_add(b).ok_or(Error::Limit)?),
+            _ => None,
+        };
+    }
+    Ok(())
 }
 impl Tx<'_> {
     pub(super) fn equipment_envelope(
@@ -56,23 +162,7 @@ impl Tx<'_> {
             };
             axes[index] = upper(Some(&row), 3)?;
         }
-        let [Some(x), Some(y), Some(z)] = axes else {
-            return Ok(None);
-        };
-        if x == 0 || y == 0 || z == 0 {
-            return Ok(None);
-        }
-        let axis = |length_um| {
-            Some(api::PhysicalExtent {
-                start_um: 0,
-                length_um,
-            })
-        };
-        Ok(Some(api::PhysicalVolume {
-            x: axis(x),
-            y: axis(y),
-            z: axis(z),
-        }))
+        envelope(axes)
     }
     pub(super) fn physical_loads(
         &self,
@@ -102,35 +192,14 @@ impl Tx<'_> {
         let mut total = needed.map(|needed| if needed { Some(0_u64) } else { None });
         for item in items {
             let profile = rows.get(&format!("physical/{}", network::identity(*item)));
-            let weight = if needed[0] {
-                upper(rows.get(&format!("{}/intent/weight", asset_key(*item))), 0)?
-            } else {
-                None
-            };
-            let quantity = |key: &str| {
-                profile
-                    .filter(|row| row.contains_key(key))
-                    .map(|row| number(row, key))
-                    .transpose()
-            };
-            for (sum, value) in total.iter_mut().zip([
-                weight,
-                if needed[1] {
-                    quantity("demand_mw")?
-                } else {
-                    None
-                },
-                if needed[2] {
-                    quantity("cooling_mw")?
-                } else {
-                    None
-                },
-            ]) {
-                *sum = match (*sum, value) {
-                    (Some(a), Some(b)) => Some(a.checked_add(b).ok_or(Error::Limit)?),
-                    _ => None,
-                };
-            }
+            add_loads(
+                &mut total,
+                row_loads(
+                    profile,
+                    rows.get(&format!("{}/intent/weight", asset_key(*item))),
+                    needed,
+                )?,
+            )?;
         }
         Ok(total)
     }

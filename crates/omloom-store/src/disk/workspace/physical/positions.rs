@@ -174,13 +174,20 @@ impl Tx<'_> {
             targets.insert(parse_target(position.target.as_ref())?);
             targets.insert(parse_target(position.owner.as_ref())?);
         }
+        let materials = view
+            .plan
+            .as_ref()
+            .map(|p| p.materials.as_slice())
+            .unwrap_or(&[]);
         for placement in view.plan.iter().flat_map(placements).chain(
             view.occupancy
                 .iter()
                 .filter_map(|o| o.placement.as_ref())
                 .map(Placement::from),
         ) {
-            targets.insert(parse_target(placement.item.as_ref())?);
+            if let Some(item) = placement.actual(materials)? {
+                targets.insert(item);
+            }
             targets.insert(parse_target(placement.enclosure.as_ref())?);
         }
         for replacement in view.plan.iter().flat_map(replacement_steps) {

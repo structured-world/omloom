@@ -1676,14 +1676,25 @@ message PhysicalPositionQuery {
   uint32 limit = 3;
 }
 message PhysicalPlacement {
-  // Existing adopted part/device incarnation, not a model identifier or future serial.
+  // Existing adopted part/device incarnation. Exactly one of item or material
+  // is supplied; a future material never acquires a fabricated asset identity.
   omloom.v1.AssetRef item = 1;
   // Existing receiving rack/enclosure incarnation; parent authority is checked separately.
   omloom.v1.AssetRef enclosure = 2;
   // Proposed position/envelope in receiving enclosure coordinates. Admission
-  // checks dimensions against the item's current sourced definition; this input
-  // cannot shrink actual equipment to make it fit. Unknown dimensions stay unvalidated.
+  // checks actual current dimensions or an unreceived unit's declared specification;
+  // it cannot shrink the body to make it fit. Unknown dimensions stay unvalidated.
   PhysicalVolume volume = 3;
+  // User-selected requested unit in this plan's materials. Its allocation, when
+  // received, supplies the real item; callers never send both derived identities.
+  PhysicalMaterialUnit material = 4;
+}
+message PhysicalMaterialUnit {
+  // Zero-based requirement line in the same saved or transient plan.
+  uint32 material = 1;
+  // Zero-based unit below that line's quantity. Selecting one unit creates
+  // one proposed placement, never placements for the line's entire quantity.
+  uint32 unit = 2;
 }
 message PhysicalReplacement {
   // Selected surviving position or actual enclosure for a chassis replacement.

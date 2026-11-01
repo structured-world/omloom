@@ -28,6 +28,214 @@ fn save_material_plan(
     .ok_or(Error::Missing)
 }
 
+// Unreceived units reserve real geometry without fabricated assets; later receipt supplies identity to the same step.
+#[test]
+fn future_unit_placement_reserves_before_receipt_and_records_only_real_inventory() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let rack = create(&store, &actor, K::Rack, "Future unit rack")?;
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(define(rack.clone())),
+        }),
+    )?;
+    let mut material = demand();
+    material.physical.as_mut().ok_or(Error::Missing)?.mounting = None;
+    material.specifications = vec![
+        equipment_quantity("width", 500_000, "mm", 3),
+        equipment_quantity("height", 2_000_000, "mm", 3),
+        equipment_quantity("depth", 1_000_000, "mm", 3),
+    ];
+    let plan = save_material_plan(
+        &store,
+        &actor,
+        api::PhysicalPlan {
+            name: "Receive after layout reservation".into(),
+            materials: vec![material],
+            steps: vec![api::PhysicalStep {
+                action: Some(api::physical_step::Action::Placement(
+                    api::PhysicalPlacement {
+                        item: None,
+                        enclosure: Some(rack.clone()),
+                        volume: Some(volume()),
+                        material: Some(api::PhysicalMaterialUnit {
+                            material: 0,
+                            unit: u32::MAX - 1,
+                        }),
+                    },
+                )),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    )?;
+    let reserved = reserve(&store, &actor, plan)?.plan.ok_or(Error::Missing)?;
+    let before = store.usage()?;
+    let key = api::PhysicalPlanKey {
+        id: reserved.id.clone().ok_or(Error::Missing)?,
+        revision: reserved.revision,
+    };
+    assert!(matches!(
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Complete(api::PhysicalCompletion {
+                plan: Some(key.clone()),
+                completed_steps: vec![0],
+                ..Default::default()
+            })
+        ),
+        Err(Error::Incomplete)
+    ));
+    assert_eq!(store.usage()?, before);
+    let actual = create(&store, &actor, K::Device, "Received actual unit")?;
+    equipment_dimensions(&store, &actor, &actual)?;
+    let occupied = draft(&store, &actor, actual.clone(), rack.clone())?;
+    assert!(matches!(
+        reserve(&store, &actor, occupied),
+        Err(Error::Conflict)
+    ));
+    let received = physical(
+        &store,
+        &actor,
+        api::physical::Action::Receive(api::PhysicalMaterialReceipt {
+            plan: Some(key),
+            material: 0,
+            allocation: Some(api::PhysicalMaterialAllocation {
+                unit: u32::MAX - 1,
+                item: Some(actual.clone()),
+                basis: "Received the planned unit".into(),
+            }),
+        }),
+    )?
+    .plan
+    .ok_or(Error::Missing)?;
+    let done = physical(
+        &store,
+        &actor,
+        api::physical::Action::Complete(api::PhysicalCompletion {
+            plan: Some(api::PhysicalPlanKey {
+                id: received.id.ok_or(Error::Missing)?,
+                revision: received.revision,
+            }),
+            completed_steps: vec![0],
+            ..Default::default()
+        }),
+    )?
+    .plan
+    .ok_or(Error::Missing)?;
+    assert_eq!(done.state, api::PhysicalPlanState::Completed as i32);
+    let view = physical(
+        &store,
+        &actor,
+        api::physical::Action::Read(api::PhysicalRead {
+            enclosure: Some(rack),
+            occupants: true,
+        }),
+    )?;
+    assert_eq!(view.occupancy.len(), 1);
+    assert_eq!(
+        view.occupancy[0]
+            .placement
+            .as_ref()
+            .ok_or(Error::Missing)?
+            .item,
+        Some(actual)
+    );
+    assert_eq!(
+        store.usage()?.rows[omloom_store::Class::Pending as usize],
+        0
+    );
+    Ok(())
+}
+
+// Another plan's unreceived unit consumes its declared load as well as geometry, without creating an inventory identity.
+#[test]
+fn future_reservations_account_for_other_plans_material_demands() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let rack = create(&store, &actor, K::Rack, "Future demand capacity")?;
+    let mut enclosure = define(rack.clone());
+    enclosure.max_mass_g = Some(15);
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(enclosure),
+        }),
+    )?;
+    let mut material = demand();
+    material.quantity = 1;
+    material.physical = None;
+    material.specifications = vec![
+        equipment_quantity("width", 500_000, "mm", 3),
+        equipment_quantity("height", 1_000_000, "mm", 3),
+        equipment_quantity("depth", 1_000_000, "mm", 3),
+        equipment_quantity("weight", 10, "g", 0),
+    ];
+    let mut lower = volume();
+    lower.y.as_mut().ok_or(Error::Missing)?.length_um = 1_000_000;
+    let mut plan = api::PhysicalPlan {
+        name: "First future load".into(),
+        materials: vec![material],
+        steps: vec![api::PhysicalStep {
+            action: Some(api::physical_step::Action::Placement(
+                api::PhysicalPlacement {
+                    item: None,
+                    enclosure: Some(rack.clone()),
+                    volume: Some(lower),
+                    material: Some(api::PhysicalMaterialUnit {
+                        material: 0,
+                        unit: 0,
+                    }),
+                },
+            )),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let first = save_material_plan(&store, &actor, plan.clone())?;
+    reserve(&store, &actor, first)?;
+    plan.name = "Second future load".into();
+    let Some(api::physical_step::Action::Placement(placement)) = &mut plan.steps[0].action else {
+        return Err(Error::Corrupt.into());
+    };
+    placement
+        .volume
+        .as_mut()
+        .ok_or(Error::Missing)?
+        .y
+        .as_mut()
+        .ok_or(Error::Missing)?
+        .start_um = 1_000_000;
+    let overweight = save_material_plan(&store, &actor, plan.clone())?;
+    let before = store.usage()?;
+    assert!(matches!(
+        reserve(&store, &actor, overweight),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.usage()?, before);
+    plan.materials[0]
+        .specifications
+        .retain(|f| f.name != "weight");
+    plan.materials[0]
+        .specifications
+        .push(equipment_quantity("weight", 5, "g", 0));
+    let exact = save_material_plan(&store, &actor, plan)?;
+    assert_eq!(
+        reserve(&store, &actor, exact)?
+            .plan
+            .ok_or(Error::Missing)?
+            .state,
+        api::PhysicalPlanState::Reserved as i32
+    );
+    Ok(())
+}
+
 // Late partial receipt uses the same serialized locks; cancellation and expiry do not release unresolved work.
 #[test]
 fn received_materials_share_reservation_and_resolution_lifecycle() -> TestResult {

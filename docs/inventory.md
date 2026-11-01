@@ -821,6 +821,12 @@ are plan-local intentions, not assets, orders or promised stock. Even a large
 quantity creates no rows per unreceived unit. Current occupancy and power-source
 completeness cannot be asserted for proposed equipment.
 
+A selected requested unit can be placed and reserve space before receipt, using
+its declared dimensions and demand. The placement references its line and unit,
+not a fabricated inventory ID. Other plans account for that reserved geometry,
+clearance and load. Receipt supplies the real adopted incarnation to the same
+step; installation cannot be recorded while that unit remains unreceived.
+
 Explicit receipt or reuse links an adopted resource to one requested unit.
 Receipt may be partial and can continue after reservation. It neither installs
 the resource nor proves compatibility or health. Real allocations use the same
