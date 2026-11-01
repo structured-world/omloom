@@ -912,7 +912,13 @@ test('cable wiring reports preserve intent on desktop and phone',async({browser}
         await ends.getByLabel('Contract issuer',{exact:true}).fill('private:manual');
         await ends.getByLabel('Interface contract',{exact:true}).fill('lc-duplex');
         await ends.getByLabel('Contract revision or source',{exact:true}).fill('Operator measured pair 1');
+        // An enum-zero placeholder must be a missing native form value, not a valid mating side.
+        const side=ends.getByRole('combobox',{name:'Mating side',exact:true});
+        expect(await side.evaluate(select=>select.checkValidity())).toBe(false);
+        await ends.getByRole('button',{name:'Save end definition',exact:true}).click();
+        expect(await side.evaluate(select=>select.validity.valueMissing)).toBe(true);
         await ends.getByRole('combobox',{name:'Mating side',exact:true}).selectOption({label:'side a'},{timeout:5000});
+        expect(await side.evaluate(select=>select.checkValidity())).toBe(true);
         await ends.getByRole('button',{name:'Save end definition',exact:true}).click();
         await expect(ends.getByRole('button',{name:'Edit end: Near end',exact:true})).toBeEnabled();
         await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
