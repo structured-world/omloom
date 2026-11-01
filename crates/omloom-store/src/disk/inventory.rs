@@ -1,6 +1,14 @@
 use super::*;
 use prost::Message;
 
+#[derive(Clone, Copy)]
+enum RelationEdit<'a> {
+    Ordinary,
+    Rebound,
+    RetainingEnd(&'a str),
+    Physical { plan: &'a str, actual: bool },
+}
+
 pub(super) fn field_props(field: &wire::Field) -> Result<Properties> {
     let (kind, name, value) = match field.value.as_ref().ok_or(Error::Invalid)? {
         field::Value::Text(v) => (1, "vtext", text(v)),
@@ -749,7 +757,7 @@ impl Tx<'_> {
         actor: &str,
         now: u64,
     ) -> Result<u64> {
-        self.save_relation_inner(relation, expected, actor, now, false, None)
+        self.save_relation_inner(relation, expected, actor, now, RelationEdit::Ordinary)
     }
     pub(super) fn save_rebound_relation(
         &mut self,
@@ -758,7 +766,7 @@ impl Tx<'_> {
         actor: &str,
         now: u64,
     ) -> Result<u64> {
-        self.save_relation_inner(relation, Some(expected), actor, now, true, None)
+        self.save_relation_inner(relation, Some(expected), actor, now, RelationEdit::Rebound)
     }
     pub(super) fn save_relation_retaining_end(
         &mut self,
@@ -768,7 +776,29 @@ impl Tx<'_> {
         now: u64,
         end: &str,
     ) -> Result<u64> {
-        self.save_relation_inner(relation, expected, actor, now, true, Some(end))
+        self.save_relation_inner(
+            relation,
+            expected,
+            actor,
+            now,
+            RelationEdit::RetainingEnd(end),
+        )
+    }
+    pub(super) fn save_physical_relation(
+        &mut self,
+        relation: &wire::Relation,
+        actor: &str,
+        now: u64,
+        plan: &str,
+        actual: bool,
+    ) -> Result<u64> {
+        self.save_relation_inner(
+            relation,
+            None,
+            actor,
+            now,
+            RelationEdit::Physical { plan, actual },
+        )
     }
     fn save_relation_inner(
         &mut self,
@@ -776,9 +806,13 @@ impl Tx<'_> {
         expected: Option<u64>,
         actor: &str,
         now: u64,
-        detached: bool,
-        retained_end: Option<&str>,
+        edit: RelationEdit<'_>,
     ) -> Result<u64> {
+        let (detached, retained_end) = match edit {
+            RelationEdit::Ordinary | RelationEdit::Physical { .. } => (false, None),
+            RelationEdit::Rebound => (true, None),
+            RelationEdit::RetainingEnd(end) => (true, Some(end)),
+        };
         let from = AssetRef::try_from(relation.from.as_ref().ok_or(Error::Invalid)?)
             .map_err(|_| Error::Invalid)?;
         let to = AssetRef::try_from(relation.to.as_ref().ok_or(Error::Invalid)?)
@@ -855,6 +889,17 @@ impl Tx<'_> {
             self.check_placement_cycle(from, to, Some(&key))?;
         }
         if kind == wire::RelationKind::InstalledIn && to_kind == wire::AssetKind::PhysicalPosition {
+            match edit {
+                RelationEdit::Physical {
+                    plan,
+                    actual: false,
+                } => {
+                    self.check_physical_lock("physical-slot", to, Some(plan))?;
+                }
+                // A report of performed work preserves the future hold for reconciliation.
+                RelationEdit::Physical { actual: true, .. } => {}
+                _ => self.check_physical_lock("physical-slot", to, None)?,
+            }
             let occupied=self.query("MATCH (p:OmRow {key:$position})<-[:OmRelationTo]-(r:OmRow) WHERE r.kind=$kind AND r.key<>$key RETURN properties(r) AS p LIMIT 1",params([("position",text(asset_key(to))),("kind",int(wire::RelationKind::InstalledIn as u64)?),("key",text(&key))]))?;
             if !occupied.is_empty() {
                 return Err(Error::Conflict);

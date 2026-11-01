@@ -81,7 +81,7 @@ impl Tx<'_> {
             };
             let selection = self.selection(context, working, true)?;
             self.check_relationship(context, &selection, &relation)?;
-            self.save_typed_relation(&relation, None, &context.actor, now)?;
+            self.save_physical_relation(&relation, &context.actor, now, plan, report.actual_state)?;
             relation
         };
         self.store_physical_pose(
@@ -188,7 +188,7 @@ impl Tx<'_> {
                 self.check_replacement_loads(context, &replacements, working)
                     .map_err(|failure| failure.error)?;
             }
-            self.record_physical_replacements(context, &replacements, &key.id, working, now)?;
+            self.record_physical_replacements(context, &replacements, &value, working, now)?;
         }
         let mut changed = false;
         // Explicit hardware transitions precede placement realization in this atomic report.

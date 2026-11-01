@@ -165,10 +165,11 @@ impl Tx<'_> {
         &mut self,
         context: &Context,
         replacements: &[&api::PhysicalReplacement],
-        plan: &str,
+        report: &api::PhysicalCompletion,
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<()> {
+        let plan = report.plan.as_ref().ok_or(Error::Invalid)?.id.as_str();
         let selection = self.selection(context, working, true)?;
         let mut old = Vec::with_capacity(replacements.len());
         let mut removed = BTreeSet::new();
@@ -227,7 +228,13 @@ impl Tx<'_> {
                     authority_id: self.workspace_authority()?,
                 };
                 self.check_relationship(context, &selection, &binding)?;
-                self.save_typed_relation(&binding, None, &context.actor, now)?;
+                self.save_physical_relation(
+                    &binding,
+                    &context.actor,
+                    now,
+                    plan,
+                    report.actual_state,
+                )?;
                 binding
             } else {
                 existing.into_iter().next().ok_or(Error::Corrupt)?

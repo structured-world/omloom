@@ -338,7 +338,7 @@ impl Tx<'_> {
         Ok(values)
     }
 
-    fn check_physical_lock(
+    pub(in crate::disk) fn check_physical_lock(
         &self,
         prefix: &str,
         target: AssetRef,

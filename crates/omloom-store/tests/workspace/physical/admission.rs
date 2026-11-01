@@ -1,5 +1,156 @@
 use super::*;
 
+// Performed work remains recordable without consuming a different plan's future slot hold.
+#[test]
+fn actual_component_report_preserves_a_conflicting_future_reservation() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let owner = create(&store, &actor, K::Device, "Enclosure")?;
+    let (position, item) = mountable_component_fixture(&store, &actor, owner, "disk-bay")?;
+    let old = binding(&store, &item)?;
+    let removal = replacement_plan(
+        &store,
+        &actor,
+        vec![api::PhysicalReplacement {
+            position: Some(position.clone()),
+            previous: Some(item.clone()),
+            previous_binding: Some(old.relation_id),
+            previous_revision: Some(old.revision),
+            ..Default::default()
+        }],
+    )?;
+    report_steps(&store, &actor, &removal, vec![0])?;
+    let future = replacement_plan(
+        &store,
+        &actor,
+        vec![api::PhysicalReplacement {
+            position: Some(position.clone()),
+            replacement: Some(item),
+            ..Default::default()
+        }],
+    )?;
+    let future = reserve(&store, &actor, future)?
+        .plan
+        .ok_or(Error::Corrupt)?;
+    let found = create(
+        &store,
+        &actor,
+        K::PhysicalComponent,
+        "Already installed component",
+    )?;
+    let actual = replacement_plan(
+        &store,
+        &actor,
+        vec![api::PhysicalReplacement {
+            position: Some(position.clone()),
+            replacement: Some(found.clone()),
+            ..Default::default()
+        }],
+    )?;
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Complete(api::PhysicalCompletion {
+            plan: Some(api::PhysicalPlanKey {
+                id: actual.id.ok_or(Error::Corrupt)?,
+                revision: actual.revision,
+            }),
+            completed_steps: vec![0],
+            actual_state: true,
+            discrepancy: Some("Performed work discovered after the reservation".into()),
+            ..Default::default()
+        }),
+    )?;
+    assert_eq!(binding(&store, &found)?.to, Some(position));
+    let before = store.usage()?;
+    assert!(matches!(
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Complete(api::PhysicalCompletion {
+                plan: Some(api::PhysicalPlanKey {
+                    id: future.id.ok_or(Error::Corrupt)?,
+                    revision: future.revision
+                }),
+                completed_steps: vec![0],
+                ..Default::default()
+            })
+        ),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// Ordinary relation writes cannot occupy a held slot; the admitted plan retains its installation path.
+#[test]
+fn installed_in_writes_respect_the_physical_slot_reservation() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let owner = create(&store, &actor, K::Device, "Enclosure")?;
+    let (position, item) = mountable_component_fixture(&store, &actor, owner, "disk-bay")?;
+    let old = binding(&store, &item)?;
+    let removal = replacement_plan(
+        &store,
+        &actor,
+        vec![api::PhysicalReplacement {
+            position: Some(position.clone()),
+            previous: Some(item.clone()),
+            previous_binding: Some(old.relation_id),
+            previous_revision: Some(old.revision),
+            ..Default::default()
+        }],
+    )?;
+    report_steps(&store, &actor, &removal, vec![0])?;
+    let plan = replacement_plan(
+        &store,
+        &actor,
+        vec![api::PhysicalReplacement {
+            position: Some(position.clone()),
+            replacement: Some(item),
+            ..Default::default()
+        }],
+    )?;
+    let plan = reserve(&store, &actor, plan)?.plan.ok_or(Error::Corrupt)?;
+    let intruder = create(&store, &actor, K::PhysicalComponent, "Unplanned component")?;
+    let before = store.usage()?;
+    assert!(matches!(
+        call(
+            &store,
+            &actor,
+            Command::Relation(api::Relationship {
+                relation: Some(wire::Relation {
+                    from: Some(intruder),
+                    to: Some(position),
+                    kind: wire::RelationKind::InstalledIn as i32,
+                    ..Default::default()
+                }),
+                remove: false,
+            })
+        ),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.usage()?, before);
+    let completed = physical(
+        &store,
+        &actor,
+        api::physical::Action::Complete(api::PhysicalCompletion {
+            plan: Some(api::PhysicalPlanKey {
+                id: plan.id.ok_or(Error::Corrupt)?,
+                revision: plan.revision,
+            }),
+            completed_steps: vec![0],
+            ..Default::default()
+        }),
+    )?
+    .plan
+    .ok_or(Error::Corrupt)?;
+    assert_eq!(completed.state, api::PhysicalPlanState::Completed as i32);
+    Ok(())
+}
+
 // An occupied destination cannot be reserved unless its occupant is explicitly removed in the plan.
 #[test]
 fn component_move_admission_checks_destination_and_preserves_atomic_swaps() -> TestResult {
