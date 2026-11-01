@@ -3982,6 +3982,15 @@ export interface PhysicalReplacement {
      * @generated from protobuf field: optional omloom.v1.AssetRef source_position = 6
      */
     sourcePosition?: AssetRef;
+    /**
+     * Optional explicitly reviewed incoming placement/envelope in position's frame.
+     * A rack chassis replacement requires this for reservation. It is proposal
+     * geometry until reported; no old pose or physical proof is copied implicitly.
+     * Report commits this pose with the new binding in the same transaction.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.PhysicalVolume volume = 7
+     */
+    volume?: PhysicalVolume;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.PlanDependency
@@ -8073,7 +8082,8 @@ class PhysicalReplacement$Type extends MessageType<PhysicalReplacement> {
             { no: 3, name: "replacement", kind: "message", T: () => AssetRef },
             { no: 4, name: "previous_binding", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 5, name: "previous_revision", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
-            { no: 6, name: "source_position", kind: "message", T: () => AssetRef }
+            { no: 6, name: "source_position", kind: "message", T: () => AssetRef },
+            { no: 7, name: "volume", kind: "message", T: () => PhysicalVolume }
         ]);
     }
 }

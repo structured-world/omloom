@@ -29,6 +29,9 @@ pub(super) fn replacement_row(value: &api::PhysicalReplacement) -> Result<Proper
     if let Some(revision) = value.previous_revision {
         row.insert("expected".into(), int(revision)?);
     }
+    if let Some(volume) = &value.volume {
+        write_volume(&mut row, volume)?;
+    }
     Ok(row)
 }
 pub(super) fn read_replacement(row: &Properties) -> Result<api::PhysicalReplacement> {
@@ -49,6 +52,7 @@ pub(super) fn read_replacement(row: &Properties) -> Result<api::PhysicalReplacem
         previous: reference("old_item")?,
         replacement: reference("item")?,
         source_position: reference("source")?,
+        volume: read_volume(row)?,
         previous_binding: row.get("claim").map(|_| string(row, "claim")).transpose()?,
         previous_revision: row
             .get("expected")
@@ -134,7 +138,7 @@ impl Tx<'_> {
             };
             let item = parse_target(Some(incoming))?;
             let existing = self.installed_bindings(item)?;
-            if existing.is_empty() {
+            let binding = if existing.is_empty() {
                 let binding = wire::Relation {
                     relation_id: RelationId::generate().to_string(),
                     from: Some(target_wire(item)),
@@ -145,6 +149,12 @@ impl Tx<'_> {
                 };
                 self.check_relationship(context, &selection, &binding)?;
                 self.save_typed_relation(&binding, None, &context.actor, now)?;
+                binding
+            } else {
+                existing.into_iter().next().ok_or(Error::Corrupt)?
+            };
+            if let Some(volume) = &replacement.volume {
+                self.store_physical_pose(&binding, volume, &context.actor)?;
             }
         }
         let mut touched = BTreeSet::new();

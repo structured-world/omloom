@@ -18,19 +18,42 @@ mod replacements;
 mod reservations;
 mod wiring;
 
-fn placement_steps(
-    plan: &api::PhysicalPlan,
-) -> impl Iterator<Item = (usize, &api::PhysicalPlacement)> {
+#[derive(Clone, Copy)]
+struct Placement<'a> {
+    item: &'a Option<wire::AssetRef>,
+    enclosure: &'a Option<wire::AssetRef>,
+    volume: &'a Option<api::PhysicalVolume>,
+}
+impl<'a> From<&'a api::PhysicalPlacement> for Placement<'a> {
+    fn from(value: &'a api::PhysicalPlacement) -> Self {
+        Self {
+            item: &value.item,
+            enclosure: &value.enclosure,
+            volume: &value.volume,
+        }
+    }
+}
+fn step_placement(step: &api::PhysicalStep) -> Option<Placement<'_>> {
+    match &step.action {
+        Some(api::physical_step::Action::Placement(value)) => Some(Placement::from(value)),
+        Some(api::physical_step::Action::Replacement(value)) if value.volume.is_some() => {
+            Some(Placement {
+                item: &value.replacement,
+                enclosure: &value.position,
+                volume: &value.volume,
+            })
+        }
+        _ => None,
+    }
+}
+fn placement_steps(plan: &api::PhysicalPlan) -> impl Iterator<Item = (usize, Placement<'_>)> {
     plan.steps
         .iter()
         .enumerate()
-        .filter_map(|(index, step)| match &step.action {
-            Some(api::physical_step::Action::Placement(value)) => Some((index, value)),
-            _ => None,
-        })
+        .filter_map(|(index, step)| step_placement(step).map(|p| (index, p)))
 }
 
-fn placements(plan: &api::PhysicalPlan) -> impl Iterator<Item = &api::PhysicalPlacement> {
+fn placements(plan: &api::PhysicalPlan) -> impl Iterator<Item = Placement<'_>> {
     placement_steps(plan).map(|(_, p)| p)
 }
 fn replacement_steps(plan: &api::PhysicalPlan) -> impl Iterator<Item = &api::PhysicalReplacement> {

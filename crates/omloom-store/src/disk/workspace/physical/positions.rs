@@ -174,12 +174,12 @@ impl Tx<'_> {
             targets.insert(parse_target(position.target.as_ref())?);
             targets.insert(parse_target(position.owner.as_ref())?);
         }
-        for placement in view
-            .plan
-            .iter()
-            .flat_map(placements)
-            .chain(view.occupancy.iter().filter_map(|o| o.placement.as_ref()))
-        {
+        for placement in view.plan.iter().flat_map(placements).chain(
+            view.occupancy
+                .iter()
+                .filter_map(|o| o.placement.as_ref())
+                .map(Placement::from),
+        ) {
             targets.insert(parse_target(placement.item.as_ref())?);
             targets.insert(parse_target(placement.enclosure.as_ref())?);
         }

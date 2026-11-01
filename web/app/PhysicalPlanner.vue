@@ -40,6 +40,7 @@ const coordinateRows=computed(()=>view.value.occupancy.slice(coordinatePage.valu
 function coordinate(value:model.PhysicalExtent|undefined){return value===undefined?'Unavailable':`${millimetres(value.startUm)} + ${millimetres(value.lengthUm)}`;}
 const working=()=>model.WorkingContext.create({roots:props.working.roots,expected:view.value.revision});
 const editable=computed(()=>plan.value===undefined||plan.value.state===model.PhysicalPlanState.DRAFT);
+const geometryEditable=computed(()=>mode.value==='placement'||(mode.value==='replacement'&&props.kind===K.RACK&&!removePart.value));
 const reservable=computed(()=>plan.value?.state===model.PhysicalPlanState.DRAFT);
 const installable=computed(()=>plan.value!==undefined&&([model.PhysicalPlanState.RESERVED,model.PhysicalPlanState.PARTIAL,model.PhysicalPlanState.CANCELLED].includes(plan.value.state)||(plan.value.state===model.PhysicalPlanState.DRAFT&&actualReport.value)));
 const envelope=computed(()=>view.value.definitions[0]?.volume);
@@ -131,6 +132,26 @@ async function chooseSource(item?:model.Item) {
   if(!item?.target)return;
   await run(async()=>{sourceView.value=await invoke({oneofKind:'read',read:{enclosure:item.target,occupants:true}});source.value=item.target;});
 }
+watch([moving,reseat,predecessor],([move,same,selected],[wasMoving,wasSame])=>{
+  if(props.kind!==K.RACK)return;
+  if(move||same){const items=sourceView.value?.items??view.value.items;void choose(items.find(item=>key(item.target)===selected));}
+  else if(wasMoving||wasSame)void choose();
+});
+function proposedVolume():model.PhysicalVolume {
+  if(manualRegion.value)return model.PhysicalVolume.create(Object.fromEntries(axes.map(axis=>[axis,{startUm:signedMicrometres(allocation.value[axis].start),lengthUm:micrometres(allocation.value[axis].length)}])));
+  const v=equipmentVolume.value,rack=envelope.value;
+  if(!v?.x||!v.y||!v.z||!rack?.x||!rack.y||!rack.z)throw Error('Use an explicit draft allocation when equipment or enclosure dimensions are unknown.');
+  if(!/^[1-9][0-9]{0,9}(\.5)?$/.test(unit.value)||(!rackGrid.value&&Number(unit.value)>=1000))throw Error('Enter a supported whole or half-unit position within the recorded range.');
+  const halves=BigInt(unit.value.split('.')[0]!)*2n+(unit.value.endsWith('.5')?1n:0n);
+  const y=rackGrid.value?rackAllocation(rackGrid.value,unit.value,v.y.lengthUm):{startUm:rack.y.startUm+(halves-2n)*22225n,lengthUm:v.y.lengthUm};
+  return {x:{startUm:rack.x.startUm+(lane.value==='right'?BigInt(rack.x.lengthUm)-BigInt(v.x.lengthUm):0n),lengthUm:v.x.lengthUm},y,z:{startUm:rack.z.startUm+(side.value==='rear'?BigInt(rack.z.lengthUm)-BigInt(v.z.lengthUm):0n),lengthUm:v.z.lengthUm}};
+}
+function proposePreviousAllocation(){
+  const volume=oldOccupancy.value.find(o=>key(o.placement?.item)===predecessor.value)?.placement?.volume;
+  if(moving.value||!volume?.x||!volume.y||!volume.z){error.value='The previous allocation in this same enclosure is unavailable.';return;}
+  for(const axis of axes)allocation.value[axis]={start:millimetres(volume[axis]!.startUm),length:millimetres(volume[axis]!.lengthUm)};
+  manualRegion.value=true;
+}
 function addReplacement() {
   error.value='';
   try{
@@ -140,6 +161,7 @@ function addReplacement() {
     if(!old&&!replacement)throw Error('Choose a known incoming part or a known predecessor.');
     if(reseat.value&&!old)throw Error('A reseat requires the same established part.');
     const r=model.PhysicalReplacement.create({position:props.target,previous:old?.placement?.item,replacement,sourcePosition:moving.value?source.value:undefined,previousBinding:old?.binding?.relationId,previousRevision:old?.binding?.revision});
+    if(props.kind===K.RACK&&replacement)r.volume=proposedVolume();
     const steps=plan.value?.steps??[];
     if(steps.length>=64)throw Error('One plan supports at most 64 physical steps.');
     plan.value=model.PhysicalPlan.create({...plan.value,name:name.value,state:model.PhysicalPlanState.DRAFT,steps:[...steps,model.PhysicalStep.create({state:model.PhysicalStepState.PLANNED,action:{oneofKind:'replacement',replacement:r}})]});
@@ -152,21 +174,7 @@ function add() {
   error.value='';
   try{
     if(!equipment.value?.target)throw Error('Choose the known equipment first.');
-    const v=equipmentVolume.value,rack=envelope.value;
-    let proposed:model.PhysicalVolume;
-    if(manualRegion.value){
-      proposed=model.PhysicalVolume.create(Object.fromEntries(axes.map(axis=>[axis,{startUm:signedMicrometres(allocation.value[axis].start),lengthUm:micrometres(allocation.value[axis].length)}])));
-    }else{
-      if(!v?.x||!v.y||!v.z||!rack?.x||!rack.y||!rack.z)throw Error('Use an explicit draft allocation when equipment or enclosure dimensions are unknown.');
-      if(!/^[1-9][0-9]{0,9}(\.5)?$/.test(unit.value)||(!rackGrid.value&&Number(unit.value)>=1000))throw Error('Enter a supported whole or half-unit position within the recorded range.');
-      const halves=BigInt(unit.value.split('.')[0]!)*2n+(unit.value.endsWith('.5')?1n:0n);
-      const y=rackGrid.value?rackAllocation(rackGrid.value,unit.value,v.y.lengthUm):{startUm:rack.y.startUm+(halves-2n)*22225n,lengthUm:v.y.lengthUm};
-      proposed={
-      x:{startUm:rack.x.startUm+(lane.value==='right'?BigInt(rack.x.lengthUm)-BigInt(v.x.lengthUm):0n),lengthUm:v.x.lengthUm},
-      y,
-      z:{startUm:rack.z.startUm+(side.value==='rear'?BigInt(rack.z.lengthUm)-BigInt(v.z.lengthUm):0n),lengthUm:v.z.lengthUm},
-      };
-    }
+    const proposed=proposedVolume();
     const placement=model.PhysicalPlacement.create({item:equipment.value.target,enclosure:props.target,volume:proposed});
     const steps=plan.value?.steps??[];
     if(steps.length>=64)throw Error('One plan supports at most 64 physical steps.');
@@ -175,6 +183,7 @@ function add() {
     if(!planItems.value.some(i=>key(i.target)===key(equipment.value?.target)))planItems.value.push(equipment.value);
   }catch(e){error.value=String(e);}
 }
+function addAtCoordinates(){if(mode.value==='placement')add();else if(mode.value==='replacement')addReplacement();}
 async function save() {
   await run(async()=>{
     if(!plan.value)throw Error('Add at least one placement.');
@@ -251,12 +260,12 @@ function dropEquipment(event:DragEvent){
   }catch(e){error.value=String(e);return;}
   const fromFront=side.value==='front'?point.x:drawingValue.width-point.x;
   lane.value=fromFront<drawingValue.width/2?'left':'right';
-  add();
+  addAtCoordinates();
 }
 function dragEquipment(event:DragEvent){if(event.dataTransfer&&equipment.value?.target){event.dataTransfer.effectAllowed='copy';event.dataTransfer.setData('application/x-omloom-equipment',key(equipment.value.target));}}
 function rackKeyboard(event:KeyboardEvent){
   if(!editable.value||manualRegion.value)return;
-  if(event.key==='Enter'){event.preventDefault();add();return;}
+  if(event.key==='Enter'){event.preventDefault();addAtCoordinates();return;}
   if(event.key==='ArrowUp'||event.key==='ArrowDown'){
     event.preventDefault();
     if(rackGrid.value){const height=equipmentVolume.value?.y?.lengthUm;if(height===undefined){error.value='Select equipment with a known height before choosing a rail position.';return;}try{unit.value=adjacentRackUnit(rackGrid.value,unit.value,height,event.key==='ArrowUp');}catch(e){error.value=String(e);}return;}
@@ -266,7 +275,10 @@ function rackKeyboard(event:KeyboardEvent){
 }
 const placementRows=computed(()=>plan.value?.steps.flatMap((step,index)=>step.action.oneofKind==='placement'?[{p:step.action.placement,index,state:step.state}]:[])??[]);
 const replacementRows=computed(()=>plan.value?.steps.flatMap((step,index)=>step.action.oneofKind==='replacement'?[{r:step.action.replacement,index,state:step.state}]:[])??[]);
-const local=computed(()=>placementRows.value.filter(row=>key(row.p.enclosure)===key(props.target)).map(row=>row.p));
+const local=computed(()=>[
+  ...placementRows.value.filter(row=>key(row.p.enclosure)===key(props.target)).map(row=>row.p),
+  ...replacementRows.value.filter(row=>row.r.volume&&key(row.r.position)===key(props.target)).map(row=>model.PhysicalPlacement.create({item:row.r.replacement,enclosure:row.r.position,volume:row.r.volume})),
+]);
 const plannedProjection=computed(()=>projections(local.value));
 const bill=computed(()=>{
   const items=new Map<string,{target:AssetRef;steps:model.PhysicalStep[]}>();
@@ -324,16 +336,6 @@ async function exportPlan(){await run(async()=>{
 <div class="placement-controls"><button v-if="kind===K.RACK" type="button" :aria-pressed="mode==='placement'" @click="mode='placement'">Plan rack placement</button><button v-if="kind!==K.CABLE" type="button" :aria-pressed="mode==='replacement'" @click="mode='replacement'">Replace, remove or move a part</button></div>
 <template v-if="mode==='placement'">
 <PlacementSearch kind="equipment" :roots="working().roots" @select="choose"/>
-<p v-if="equipment">Selected: {{itemName(equipment)}}. {{equipmentVolume?'Accepted upper-bound dimensions available.':'Accepted dimension bounds are unknown or unavailable.'}}</p>
-<label v-if="equipment"><input v-model="manualRegion" type="checkbox"/>Use an explicit plan-only allocation</label>
-<template v-if="manualRegion"><p>This is proposed space, not new equipment facts. Unknown source dimensions or occupancy keep fit unqualified. Confirm the recorded position and envelope when reporting actual installation.</p>
-<template v-for="axis in axes" :key="axis"><label>{{axis.toUpperCase()}} allocation start (mm)<input v-model="allocation[axis].start" inputmode="decimal" maxlength="18"/></label><label>{{axis.toUpperCase()}} allocation length (mm)<input v-model="allocation[axis].length" inputmode="decimal" maxlength="17"/></label></template></template>
-<template v-else><button v-if="equipmentVolume" type="button" draggable="true" @dragstart="dragEquipment" @click="add">Drag selected equipment onto elevation, or add at chosen coordinates</button>
-<p v-if="rackGrid">Uses the sourced rail grid. Allocation height rounds outward to half-U increments; equipment dimensions remain unchanged.</p><p v-else>No sourced rail grid. Positions below are geometric offsets from the usable top, not printed rack unit numbers.</p>
-<div class="placement-controls"><label>{{rackGrid?'Starting U':'Position from usable top (U)'}}<input v-model="unit" inputmode="decimal" maxlength="12"/></label>
-<label>Side<select v-model="side"><option value="front">Front</option><option value="rear">Rear</option></select></label>
-<label>Horizontal position<select v-model="lane"><option value="left">Left from front</option><option value="right">Right from front</option></select></label></div></template>
-<button type="button" :disabled="!equipment?.target||(!manualRegion&&!equipmentVolume)" @click="add">Add planned placement</button>
 </template>
 <template v-else-if="mode==='replacement'">
 <label class="outcome"><input v-model="moving" type="checkbox" @change="sourceView=undefined;source=undefined;predecessor=''"/>Move an established part from another enclosure</label>
@@ -345,7 +347,6 @@ async function exportPlan(){await run(async()=>{
 <PlacementSearch v-if="!removePart&&!reseat" :kind="kind===K.RACK?'equipment':'component'" :roots="working().roots" @select="choose"/>
 </template>
 <p>The position and retained logical intent survive. Cable attachments, physical evidence, credentials and grants are not transferred to the incoming part.</p>
-<button type="button" @click="addReplacement">Add reviewed physical transition</button>
 </template>
 <template v-else>
 <p>Cable work uses this enclosing selection and explicit endpoint choices. Unknown attachment retains possible occupancy; a confirmed loose end releases it. No service health is inferred.</p>
@@ -356,6 +357,20 @@ async function exportPlan(){await run(async()=>{
 <label>Intended destination<select v-model="wiringIntent"><option :value="model.PhysicalWiringIntent.PRESERVE">Preserve existing intent</option><option v-if="wiringState==='port'" :value="model.PhysicalWiringIntent.ADOPT_DESTINATION">Adopt selected port as intent</option><option :value="model.PhysicalWiringIntent.CLEAR_DESTINATION">Explicitly clear intent</option></select></label>
 <button type="button" @click="addWiring">Add cable-end transition</button>
 </template>
+<template v-if="geometryEditable">
+<p v-if="equipment">Selected: {{itemName(equipment)}}. {{equipmentVolume?'Accepted upper-bound dimensions available.':'Accepted dimension bounds are unknown or unavailable.'}}</p>
+<button v-if="mode==='replacement'&&!moving&&predecessor" type="button" @click="proposePreviousAllocation">Use previous allocation as a proposal</button>
+<label v-if="equipment"><input v-model="manualRegion" type="checkbox"/>Use an explicit plan-only allocation</label>
+<template v-if="manualRegion"><p>This is proposed space, not new equipment facts. Unknown source dimensions or occupancy keep fit unqualified. Confirm the recorded position and envelope when reporting actual installation.</p>
+<template v-for="axis in axes" :key="axis"><label>{{axis.toUpperCase()}} allocation start (mm)<input v-model="allocation[axis].start" inputmode="decimal" maxlength="18"/></label><label>{{axis.toUpperCase()}} allocation length (mm)<input v-model="allocation[axis].length" inputmode="decimal" maxlength="17"/></label></template></template>
+<template v-else><button v-if="equipmentVolume" type="button" draggable="true" @dragstart="dragEquipment" @click="addAtCoordinates">Drag selected equipment onto elevation, or add at chosen coordinates</button>
+<p v-if="rackGrid">Uses the sourced rail grid. Allocation height rounds outward to half-U increments; equipment dimensions remain unchanged.</p><p v-else>No sourced rail grid. Positions below are geometric offsets from the usable top, not printed rack unit numbers.</p>
+<div class="placement-controls"><label>{{rackGrid?'Starting U':'Position from usable top (U)'}}<input v-model="unit" inputmode="decimal" maxlength="12"/></label>
+<label>Side<select v-model="side"><option value="front">Front</option><option value="rear">Rear</option></select></label>
+<label>Horizontal position<select v-model="lane"><option value="left">Left from front</option><option value="right">Right from front</option></select></label></div></template>
+</template>
+<button v-if="mode==='placement'" type="button" :disabled="!equipment?.target||(!manualRegion&&!equipmentVolume)" @click="add">Add planned placement</button>
+<button v-else-if="mode==='replacement'" type="button" @click="addReplacement">Add reviewed physical transition</button>
 <button type="button" :disabled="!plan?.steps.length" @click="preview">Check physical requirements</button>
 <button type="submit" :disabled="!plan?.steps.length">Save installation plan</button>
 </fieldset></form>

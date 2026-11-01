@@ -220,7 +220,9 @@ impl Tx<'_> {
                                 working,
                                 now,
                             )?,
-                        api::physical_step::Action::Replacement(_) => {}
+                        api::physical_step::Action::Replacement(_) => {
+                            self.clear_physical_reservation(&key.id, index as usize)?;
+                        }
                         api::physical_step::Action::Wiring(w) => {
                             self.record_wiring(
                                 context,

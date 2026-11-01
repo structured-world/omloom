@@ -131,6 +131,7 @@ impl Tx<'_> {
                 let mut always_before = true;
                 for (index, p) in placement_steps(plan) {
                     if parse_target(p.enclosure.as_ref())? == enclosure
+                        && index != removal
                         && ancestors[index] & (1u64 << removal) == 0
                     {
                         always_before = false;
@@ -182,9 +183,7 @@ impl Tx<'_> {
             if step.state != api::PhysicalStepState::Reserved as i32 {
                 return Err(Error::Corrupt);
             }
-            let Some(api::physical_step::Action::Placement(placement)) = step.action else {
-                return Err(Error::Corrupt);
-            };
+            let placement = step_placement(&step).ok_or(Error::Corrupt)?;
             if parse_target(placement.enclosure.as_ref())? != enclosure {
                 return Err(Error::Corrupt);
             }

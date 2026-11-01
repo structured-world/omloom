@@ -185,10 +185,11 @@ test('space reuse follows reviewed removal prerequisites on desktop and phone',a
           const detail=await rpc({oneofKind:'read',read:m.Read.create({target})});
           const changes=[['width',500000n],['height',44450n],['depth',1000000n]].map(([name,value])=>({name,value:{oneofKind:'equipment',equipment:{basis:'Measured enclosing allocation',assertion:{oneofKind:'quantity',quantity:{lower:value,upper:value,unit:'mm',scale:3}}}}}));
           await rpc({oneofKind:'write',write:m.Write.create({target,kind:m.AssetKind.DEVICE,expected:detail.detail.item.revision,changes})});
+          await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target,basis:'Qualified fixture rack attachment',mounting:'Fixture rail interface v1'})}}})});
         }
         const extent=lengthUm=>({startUm:0n,lengthUm});
         const volume={x:extent(500000n),y:extent(44450n),z:extent(1000000n)};
-        await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target:rack,basis:'Measured current enclosure occupancy',volume,occupancyCoverage:volume})}}})});
+        await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target:rack,basis:'Measured current enclosure occupancy and fixture rails',volume,occupancyCoverage:volume,mounting:'Fixture rail interface v1'})}}})});
         const draft=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'save',save:{plan:m.PhysicalPlan.create({name:'Establish actual occupant',steps:[{action:{oneofKind:'placement',placement:{item:old,enclosure:rack,volume}}}]})}}})});
         await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'complete',complete:{plan:{id:draft.physical.plan.id,revision:draft.physical.plan.revision},completedSteps:[0],actualState:true}}})});
         await page.reload();await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
@@ -222,6 +223,30 @@ test('space reuse follows reviewed removal prerequisites on desktop and phone',a
         await expect(planner.getByRole('status')).toHaveText('Reported installation recorded. Live health has not been asserted.');
         const current=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'read',read:{enclosure:rack,occupants:true}}})});
         expect(current.physical.occupancy.map(o=>o.placement.item)).toEqual([incoming]);
+        // Reusing the established spare is one atomic replacement, not a separate move/pose step.
+        await planner.getByRole('button',{name:'New installation plan',exact:true}).click();
+        await planner.getByLabel('Installation plan name',{exact:true}).fill(`Atomic enclosure replacement ${width}`);
+        await planner.getByRole('button',{name:'Replace, remove or move a part',exact:true}).click();
+        await planner.getByRole('checkbox',{name:'Remove the known part without installing another',exact:true}).uncheck();
+        await planner.getByRole('combobox',{name:'Known predecessor or moving part',exact:true}).selectOption({label:`Space reuse spare ${width}`});
+        await planner.getByRole('combobox',{name:'Find equipment',exact:true}).fill(`Current occupant ${width}`);
+        await planner.getByRole('option',{name:`Use equipment: Current occupant ${width}`,exact:true}).click();
+        await planner.getByRole('button',{name:'Use previous allocation as a proposal',exact:true}).click();
+        await planner.getByRole('button',{name:'Add reviewed physical transition',exact:true}).click();
+        await expect(planner.getByRole('region',{name:'Step 1 controls',exact:true})).toBeVisible();
+        await expect(planner.getByRole('region',{name:'Step 2 controls',exact:true})).toHaveCount(0);
+        await expect(planner.locator('rect.proposed')).toHaveCount(1);
+        await planner.getByRole('button',{name:'Check physical requirements',exact:true}).click();
+        await expect(planner.getByRole('status')).toHaveText('Declared physical constraints satisfied. Nothing was saved or reserved.');
+        await planner.getByRole('button',{name:'Save installation plan',exact:true}).click();
+        await planner.getByLabel('Reserve until',{exact:true}).fill(new Date(Date.now()+600000).toISOString().slice(0,16));
+        await planner.getByRole('button',{name:'Check and reserve capacity',exact:true}).click();
+        await planner.getByRole('checkbox',{name:'Physical transition performed',exact:true}).check();
+        await planner.getByRole('button',{name:'Record selected installation',exact:true}).click();
+        await expect(planner.getByRole('status')).toHaveText('Reported installation recorded. Live health has not been asserted.');
+        const replaced=await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'read',read:{enclosure:rack,occupants:true}}})});
+        expect(replaced.physical.occupancy.map(o=>o.placement.item)).toEqual([old]);
+        expect(replaced.physical.occupancy[0].placement.volume).toEqual(volume);
         expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
       }finally{await page.close();}
     }

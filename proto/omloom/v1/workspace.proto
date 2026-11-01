@@ -1701,6 +1701,11 @@ message PhysicalReplacement {
   // Explicit old position when moving an established part or staging a chassis
   // elsewhere; omission selects the same position as the destination.
   optional omloom.v1.AssetRef source_position = 6;
+  // Optional explicitly reviewed incoming placement/envelope in position's frame.
+  // A rack chassis replacement requires this for reservation. It is proposal
+  // geometry until reported; no old pose or physical proof is copied implicitly.
+  // Report commits this pose with the new binding in the same transaction.
+  optional PhysicalVolume volume = 7;
 }
 enum PhysicalStepState {
   PHYSICAL_STEP_STATE_UNSPECIFIED = 0;

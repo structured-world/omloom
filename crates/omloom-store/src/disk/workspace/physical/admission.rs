@@ -175,7 +175,7 @@ impl Tx<'_> {
                 crate::requirements::State::Unknown => return Err(Error::Incomplete.into()),
             }
             for (removal, prior) in &occupied.conditional_removals {
-                if graph.ancestors[index] & (1u64 << removal) != 0 {
+                if index == *removal || graph.ancestors[index] & (1u64 << removal) != 0 {
                     continue;
                 }
                 let prior = prior.ok_or(Error::Incomplete)?;
@@ -319,19 +319,10 @@ impl Tx<'_> {
             }
             if let Some(incoming) = &replacement.replacement {
                 let incoming = parse_target(Some(incoming))?;
-                if number(&destination_row, "kind")? == wire::AssetKind::Rack as u64 {
-                    let mut has_region = false;
-                    for placement in placements(plan) {
-                        if parse_target(placement.item.as_ref())? == incoming
-                            && parse_target(placement.enclosure.as_ref())? == destination
-                        {
-                            has_region = true;
-                            break;
-                        }
-                    }
-                    if !has_region {
-                        return Err(Error::Incomplete.into());
-                    }
+                if number(&destination_row, "kind")? == wire::AssetKind::Rack as u64
+                    && replacement.volume.is_none()
+                {
+                    return Err(Error::Incomplete.into());
                 }
                 let item = self
                     .physical_definition(incoming)?

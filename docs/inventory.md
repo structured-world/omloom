@@ -784,6 +784,10 @@ plan. A future removal does not free current occupancy for an independent step.
 Uncertain overlap between old and new loads keeps capacity unqualified. Manual
 reports record work already performed, including discrepancies, and do not
 certify physical fit or dispatch another operation.
+An enclosure replacement can include an explicitly reviewed incoming allocation
+on that same step. Reporting it commits the new binding and its reported pose
+atomically. The previous allocation can be selected as a proposal for review;
+it does not supply the incoming dimensions, cable attachment or physical proof.
 
 Named ends belong to a retained cable. Their definition, accepted destination
 intent and reported attachment are distinct. A confirmed loose end releases its

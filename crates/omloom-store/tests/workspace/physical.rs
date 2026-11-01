@@ -1042,23 +1042,11 @@ fn whole_chassis_replacement_requires_explicit_rack_placement() -> TestResult {
         Err(Error::Incomplete)
     ));
     assert_eq!(store.usage()?, before);
-    plan.steps.push(api::PhysicalStep {
-        action: Some(api::physical_step::Action::Placement(
-            api::PhysicalPlacement {
-                item: Some(new.clone()),
-                enclosure: Some(rack.clone()),
-                volume: Some(volume()),
-            },
-        )),
-        control: Some(api::PlanControl {
-            after: vec![api::PlanDependency {
-                step: 0,
-                when: api::PlanTrigger::Reported as i32,
-            }],
-            ..Default::default()
-        }),
-        ..Default::default()
-    });
+    let Some(api::physical_step::Action::Replacement(replacement)) = &mut plan.steps[0].action
+    else {
+        return Err(Error::Corrupt.into());
+    };
+    replacement.volume = Some(volume());
     let saved = physical(
         &store,
         &actor,
@@ -1067,8 +1055,27 @@ fn whole_chassis_replacement_requires_explicit_rack_placement() -> TestResult {
     .plan
     .ok_or(Error::Corrupt)?;
     let admitted = reserve(&store, &actor, saved)?.plan.ok_or(Error::Corrupt)?;
-    let partial = report_steps(&store, &actor, &admitted, vec![0])?;
-    let completed = report_steps(&store, &actor, &partial, vec![1])?;
+    let third = create(&store, &actor, K::Device, "Another chassis proposal")?;
+    equipment_dimensions(&store, &actor, &third)?;
+    let mut third_facts = define(third.clone());
+    third_facts.mounting = Some("Qualified rack attachment".into());
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(third_facts),
+        }),
+    )?;
+    let competing = draft(&store, &actor, third, rack.clone())?;
+    let preview = physical(
+        &store,
+        &actor,
+        api::physical::Action::Preview(api::PhysicalPreview {
+            plan: Some(competing),
+        }),
+    )?;
+    assert_eq!(preview.state, api::RequirementState::Failed as i32);
+    let completed = report_steps(&store, &actor, &admitted, vec![0])?;
     assert_eq!(completed.state, api::PhysicalPlanState::Completed as i32);
     let view = physical(
         &store,
@@ -1085,6 +1092,18 @@ fn whole_chassis_replacement_requires_explicit_rack_placement() -> TestResult {
             .as_ref()
             .and_then(|p| p.item.as_ref()),
         Some(&new)
+    );
+    assert_eq!(
+        view.occupancy[0]
+            .placement
+            .as_ref()
+            .ok_or(Error::Corrupt)?
+            .volume,
+        Some(volume())
+    );
+    assert_eq!(
+        store.usage()?.rows[omloom_store::Class::Pending as usize],
+        before.rows[omloom_store::Class::Pending as usize]
     );
     assert!(
         store
@@ -1732,6 +1751,7 @@ fn two_known_parts_swap_positions_without_changing_their_identities() -> TestRes
             replacement: Some(item.clone()),
             previous_binding: Some(old.relation_id),
             previous_revision: Some(old.revision),
+            volume: None,
         });
     }
     let plan = replacement_plan(&store, &actor, changes)?;
