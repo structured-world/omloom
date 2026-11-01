@@ -313,6 +313,20 @@ fn native_availability_does_not_hide_implementation_errors() {
     }
 }
 
+fn source_coverage_valid(status: &str) -> bool {
+    ["verified", "partial", "blocked", "unavailable"].contains(&status)
+}
+
+// Qualification accepts availability limits, but never an unexplained failure of a readable table.
+#[test]
+fn failed_native_sources_do_not_qualify_readable_tables() {
+    assert!(!source_coverage_valid("failed"));
+    assert!(!source_coverage_valid("unknown"));
+    for status in ["verified", "partial", "blocked", "unavailable"] {
+        assert!(source_coverage_valid(status));
+    }
+}
+
 // Native availability is reported honestly. A failed source cannot publish an
 // empty inventory; available sources retain coherent boot and decoder checks.
 #[tokio::test]
@@ -357,8 +371,7 @@ async fn native_host_collection_reports_verified_or_unavailable_sources() {
             .find(|v| v.module == module)
             .expect("attempted native module");
         assert!(
-            ["verified", "partial", "blocked", "unavailable", "failed"]
-                .contains(&coverage.status.as_str()),
+            source_coverage_valid(&coverage.status),
             "{module}: {}",
             coverage.status
         );
