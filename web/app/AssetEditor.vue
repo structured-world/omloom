@@ -257,7 +257,7 @@ async function save() {
 <p v-if="addressReview && derivedBroadcast" class="hint">Calculated subnet broadcast: {{ derivedBroadcast }}. This is a display calculation, not a recorded endpoint setting.</p>
 <p v-else-if="addressReview?.address?.includes(':')" class="hint">IPv6 has no broadcast address.</p>
 <p v-else-if="addressReview?.prefixLength === 31 || addressReview?.prefixLength === 32" class="hint">This mask has no directed broadcast. A /31 may describe a point-to-point link.</p>
-<p v-if="error" role="alert">{{ error }}</p><footer><button type="button" @click="emit('close')">Cancel</button><button class="primary" :disabled="busy || preparing || placementBusy || (!!placementKind && !placementReady) || (!item && !choice)">{{ busy ? 'Saving…' : known ? addressReview ? 'Save known address' : 'Review known address' : 'Save resource' }}</button></footer>
+<p v-if="error" role="alert">{{ error }}</p><footer><button type="button" @click="emit('close')">Cancel</button><button class="primary" :disabled="busy || preparing || placementBusy || (!!placementKind && !placementReady) || (!item && !choice)">{{ busy ? known && !addressReview ? 'Preparing review…' : 'Saving…' : known ? addressReview ? 'Save known address' : 'Review known address' : 'Save resource' }}</button></footer>
 </form></Dialog></template>
 <style scoped>
 .field-edit > .hint, .field-edit > .role-selector, .field-edit > textarea { grid-column:1/-1; }
