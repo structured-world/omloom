@@ -30,7 +30,9 @@ async function run(apply: boolean) {
   try {
     if (!actions.value || revision.value === undefined || !choice.value) throw Error('Choose an applicable kind and actual parent');
     if (!apply && mappings.value.some(m => !destinations.value.some(f => f.id === m.field))) throw Error('Review mappings that do not apply in this context');
-    const result = await call({ oneofKind: 'import', import: model.Import.create(apply ? { preview: preview.value?.id } : { csv: csv.value, source: source.value, kind: kind.value, mappings: mappings.value, parent: choice.value.parent?.target }) }, model.WorkingContext.create({ ...props.working, expected: apply ? preview.value?.revision : revision.value }));
+    const prefix = choice.value.prefixContext?.target;
+    const working = model.WorkingContext.create({ ...props.working, ...(prefix ? { roots: [prefix], focus: undefined } : {}), expected: apply ? preview.value?.revision : revision.value });
+    const result = await call({ oneofKind: 'import', import: model.Import.create(apply ? { preview: preview.value?.id } : { csv: csv.value, source: source.value, kind: kind.value, mappings: mappings.value, parent: choice.value.parent?.target }) }, working);
     // Editing the draft clears its preview, but must retain the revision acknowledged by the store.
     if (apply) emit('saved'); else if (result.oneofKind === 'preview') { preview.value = result.preview; revision.value = result.preview.revision; }
   } catch (e) { error.value = String(e); }

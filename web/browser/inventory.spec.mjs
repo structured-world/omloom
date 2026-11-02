@@ -6,6 +6,48 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 
+test('CSV keeps the selected prefix among multiple import contexts on desktop and phone', async ({ browser }) => {
+  // Choosing a network context creates membership, never ownership or an unscoped address.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-import-prefix-choice-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const prefixes = [];
+      for (const [index, cidr] of ['192.0.2.0/24', '198.51.100.0/24'].entries()) prefixes.push((await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name: `Import choice ${width}-${index}`, cidr, sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0]);
+      const page = await browser.newPage({ viewport: { width, height: 900 }, isMobile: width < 600, hasTouch: width < 600 });
+      page.setDefaultTimeout(5000);
+      try {
+        const scope = new URLSearchParams({ view: String(m.View.NETWORK) });
+        for (const prefix of prefixes) { scope.append('scope', prefix.assetId); scope.append('scopeInc', prefix.incarnation); }
+        await page.goto(`${server.url}/#/?${scope}`);
+        if (width < 600) await page.getByRole('button', { name: 'More', exact: true }).click();
+        await page.getByRole('button', { name: 'Import CSV', exact: true }).click();
+        const dialog = page.getByRole('dialog', { name: 'Import inventory', exact: true });
+        await expect(dialog).toBeVisible();
+        await dialog.getByRole('combobox', { name: /Import context/ }).selectOption({ label: `Import choice ${width}-1` });
+        await dialog.getByRole('combobox', { name: 'New resource kind', exact: true }).selectOption(String(m.AssetKind.ADDRESS_REFERENCE));
+        await dialog.getByLabel('Source name', { exact: true }).fill(`Multiple prefix source ${width}`);
+        const address = width === 1440 ? '198.51.100.9' : '198.51.100.10';
+        await dialog.getByLabel('CSV', { exact: true }).fill(`external_id,address\nendpoint,${address}`);
+        await dialog.getByLabel('CSV column', { exact: true }).fill('address');
+        await dialog.getByRole('combobox', { name: 'Inventory field', exact: true }).selectOption('address');
+        await dialog.getByRole('button', { name: 'Prepare preview', exact: true }).click();
+        await expect(dialog.getByRole('heading', { name: 'Review 1 rows', exact: true })).toBeVisible();
+        await dialog.getByRole('button', { name: 'Accept reviewed rows', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        const items = (await rpc({ oneofKind: 'query', query: m.Query.create({ kinds: [m.AssetKind.ADDRESS_REFERENCE], search: address, columns: ['address'], limit: 10 }) })).page.items;
+        expect(items).toHaveLength(1);
+        const relations = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: items[0].target }) })).detail.relations;
+        expect(relations.filter(r => r.kind === m.RelationKind.MEMBER_OF).map(r => r.to)).toEqual([prefixes[1]]);
+        expect(relations.some(r => r.kind === m.RelationKind.CONTAINS)).toBe(false);
+        const selected = (await rpc({ oneofKind: 'query', query: m.Query.create({ roots: [prefixes[1]], kinds: [m.AssetKind.ADDRESS_REFERENCE], columns: ['address'], limit: 10 }) })).page;
+        expect(selected.items.map(item => item.target)).toEqual([items[0].target]);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      } finally { await page.close(); }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('allocation form creates a canonical prefix without an optional label on desktop and phone', async ({ browser }) => {
   // The allocation form itself must accept an empty label, not just import or known-address paths.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-unnamed-prefix-allocation-')); const server = await host(dir);
