@@ -6,6 +6,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 
+test('phone local resources identify unnamed prefixes by CIDR', async ({ page }) => {
+  // The local navigation must describe a subnet, not substitute an opaque ID suffix.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-phone-prefix-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const space = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.ADDRESS_SPACE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Home namespace' } }] }) })).mutation.targets[0];
+    await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, cidr: '192.0.2.0/24', addressSpace: space, sharing: m.SharedUse.EXCLUSIVE }) });
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.goto(`${server.url}/#/?view=1&asset=${space.assetId}&incarnation=${space.incarnation}`);
+    const local = page.getByRole('region', { name: 'Local resources', exact: true });
+    await local.getByRole('button', { name: '192.0.2.0/24', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { level: 2 })).toHaveText('192.0.2.0/24');
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('inventory CSV exports retain the visible unnamed prefix CIDR', async ({ browser }) => {
   // Export must use the displayed projection rather than silently dropping its fallback identity.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-export-')); const server = await host(dir);
