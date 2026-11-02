@@ -2452,6 +2452,115 @@ fn known_address_mask_refinement_preserves_prefix_identity_and_cidr() -> TestRes
     Ok(())
 }
 
+// Prefix sharing is fixed by its type, so correction needs no additional sharing-read grant.
+#[test]
+fn canonical_prefix_correction_preserves_fixed_sharing_with_restricted_reads() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let space = create(&store, &operator(), K::AddressSpace, "namespace")?;
+    let mut targets = Vec::new();
+    for namespace in [Some(space.clone()), None] {
+        let R::Mutation(saved) = command_at(
+            &store,
+            C::Network(api::Network {
+                kind: K::Prefix as i32,
+                cidr: "192.0.2.0/24".into(),
+                address_space: namespace,
+                sharing: api::SharedUse::Exclusive as i32,
+                ..Default::default()
+            }),
+            revision(&store)?,
+        )?
+        else {
+            panic!("prefix")
+        };
+        targets.push(saved.targets[0].clone());
+    }
+    let mut actor = operator();
+    actor.grants[0].read = Fields::Selected(
+        [
+            "name",
+            "cidr",
+            "address_space",
+            "link_scope",
+            "routing_context",
+            "relations",
+            "network",
+        ]
+        .map(String::from)
+        .into(),
+    );
+    let execute = |command| -> Result<R, Error> {
+        store
+            .workspace(
+                &actor,
+                api::Request {
+                    command: Some(command),
+                    working: Some(api::WorkingContext {
+                        expected: Some(revision(&store)?),
+                        ..Default::default()
+                    }),
+                },
+                100,
+            )?
+            .result
+            .ok_or(Error::Corrupt)
+    };
+    let R::IdentityCorrection(preview) = execute(C::CorrectIdentity(api::IdentityCorrection {
+        decision: api::IdentityDecision::DuplicateResource as i32,
+        mappings: vec![api::IdentityMapping {
+            duplicate: Some(targets[0].clone()),
+            retained: Some(targets[1].clone()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }))
+    .map_err(|error| format!("restricted correction preview: {error}"))?
+    else {
+        panic!("correction preview")
+    };
+    execute(C::CorrectIdentity(api::IdentityCorrection {
+        preview: Some(preview.id),
+        ..Default::default()
+    }))
+    .map_err(|error| format!("restricted correction acceptance: {error}"))?;
+    let R::Detail(detail) = execute(C::Read(api::Read {
+        target: Some(targets[1].clone()),
+        ..Default::default()
+    }))
+    .map_err(|error| format!("restricted retained read: {error}"))?
+    else {
+        panic!("retained prefix")
+    };
+    let item = detail.item.ok_or(Error::Missing)?;
+    assert!(item.fields.iter().all(|field| field.name != "sharing"));
+    assert!(item.fields.contains(&text_field(
+        "address_space",
+        &format!("{}/{}", space.asset_id, space.incarnation)
+    )));
+    let usage = store.usage()?;
+    command_at(
+        &store,
+        C::Network(api::Network {
+            target: Some(targets[1].clone()),
+            expected: Some(item.revision),
+            kind: K::Prefix as i32,
+            cidr: "192.0.2.0/24".into(),
+            address_space: Some(space),
+            sharing: api::SharedUse::Exclusive as i32,
+            ..Default::default()
+        }),
+        revision(&store)?,
+    )
+    .map_err(|error| format!("normalized update: {error}"))?;
+    assert_eq!(
+        store.usage()?,
+        usage,
+        "normalized canonical state must already match the typed command"
+    );
+    Ok(())
+}
+
 // A prefix view follows declared membership, never equal CIDR text or hidden resources.
 #[test]
 fn known_prefix_scope_is_explicit_visible_and_survives_address_removal() -> TestResult {

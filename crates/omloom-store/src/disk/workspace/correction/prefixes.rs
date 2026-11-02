@@ -55,7 +55,6 @@ impl Tx<'_> {
             "link_scope",
             "routing_context",
             "namespace",
-            "sharing",
         ] {
             if let Some(value) = source.get(field) {
                 if previous.get(field).is_some_and(|old| old != value) {
@@ -63,6 +62,13 @@ impl Tx<'_> {
                 }
                 data.insert(field.into(), value.clone());
             }
+        }
+        // Canonical prefixes are always exclusive; do not copy a protected source field.
+        if data.contains_key("address_space") {
+            data.insert(
+                "sharing".into(),
+                text(api::SharedUse::Exclusive.as_str_name()),
+            );
         }
         // The allocation keeps its exact domain key, changing only its explicit
         // reviewed owner. No address allocation or provider identity is merged.
