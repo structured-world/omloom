@@ -43,8 +43,10 @@ test('prefix correction reviews domain changes and allocation ownership before a
     for (const width of [1440, 390]) {
       const scopes = [];
       for (const [kind, name] of [[m.AssetKind.ADDRESS_SPACE, 'Address space'], [m.AssetKind.L2_DOMAIN, 'L2 domain'], [m.AssetKind.VRF, 'Routing context']]) scopes.push((await rpc({ oneofKind: 'write', write: m.Write.create({ kind, changes: [{ name: 'name', value: { oneofKind: 'text', text: `${name} ${width}` } }] }) })).mutation.targets[0]);
-      await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name: `Allocated subnet ${width}`, cidr: '192.0.2.0/24', addressSpace: scopes[0], link: scopes[1], routing: scopes[2], sharing: m.SharedUse.EXCLUSIVE }) });
+      const canonical = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name: `Allocated subnet ${width}`, cidr: '192.0.2.0/24', addressSpace: scopes[0], link: scopes[1], routing: scopes[2], sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
       const retained = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name: `Unresolved subnet ${width}`, cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
+      const comparison = (await rpc({ oneofKind: 'compareHostIdentity', compareHostIdentity: m.CompareHostIdentity.create({ left: canonical, right: retained }) })).hostIdentityComparison;
+      expect(comparison.left.domainLabels.find(f => f.name === 'address_space')?.value.text).toBe(`Address space ${width}`);
       const page = await browser.newPage({ viewport: { width, height: 900 } }); page.setDefaultTimeout(5000);
       try {
         await page.goto(`${server.url}/#/?view=1&kind=${m.AssetKind.PREFIX}`);
@@ -61,7 +63,8 @@ test('prefix correction reviews domain changes and allocation ownership before a
         for (const [index, label] of ['Address space', 'L2 domain', 'Routing context'].entries()) {
           const row = review.locator('dl > div').filter({ has: page.locator('dt').filter({ hasText: new RegExp(`^${label}$`) }) });
           await expect(row).toContainText('Before: Unknown');
-          await expect(row).toContainText(`After: ${scopes[index].assetId}/${scopes[index].incarnation}`);
+          await expect(row).toContainText(`After: ${label} ${width}`);
+          await expect(row.locator('details')).toContainText(`${scopes[index].assetId}/${scopes[index].incarnation}`);
         }
         await expect(review).toContainText('Canonical allocation ownership moves');
         await expect(dialog).not.toContainText('allocation/');

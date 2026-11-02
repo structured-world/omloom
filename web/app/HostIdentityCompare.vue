@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue';
 import Dialog from './Dialog.vue';
 import HostIdentityEvidence from './HostIdentityEvidence.vue';
-import { call, model, display, identityName as name, label, key, AssetKind as K, RelationKind as R, type AssetRef } from './api';
+import { call, model, display, identityName as name, label, key, AssetKind as K, RelationKind as R, type AssetRef, type Field } from './api';
 const props = defineProps<{ left: AssetRef; right: AssetRef; working: model.WorkingContext }>();
 const emit = defineEmits<{ close: []; changed: [] }>();
 const comparison = ref<model.HostIdentityComparison>();
@@ -18,13 +18,26 @@ const layerLeft=ref<model.Item>();const layerRight=ref<model.Item>();
 const physical=(r:model.IdentityImpact['before'])=>r && [R.HAS_PORT,R.CARRIES,R.INSTALLED_IN,R.CONNECTED_TO,R.ON].includes(r.kind);
 const duplicate=(draft:Draft)=>draft.keep==='left'?draft.pair.right:draft.pair.left;
 const retained=(draft:Draft)=>draft.keep==='left'?draft.pair.left:draft.pair.right;
+function domainDisplay(subject: model.HostIdentitySubject | undefined, field: Field) {
+  const label = subject?.domainLabels.find(value => value.name === field.name);
+  if (!label || field.value.oneofKind !== 'text') return display(field);
+  const reference = field.value.text;
+  return `${display(label)} (${reference.slice(0, reference.indexOf('/')).slice(-8)})`;
+}
 function prefixChanges(draft: Draft) {
-  const before = retained(draft)?.domainFields ?? [];
-  const source = duplicate(draft)?.domainFields ?? [];
+  const destination = retained(draft); const duplicateSubject = duplicate(draft);
+  const before = destination?.domainFields ?? [];
+  const source = duplicateSubject?.domainFields ?? [];
   return ([['cidr', 'CIDR'], ['address_space', 'Address space'], ['link_scope', 'L2 domain'], ['routing_context', 'Routing context']] as const).map(([id, label]) => {
     const previous = before.find(field => field.name === id);
     // A successful preview checks compatibility; domain facts only fill missing values.
-    return { id, label, before: previous, after: previous ?? source.find(field => field.name === id) };
+    const after = previous ?? source.find(field => field.name === id);
+    const afterSubject = previous ? destination : duplicateSubject;
+    return { id, label, before: previous, after,
+      beforeLabel: previous ? domainDisplay(destination, previous) : 'Unknown',
+      afterLabel: after ? domainDisplay(afterSubject, after) : 'Unknown',
+      named: destination?.domainLabels.some(field => field.name === id) || afterSubject?.domainLabels.some(field => field.name === id),
+    };
   });
 }
 function configure(draft:Draft) {
@@ -91,7 +104,7 @@ async function load() {
 }
 onMounted(load);
 </script>
-<template><Dialog title="Compare identity" @close="!busy && emit('close')">
+<template><Dialog title="Compare identity" @close="!busy && emit('close')"><div class="identity-review">
 <template v-if="step==='compare'">
 <p v-if="comparison?.left?.item?.kind !== K.PREFIX">Compare hardware and installed operating systems separately. Different IPs do not prove different machines. Matching identifiers may be cloned, movable or reported by the same underlying source.</p>
 <p v-if="busy" role="status">Loading the two selected resources…</p>
@@ -103,7 +116,7 @@ onMounted(load);
 <p v-else>No matching identity claims are available in this comparison. Missing evidence does not prove that these are different machines.</p>
 <div class="identity-pair"><section v-for="(subject, index) in [comparison.left, comparison.right]" :key="index" :aria-label="index === 0 ? 'First identity' : 'Second identity'">
 <template v-if="subject?.item"><h3>{{ name(subject.item, subject.domainFields) }}</h3>
-<p>{{ label(subject.item.kind) }}</p><dl><template v-for="field in [...subject.item.fields.filter(v => v.name !== 'name'), ...subject.domainFields]" :key="field.name"><dt>{{ field.name.replaceAll('_', ' ') }}</dt><dd>{{ display(field) }}</dd></template></dl>
+<p>{{ label(subject.item.kind) }}</p><dl><template v-for="field in [...subject.item.fields.filter(v => v.name !== 'name'), ...subject.domainFields]" :key="field.name"><dt>{{ field.name.replaceAll('_', ' ') }}</dt><dd>{{ domainDisplay(subject, field) }}</dd></template></dl>
 <HostIdentityEvidence :observations="subject.identity" />
 <p v-if="!subject.identity.length && subject.item.kind !== K.PREFIX">No identity evidence is available to this view. Do not infer hardware or installation continuity from the name.</p>
 </template></section></div></template>
@@ -138,11 +151,11 @@ onMounted(load);
 <p>Access grants, secrets, account control and operation targets are never transferred. Resolve responsibility, policy, source and external-binding conflicts explicitly.</p>
 <footer><button :disabled="busy" @click="step='decision'">Back</button><button :disabled="busy" @click="prepare">Prepare correction preview</button></footer>
 </template>
-<template v-else-if="step==='preview'&&plan"><h3>Review identity correction</h3><ul><li v-for="mapping in plan.mappings" :key="key(mapping.duplicate)">Retire {{ mapping.duplicate?.assetId }}; retain {{ mapping.retained?.assetId }}.</li></ul>
+<template v-else-if="step==='preview'&&plan"><h3>Review identity correction</h3><details><summary>Exact accepted identities</summary><ul><li v-for="mapping in plan.mappings" :key="key(mapping.duplicate)">Retire {{ key(mapping.duplicate) }}; retain {{ key(mapping.retained) }}.</li></ul></details>
 <section v-for="(draft,index) in drafts" :key="index" class="mapping" :aria-label="'Final layer review '+(index+1)">
 <h4>Layer {{ index+1 }}</h4><p>Retire {{ name(duplicate(draft)?.item, duplicate(draft)?.domainFields) }}. Retain {{ name(retained(draft)?.item, retained(draft)?.domainFields) }}.</p>
 <section v-if="retained(draft)?.item?.kind === K.PREFIX" aria-label="Prefix domain changes" class="prefix-changes">
-<h5>Retained prefix before and after</h5><dl><div v-for="change in prefixChanges(draft)" :key="change.id"><dt>{{ change.label }}</dt><dd><span>Before: {{ change.before ? display(change.before) : 'Unknown' }}</span><span>After: {{ change.after ? display(change.after) : 'Unknown' }}</span></dd></div></dl>
+<h5>Retained prefix before and after</h5><dl><div v-for="change in prefixChanges(draft)" :key="change.id"><dt>{{ change.label }}</dt><dd><span>Before: {{ change.beforeLabel }}</span><span>After: {{ change.afterLabel }}</span><details v-if="change.named"><summary>Exact reference</summary><span>Before: {{ change.before ? display(change.before) : 'Unknown' }}</span><span>After: {{ change.after ? display(change.after) : 'Unknown' }}</span></details></dd></div></dl>
 <p v-if="duplicate(draft)?.domainFields.some(field => field.name === 'address_space')">Canonical allocation ownership moves from the retiring prefix to the retained prefix.</p>
 <p v-else-if="retained(draft)?.domainFields.some(field => field.name === 'address_space')">Existing canonical allocation ownership stays with the retained prefix.</p>
 <p v-else>No canonical allocation is created.</p>
@@ -150,15 +163,16 @@ onMounted(load);
 <ul><li v-for="field in duplicate(draft)?.item?.fields" :key="field.name">{{ field.name }}: {{ draft.fields[field.name]==='duplicate'?'use duplicate value':'keep retained value' }}: {{ display(draft.fields[field.name]==='duplicate'?field:retained(draft)?.item?.fields.find(value=>value.name===field.name)) }}</li>
 <li v-for="(after,before) in draft.sources" :key="before">Source label {{ before }} becomes {{ after }}</li>
 <li>Confirmed physical attachments: {{ draft.attachments.length }}</li></ul></section>
-<h4>Affected relationships</h4><ul><li v-for="impact in plan.relations" :key="impact.before?.relationId">{{ impact.before&&R[impact.before.kind]?.toLowerCase().replaceAll('_',' ') }}: {{ impact.before?.from?.assetId }} → {{ impact.before?.to?.assetId }}<template v-if="impact.after"> becomes {{ impact.after.from?.assetId }} → {{ impact.after.to?.assetId }}</template><template v-else> is removed as an internal attachment</template>.</li></ul>
+<template v-if="plan.relations.length"><h4>Affected relationships</h4><ul><li v-for="impact in plan.relations" :key="impact.before?.relationId">{{ impact.before&&R[impact.before.kind]?.toLowerCase().replaceAll('_',' ') }}: {{ impact.before?.from?.assetId }} → {{ impact.before?.to?.assetId }}<template v-if="impact.after"> becomes {{ impact.after.from?.assetId }} → {{ impact.after.to?.assetId }}</template><template v-else> is removed as an internal attachment</template>.</li></ul></template>
 <p>No grants or external operations are merged. The selected change commits atomically at revision {{ plan.revision.toString() }}.</p><footer><button :disabled="busy" @click="step='mapping'">Back</button><button :disabled="busy" @click="commit()">Accept identity correction</button></footer></template>
 <template v-else-if="receipt"><h3>{{ receipt.undoUntil===0n?'Correction reversed':'Correction applied' }}</h3><p>Accepted revision {{ receipt.revision.toString() }}.</p><p v-if="receipt.undoUntil">Reversal is available until {{ new Date(Number(receipt.undoUntil)).toLocaleString() }} if no further mutations have been accepted and permissions remain current. Otherwise review a fresh correction.</p><footer><button :disabled="busy" @click="emit('close')">Close</button><button v-if="receipt.undoUntil" :disabled="busy" @click="commit(true)">Reverse this correction</button></footer></template>
 <p v-if="step!=='compare'&&busy" role="status">Checking the selected correction…</p><p v-if="step!=='compare'&&error" role="alert">{{ error }}</p><button v-if="error&&!busy&&step!=='receipt'" @click="drafts=[];plan=undefined;step='compare';load()">Reload current comparison</button>
-</Dialog></template>
+</div></Dialog></template>
 <style scoped>
+.identity-review { padding:1rem 1.5rem; overflow-wrap:anywhere; }
 .identity-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 .identity-pair > section { min-width: 0; overflow-wrap: anywhere; }
 .mapping {border-block-start:1px solid #cbd6d9;padding-block:1rem;overflow-wrap:anywhere;}
-.prefix-changes dd > span { display:block; }
+.prefix-changes dd span { display:block; }
 @media (max-width: 700px) { .identity-pair { grid-template-columns: minmax(0, 1fr); } }
 </style>

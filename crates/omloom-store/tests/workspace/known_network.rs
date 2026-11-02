@@ -846,6 +846,119 @@ fn link_local_prefix_membership_checks_the_allocation_link() -> TestResult {
     Ok(())
 }
 
+// Reference names are a bounded read projection, independently authorized and never persisted.
+#[test]
+fn prefix_comparison_labels_respect_reference_permissions() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let space = create(&store, &operator(), K::AddressSpace, "Home namespace")?;
+    let link = create(&store, &operator(), K::L2Domain, "Home LAN")?;
+    let routing = create(&store, &operator(), K::Vrf, "Home forwarding")?;
+    let mut targets = Vec::new();
+    for canonical in [true, false] {
+        let R::Mutation(saved) = command_at(
+            &store,
+            C::Network(api::Network {
+                kind: K::Prefix as i32,
+                cidr: "192.0.2.0/24".into(),
+                address_space: canonical.then(|| space.clone()),
+                link: canonical.then(|| link.clone()),
+                routing: canonical.then(|| routing.clone()),
+                sharing: api::SharedUse::Exclusive as i32,
+                ..Default::default()
+            }),
+            revision(&store)?,
+        )?
+        else {
+            panic!("prefix")
+        };
+        targets.push(saved.targets[0].clone());
+    }
+    let command = C::CompareHostIdentity(api::CompareHostIdentity {
+        left: Some(targets[0].clone()),
+        right: Some(targets[1].clone()),
+        ..Default::default()
+    });
+    let usage = store.usage()?;
+    let R::HostIdentityComparison(comparison) = call(&store, &operator(), command.clone())? else {
+        panic!("comparison")
+    };
+    let labels = comparison.left.ok_or("left subject")?.domain_labels;
+    assert_eq!(
+        labels,
+        vec![
+            text_field("address_space", "Home namespace"),
+            text_field("link_scope", "Home LAN"),
+            text_field("routing_context", "Home forwarding")
+        ]
+    );
+    assert!(
+        comparison
+            .right
+            .ok_or("right subject")?
+            .domain_labels
+            .is_empty()
+    );
+    let mut restricted = operator();
+    restricted.grants[0].scope = Scope::Kinds(vec![K::Prefix]);
+    let R::HostIdentityComparison(comparison) = call(&store, &restricted, command.clone())? else {
+        panic!("restricted comparison")
+    };
+    let subject = comparison.left.ok_or("restricted subject")?;
+    assert!(subject.domain_labels.is_empty());
+    assert!(
+        subject
+            .domain_fields
+            .iter()
+            .any(|f| f.name == "address_space")
+    );
+    let mut hidden_names = operator();
+    hidden_names.grants[0].read = Fields::Selected(vec![
+        "cidr".into(),
+        "address_space".into(),
+        "link_scope".into(),
+        "routing_context".into(),
+    ]);
+    let R::HostIdentityComparison(comparison) = call(&store, &hidden_names, command.clone())?
+    else {
+        panic!("name-restricted comparison")
+    };
+    let subject = comparison.left.ok_or("name-restricted subject")?;
+    assert!(subject.domain_labels.is_empty());
+    assert!(
+        subject
+            .domain_fields
+            .iter()
+            .any(|f| f.name == "address_space")
+    );
+    // Readable names must not reveal the denied relationship to an address space.
+    let mut hidden_reference = operator();
+    hidden_reference.grants[0].read = Fields::Selected(vec![
+        "name".into(),
+        "cidr".into(),
+        "link_scope".into(),
+        "routing_context".into(),
+    ]);
+    let R::HostIdentityComparison(comparison) = call(&store, &hidden_reference, command)? else {
+        panic!("reference-restricted comparison")
+    };
+    let subject = comparison.left.ok_or("reference-restricted subject")?;
+    assert!(
+        subject
+            .domain_fields
+            .iter()
+            .all(|f| f.name != "address_space")
+    );
+    assert!(
+        subject
+            .domain_labels
+            .iter()
+            .all(|f| f.name != "address_space")
+    );
+    assert_eq!(store.usage()?, usage);
+    Ok(())
+}
+
 // A combined network refinement and label removal is one authorized conditional write.
 #[test]
 fn prefix_cidr_and_label_clear_commit_together() -> TestResult {

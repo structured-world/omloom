@@ -201,6 +201,7 @@ impl Tx<'_> {
             }
         }
         Ok(api::HostIdentitySubject {
+            domain_labels: Vec::new(),
             domain_fields: if kind == wire::AssetKind::Prefix as i32 {
                 let network = self
                     .get(&format!("network/{}", network::identity(target)))?
@@ -224,6 +225,45 @@ impl Tx<'_> {
             sources: Vec::new(),
             relations: Vec::new(),
         })
+    }
+
+    fn identity_domain_labels(
+        &self,
+        context: &Context,
+        fields: &[wire::Field],
+    ) -> Result<Vec<wire::Field>> {
+        let mut labels = Vec::new();
+        for field in fields {
+            if !matches!(
+                field.name.as_str(),
+                "address_space" | "link_scope" | "routing_context"
+            ) {
+                continue;
+            }
+            let Some(wire::field::Value::Text(reference)) = &field.value else {
+                return Err(Error::Corrupt);
+            };
+            let target = network::groups::reference(reference)?;
+            let row = match self.visible_asset(context, target) {
+                Ok(row) => row,
+                Err(Error::Denied | Error::Missing) => continue,
+                Err(error) => return Err(error),
+            };
+            if !context.field(target, number(&row, "kind")? as i32, "name", false) {
+                continue;
+            }
+            let Some(name) = self.get(&format!("{}/intent/name", asset_key(target)))? else {
+                continue;
+            };
+            let name = inventory::read_field(&name)?;
+            if matches!(name.value, Some(wire::field::Value::Text(_))) {
+                labels.push(wire::Field {
+                    name: field.name.clone(),
+                    value: name.value,
+                });
+            }
+        }
+        Ok(labels)
     }
 }
 
@@ -422,6 +462,12 @@ impl Store {
             left: Some(tx.identity_subject(context, left)?),
             right: Some(tx.identity_subject(context, right)?),
         };
+        for subject in [&mut comparison.left, &mut comparison.right]
+            .into_iter()
+            .flatten()
+        {
+            subject.domain_labels = tx.identity_domain_labels(context, &subject.domain_fields)?;
+        }
         if value.include_relations {
             for subject in [&mut comparison.left, &mut comparison.right]
                 .into_iter()

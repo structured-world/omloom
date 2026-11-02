@@ -1046,6 +1046,10 @@ message HostIdentitySubject {
   // Permitted immutable domain facts used to assess duplicate compatibility.
   // These explain Prefix CIDR/namespace; they are not selectable field copies.
   repeated omloom.v1.Field domain_fields = 5;
+  // Current permitted names for the references in domain_fields, keyed by the
+  // corresponding field name. Values are text from the same comparison snapshot.
+  // A missing label does not hide the reference or grant access to its target.
+  repeated omloom.v1.Field domain_labels = 6;
 }
 message HostIdentityComparison {
   // Server-selected consistent application revision for both subjects.

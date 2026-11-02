@@ -2458,6 +2458,14 @@ export interface HostIdentitySubject {
      * @generated from protobuf field: repeated omloom.v1.Field domain_fields = 5
      */
     domainFields: Field[];
+    /**
+     * Current permitted names for the references in domain_fields, keyed by the
+     * corresponding field name. Values are text from the same comparison snapshot.
+     * A missing label does not hide the reference or grant access to its target.
+     *
+     * @generated from protobuf field: repeated omloom.v1.Field domain_labels = 6
+     */
+    domainLabels: Field[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.HostIdentityComparison
@@ -8074,7 +8082,8 @@ class HostIdentitySubject$Type extends MessageType<HostIdentitySubject> {
             { no: 2, name: "identity", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostIdentityObservation },
             { no: 3, name: "sources", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
             { no: 4, name: "relations", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Relation },
-            { no: 5, name: "domain_fields", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Field }
+            { no: 5, name: "domain_fields", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Field },
+            { no: 6, name: "domain_labels", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Field }
         ]);
     }
 }
