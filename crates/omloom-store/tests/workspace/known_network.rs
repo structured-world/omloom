@@ -2561,6 +2561,188 @@ fn canonical_prefix_correction_preserves_fixed_sharing_with_restricted_reads() -
     Ok(())
 }
 
+// A canonical prefix includes explicit facts and canonical allocations without admitting unrelated IP text.
+#[test]
+fn canonical_prefix_scope_qualifies_mixed_current_members() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let mut store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let space = create(&store, &actor, K::AddressSpace, "namespace")?;
+    let other = create(&store, &actor, K::AddressSpace, "other namespace")?;
+    let mut expected = Vec::new();
+    for (kind, cidr, namespace) in [
+        (K::Prefix, "192.0.2.0/24", space.clone()),
+        (K::Prefix, "192.0.2.0/25", space.clone()),
+        (K::IpAddress, "192.0.2.2/32", space),
+        (K::IpAddress, "192.0.2.3/32", other),
+    ] {
+        let R::Mutation(saved) = command_at(
+            &store,
+            C::Network(api::Network {
+                kind: kind as i32,
+                cidr: cidr.into(),
+                address_space: Some(namespace),
+                name: "Allocation".into(),
+                sharing: api::SharedUse::Exclusive as i32,
+                ..Default::default()
+            }),
+            revision(&store)?,
+        )?
+        else {
+            panic!("allocation")
+        };
+        if cidr != "192.0.2.3/32" {
+            expected.push(saved.targets[0].clone());
+        }
+    }
+    let prefix = expected[0].clone();
+    let R::Mutation(member) = command_at(
+        &store,
+        C::Address(api::Address {
+            address: Some("192.0.2.1".into()),
+            prefix: Some(prefix.clone()),
+            ..Default::default()
+        }),
+        revision(&store)?,
+    )?
+    else {
+        panic!("known member")
+    };
+    expected.push(member.targets[0].clone());
+    command_at(
+        &store,
+        C::Address(api::Address {
+            address: Some("192.0.2.88".into()),
+            ..Default::default()
+        }),
+        revision(&store)?,
+    )?;
+    for base in (0..512).step_by(128) {
+        let mut csv = String::from("external_id,address\n");
+        for index in base..base + 128 {
+            csv.push_str(&format!(
+                "unrelated-{index},198.18.{}.{}\n",
+                index / 256,
+                index % 256
+            ));
+        }
+        let R::Preview(preview) = call(
+            &store,
+            &actor,
+            C::Import(api::Import {
+                source: "canonical-prefix-qualification".into(),
+                kind: K::AddressReference as i32,
+                csv,
+                mappings: vec![api::Mapping {
+                    source: "address".into(),
+                    field: "address".into(),
+                }],
+                ..Default::default()
+            }),
+        )?
+        else {
+            panic!("fixture preview")
+        };
+        assert!(preview.id.is_some(), "{preview:?}");
+        call(
+            &store,
+            &actor,
+            C::Import(api::Import {
+                preview: preview.id,
+                ..Default::default()
+            }),
+        )?;
+    }
+    store.diagnostic_database().persist()?;
+    let usage = store.usage()?;
+    let scoped = api::Query {
+        roots: vec![prefix],
+        kinds: vec![
+            K::Prefix as i32,
+            K::IpAddress as i32,
+            K::AddressReference as i32,
+        ],
+        columns: vec!["cidr".into(), "address".into(), "name".into()],
+        limit: 25,
+        view: api::View::Network as i32,
+        ..Default::default()
+    };
+    store.set_diagnostic_query_check(|db, statement| {
+        if statement.contains("membership:OmRow") && statement.contains("count(DISTINCT a.key)") {
+            eprintln!(
+                "canonical prefix count plan:\n{}",
+                db.explain_plan(statement, None)
+                    .expect("prefix count plan")
+                    .explain()
+            );
+        }
+    });
+    let R::Page(page) = call(&store, &actor, C::Query(scoped.clone()))? else {
+        panic!("prefix page")
+    };
+    store.set_diagnostic_query_check(|_, _| {});
+    assert_eq!(page.total, expected.len() as u64);
+    fn identities(items: &[wire::AssetRef]) -> std::collections::BTreeSet<(&str, &str)> {
+        items
+            .iter()
+            .map(|item| (item.asset_id.as_str(), item.incarnation.as_str()))
+            .collect()
+    }
+    let actual = page
+        .items
+        .into_iter()
+        .map(|item| item.target.ok_or(Error::Missing))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(identities(&actual), identities(&expected));
+    let mut samples = Vec::new();
+    for _ in 0..5 {
+        let start = std::time::Instant::now();
+        let R::Page(page) = call(&store, &actor, C::Query(scoped.clone()))? else {
+            panic!("measured page")
+        };
+        samples.push(start.elapsed());
+        assert_eq!(page.total, expected.len() as u64);
+    }
+    samples.sort_unstable();
+    eprintln!(
+        "canonical prefix: unrelated=512 matched={} p50={:?} logical_bytes={} rows={}",
+        expected.len(),
+        samples[2],
+        usage.bytes.iter().sum::<u64>(),
+        usage.rows.iter().sum::<u64>()
+    );
+    assert_eq!(store.usage()?, usage);
+    let mut restricted = actor;
+    restricted.grants = vec![
+        Grant {
+            scope: Scope::Kinds(vec![K::Prefix, K::IpAddress, K::AddressSpace]),
+            read: Fields::All,
+            write: Fields::Selected(Vec::new()),
+            writable: false,
+        },
+        Grant {
+            scope: Scope::Kinds(vec![K::AddressReference]),
+            read: Fields::Selected(vec!["name".into(), "address".into()]),
+            write: Fields::Selected(Vec::new()),
+            writable: false,
+        },
+    ];
+    let R::Page(page) = call(&store, &restricted, C::Query(scoped))? else {
+        panic!("restricted prefix")
+    };
+    assert_eq!(
+        page.total, 3,
+        "hidden memberships must not affect the total"
+    );
+    assert!(
+        page.items
+            .iter()
+            .all(|item| item.kind != K::AddressReference as i32)
+    );
+    assert_eq!(store.usage()?, usage);
+    Ok(())
+}
+
 // A prefix view follows declared membership, never equal CIDR text or hidden resources.
 #[test]
 fn known_prefix_scope_is_explicit_visible_and_survives_address_removal() -> TestResult {
