@@ -59,13 +59,18 @@ fn owner(subject: &str) -> api::ResponsibilityAssignment {
     }
 }
 
-// A dedicated port-owned endpoint inherits both facets through its accepted containment binding.
+// Component-owned ports and dedicated endpoints inherit through their accepted ownership bindings.
 #[test]
-fn dedicated_port_endpoint_inherits_owner_and_operator() -> TestResult {
+fn component_port_and_dedicated_endpoint_inherit_owner_and_operator() -> TestResult {
     let dir = tempfile::tempdir()?;
     let store = Store::open(dir.path(), policy())?;
     let actor = operator();
-    let server = create(&store, &actor, K::Device, "Management controller")?;
+    let component = create(
+        &store,
+        &actor,
+        K::PhysicalComponent,
+        "Management controller",
+    )?;
     let make = |parent: &wire::AssetRef, kind, name| -> Result<wire::AssetRef, Error> {
         let Reply::Mutation(child) = call(
             &store,
@@ -82,16 +87,41 @@ fn dedicated_port_endpoint_inherits_owner_and_operator() -> TestResult {
         };
         child.targets.into_iter().next().ok_or(Error::Corrupt)
     };
-    let port = make(&server, K::Port, "Dedicated management port")?;
     let mut operational = owner("operations");
     operational.facet = Facet::Operator as i32;
     responsibility(
         &store,
         &actor,
-        &port,
+        &component,
         Action::Apply,
         vec![owner("hardware"), operational],
     )?;
+    let port = make(&component, K::Port, "Dedicated management port")?;
+    let port_state = responsibility(&store, &actor, &port, Action::Read, vec![])?;
+    assert_eq!(port_state.assignments.len(), 2);
+    for (facet, subject) in [
+        (Facet::ClaimedOwner, "hardware"),
+        (Facet::Operator, "operations"),
+    ] {
+        let effective = port_state
+            .effective
+            .iter()
+            .find(|value| value.facet == facet as i32)
+            .ok_or("port facet")?;
+        assert_eq!(effective.status, Status::Inherited as i32);
+        assert_eq!(
+            effective.party.as_ref().ok_or("port party")?.subject,
+            subject
+        );
+    }
+    let source = port_state
+        .assignments
+        .iter()
+        .find(|value| value.facet == Facet::ClaimedOwner as i32)
+        .ok_or("port source")?;
+    let before = store.usage()?;
+    responsibility(&store, &actor, &port, Action::Apply, vec![source.clone()])?;
+    assert_eq!(store.usage()?, before);
     let endpoint = make(&port, K::Interface, "Management endpoint")?;
     let before = store.usage()?;
     let Reply::Responsibility(state) = call(

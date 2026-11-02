@@ -1408,6 +1408,7 @@ test('plan checkpoints gate successive installation on desktop and phone',async(
           const target=reference(item);const detail=await rpc({oneofKind:'read',read:m.Read.create({target})});
           const changes=[['width',440000n],['height',44450n],['depth',500000n]].map(([name,value])=>({name,value:{oneofKind:'equipment',equipment:{basis:'Explicit physical specification',assertion:{oneofKind:'quantity',quantity:{lower:value,upper:value,unit:'mm',scale:3}}}}}));
           await rpc({oneofKind:'write',write:m.Write.create({target,kind:m.AssetKind.DEVICE,expected:detail.detail.item.revision,changes})});
+          await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'define',define:{definition:m.PhysicalDefinition.create({target,basis:'Measured body-only service envelope for checkpoint fixture',clearance:{}})}}})});
         }
         const extent=lengthUm=>({startUm:0n,lengthUm});
         const recorded={x:extent(500000n),y:extent(2000000n),z:extent(1000000n)};

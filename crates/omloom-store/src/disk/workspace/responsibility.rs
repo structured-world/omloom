@@ -101,7 +101,7 @@ fn qualified(
                 )
         ),
         R::HasPort if from == parent && to == child => {
-            parent_kind == K::Device && child_kind == K::Port
+            matches!(parent_kind, K::Device | K::PhysicalComponent) && child_kind == K::Port
         }
         R::Carries if from == parent && to == child => {
             parent_kind == K::Port && child_kind == K::Interface
