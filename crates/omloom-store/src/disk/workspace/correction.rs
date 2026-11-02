@@ -226,6 +226,9 @@ impl Tx<'_> {
             let final_to = *mappings.get(&to).unwrap_or(&to);
             if !destinations.insert((final_from, final_to, before.kind)) {
                 redundant_ids.insert(before.relation_id.clone());
+                if before.kind == wire::RelationKind::InstalledIn as i32 {
+                    self.remove_physical_pose(&before.relation_id)?;
+                }
                 self.delete(&format!("relation/{}", before.relation_id))?;
             }
         }
@@ -263,6 +266,9 @@ impl Tx<'_> {
                 .find(|r| r.from == after.from && r.to == after.to && r.kind == after.kind);
             if let Some(retained) = redundant {
                 self.rebind_correction_responsibility(context, &before, &retained)?;
+                if before.kind == wire::RelationKind::InstalledIn as i32 {
+                    self.remove_physical_pose(&before.relation_id)?;
+                }
                 self.delete(&format!("relation/{}", before.relation_id))?;
                 impacts.push(api::IdentityImpact {
                     before: Some(before),

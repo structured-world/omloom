@@ -242,15 +242,150 @@ fn temporary_literals_are_removed_from_routes_and_binds() {
     assert!(value.network.expect("network").routes.is_empty());
 }
 
-// This runs on the actual native host. Fixtures cannot substitute for working
-// OS reads, coherent boot evidence or a file accepted by the common decoder.
+// An unavailable source is a collection outcome, not a crash or an empty inventory.
+#[test]
+fn unavailable_collection_does_not_publish_or_fail_the_command() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = dir.path().join("unavailable.omloom");
+    assert_eq!(
+        finish_collection(
+            Err("Windows identity: command deadline exceeded (powershell.exe)".into()),
+            &path
+        ),
+        Ok(())
+    );
+    assert!(!path.exists());
+    std::fs::write(&path, b"existing report").expect("existing output");
+    assert_eq!(
+        finish_collection(Err("Interfaces unavailable".into()), &path),
+        Ok(())
+    );
+    assert_eq!(
+        std::fs::read(&path).expect("preserved file"),
+        b"existing report"
+    );
+}
+
+// An unsupported source format is incomplete collection, independent of the stricter qualification classifier.
+#[test]
+fn malformed_source_output_does_not_publish_or_replace_a_report() {
+    let dir = tempfile::tempdir().expect("output directory");
+    let path = dir.path().join("report.pb");
+    let outcome = || -> Result<api::HostReport> {
+        Err("Invalid structured command output; source: Windows identity".into())
+    };
+    assert!(!source_unavailable(
+        outcome().as_ref().expect_err("source error")
+    ));
+    finish_collection(outcome(), &path).expect("incomplete collection");
+    assert!(!path.exists());
+    std::fs::write(&path, b"retained report").expect("prior report");
+    finish_collection(outcome(), &path).expect("incomplete collection");
+    assert_eq!(
+        std::fs::read(&path).expect("retained report"),
+        b"retained report"
+    );
+}
+
+// Source unavailability cannot turn storage/publication failures into success.
+#[test]
+fn collection_publication_failures_remain_errors() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = dir.path().join("existing.omloom");
+    std::fs::write(&path, b"original report").expect("existing output");
+    let error = finish_collection(Ok(report()), &path).expect_err("no replacement");
+    assert!(error.contains("Cannot publish report"), "{error}");
+    assert_eq!(
+        std::fs::read(path).expect("preserved output"),
+        b"original report"
+    );
+}
+
+pub(super) fn source_unavailable(reason: &str) -> bool {
+    reason.contains("Command unavailable (")
+        || reason.contains("Command deadline exceeded (")
+        || reason.contains("Permission denied")
+        || reason.contains("Collection execution budget exhausted")
+        || reason.contains("Collection byte budget exhausted")
+        || reason.contains("Hardware evidence changed during collection")
+        || reason.contains("Installation or boot changed during collection")
+}
+
+// The full collector shares the command budget and cannot publish a partial frame on exhaustion.
 #[tokio::test]
-async fn native_host_collection_has_a_decodable_core() {
-    let report = collect().await.expect("native collection");
+async fn collection_budget_exhaustion_publishes_no_report() {
+    let dir = tempfile::tempdir().expect("output directory");
+    let path = dir.path().join("report.pb");
+    for budget in [0, 3] {
+        let mut runner = command::Runner::scripted(&[], budget);
+        let outcome = collect_with(&mut runner).await;
+        let reason = outcome.as_ref().expect_err("collection refused");
+        assert!(reason.contains("budget exhausted"), "{reason}");
+        assert_eq!(runner.budget().1, budget);
+        finish_collection(outcome, &path).expect("unavailable");
+        assert!(!path.exists());
+    }
+}
+
+// Unavailable commands are normal, but parsing and execution defects must not skip native assertions.
+#[test]
+fn native_availability_does_not_hide_implementation_errors() {
+    for reason in [
+        "Invalid structured output; source: Windows identity",
+        "Missing source field boot",
+        "Invalid native identity claim",
+        "Command wait failed",
+        "Cannot terminate failed command",
+    ] {
+        assert!(!source_unavailable(reason), "{reason}");
+    }
+    for reason in [
+        "Initial host identity: Command unavailable (powershell.exe): NotFound",
+        "Required interface table unavailable: Permission denied",
+        "Command deadline exceeded (powershell.exe)",
+        "Collection execution budget exhausted",
+        "Installation or boot changed during collection; output not written",
+    ] {
+        assert!(source_unavailable(reason), "{reason}");
+    }
+}
+
+fn source_coverage_valid(status: &str) -> bool {
+    ["verified", "partial", "blocked", "unavailable"].contains(&status)
+}
+
+// Qualification accepts availability limits, but never an unexplained failure of a readable table.
+#[test]
+fn failed_native_sources_do_not_qualify_readable_tables() {
+    assert!(!source_coverage_valid("failed"));
+    assert!(!source_coverage_valid("unknown"));
+    for status in ["verified", "partial", "blocked", "unavailable"] {
+        assert!(source_coverage_valid(status));
+    }
+}
+
+// Native availability is reported honestly. A failed source cannot publish an
+// empty inventory; available sources retain coherent boot and decoder checks.
+#[tokio::test]
+async fn native_host_collection_reports_verified_or_unavailable_sources() {
+    let report = match collect().await {
+        Ok(report) => report,
+        Err(reason) => {
+            assert!(
+                source_unavailable(&reason),
+                "Unexpected native failure: {reason}"
+            );
+            let dir = tempfile::tempdir().expect("temporary directory");
+            let path = dir.path().join("unavailable.omloom");
+            finish_collection(Err(reason), &path).expect("normal unavailable outcome");
+            assert!(!path.exists());
+            return;
+        }
+    };
     for coverage in &report.coverage {
         println!("native module {}: {}", coverage.module, coverage.status);
-        if coverage.module == "docker" && coverage.status != "verified" {
-            println!("native Docker diagnostic: {}", coverage.detail);
+        if coverage.status != "verified" {
+            println!("native source {}: {}", coverage.module, coverage.detail);
         }
     }
     println!(
@@ -272,7 +407,12 @@ async fn native_host_collection_has_a_decodable_core() {
             .iter()
             .find(|v| v.module == module)
             .expect("attempted native module");
-        assert_eq!(coverage.status, "verified", "{module}: {}", coverage.detail);
+        assert!(
+            source_coverage_valid(&coverage.status),
+            "{module}: {}",
+            coverage.status
+        );
+        assert!(!coverage.detail.is_empty());
     }
     assert!(
         report

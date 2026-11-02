@@ -1,6 +1,14 @@
 use super::*;
 use prost::Message;
 
+#[derive(Clone, Copy)]
+enum RelationEdit<'a> {
+    Ordinary,
+    Rebound,
+    RetainingEnd(&'a str),
+    Physical { plan: &'a str, actual: bool },
+}
+
 pub(super) fn field_props(field: &wire::Field) -> Result<Properties> {
     let (kind, name, value) = match field.value.as_ref().ok_or(Error::Invalid)? {
         field::Value::Text(v) => (1, "vtext", text(v)),
@@ -308,6 +316,12 @@ impl Store {
             (Some(p), Some(rev))
                 if number(p, "revision")? == rev && super::target(p)? == target => {}
             _ => return Err(Error::Conflict),
+        }
+        if asset.kind == wire::AssetKind::PhysicalPosition as i32 {
+            let prior = old.as_ref().ok_or(Error::Invalid)?;
+            if number(prior, "kind")? != wire::AssetKind::PhysicalPosition as u64 {
+                return Err(Error::Invalid);
+            }
         }
         let children = tx.children(&key)?;
         if asset.kind != wire::AssetKind::Container as i32
@@ -682,6 +696,68 @@ pub(super) fn relation_projection(p: &Properties) -> Result<wire::Relation> {
 }
 
 impl Tx<'_> {
+    pub(super) fn require_structural_relation_edit(&self, relation: &wire::Relation) -> Result<()> {
+        // The descriptor and owner relation form one structure. Keeping the relation prevents
+        // generic archival or retyping from stranding a retired position descriptor.
+        for endpoint in [relation.from.as_ref(), relation.to.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            let target = AssetRef::try_from(endpoint).map_err(|_| Error::Invalid)?;
+            let identity = format!("{}/{}", target.asset, target.incarnation);
+            if relation.kind == wire::RelationKind::Contains as i32
+                && relation.to.as_ref() == Some(endpoint)
+                && self.get(&format!("position/{identity}"))?.is_some()
+            {
+                return Err(Error::Conflict);
+            }
+        }
+        Ok(())
+    }
+    pub(super) fn remove_binding_relation(
+        &mut self,
+        relation: &wire::Relation,
+        actor: &str,
+        now: u64,
+    ) -> Result<()> {
+        self.remove_binding_relation_retaining_end(relation, actor, now, None)
+    }
+    pub(super) fn remove_binding_relation_retaining_end(
+        &mut self,
+        relation: &wire::Relation,
+        actor: &str,
+        now: u64,
+        end: Option<&str>,
+    ) -> Result<()> {
+        let id = omloom_contracts::ids::RelationId::parse(&relation.relation_id)
+            .map_err(|_| Error::Invalid)?;
+        let key = format!("relation/{id}");
+        let row = self.get(&key)?.ok_or(Error::Conflict)?;
+        if relation_projection(&row)? != *relation {
+            return Err(Error::Conflict);
+        }
+        self.remove_physical_pose(&relation.relation_id)?;
+        self.invalidate_cable_attachment(relation, end, None)?;
+        for query in [
+            "MATCH (r:OmRow {key:$key})<-[e:OmRelationFrom]-() DELETE e",
+            "MATCH (r:OmRow {key:$key})-[e:OmRelationTo]->() DELETE e",
+        ] {
+            self.store.db.execute_in_transaction(
+                self.id.ok_or(Error::Corrupt)?,
+                query,
+                params([("key", text(&key))]),
+            )?;
+        }
+        self.delete(&key)?;
+        self.audit(
+            &key,
+            actor,
+            "relation.removed",
+            relation.revision.checked_add(1).ok_or(Error::Limit)?,
+            now,
+        )?;
+        Ok(())
+    }
     pub(super) fn save_typed_relation(
         &mut self,
         relation: &wire::Relation,
@@ -689,7 +765,7 @@ impl Tx<'_> {
         actor: &str,
         now: u64,
     ) -> Result<u64> {
-        self.save_relation_inner(relation, expected, actor, now, false)
+        self.save_relation_inner(relation, expected, actor, now, RelationEdit::Ordinary)
     }
     pub(super) fn save_rebound_relation(
         &mut self,
@@ -698,7 +774,39 @@ impl Tx<'_> {
         actor: &str,
         now: u64,
     ) -> Result<u64> {
-        self.save_relation_inner(relation, Some(expected), actor, now, true)
+        self.save_relation_inner(relation, Some(expected), actor, now, RelationEdit::Rebound)
+    }
+    pub(super) fn save_relation_retaining_end(
+        &mut self,
+        relation: &wire::Relation,
+        expected: Option<u64>,
+        actor: &str,
+        now: u64,
+        end: &str,
+    ) -> Result<u64> {
+        self.save_relation_inner(
+            relation,
+            expected,
+            actor,
+            now,
+            RelationEdit::RetainingEnd(end),
+        )
+    }
+    pub(super) fn save_physical_relation(
+        &mut self,
+        relation: &wire::Relation,
+        actor: &str,
+        now: u64,
+        plan: &str,
+        actual: bool,
+    ) -> Result<u64> {
+        self.save_relation_inner(
+            relation,
+            None,
+            actor,
+            now,
+            RelationEdit::Physical { plan, actual },
+        )
     }
     fn save_relation_inner(
         &mut self,
@@ -706,8 +814,13 @@ impl Tx<'_> {
         expected: Option<u64>,
         actor: &str,
         now: u64,
-        detached: bool,
+        edit: RelationEdit<'_>,
     ) -> Result<u64> {
+        let (detached, retained_end) = match edit {
+            RelationEdit::Ordinary | RelationEdit::Physical { .. } => (false, None),
+            RelationEdit::Rebound => (true, None),
+            RelationEdit::RetainingEnd(end) => (true, Some(end)),
+        };
         let from = AssetRef::try_from(relation.from.as_ref().ok_or(Error::Invalid)?)
             .map_err(|_| Error::Invalid)?;
         let to = AssetRef::try_from(relation.to.as_ref().ok_or(Error::Invalid)?)
@@ -727,6 +840,18 @@ impl Tx<'_> {
         if !compatible(from_kind, to_kind, kind) {
             return Err(Error::Invalid);
         }
+        if kind == wire::RelationKind::ConnectedTo {
+            let port = if from_kind == wire::AssetKind::Port {
+                from
+            } else {
+                to
+            };
+            if let Some(binding) = self.cable_binding_at(port)?
+                && binding.relation_id != relation.relation_id
+            {
+                return Err(Error::Conflict);
+            }
+        }
         self.check_software_relation(from, from_kind, kind, &relation.relation_id)?;
         if kind == wire::RelationKind::RunsOn
             && from_kind == wire::AssetKind::VirtualMachine
@@ -742,6 +867,13 @@ impl Tx<'_> {
             return Err(Error::Conflict);
         }
         if let Some(old) = &old {
+            let previous = relation_projection(old)?;
+            if previous.from != relation.from
+                || previous.to != relation.to
+                || previous.kind != relation.kind
+            {
+                self.require_structural_relation_edit(&previous)?;
+            }
             self.check_software_relation_replacement(old, from, from_kind, to, kind, detached)?;
         }
         let placement = match kind {
@@ -750,9 +882,36 @@ impl Tx<'_> {
             _ => None,
         };
         if let Some((child, parent)) = placement {
+            if number(&self.asset(child)?, "kind")? == wire::AssetKind::PhysicalPosition as u64 {
+                let position = self
+                    .get(&format!("position/{}/{}", child.asset, child.incarnation))?
+                    .ok_or(Error::Incomplete)?;
+                if string(&position, "parent")?
+                    != format!("positions/{}/{}", parent.asset, parent.incarnation)
+                {
+                    return Err(Error::Conflict);
+                }
+            }
             self.check_physical_parent(child, parent, &key)?;
         } else if kind == wire::RelationKind::RunsOn {
             self.check_placement_cycle(from, to, Some(&key))?;
+        }
+        if kind == wire::RelationKind::InstalledIn && to_kind == wire::AssetKind::PhysicalPosition {
+            match edit {
+                RelationEdit::Physical {
+                    plan,
+                    actual: false,
+                } => {
+                    self.check_physical_lock("physical-slot", to, Some(plan))?;
+                }
+                // A report of performed work preserves the future hold for reconciliation.
+                RelationEdit::Physical { actual: true, .. } => {}
+                _ => self.check_physical_lock("physical-slot", to, None)?,
+            }
+            let occupied=self.query("MATCH (p:OmRow {key:$position})<-[:OmRelationTo]-(r:OmRow) WHERE r.kind=$kind AND r.key<>$key RETURN properties(r) AS p LIMIT 1",params([("position",text(asset_key(to))),("kind",int(wire::RelationKind::InstalledIn as u64)?),("key",text(&key))]))?;
+            if !occupied.is_empty() {
+                return Err(Error::Conflict);
+            }
         }
         if kind == wire::RelationKind::Contains
             && from_kind == wire::AssetKind::Interface
@@ -776,6 +935,27 @@ impl Tx<'_> {
             return expected.ok_or(Error::Corrupt);
         }
         let revision = expected.unwrap_or(0).checked_add(1).ok_or(Error::Limit)?;
+        if let Some(prior) = &old {
+            let prior = relation_projection(prior)?;
+            let same = prior.from == relation.from
+                && prior.to == relation.to
+                && prior.kind == relation.kind;
+            self.invalidate_cable_attachment(
+                &prior,
+                retained_end,
+                if same { Some(revision) } else { None },
+            )?;
+            if prior.from != relation.from || prior.to != relation.to || prior.kind != relation.kind
+            {
+                self.remove_physical_pose(&relation.relation_id)?;
+            }
+        }
+        if kind == wire::RelationKind::InstalledIn {
+            data.insert("actor".into(), text(actor));
+            if to_kind == wire::AssetKind::PhysicalPosition {
+                self.clear_position_empty_report(to)?;
+            }
+        }
         if kind == wire::RelationKind::RunsOn && from_kind == wire::AssetKind::VirtualMachine {
             self.require_no_pending_operations(from)?;
         }
@@ -932,6 +1112,7 @@ pub(super) fn compatible(
             (K::Device, K::Rack | K::Site | K::Location)
                 | (K::Rack, K::Site | K::Location)
                 | (K::Location, K::Site | K::Location)
+                | (K::PhysicalComponent | K::Device, K::PhysicalPosition)
         ),
         R::Contains => matches!(
             (from, to),
@@ -950,11 +1131,16 @@ pub(super) fn compatible(
                 | (K::Service, K::ProviderAccount)
                 | (K::Workload, K::Container | K::Service)
                 | (
+                    K::Device | K::Rack | K::Port | K::PhysicalComponent,
+                    K::PhysicalPosition
+                )
+                | (K::Port, K::Interface)
+                | (
                     K::Container,
                     K::Service | K::Interface | K::SoftwareInstallation
                 )
         ),
-        R::HasPort => matches!((from, to), (K::Device, K::Port)),
+        R::HasPort => matches!((from, to), (K::Device | K::PhysicalComponent, K::Port)),
         R::Carries => matches!((from, to), (K::Port, K::Interface)),
         R::ConnectedTo => matches!((from, to), (K::Port, K::Cable) | (K::Cable, K::Port)),
         R::AssignedTo => matches!((from, to), (K::IpAddress, K::Interface)),
@@ -973,7 +1159,15 @@ pub(super) fn compatible(
             (from, to),
             (K::Device, K::Interface) | (K::Vrf, K::AddressSpace)
         ),
-        R::PoweredBy => matches!((from, to), (K::Device, K::Port) | (K::Port, K::PowerFeed)),
+        R::PoweredBy => matches!(
+            (from, to),
+            (K::Device | K::PhysicalComponent, K::Port)
+                | (K::Port, K::PowerFeed)
+                | (
+                    K::PowerFeed,
+                    K::Device | K::PhysicalComponent | K::PowerFeed
+                )
+        ),
         R::Manages => matches!(
             (from, to),
             (K::Device, K::Device) | (K::Service, K::Device | K::VirtualMachine)
