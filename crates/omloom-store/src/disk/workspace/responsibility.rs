@@ -82,6 +82,7 @@ fn qualified(
                 K::VirtualMachine,
                 K::Interface | K::SoftwareInstallation | K::AddressReference
             ) | (K::Interface, K::Interface | K::AddressReference)
+                | (K::Port, K::Interface)
                 | (
                     K::SoftwareInstallation,
                     K::Interface | K::Service | K::AddressReference | K::SoftwareInstallation

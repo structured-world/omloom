@@ -1,5 +1,102 @@
 use super::*;
 
+// Shared enclosures admit additions without a slot-empty report, while enforcing their load budget.
+#[test]
+fn shared_enclosure_addition_needs_capacity_not_empty_slot_evidence() -> TestResult {
+    for kind in [K::Site, K::Location] {
+        let dir = tempfile::tempdir()?;
+        let store = Store::open(dir.path(), policy())?;
+        let actor = operator();
+        let enclosure = create(&store, &actor, kind, "Shared enclosure")?;
+        let mut target = define(enclosure.clone());
+        target.mounting = Some("Qualified attachment".into());
+        target.capacity_mw = Some(20);
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Define(api::PhysicalDefinitionEdit {
+                definition: Some(target.clone()),
+            }),
+        )?;
+        let item = create(&store, &actor, K::Device, "Additional device")?;
+        equipment_dimensions(&store, &actor, &item)?;
+        let mut specification = define(item.clone());
+        specification.mounting = target.mounting.clone();
+        specification.demand_mw = Some(10);
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Define(api::PhysicalDefinitionEdit {
+                definition: Some(specification),
+            }),
+        )?;
+        let plan = replacement_plan(
+            &store,
+            &actor,
+            vec![api::PhysicalReplacement {
+                position: Some(enclosure.clone()),
+                replacement: Some(item.clone()),
+                ..Default::default()
+            }],
+        )?;
+        let before = store.usage()?;
+        let preview = physical(
+            &store,
+            &actor,
+            api::physical::Action::Preview(api::PhysicalPreview {
+                plan: Some(plan.clone()),
+            }),
+        )?;
+        assert_eq!(preview.state, api::RequirementState::Satisfied as i32);
+        assert_eq!(store.usage()?, before);
+        target.capacity_mw = Some(5);
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Define(api::PhysicalDefinitionEdit {
+                definition: Some(target.clone()),
+            }),
+        )?;
+        let before = store.usage()?;
+        let preview = physical(
+            &store,
+            &actor,
+            api::physical::Action::Preview(api::PhysicalPreview {
+                plan: Some(plan.clone()),
+            }),
+        )?;
+        assert_eq!(preview.state, api::RequirementState::Failed as i32);
+        assert!(matches!(
+            reserve(&store, &actor, plan.clone()),
+            Err(Error::Conflict)
+        ));
+        assert_eq!(store.usage()?, before);
+        target.capacity_mw = Some(20);
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Define(api::PhysicalDefinitionEdit {
+                definition: Some(target),
+            }),
+        )?;
+        let reserved = reserve(&store, &actor, plan)?.plan.ok_or(Error::Corrupt)?;
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Complete(api::PhysicalCompletion {
+                plan: Some(api::PhysicalPlanKey {
+                    id: reserved.id.ok_or(Error::Corrupt)?,
+                    revision: reserved.revision,
+                }),
+                completed_steps: vec![0],
+                ..Default::default()
+            }),
+        )?;
+        assert_eq!(binding(&store, &item)?.to, Some(enclosure));
+    }
+    Ok(())
+}
+
 // A caller cannot hold scarce resources beyond the test host's finite reservation window.
 #[test]
 fn physical_reservation_deadline_is_bounded_by_host_policy() -> TestResult {

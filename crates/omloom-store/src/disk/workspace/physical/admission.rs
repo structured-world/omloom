@@ -429,7 +429,9 @@ impl Tx<'_> {
                         error.into()
                     }
                 })?;
-            if replacement.previous.is_none() {
+            if replacement.previous.is_none()
+                && destination_kind == wire::AssetKind::PhysicalPosition
+            {
                 let position = self
                     .get(&format!("position/{}", network::identity(destination)))?
                     .ok_or(Error::Incomplete)?;

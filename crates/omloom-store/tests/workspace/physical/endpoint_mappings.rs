@@ -31,6 +31,14 @@ fn distinct_replacements_share_enclosures_without_reusing_slots_or_parts() -> Te
         for index in 0..2 {
             let old = create(&store, &actor, K::Device, "Outgoing device")?;
             let new = create(&store, &actor, K::Device, "Incoming device")?;
+            // Independent replacement steps must know the other outgoing body's service envelope.
+            physical(
+                &store,
+                &actor,
+                api::physical::Action::Define(api::PhysicalDefinitionEdit {
+                    definition: Some(define(old.clone())),
+                }),
+            )?;
             equipment_dimensions(&store, &actor, &new)?;
             let mut definition = define(new.clone());
             definition.mounting = Some("Qualified attachment".into());

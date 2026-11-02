@@ -59,6 +59,97 @@ fn owner(subject: &str) -> api::ResponsibilityAssignment {
     }
 }
 
+// A dedicated port-owned endpoint inherits both facets through its accepted containment binding.
+#[test]
+fn dedicated_port_endpoint_inherits_owner_and_operator() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let server = create(&store, &actor, K::Device, "Management controller")?;
+    let make = |parent: &wire::AssetRef, kind, name| -> Result<wire::AssetRef, Error> {
+        let Reply::Mutation(child) = call(
+            &store,
+            &actor,
+            Command::Write(api::Write {
+                kind: kind as i32,
+                parent: Some(parent.clone()),
+                changes: vec![text_field("name", name)],
+                ..Default::default()
+            }),
+        )?
+        else {
+            return Err(Error::Corrupt);
+        };
+        child.targets.into_iter().next().ok_or(Error::Corrupt)
+    };
+    let port = make(&server, K::Port, "Dedicated management port")?;
+    let mut operational = owner("operations");
+    operational.facet = Facet::Operator as i32;
+    responsibility(
+        &store,
+        &actor,
+        &port,
+        Action::Apply,
+        vec![owner("hardware"), operational],
+    )?;
+    let endpoint = make(&port, K::Interface, "Management endpoint")?;
+    let before = store.usage()?;
+    let Reply::Responsibility(state) = call(
+        &store,
+        &actor,
+        Command::Responsibility(api::Responsibility {
+            target: Some(endpoint.clone()),
+            action: Action::Read as i32,
+            include_sources: true,
+            ..Default::default()
+        }),
+    )?
+    else {
+        return Err(Error::Corrupt.into());
+    };
+    assert_eq!(state.assignments.len(), 2);
+    for (facet, subject) in [
+        (Facet::ClaimedOwner, "hardware"),
+        (Facet::Operator, "operations"),
+    ] {
+        let effective = state
+            .effective
+            .iter()
+            .find(|value| value.facet == facet as i32)
+            .ok_or("facet")?;
+        assert_eq!(effective.status, Status::Inherited as i32);
+        assert_eq!(effective.party.as_ref().ok_or("party")?.subject, subject);
+    }
+    assert_eq!(state.sources.len(), 1);
+    let source = &state.sources[0];
+    assert_eq!(
+        source.parent.as_ref().and_then(|p| p.target.as_ref()),
+        Some(&port)
+    );
+    let relation = source.relation.as_ref().ok_or("source")?;
+    assert_eq!(relation.kind, wire::RelationKind::Contains as i32);
+    assert_eq!(store.usage()?, before);
+    responsibility(
+        &store,
+        &actor,
+        &endpoint,
+        Action::Apply,
+        vec![api::ResponsibilityAssignment {
+            facet: Facet::ClaimedOwner as i32,
+            mode: Mode::Inherit as i32,
+            source_relation: Some(relation.relation_id.clone()),
+            source_revision: Some(relation.revision),
+            ..Default::default()
+        }],
+    )?;
+    assert_eq!(
+        store.usage()?,
+        before,
+        "Reselecting the accepted source is unchanged input"
+    );
+    Ok(())
+}
+
 // A redacted contact must not become an implicit clear in a replacement declaration.
 #[test]
 fn responsibility_replacement_cannot_clear_an_unreadable_contact() -> TestResult {
