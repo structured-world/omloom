@@ -210,13 +210,49 @@ impl Tx<'_> {
         if working.expected.is_none() {
             return Err(Error::Conflict);
         }
-        let address: IpAddr = request
-            .address
-            .as_deref()
-            .ok_or(Error::Invalid)?
-            .parse()
-            .map_err(|_| Error::Invalid)?;
-        let mask = request.prefix_length.ok_or(Error::Invalid)?;
+        if request.clear_prefix_length {
+            return Err(Error::Invalid);
+        }
+        let retained = if request.address.is_none() || request.prefix_length.is_none() {
+            let target = parse_target(request.target.as_ref())?;
+            let row = self.visible_asset(context, target)?;
+            if number(&row, "kind")? != wire::AssetKind::AddressReference as u64 {
+                return Err(Error::Invalid);
+            }
+            for (field, needed) in [
+                ("address", request.address.is_none()),
+                ("prefix_length", request.prefix_length.is_none()),
+            ] {
+                if needed
+                    && !context.field(
+                        target,
+                        wire::AssetKind::AddressReference as i32,
+                        field,
+                        false,
+                    )
+                {
+                    return Err(Error::Denied);
+                }
+            }
+            Some(
+                self.get(&format!("network/{}", network::identity(target)))?
+                    .ok_or(Error::Missing)?,
+            )
+        } else {
+            None
+        };
+        let address: IpAddr = if let Some(address) = request.address.as_deref() {
+            address.parse().map_err(|_| Error::Invalid)?
+        } else {
+            string(retained.as_ref().ok_or(Error::Invalid)?, "address")?
+                .parse()
+                .map_err(|_| Error::Corrupt)?
+        };
+        let mask = request
+            .prefix_length
+            .map(i64::from)
+            .or_else(|| retained.as_ref()?.get("prefix_length")?.as_int())
+            .ok_or(Error::Invalid)?;
         let block = ipnet::IpNet::new(address, u8::try_from(mask).map_err(|_| Error::Invalid)?)
             .map_err(|_| Error::Invalid)?
             .trunc();

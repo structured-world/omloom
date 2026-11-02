@@ -444,6 +444,98 @@ fn prefix_network_writes_preserve_metadata_and_custom_fields() -> TestResult {
     Ok(())
 }
 
+// A sparse edit derives prefix creation from readable retained facts, not redundant user input.
+#[test]
+fn existing_address_creates_prefix_from_retained_input() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    for supplied in [Some(24), None] {
+        let R::Mutation(created) = command_at(
+            &store,
+            C::Address(api::Address {
+                address: Some("192.0.2.9".into()),
+                prefix_length: if supplied.is_none() { Some(24) } else { None },
+                ..Default::default()
+            }),
+            revision(&store)?,
+        )?
+        else {
+            panic!("address")
+        };
+        let target = created.targets[0].clone();
+        let R::Detail(detail) = call(
+            &store,
+            &operator(),
+            C::Read(api::Read {
+                target: Some(target.clone()),
+                ..Default::default()
+            }),
+        )?
+        else {
+            panic!("address detail")
+        };
+        let edit = api::Address {
+            target: Some(target.clone()),
+            expected: Some(detail.item.ok_or(Error::Missing)?.revision),
+            prefix_length: supplied,
+            create_prefix: true,
+            prefix_name: Some("Retained address subnet".into()),
+            ..Default::default()
+        };
+        let base = revision(&store)?;
+        let usage = store.usage()?;
+        let mut restricted = operator();
+        restricted.grants[0].read = Fields::Selected(vec![
+            "prefix_length".into(),
+            "relations".into(),
+            "name".into(),
+        ]);
+        assert!(matches!(
+            store.workspace(
+                &restricted,
+                api::Request {
+                    command: Some(C::PreviewAddress(edit.clone())),
+                    working: Some(api::WorkingContext {
+                        expected: Some(base),
+                        ..Default::default()
+                    }),
+                },
+                100
+            ),
+            Err(Error::Denied)
+        ));
+        assert_eq!(store.usage()?, usage);
+        let R::AddressReview(review) = command_at(&store, C::PreviewAddress(edit.clone()), base)?
+        else {
+            panic!("address review")
+        };
+        assert_eq!(review.prefix_cidr.as_deref(), Some("192.0.2.0/24"));
+        assert_eq!(store.usage()?, usage);
+        command_at(&store, C::Address(edit), base)?;
+        let R::Detail(detail) = call(
+            &store,
+            &operator(),
+            C::Read(api::Read {
+                target: Some(target.clone()),
+                ..Default::default()
+            }),
+        )?
+        else {
+            panic!("updated address")
+        };
+        assert_eq!(detail.item.ok_or(Error::Missing)?.target, Some(target));
+        assert_eq!(
+            detail
+                .relations
+                .iter()
+                .filter(|relation| relation.kind == wire::RelationKind::MemberOf as i32)
+                .count(),
+            1
+        );
+    }
+    Ok(())
+}
+
 // Ambiguous network input cannot choose the last repeated CIDR or namespace.
 #[test]
 fn prefix_network_writes_reject_duplicate_fields() -> TestResult {
