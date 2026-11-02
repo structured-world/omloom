@@ -6,6 +6,48 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 
+test('prefix correction reviews domain changes and allocation ownership before acceptance', async ({ browser }) => {
+  // The confirmation must show canonical facts filled into an unresolved survivor, not internal keys.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-domain-review-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const scopes = [];
+      for (const [kind, name] of [[m.AssetKind.ADDRESS_SPACE, 'Address space'], [m.AssetKind.L2_DOMAIN, 'L2 domain'], [m.AssetKind.VRF, 'Routing context']]) scopes.push((await rpc({ oneofKind: 'write', write: m.Write.create({ kind, changes: [{ name: 'name', value: { oneofKind: 'text', text: `${name} ${width}` } }] }) })).mutation.targets[0]);
+      await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name: `Allocated subnet ${width}`, cidr: '192.0.2.0/24', addressSpace: scopes[0], link: scopes[1], routing: scopes[2], sharing: m.SharedUse.EXCLUSIVE }) });
+      const retained = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name: `Unresolved subnet ${width}`, cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
+      const page = await browser.newPage({ viewport: { width, height: 900 } }); page.setDefaultTimeout(5000);
+      try {
+        await page.goto(`${server.url}/#/?view=1&kind=${m.AssetKind.PREFIX}`);
+        for (const name of [`Allocated subnet ${width}`, `Unresolved subnet ${width}`]) await page.getByRole('checkbox', { name: `Select ${name}`, exact: true }).check();
+        await page.getByRole('button', { name: 'Compare identity', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await dialog.getByRole('button', { name: 'Plan identity correction', exact: true }).click();
+        await dialog.getByRole('radio', { name: /^Duplicate records of the same prefix/ }).check();
+        await dialog.getByRole('button', { name: 'Continue', exact: true }).click();
+        await dialog.getByRole('combobox', { name: 'Retained identity', exact: true }).selectOption({ label: `Unresolved subnet ${width}` });
+        await dialog.getByRole('button', { name: 'Keep all retained field values', exact: true }).click();
+        await dialog.getByRole('button', { name: 'Prepare correction preview', exact: true }).click();
+        const review = dialog.getByRole('region', { name: 'Prefix domain changes', exact: true });
+        for (const [index, label] of ['Address space', 'L2 domain', 'Routing context'].entries()) {
+          const row = review.locator('dl > div').filter({ has: page.locator('dt').filter({ hasText: new RegExp(`^${label}$`) }) });
+          await expect(row).toContainText('Before: Unknown');
+          await expect(row).toContainText(`After: ${scopes[index].assetId}/${scopes[index].incarnation}`);
+        }
+        await expect(review).toContainText('Canonical allocation ownership moves');
+        await expect(dialog).not.toContainText('allocation/');
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        await page.screenshot({ path: `test-results/prefix-domain-review-${width}.png`, fullPage: true });
+        await dialog.getByRole('button', { name: 'Accept identity correction', exact: true }).click();
+        await expect(dialog.getByRole('heading', { name: 'Correction applied', exact: true })).toBeVisible();
+        const item = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: retained }) })).detail.item;
+        for (const [index, field] of ['address_space', 'link_scope', 'routing_context'].entries()) expect(item.fields.find(f => f.name === field)?.value.text).toBe(`${scopes[index].assetId}/${scopes[index].incarnation}`);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      } finally { await page.close(); }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('separately entered assignment masks create the reviewed prefix including slash zero', async ({ browser }) => {
   // A submitted zero mask is known, and must behave exactly like a mask in the IP/CIDR input.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-mask-')); const server = await host(dir);
@@ -339,7 +381,7 @@ for (const width of [1440, 390]) test(`known prefix refinement, contextual creat
     await page.getByRole('button', { name: 'Compare identity', exact: true }).click();
     dialog = page.getByRole('dialog');
     await dialog.getByRole('button', { name: 'Plan identity correction', exact: true }).click();
-    await dialog.getByRole('radio', { name: 'Duplicate records of the same prefix, with compatible namespace', exact: true }).check();
+    await dialog.getByRole('radio', { name: 'Duplicate records of the same prefix', exact: true }).check();
     await dialog.getByRole('button', { name: 'Continue', exact: true }).click();
     await expect(dialog.getByRole('combobox', { name: 'Retained identity', exact: true }).getByRole('option', { name: /^192\.0\.2\.0\/24 \([0-9a-f]{8}\)$/ })).toHaveCount(1);
     await dialog.getByRole('combobox', { name: 'Retained identity', exact: true }).selectOption({ label: 'Workshop subnet' });

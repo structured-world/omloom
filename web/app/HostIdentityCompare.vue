@@ -18,6 +18,15 @@ const layerLeft=ref<model.Item>();const layerRight=ref<model.Item>();
 const physical=(r:model.IdentityImpact['before'])=>r && [R.HAS_PORT,R.CARRIES,R.INSTALLED_IN,R.CONNECTED_TO,R.ON].includes(r.kind);
 const duplicate=(draft:Draft)=>draft.keep==='left'?draft.pair.right:draft.pair.left;
 const retained=(draft:Draft)=>draft.keep==='left'?draft.pair.left:draft.pair.right;
+function prefixChanges(draft: Draft) {
+  const before = retained(draft)?.domainFields ?? [];
+  const source = duplicate(draft)?.domainFields ?? [];
+  return ([['cidr', 'CIDR'], ['address_space', 'Address space'], ['link_scope', 'L2 domain'], ['routing_context', 'Routing context']] as const).map(([id, label]) => {
+    const previous = before.find(field => field.name === id);
+    // A successful preview checks compatibility; domain facts only fill missing values.
+    return { id, label, before: previous, after: previous ?? source.find(field => field.name === id) };
+  });
+}
 function configure(draft:Draft) {
   draft.fields={};draft.sources={};draft.attachments=[];
   for(const source of duplicate(draft)?.sources??[])draft.sources[source]=source;
@@ -105,7 +114,7 @@ onMounted(load);
 <label><input v-model="decision" type="radio" :value="model.IdentityDecision.KEEP_SEPARATE">Different or not established: keep separate</label>
 <label v-if="comparison?.left?.item?.kind !== K.PREFIX"><input v-model="decision" type="radio" :value="model.IdentityDecision.DISTINCT_INSTALLATIONS">Same hardware, different OS installations</label>
 <label v-if="comparison?.left?.item?.kind !== K.PREFIX"><input v-model="decision" type="radio" :value="model.IdentityDecision.DUPLICATE_INSTALLATION">Duplicate records of the same hardware and installation</label>
-<label v-if="comparison?.left?.item?.kind === K.PREFIX"><input v-model="decision" type="radio" :value="model.IdentityDecision.DUPLICATE_RESOURCE">Duplicate records of the same prefix, with compatible namespace</label>
+<label v-if="comparison?.left?.item?.kind === K.PREFIX"><input v-model="decision" type="radio" :value="model.IdentityDecision.DUPLICATE_RESOURCE">Duplicate records of the same prefix</label>
 <p v-if="comparison?.left?.item?.kind !== K.PREFIX">Separate OS installations retain their own services, interfaces and addresses. Duplicate installations require an explicit mapping at each layer.</p>
 <footer><button :disabled="busy" @click="step='compare'">Back</button><button :disabled="decision===model.IdentityDecision.UNSPECIFIED||busy" @click="decision===model.IdentityDecision.KEEP_SEPARATE?emit('close'):step='mapping'">Continue</button></footer>
 </template>
@@ -131,7 +140,13 @@ onMounted(load);
 </template>
 <template v-else-if="step==='preview'&&plan"><h3>Review identity correction</h3><ul><li v-for="mapping in plan.mappings" :key="key(mapping.duplicate)">Retire {{ mapping.duplicate?.assetId }}; retain {{ mapping.retained?.assetId }}.</li></ul>
 <section v-for="(draft,index) in drafts" :key="index" class="mapping" :aria-label="'Final layer review '+(index+1)">
-<h4>Layer {{ index+1 }}</h4><p>Retire {{ name(duplicate(draft)?.item) }}. Retain {{ name(retained(draft)?.item) }}.</p>
+<h4>Layer {{ index+1 }}</h4><p>Retire {{ name(duplicate(draft)?.item, duplicate(draft)?.domainFields) }}. Retain {{ name(retained(draft)?.item, retained(draft)?.domainFields) }}.</p>
+<section v-if="retained(draft)?.item?.kind === K.PREFIX" aria-label="Prefix domain changes" class="prefix-changes">
+<h5>Retained prefix before and after</h5><dl><div v-for="change in prefixChanges(draft)" :key="change.id"><dt>{{ change.label }}</dt><dd><span>Before: {{ change.before ? display(change.before) : 'Unknown' }}</span><span>After: {{ change.after ? display(change.after) : 'Unknown' }}</span></dd></div></dl>
+<p v-if="duplicate(draft)?.domainFields.some(field => field.name === 'address_space')">Canonical allocation ownership moves from the retiring prefix to the retained prefix.</p>
+<p v-else-if="retained(draft)?.domainFields.some(field => field.name === 'address_space')">Existing canonical allocation ownership stays with the retained prefix.</p>
+<p v-else>No canonical allocation is created.</p>
+</section>
 <ul><li v-for="field in duplicate(draft)?.item?.fields" :key="field.name">{{ field.name }}: {{ draft.fields[field.name]==='duplicate'?'use duplicate value':'keep retained value' }}: {{ display(draft.fields[field.name]==='duplicate'?field:retained(draft)?.item?.fields.find(value=>value.name===field.name)) }}</li>
 <li v-for="(after,before) in draft.sources" :key="before">Source label {{ before }} becomes {{ after }}</li>
 <li>Confirmed physical attachments: {{ draft.attachments.length }}</li></ul></section>
@@ -144,5 +159,6 @@ onMounted(load);
 .identity-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 .identity-pair > section { min-width: 0; overflow-wrap: anywhere; }
 .mapping {border-block-start:1px solid #cbd6d9;padding-block:1rem;overflow-wrap:anywhere;}
+.prefix-changes dd > span { display:block; }
 @media (max-width: 700px) { .identity-pair { grid-template-columns: minmax(0, 1fr); } }
 </style>
