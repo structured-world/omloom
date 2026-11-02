@@ -281,6 +281,210 @@ fn prefix_cannot_acquire_interface_participants() -> TestResult {
     Ok(())
 }
 
+// Network edits and ordinary metadata form one atomic write, including selected CSV fields.
+#[test]
+fn prefix_network_writes_preserve_metadata_and_custom_fields() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let R::Definitions(definitions) = call(
+        &store,
+        &actor,
+        C::Definition(api::Definition {
+            name: "Prefix purpose".into(),
+            r#type: api::FieldType::Text as i32,
+            kinds: vec![K::Prefix as i32],
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("definition")
+    };
+    let field = &definitions.items[0].id;
+    let space = create(&store, &actor, K::AddressSpace, "namespace")?;
+    for namespace in [None, Some(space)] {
+        let mut changes = vec![
+            text_field("cidr", "192.0.2.0/24"),
+            text_field("description", "office"),
+            text_field(field, "staff"),
+        ];
+        if let Some(namespace) = namespace {
+            changes.push(text_field(
+                "address_space",
+                &format!("{}/{}", namespace.asset_id, namespace.incarnation),
+            ));
+        }
+        let R::Mutation(saved) = command_at(
+            &store,
+            C::Write(api::Write {
+                kind: K::Prefix as i32,
+                changes,
+                ..Default::default()
+            }),
+            revision(&store)?,
+        )?
+        else {
+            panic!("prefix")
+        };
+        let target = saved.targets[0].clone();
+        for (cidr, description) in [("192.0.2.0/24", "office"), ("192.0.2.0/25", "lab")] {
+            let R::Detail(detail) = call(
+                &store,
+                &actor,
+                C::Read(api::Read {
+                    target: Some(target.clone()),
+                    ..Default::default()
+                }),
+            )?
+            else {
+                panic!("prefix detail")
+            };
+            let item = detail.item.ok_or(Error::Missing)?;
+            if description == "office" {
+                assert!(
+                    item.fields
+                        .contains(&text_field("description", description))
+                );
+                assert!(item.fields.contains(&text_field(field, "staff")));
+            } else {
+                command_at(
+                    &store,
+                    C::Write(api::Write {
+                        target: Some(target.clone()),
+                        expected: Some(item.revision),
+                        kind: K::Prefix as i32,
+                        changes: vec![
+                            text_field("cidr", cidr),
+                            text_field("description", description),
+                            text_field(field, "research"),
+                        ],
+                        ..Default::default()
+                    }),
+                    revision(&store)?,
+                )?;
+                let R::Detail(detail) = call(
+                    &store,
+                    &actor,
+                    C::Read(api::Read {
+                        target: Some(target.clone()),
+                        ..Default::default()
+                    }),
+                )?
+                else {
+                    panic!("updated prefix")
+                };
+                let item = detail.item.ok_or(Error::Missing)?;
+                assert!(item.fields.contains(&text_field("cidr", cidr)));
+                assert!(
+                    item.fields
+                        .contains(&text_field("description", description))
+                );
+                assert!(item.fields.contains(&text_field(field, "research")));
+                let unchanged = api::Write {
+                    target: Some(target.clone()),
+                    expected: Some(item.revision),
+                    kind: K::Prefix as i32,
+                    changes: vec![
+                        text_field("cidr", cidr),
+                        text_field("description", description),
+                        text_field(field, "research"),
+                    ],
+                    ..Default::default()
+                };
+                let usage = store.usage()?;
+                command_at(&store, C::Write(unchanged.clone()), revision(&store)?)?;
+                assert_eq!(store.usage()?, usage);
+                let mut restricted = actor.clone();
+                restricted.grants[0].write =
+                    Fields::Selected(vec!["network".into(), "cidr".into()]);
+                assert!(matches!(
+                    call(&store, &restricted, C::Write(unchanged)),
+                    Err(Error::Denied)
+                ));
+                assert_eq!(store.usage()?, usage);
+            }
+        }
+    }
+    let R::Preview(preview) = command_at(&store, C::Import(api::Import {
+        source: "prefix-metadata".into(), kind: K::Prefix as i32,
+        csv: "external_id,cidr,description,purpose\nremote,2001:db8::/64,remote site,connectivity\n".into(),
+        mappings: [ ("cidr", "cidr"), ("description", "description"), ("purpose", field.as_str()) ]
+            .into_iter().map(|(source, field)| api::Mapping { source: source.into(), field: field.into() }).collect(),
+        ..Default::default()
+    }), revision(&store)?)? else { panic!("CSV preview") };
+    assert!(preview.id.is_some(), "{preview:?}");
+    let R::Mutation(saved) = command_at(
+        &store,
+        C::Import(api::Import {
+            preview: preview.id,
+            ..Default::default()
+        }),
+        preview.revision,
+    )?
+    else {
+        panic!("CSV apply")
+    };
+    let R::Detail(detail) = call(
+        &store,
+        &actor,
+        C::Read(api::Read {
+            target: Some(saved.targets[0].clone()),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("imported prefix")
+    };
+    let item = detail.item.ok_or(Error::Missing)?;
+    assert!(
+        item.fields
+            .contains(&text_field("description", "remote site"))
+    );
+    assert!(item.fields.contains(&text_field(field, "connectivity")));
+    Ok(())
+}
+
+// Ambiguous network input cannot choose the last repeated CIDR or namespace.
+#[test]
+fn prefix_network_writes_reject_duplicate_fields() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let first = create(&store, &actor, K::AddressSpace, "first")?;
+    let second = create(&store, &actor, K::AddressSpace, "second")?;
+    for changes in [
+        vec![
+            text_field("cidr", "192.0.2.0/24"),
+            text_field("cidr", "198.51.100.0/24"),
+        ],
+        vec![
+            text_field("cidr", "192.0.2.0/24"),
+            text_field(
+                "address_space",
+                &format!("{}/{}", first.asset_id, first.incarnation),
+            ),
+            text_field(
+                "address_space",
+                &format!("{}/{}", second.asset_id, second.incarnation),
+            ),
+        ],
+    ] {
+        let usage = store.usage()?;
+        let result = command_at(
+            &store,
+            C::Write(api::Write {
+                kind: K::Prefix as i32,
+                changes,
+                ..Default::default()
+            }),
+            revision(&store)?,
+        );
+        assert!(matches!(result, Err(Error::Invalid)), "{result:?}");
+        assert_eq!(store.usage()?, usage);
+    }
+    Ok(())
+}
+
 // Resolving an allocation must recheck both preserved and explicitly selected prefix membership.
 #[test]
 fn allocation_resolution_revalidates_prefix_namespace() -> TestResult {

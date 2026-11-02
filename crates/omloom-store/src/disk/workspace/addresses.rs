@@ -167,7 +167,7 @@ impl Store {
                 return Err(Error::Invalid);
             }
             request.binding = Some(
-                self.workspace_network_in(&mut tx, context, *allocation, working, now)?
+                self.workspace_network_in(&mut tx, context, *allocation, working, now, Vec::new())?
                     .into_iter()
                     .next()
                     .ok_or(Error::Corrupt)?,

@@ -1676,9 +1676,10 @@ impl Tx<'_> {
                     .iter()
                     .any(|field| network_column(&field.name)))
         {
-            let network = self.prefix_write(context, write)?;
+            let (network, changes) = self.prefix_write(context, write)?;
             let store = self.store;
-            let targets = store.workspace_network_in(self, context, network, working, now)?;
+            let targets =
+                store.workspace_network_in(self, context, network, working, now, changes)?;
             return parse_target(targets.first());
         }
         let parent = if write.target.is_none() {
@@ -2098,7 +2099,7 @@ pub(super) fn query_fingerprint(query: &api::Query, context: &Context) -> String
     digest.update(format!("{:?}", context.grants).as_bytes());
     format!("{:x}", digest.finalize())
 }
-fn network_column(name: &str) -> bool {
+pub(super) fn network_column(name: &str) -> bool {
     [
         "cidr",
         "address_space",

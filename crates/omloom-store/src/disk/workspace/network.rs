@@ -210,7 +210,8 @@ impl Store {
         {
             return Ok(reply(api::reply::Result::Mutation(saved)));
         }
-        let targets = self.workspace_network_in(&mut tx, context, request, working, now)?;
+        let targets =
+            self.workspace_network_in(&mut tx, context, request, working, now, Vec::new())?;
         if let Some(input) = input {
             tx.save_creation_outcome(
                 context,
@@ -231,6 +232,7 @@ impl Store {
         mut request: api::Network,
         working: &api::WorkingContext,
         now: u64,
+        mut changes: Vec<wire::Field>,
     ) -> Result<Vec<wire::AssetRef>> {
         use wire::AssetKind as K;
         let kind = K::try_from(request.kind).map_err(|_| Error::Invalid)?;
@@ -245,7 +247,7 @@ impl Store {
         }
         tx.resolve_allocation_parent(context, working, &mut request)?;
         if kind == K::Prefix && request.address_space.is_none() {
-            return tx.workspace_unresolved_prefix(context, request, working, now);
+            return tx.workspace_unresolved_prefix(context, request, working, now, changes);
         }
         let space = parse_target(request.address_space.as_ref())?;
         let routing = request
@@ -332,20 +334,22 @@ impl Store {
             .map(|t| parse_target(Some(t)))
             .transpose()?;
         request.name = request.name.trim().to_owned();
+        if kind == K::Prefix {
+            changes.extend(prefix_name_changes(request.name, request.clear_name));
+        } else {
+            debug_assert!(changes.is_empty());
+            changes.push(wire::Field {
+                name: "name".into(),
+                value: Some(field::Value::Text(request.name)),
+            });
+        }
         let target = tx.workspace_network_write(
             context,
             api::Write {
                 target: old_target.map(target_wire),
                 expected: request.expected,
                 kind: request.kind,
-                changes: if kind == K::Prefix {
-                    prefix_name_changes(request.name, request.clear_name)
-                } else {
-                    vec![wire::Field {
-                        name: "name".into(),
-                        value: Some(field::Value::Text(request.name)),
-                    }]
-                },
+                changes,
                 parent: None,
             },
             now,

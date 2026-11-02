@@ -163,7 +163,19 @@ impl Tx<'_> {
         &self,
         context: &Context,
         write: api::Write,
-    ) -> Result<api::Network> {
+    ) -> Result<(api::Network, Vec<wire::Field>)> {
+        if write.changes.is_empty() || write.changes.len() > MAX_FIELDS {
+            return Err(Error::Invalid);
+        }
+        {
+            let mut seen = BTreeSet::new();
+            for field in &write.changes {
+                if !seen.insert(&field.name) {
+                    return Err(Error::Invalid);
+                }
+            }
+        }
+        let mut changes = Vec::new();
         let mut result = api::Network {
             target: write.target,
             expected: write.expected,
@@ -203,10 +215,17 @@ impl Tx<'_> {
                 .transpose()?;
         }
         for field in write.changes {
+            if !matches!(field.name.as_str(), "cidr" | "name" | "address_space") {
+                if crate::disk::workspace::assets::network_column(&field.name) {
+                    return Err(Error::Invalid);
+                }
+                changes.push(field);
+                continue;
+            }
             match (field.name.as_str(), field.value) {
                 ("cidr", Some(field::Value::Text(value))) => result.cidr = value,
                 ("name", Some(field::Value::Text(value))) => result.name = value,
-                ("name", Some(field::Value::Clear(_))) => result.clear_name = true,
+                ("name", Some(field::Value::Clear(EXPLICIT_CLEAR))) => result.clear_name = true,
                 ("address_space", Some(field::Value::Text(value))) => {
                     result.address_space = Some(target_wire(groups::reference(&value)?))
                 }
@@ -216,7 +235,7 @@ impl Tx<'_> {
         if result.cidr.len() > 64 || result.cidr.parse::<IpNet>().is_err() {
             return Err(Error::Invalid);
         }
-        Ok(result)
+        Ok((result, changes))
     }
 
     pub(super) fn workspace_unresolved_prefix(
@@ -225,6 +244,7 @@ impl Tx<'_> {
         request: api::Network,
         working: &api::WorkingContext,
         now: u64,
+        mut changes: Vec<wire::Field>,
     ) -> Result<Vec<wire::AssetRef>> {
         if request.next_available
             || request.link.is_some()
@@ -242,13 +262,17 @@ impl Tx<'_> {
         }
         let block: IpNet = request.cidr.parse().map_err(|_| Error::Invalid)?;
         self.check_network_context(context, working, &request)?;
+        changes.extend(prefix_name_changes(
+            request.name.trim().into(),
+            request.clear_name,
+        ));
         let target = self.workspace_network_write(
             context,
             api::Write {
                 target: request.target.clone(),
                 expected: request.expected,
                 kind: request.kind,
-                changes: prefix_name_changes(request.name.trim().into(), request.clear_name),
+                changes,
                 parent: None,
             },
             now,
