@@ -24,6 +24,8 @@ mod groups;
 mod host_import;
 #[path = "workspace/host_network.rs"]
 mod host_network;
+#[path = "workspace/known_network.rs"]
+mod known_network;
 #[path = "workspace/physical.rs"]
 mod physical;
 #[path = "workspace/projections.rs"]

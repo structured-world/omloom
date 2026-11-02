@@ -4,6 +4,11 @@ Discuss a concrete change in an issue before implementation. Keep changes
 scoped, document observable behavior, and include relevant verification.
 Never include credentials or private infrastructure details.
 
+Linux Rust builds use the mold linker. Install `mold` alongside the C compiler
+before building or running tests. macOS, Windows and bare-metal targets retain
+their platform linkers. CI installs mold and checks its identifier in the built
+Linux executable.
+
 Omloom is developed by Dmitry Prudnikov, with support from Structured World.
 The project is licensed under AGPL-3.0-only; see [LICENSE](LICENSE).
 

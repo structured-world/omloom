@@ -1,6 +1,7 @@
 //! Reviewed corrections reuse inventory validation, transaction CAS, audit and
 //! finite review/detail custody. No operation or account authority is retargeted.
 use super::*;
+mod prefixes;
 mod sources;
 mod undo;
 
@@ -34,7 +35,11 @@ impl Tx<'_> {
             }
         }
         self.require_no_account_references(target)?;
-        self.require_no_ipam_state(target)?;
+        if kind == wire::AssetKind::Prefix as i32 {
+            self.prefix_correction_guard(context, target)?;
+        } else {
+            self.require_no_ipam_state(target)?;
+        }
         self.require_no_pending_operations(target)?;
         Ok(row)
     }
@@ -118,7 +123,7 @@ impl Tx<'_> {
             || request.mappings.len() > 8
             || !matches!(
                 decision,
-                D::DistinctInstallations | D::DuplicateInstallation
+                D::DistinctInstallations | D::DuplicateInstallation | D::DuplicateResource
             )
         {
             return Err(Error::Invalid);
@@ -140,9 +145,13 @@ impl Tx<'_> {
                     Ok(wire::AssetKind::Device
                         | wire::AssetKind::VirtualMachine
                         | wire::AssetKind::SoftwareInstallation
-                        | wire::AssetKind::Interface)
+                        | wire::AssetKind::Interface
+                        | wire::AssetKind::Prefix)
                 )
             {
+                return Err(Error::Invalid);
+            }
+            if (kind == wire::AssetKind::Prefix as i32) != (decision == D::DuplicateResource) {
                 return Err(Error::Invalid);
             }
             if decision == D::DistinctInstallations
@@ -308,6 +317,9 @@ impl Tx<'_> {
         }
         for mapping in &request.mappings {
             let (from, to) = pair(mapping)?;
+            if kinds[&from] == wire::AssetKind::Prefix as i32 {
+                self.merge_prefix_state(context, from, to)?;
+            }
             self.move_correction_sources(context, mapping, from, to, kinds[&from])?;
             // Native and explicitly selected field state have moved. The
             // generic delete guard still owns all remaining bindings.
@@ -322,7 +334,7 @@ impl Tx<'_> {
         }
         Ok(impacts)
     }
-    fn unlink_correction_relation(&mut self, id: &str) -> Result<()> {
+    pub(super) fn unlink_correction_relation(&mut self, id: &str) -> Result<()> {
         let key = format!("relation/{id}");
         for query in [
             "MATCH (r:OmRow {key:$key})<-[e:OmRelationFrom]-() DELETE e",
