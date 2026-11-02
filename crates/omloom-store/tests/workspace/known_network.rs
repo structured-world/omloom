@@ -533,6 +533,88 @@ fn address_changes_cannot_bypass_broadcast_validation() -> TestResult {
     Ok(())
 }
 
+// A brd-only address edit uses the retained assignment mask, without weakening /31 or /32 rules.
+#[test]
+fn broadcast_edit_uses_the_retained_mask() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    for mask in [24, 31, 32] {
+        let R::Mutation(saved) = command_at(
+            &store,
+            C::Address(api::Address {
+                address: Some(format!("192.0.2.8/{mask}")),
+                ..Default::default()
+            }),
+            revision(&store)?,
+        )?
+        else {
+            panic!("address")
+        };
+        let R::Detail(detail) = call(
+            &store,
+            &operator(),
+            C::Read(api::Read {
+                target: Some(saved.targets[0].clone()),
+                ..Default::default()
+            }),
+        )?
+        else {
+            panic!("detail")
+        };
+        let request = api::Address {
+            target: Some(saved.targets[0].clone()),
+            expected: Some(detail.item.ok_or("item")?.revision),
+            address: Some("192.0.2.8 brd 192.0.2.254".into()),
+            ..Default::default()
+        };
+        let before = store.usage()?;
+        let base = revision(&store)?;
+        if mask == 24 {
+            let R::AddressReview(review) =
+                command_at(&store, C::PreviewAddress(request.clone()), base)?
+            else {
+                panic!("preview")
+            };
+            assert_eq!(review.prefix_length, Some(mask));
+            assert_eq!(review.broadcast.as_deref(), Some("192.0.2.254"));
+            assert_eq!(store.usage()?, before);
+            let mut cleared = request.clone();
+            cleared.clear_prefix_length = true;
+            assert!(matches!(
+                command_at(&store, C::Address(cleared), base),
+                Err(Error::Invalid)
+            ));
+            assert_eq!(store.usage()?, before);
+            command_at(&store, C::Address(request), base)?;
+            let R::Detail(detail) = call(
+                &store,
+                &operator(),
+                C::Read(api::Read {
+                    target: Some(saved.targets[0].clone()),
+                    ..Default::default()
+                }),
+            )?
+            else {
+                panic!("updated address")
+            };
+            let fields = detail.item.ok_or("item")?.fields;
+            assert_eq!(
+                fields.iter().find(|f| f.name == "broadcast"),
+                Some(&text_field("broadcast", "192.0.2.254"))
+            );
+        } else {
+            for command in [C::PreviewAddress(request.clone()), C::Address(request)] {
+                assert!(matches!(
+                    command_at(&store, command, base),
+                    Err(Error::Invalid)
+                ));
+                assert_eq!(store.usage()?, before);
+            }
+        }
+    }
+    Ok(())
+}
+
 // Generic relationship commands cannot bypass the address owner's range invariant.
 #[test]
 fn ordinary_membership_validates_the_known_address() -> TestResult {

@@ -46,7 +46,7 @@ pub(in crate::disk::workspace) fn normalize(request: &mut api::Address) -> Resul
         }
         let broadcast = words.next().ok_or(Error::Invalid)?;
         if !address.is_ipv4()
-            || request.prefix_length.is_none()
+            || (request.target.is_none() && request.prefix_length.is_none())
             || request.clear_broadcast
             || request.broadcast.as_deref().is_some_and(|v| v != broadcast)
             || words.next().is_some()
@@ -65,7 +65,9 @@ pub(in crate::disk::workspace) fn normalize(request: &mut api::Address) -> Resul
     )?;
     // RFC 3021 section 2 and RFC 4291 section 2: /31 P2P and IPv6 have no directed broadcast.
     if request.broadcast.is_some()
-        && (!address.is_ipv4() || request.prefix_length.is_none_or(|mask| mask >= 31))
+        && (!address.is_ipv4()
+            || request.prefix_length.is_some_and(|mask| mask >= 31)
+            || (request.target.is_none() && request.prefix_length.is_none()))
     {
         return Err(Error::Invalid);
     }
