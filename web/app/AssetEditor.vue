@@ -8,7 +8,7 @@ import ObserveHypervisor from './ObserveHypervisor.vue';
 import EquipmentField from './EquipmentField.vue';
 import { equipmentFields as equipmentNames } from './equipment-fields';
 import { softwareFields, softwareChoiceLabel } from './software-fields';
-import { call, typedField, input, label, key, model, AssetKind, type AssetRef } from './api';
+import { call, typedField, input, display, label, key, model, AssetKind, type AssetRef } from './api';
 
 const props = defineProps<{ item?: model.Item; definitions: model.Definition[]; initialKind?: AssetKind; initialHypervisor?: boolean; working: model.WorkingContext; view: model.View }>();
 const emit = defineEmits<{ close: []; saved: [target?: AssetRef] }>();
@@ -23,6 +23,10 @@ const prefixChoice = ref<Partial<model.Address>>({});
 const prefixEditor = ref<InstanceType<typeof AddressPrefix>>();
 const addressReview = ref<model.AddressReview>();
 const reviewedAddress = ref<model.Address>();
+const reviewedMeaning = computed(() => {
+  const meaning = reviewedAddress.value?.meaning;
+  return meaning === undefined || meaning === model.AddressMeaning.UNSPECIFIED ? undefined : model.AddressMeaning[meaning]?.toLowerCase().replaceAll('_', ' ');
+});
 const reviewedWorking = ref<model.WorkingContext>();
 const derivedBroadcast = computed(() => {
   const review = addressReview.value;
@@ -248,7 +252,16 @@ async function save() {
 </div></template>
 </template>
 <AddressPrefix v-if="known && !preparing" v-show="!addressReview" ref="prefixEditor" v-model="prefixChoice" :address="values.address ?? ''" :editing="!!item" :initial-prefix="initialPrefix" :working="working" />
-<section v-if="addressReview" aria-label="Review known address"><h3>Review known address</h3><dl><dt>Address</dt><dd>{{ addressReview.address }}</dd><dt>Assignment mask</dt><dd>{{ addressReview.prefixLength === undefined ? 'Unknown' : '/'+addressReview.prefixLength }}</dd><template v-if="addressReview.prefixCidr"><dt>{{ reviewedAddress?.createPrefix ? 'New prefix, namespace unknown' : 'Selected prefix' }}</dt><dd>{{ addressReview.prefixCidr }}</dd></template><template v-if="addressReview.broadcast"><dt>Explicit endpoint broadcast</dt><dd>{{ addressReview.broadcast }}</dd></template></dl><p>No allocation, interface assignment, route or provider effect is implied.</p><button type="button" @click="addressReview = undefined; reviewedAddress = undefined; reviewedWorking = undefined">Back to input</button></section>
+<section v-if="addressReview" aria-label="Review known address"><h3>Review known address</h3><dl>
+<dt>Address</dt><dd>{{ addressReview.address }}</dd>
+<dt>Assignment mask</dt><dd>{{ reviewedAddress?.clearPrefixLength ? 'Clear explicitly' : addressReview.prefixLength === undefined ? 'Unknown' : '/'+addressReview.prefixLength }}</dd>
+<template v-if="reviewedMeaning"><dt>Address meaning</dt><dd>{{ reviewedMeaning }}</dd></template>
+<template v-if="addressReview.zone || reviewedAddress?.clearZone"><dt>Local IPv6 zone</dt><dd>{{ reviewedAddress?.clearZone ? 'Clear explicitly' : addressReview.zone }}</dd></template>
+<template v-if="addressReview.prefixCidr"><dt>{{ reviewedAddress?.createPrefix ? 'New prefix, namespace unknown' : 'Selected prefix' }}</dt><dd>{{ addressReview.prefixCidr }}</dd></template>
+<template v-if="reviewedAddress?.clearPrefix"><dt>Prefix relationship</dt><dd>Remove the relationship only</dd></template>
+<template v-if="addressReview.broadcast || reviewedAddress?.clearBroadcast"><dt>Explicit endpoint broadcast</dt><dd>{{ reviewedAddress?.clearBroadcast ? 'Clear explicitly' : addressReview.broadcast }}</dd></template>
+<template v-for="change in reviewedAddress?.changes" :key="change.name"><dt>{{ fields.find(f => f.id === change.name)?.name ?? change.name }}</dt><dd>{{ display(change) }}</dd></template>
+</dl><p>No allocation, interface assignment, route or provider effect is implied.</p><button type="button" @click="addressReview = undefined; reviewedAddress = undefined; reviewedWorking = undefined">Back to input</button></section>
 <p v-if="addressReview?.zone" class="hint">Host-local zone: {{ addressReview.zone }}</p>
 <p v-if="addressReview && reviewedAddress?.clearBroadcast">The recorded endpoint broadcast will be cleared.</p>
 <p v-if="addressReview && reviewedAddress?.clearPrefix">The prefix relationship will be removed; the prefix remains.</p>

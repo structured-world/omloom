@@ -6,6 +6,45 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 
+test('known address final review includes every submitted fact on desktop and phone', async ({ browser }) => {
+  // Reviewing an address must not silently conceal the meaning or accompanying accepted fields.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-address-review-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const definition = (await rpc({ oneofKind: 'definition', definition: m.Definition.create({ name: 'Purpose', type: m.FieldType.TEXT, kinds: [m.AssetKind.ADDRESS_REFERENCE] }) })).definitions.items[0];
+    for (const width of [1440, 390]) {
+      const page = await browser.newPage({ viewport: { width, height: 900 } }); page.setDefaultTimeout(5000);
+      try {
+        await page.goto(`${server.url}/#/?view=1`);
+        await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'address reference' });
+        await dialog.getByLabel('IP address', { exact: true }).fill('192.0.2.42');
+        await dialog.getByRole('button', { name: 'More known details', exact: true }).click();
+        await dialog.getByRole('combobox', { name: 'Known local VLAN tag change', exact: true }).selectOption('set');
+        await dialog.getByLabel('Known local VLAN tag', { exact: true }).fill('101');
+        await dialog.getByRole('combobox', { name: 'Address meaning change', exact: true }).selectOption('set');
+        await dialog.getByLabel('Address meaning', { exact: true }).selectOption('ADDRESS_MEANING_DESTINATION');
+        await dialog.getByLabel('Description', { exact: true }).fill('Printer management destination');
+        await dialog.getByRole('combobox', { name: 'Purpose change', exact: true }).selectOption('set');
+        await dialog.getByLabel('Purpose', { exact: true }).fill('Family printer');
+        await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
+        const review = dialog.getByRole('region', { name: 'Review known address', exact: true });
+        for (const value of ['destination', 'Known local VLAN tag', '101', 'Description', 'Printer management destination', 'Purpose', 'Family printer']) await expect(review).toContainText(value);
+        await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        const params = new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
+        const target = { assetId: params.get('asset'), incarnation: params.get('incarnation') };
+        const item = (await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail.item;
+        expect(item.fields.find(f => f.name === 'meaning')?.value.text).toBe('ADDRESS_MEANING_DESTINATION');
+        expect(item.fields.find(f => f.name === 'vlan_tag')?.value.integer).toBe(101n);
+        expect(item.fields.find(f => f.name === 'description')?.value.text).toBe('Printer management destination');
+        expect(item.fields.find(f => f.name === definition.id)?.value.text).toBe('Family printer');
+      } finally { await page.close(); }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('phone local resources identify unnamed prefixes by CIDR', async ({ page }) => {
   // The local navigation must describe a subnet, not substitute an opaque ID suffix.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-phone-prefix-')); const server = await host(dir);
