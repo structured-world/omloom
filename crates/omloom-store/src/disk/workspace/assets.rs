@@ -460,6 +460,7 @@ impl Store {
             )
         ));
         let mut entry = "MATCH (a:OmRow {parent:'assets'})".to_owned();
+        let mut prefix_membership_entry = false;
         let mut bindings = vec!["a".to_owned()];
         let mut predicate_joins = Vec::new();
         if query.omit_host_local
@@ -697,6 +698,7 @@ impl Store {
                 && selection.networks.iter().all(|scope| matches!(scope, working::NetworkScope::KnownPrefix(owner) if roots.contains(owner)))
                 && (query.level_only || query.focus.is_some() || (!query.kinds.is_empty() && !query.kinds.contains(&(wire::AssetKind::Prefix as i32))));
             if narrow_prefixes {
+                prefix_membership_entry = true;
                 let scopes = parameter(
                     &mut values,
                     Value::Array(
@@ -810,7 +812,7 @@ impl Store {
             } else if let Ok(ip) = term.parse::<std::net::IpAddr>() {
                 let literal = parameter(&mut values, text(ip.to_string()));
                 let cidr = parameter(&mut values, text(format!("{ip}/")));
-                if level_only {
+                if level_only || prefix_membership_entry {
                     predicate_joins.push(
                         " MATCH (ip:OmRow) WHERE ip.key='network/'+a.asset+'/'+a.incarnation"
                             .into(),
@@ -863,7 +865,7 @@ impl Store {
                 }
                 let fields = parameter(&mut values, strings(&searchable));
                 let matches = value_matches.join(" OR ");
-                if level_only {
+                if level_only || prefix_membership_entry {
                     predicate_joins.push(format!(" MATCH (s:OmRow) WHERE s.parent=a.key AND s.layer='intent' AND s.field IN {fields} AND ({matches})"));
                 } else {
                     entry = format!(

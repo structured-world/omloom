@@ -615,6 +615,98 @@ fn broadcast_edit_uses_the_retained_mask() -> TestResult {
     Ok(())
 }
 
+// Searching a known-prefix scope must retain membership for text and exact IP searches.
+#[test]
+fn scoped_prefix_search_never_returns_unrelated_addresses() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let R::Mutation(saved) = command_at(
+        &store,
+        C::Network(api::Network {
+            kind: K::Prefix as i32,
+            cidr: "192.0.2.0/24".into(),
+            sharing: api::SharedUse::Exclusive as i32,
+            ..Default::default()
+        }),
+        revision(&store)?,
+    )?
+    else {
+        panic!("prefix")
+    };
+    let prefix = saved.targets[0].clone();
+    let mut selected = Vec::new();
+    for index in 0..10 {
+        let R::Mutation(saved) = command_at(
+            &store,
+            C::Address(api::Address {
+                address: Some(if index == 1 { "192.0.2.9" } else { "192.0.2.8" }.into()),
+                prefix: (index < 2).then(|| prefix.clone()),
+                changes: vec![text_field("description", "needle")],
+                ..Default::default()
+            }),
+            revision(&store)?,
+        )?
+        else {
+            panic!("address")
+        };
+        if index < 2 {
+            selected.push(saved.targets[0].clone());
+        }
+    }
+    let before = store.usage()?;
+    let mut pages = Vec::new();
+    for term in ["needle", "192.0.2.8"] {
+        let query = api::Query {
+            roots: vec![prefix.clone()],
+            kinds: vec![K::AddressReference as i32],
+            view: api::View::Network as i32,
+            columns: vec!["address".into(), "description".into()],
+            search: term.into(),
+            limit: 1,
+            ..Default::default()
+        };
+        let started = std::time::Instant::now();
+        let R::Page(page) = call(&store, &operator(), C::Query(query.clone()))? else {
+            panic!("page")
+        };
+        eprintln!(
+            "prefix search: term={term}, elapsed={:?}, total={}, retained_bytes={:?}",
+            started.elapsed(),
+            page.total,
+            before.bytes
+        );
+        pages.push((query, page));
+    }
+    for (mut query, page) in pages {
+        assert_eq!(page.total, if query.search == "needle" { 2 } else { 1 });
+        assert_eq!(page.items.len(), 1);
+        assert!(
+            selected
+                .iter()
+                .any(|target| page.items[0].target.as_ref() == Some(target))
+        );
+        if query.search == "needle" {
+            query.cursor = Some(page.next.ok_or("next page")?);
+            let R::Page(next) = call(&store, &operator(), C::Query(query))? else {
+                panic!("next")
+            };
+            assert_eq!(next.total, 2);
+            assert_eq!(next.items.len(), 1);
+            assert!(
+                selected
+                    .iter()
+                    .any(|target| next.items[0].target.as_ref() == Some(target))
+            );
+            assert_ne!(page.items[0].target, next.items[0].target);
+            assert!(next.next.is_none());
+        } else {
+            assert!(page.next.is_none());
+        }
+    }
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // Generic relationship commands cannot bypass the address owner's range invariant.
 #[test]
 fn ordinary_membership_validates_the_known_address() -> TestResult {
