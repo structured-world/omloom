@@ -619,7 +619,7 @@ fn broadcast_edit_uses_the_retained_mask() -> TestResult {
 #[test]
 fn scoped_prefix_search_never_returns_unrelated_addresses() -> TestResult {
     let dir = tempfile::tempdir()?;
-    let store = Store::open(dir.path(), policy())?;
+    let mut store = Store::open(dir.path(), policy())?;
     let R::Mutation(saved) = command_at(
         &store,
         C::Network(api::Network {
@@ -677,7 +677,30 @@ fn scoped_prefix_search_never_returns_unrelated_addresses() -> TestResult {
         );
         pages.push((query, page));
     }
+    #[cfg(feature = "diagnostics")]
+    store.set_diagnostic_query_check(|db, statement| {
+        if statement.contains("prefix_scope") {
+            let plan = db.explain_cypher(statement).expect("scoped search plan");
+            if statement.contains("(s:OmRow") {
+                assert!(plan.contains("IndexScan(s:"), "{plan}");
+            }
+            if statement.contains("(ip:OmRow") {
+                assert!(plan.contains("IndexScan(ip:"), "{plan}");
+            }
+            eprintln!(
+                "scoped search scans: {}",
+                plan.lines()
+                    .filter(|line| line.contains("Scan("))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            );
+        }
+    });
     for (mut query, page) in pages {
+        let R::Page(repeated) = call(&store, &operator(), C::Query(query.clone()))? else {
+            panic!("planned page")
+        };
+        assert_eq!(repeated, page);
         assert_eq!(page.total, if query.search == "needle" { 2 } else { 1 });
         assert_eq!(page.items.len(), 1);
         assert!(
