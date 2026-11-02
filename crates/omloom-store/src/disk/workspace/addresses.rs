@@ -1,5 +1,6 @@
 use super::*;
 use std::net::IpAddr;
+pub(super) mod knowledge;
 
 fn validate_details(address: IpAddr, mask: Option<i64>, zone: Option<&str>) -> Result<()> {
     if mask.is_some_and(|n| n < 0 || n > if address.is_ipv4() { 32 } else { 128 })
@@ -67,12 +68,23 @@ pub(super) fn from_write(write: api::Write) -> Result<api::Address> {
                 request.binding = Some(target_wire(network::groups::reference(s)?))
             }
             ("binding", Some(field::Value::Clear(EXPLICIT_CLEAR))) => request.clear_binding = true,
+            ("broadcast", Some(field::Value::Text(s))) => request.broadcast = Some(s.clone()),
+            ("broadcast", Some(field::Value::Clear(EXPLICIT_CLEAR))) => {
+                request.clear_broadcast = true
+            }
+            ("prefix", Some(field::Value::Text(s))) => {
+                request.prefix = Some(target_wire(network::groups::reference(s)?))
+            }
+            ("prefix", Some(field::Value::Clear(EXPLICIT_CLEAR))) => request.clear_prefix = true,
+            ("create_prefix", Some(field::Value::Flag(value))) => request.create_prefix = *value,
+            ("prefix_name", Some(field::Value::Text(s))) => request.prefix_name = Some(s.clone()),
             ("address" | "prefix_length" | "meaning" | "zone" | "binding", _) => {
                 return Err(Error::Invalid);
             }
             _ => request.changes.push(field),
         }
     }
+    knowledge::normalize(&mut request)?;
     Ok(request)
 }
 
@@ -80,16 +92,47 @@ impl Store {
     pub(super) fn workspace_address(
         &self,
         context: &Context,
-        mut request: api::Address,
+        request: api::Address,
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<api::Reply> {
+        self.workspace_address_inner(context, request, working, now, false)
+    }
+    pub(super) fn workspace_preview_address(
+        &self,
+        context: &Context,
+        request: api::Address,
+        working: &api::WorkingContext,
+        now: u64,
+    ) -> Result<api::Reply> {
+        self.workspace_address_inner(context, request, working, now, true)
+    }
+    fn workspace_address_inner(
+        &self,
+        context: &Context,
+        mut request: api::Address,
+        working: &api::WorkingContext,
+        now: u64,
+        preview: bool,
+    ) -> Result<api::Reply> {
+        knowledge::normalize(&mut request)?;
+        let replay = if request.target.is_none() {
+            Some(request.encode_to_vec())
+        } else {
+            None
+        };
+        let mut tx = self.begin()?;
+        if !preview
+            && let Some(input) = &replay
+            && let Some(saved) = tx.creation_outcome(context, working, input, "address")?
+        {
+            return Ok(reply(api::reply::Result::Mutation(saved)));
+        }
         if (request.allocation.is_some() || request.interface.is_some())
             && working.expected.is_none()
         {
             return Err(Error::Conflict);
         }
-        let mut tx = self.begin()?;
         if let Some(interface) = request.interface.as_deref() {
             let interface = parse_target(Some(interface))?;
             let row = tx.visible_asset(context, interface)?;
@@ -125,12 +168,21 @@ impl Store {
                     .ok_or(Error::Corrupt)?,
             );
         }
+        let selected_prefix = tx.prepare_address_prefix(
+            context,
+            &mut request,
+            working,
+            now,
+            knowledge::PrefixCreation::New,
+        )?;
+        let clear_prefix = request.clear_prefix;
         let assignment = request.interface.take();
         let priority = request.priority.take();
         if priority.is_some() && assignment.is_none() {
             return Err(Error::Invalid);
         }
         let target = tx.workspace_address(context, request, working, now)?;
+        tx.set_address_prefix(context, target, selected_prefix, clear_prefix, working, now)?;
         if let Some(interface) = assignment {
             let fact = tx
                 .get(&format!("network/{}", network::identity(target)))?
@@ -162,7 +214,66 @@ impl Store {
                 now,
             )?;
         }
-        Ok(mutation(tx.commit()?, vec![target_wire(target)]))
+        let mut targets = vec![target_wire(target)];
+        if let Some(prefix) = selected_prefix {
+            targets.push(target_wire(prefix));
+        }
+        if preview {
+            let fact = tx
+                .get(&format!("network/{}", network::identity(target)))?
+                .ok_or(Error::Corrupt)?;
+            let readable = |field| {
+                context.field(
+                    target,
+                    wire::AssetKind::AddressReference as i32,
+                    field,
+                    false,
+                )
+            };
+            let summary = api::AddressReview {
+                revision: number(&tx.root, "revision")?,
+                address: if readable("address") {
+                    Some(string(&fact, "address")?)
+                } else {
+                    None
+                },
+                prefix_length: if readable("prefix_length") {
+                    fact.get("prefix_length")
+                        .and_then(Value::as_int)
+                        .map(|n| u32::try_from(n).map_err(|_| Error::Corrupt))
+                        .transpose()?
+                } else {
+                    None
+                },
+                zone: if readable("zone") {
+                    fact.get("zone").and_then(Value::as_str).map(str::to_owned)
+                } else {
+                    None
+                },
+                broadcast: if readable("broadcast") {
+                    fact.get("broadcast")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                } else {
+                    None
+                },
+                prefix_cidr: selected_prefix
+                    .filter(|prefix| {
+                        context.field(*prefix, wire::AssetKind::Prefix as i32, "cidr", false)
+                    })
+                    .map(|prefix| {
+                        tx.get(&format!("network/{}", network::identity(prefix)))?
+                            .ok_or(Error::Missing)
+                            .and_then(|row| string(&row, "cidr"))
+                    })
+                    .transpose()?,
+            };
+            return Ok(reply(api::reply::Result::AddressReview(summary)));
+        }
+        if let Some(input) = replay {
+            tx.save_creation_outcome(context, working, &input, &targets, now, "address")?;
+        }
+        Ok(mutation(tx.commit()?, targets))
     }
 }
 
@@ -252,7 +363,14 @@ impl Tx<'_> {
         if request.changes.iter().any(|f| {
             matches!(
                 f.name.as_str(),
-                "name" | "serial" | "address" | "prefix_length" | "meaning" | "zone" | "binding"
+                "name"
+                    | "serial"
+                    | "address"
+                    | "prefix_length"
+                    | "meaning"
+                    | "zone"
+                    | "binding"
+                    | "broadcast"
             )
         }) {
             return Err(Error::Invalid);
@@ -362,6 +480,25 @@ impl Tx<'_> {
             ("address", text(address.to_string())),
             ("authority", text(self.workspace_authority()?)),
         ]));
+        if request.clear_broadcast && request.broadcast.is_some() {
+            return Err(Error::Invalid);
+        }
+        let broadcast = if request.clear_broadcast {
+            None
+        } else {
+            request.broadcast.as_deref().or_else(|| {
+                old.as_ref()
+                    .and_then(|r| r.get("broadcast"))
+                    .and_then(Value::as_str)
+            })
+        };
+        if let Some(broadcast) = broadcast {
+            let value: std::net::Ipv4Addr = broadcast.parse().map_err(|_| Error::Invalid)?;
+            if !address.is_ipv4() {
+                return Err(Error::Invalid);
+            }
+            data.insert("broadcast".into(), text(value.to_string()));
+        }
         if meaning != api::AddressMeaning::Unspecified.as_str_name() {
             data.insert("meaning".into(), text(&meaning));
         }
@@ -384,6 +521,14 @@ impl Tx<'_> {
             data.get("prefix_length").and_then(Value::as_int),
             data.get("zone").and_then(Value::as_str),
         )?;
+        if data.contains_key("broadcast")
+            && data
+                .get("prefix_length")
+                .and_then(Value::as_int)
+                .is_none_or(|mask| mask >= 31)
+        {
+            return Err(Error::Invalid);
+        }
         let binding = if request.clear_binding {
             None
         } else if let Some(binding) = &request.binding {
@@ -475,7 +620,7 @@ impl Tx<'_> {
                 self.visible_asset(context, previous)?;
             }
         }
-        for name in ["prefix_length", "meaning", "zone"] {
+        for name in ["prefix_length", "meaning", "zone", "broadcast"] {
             if old.as_ref().and_then(|r| r.get(name)) != data.get(name)
                 && !context.field(target, kind as i32, name, true)
             {

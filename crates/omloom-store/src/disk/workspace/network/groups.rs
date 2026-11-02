@@ -27,7 +27,8 @@ impl Store {
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<api::Reply> {
-        if !request.cidr.is_empty()
+        if request.clear_name
+            || !request.cidr.is_empty()
             || request.address_space.is_some()
             || request.routing.is_some()
             || request.vlan_id.is_some()

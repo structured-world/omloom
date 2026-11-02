@@ -9,8 +9,12 @@ const emit = defineEmits<{ close: []; saved: [] }>();
 const csv = ref(''); const source = ref(''); const kind = ref<number>(AssetKind.DEVICE); const preview = ref<model.Preview>(); const error = ref('');
 const actions = ref<model.Actions>(); const parent = ref('');
 const revision = ref<bigint>();
-const parents = computed(() => [...new Map(actions.value?.creations.flatMap(c => c.parent?.target ? [[key(c.parent.target), c.parent] as const] : [])).values()]);
-const choices = computed(() => actions.value?.creations.filter(c => key(c.parent?.target) === parent.value) ?? []);
+const available = computed(() => [...(actions.value?.creations ?? []), ...(actions.value?.allocations.filter(c => c.kind === AssetKind.PREFIX) ?? [])]);
+function choiceContext(choice: model.Actions['creations'][number]) { return choice.parent ?? choice.prefixContext; }
+const parents = computed(() => [...new Map(available.value.flatMap(c => {
+  const context = choiceContext(c); return context?.target ? [[key(context.target), context] as const] : [];
+})).values()]);
+const choices = computed(() => available.value.filter(c => key(choiceContext(c)?.target) === parent.value));
 const choice = computed(() => choices.value.find(c => c.kind === kind.value));
 watch(choices, options => { if (!options.some(c => c.kind === kind.value) && options[0]) kind.value = options[0].kind; });
 onMounted(async () => { try {
@@ -19,7 +23,8 @@ onMounted(async () => { try {
   if (parents.value.length === 1) parent.value = key(parents.value[0]!.target);
 } catch (e) { error.value = String(e); } });
 const mappings = ref([{ source: 'name', field: 'name' }]);
-const destinations = computed(() => [{ id: 'name', name: 'Name' }, { id: 'dns_name', name: 'DNS name' }, { id: 'description', name: 'Description' }, { id: 'serial', name: 'Serial number' }, { id: 'address', name: 'IP address' }, { id: 'prefix_length', name: 'Known prefix length' }, { id: 'meaning', name: 'Address meaning' }, { id: 'zone', name: 'Known local IPv6 zone' }, ...equipmentFields.map(id=>({id,name:id.replaceAll('_',' ')})), ...softwareFields(choice.value?.fields ?? []).filter(f=>!equipmentFields.includes(f.id)), ...props.definitions.filter(d => !d.retired && d.kinds.includes(kind.value))].filter(f => choice.value?.fields.includes(f.id)));
+const networkInputs = [ { id: 'cidr', name: 'Prefix CIDR' }, { id: 'address_space', name: 'Address space reference' }, { id: 'broadcast', name: 'Explicit endpoint broadcast' }, { id: 'prefix', name: 'Selected prefix reference' }, { id: 'create_prefix', name: 'Ensure prefix membership' }, { id: 'prefix_name', name: 'Optional prefix name' } ];
+const destinations = computed(() => [{ id: 'name', name: 'Name' }, { id: 'dns_name', name: 'DNS name' }, { id: 'description', name: 'Description' }, { id: 'serial', name: 'Serial number' }, { id: 'address', name: 'IP address' }, { id: 'prefix_length', name: 'Known prefix length' }, { id: 'meaning', name: 'Address meaning' }, { id: 'zone', name: 'Known local IPv6 zone' }, ...networkInputs, ...equipmentFields.map(id=>({id,name:id.replaceAll('_',' ')})), ...softwareFields(choice.value?.fields ?? []).filter(f=>!equipmentFields.includes(f.id)), ...props.definitions.filter(d => !d.retired && d.kinds.includes(kind.value))].filter(f => choice.value?.fields.includes(f.id)));
 async function run(apply: boolean) {
   error.value = '';
   try {
@@ -34,8 +39,8 @@ async function run(apply: boolean) {
 <template><Dialog title="Import inventory" @close="emit('close')"><form @submit.prevent="run(false)">
 <p class="hint">Map only the fields you intend to accept. Omitted fields are preserved; use &lt;clear&gt; to clear explicitly. The external_id column identifies rows within this personal source.</p>
 <label>Source name<input v-model="source" required maxlength="100" @input="preview = undefined"></label>
-<p v-if="parents.length === 1" class="context-chip">Inside {{ display(parents[0]!.fields.find(f => f.name === 'name')) || parents[0]!.target?.assetId.slice(-8) }}</p>
-<label v-else-if="parents.length">Create new rows inside<select v-model="parent" required @change="preview = undefined"><option value="" disabled>Choose the actual parent</option><option v-for="p in parents" :key="key(p.target)" :value="key(p.target)">{{ display(p.fields.find(f => f.name === 'name')) || p.target?.assetId.slice(-8) }}</option></select></label>
+<p v-if="parents.length === 1" class="context-chip">For {{ display(parents[0]!.fields.find(f => f.name === 'name')) || parents[0]!.target?.assetId.slice(-8) }}</p>
+<label v-else-if="parents.length">Import context<select v-model="parent" required @change="preview = undefined"><option value="" disabled>Choose the import context</option><option v-for="p in parents" :key="key(p.target)" :value="key(p.target)">{{ display(p.fields.find(f => f.name === 'name')) || p.target?.assetId.slice(-8) }}</option></select></label>
 <label>New resource kind<select v-model="kind" @change="preview = undefined"><option v-for="c in choices" :key="c.kind" :value="c.kind">{{ label(c.kind) }}</option></select></label>
 <label>CSV<textarea v-model="csv" required rows="7" maxlength="262144" placeholder="external_id,name&#10;router-1,Edge router" @input="preview = undefined" /></label>
 <div v-for="(mapping, i) in mappings" :key="i" class="row"><label>CSV column<input v-model="mapping.source" required @input="preview = undefined"></label><label>Inventory field<select v-model="mapping.field" @change="preview = undefined"><option v-for="d in destinations" :key="d.id" :value="d.id">{{ d.name }}</option></select></label><button v-if="i" type="button" @click="mappings.splice(i, 1); preview = undefined">Remove</button></div>

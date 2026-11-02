@@ -499,6 +499,7 @@ impl Tx<'_> {
                     addresses: by_owner.get(&t).into_iter().flatten().cloned().collect(),
                     endpoints: endpoints.remove(&t).unwrap_or_default(),
                     responsibility: None,
+                    prefix_cidr: None,
                 })
             })
             .collect()

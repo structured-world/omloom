@@ -6,6 +6,600 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 
+test('allocation form creates a canonical prefix without an optional label on desktop and phone', async ({ browser }) => {
+  // The allocation form itself must accept an empty label, not just import or known-address paths.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-unnamed-prefix-allocation-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const space = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.ADDRESS_SPACE, changes: [{ name: 'name', value: { oneofKind: 'text', text: `Allocation namespace ${width}` } }] }) })).mutation.targets[0];
+      const page = await browser.newPage({ viewport: { width, height: 900 } }); page.setDefaultTimeout(5000);
+      try {
+        await page.goto(`${server.url}/#/?view=1&scope=${space.assetId}&scopeInc=${space.incarnation}`);
+        await page.getByRole('button', { name: 'Allocate IP / prefix', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await dialog.getByLabel('Kind', { exact: true }).selectOption({ label: 'Prefix' });
+        await expect(dialog.getByLabel('Name (optional)', { exact: true })).toHaveValue('');
+        await expect(dialog.getByLabel('Name (optional)', { exact: true })).toHaveJSProperty('required', false);
+        await dialog.getByLabel('Address / prefix', { exact: true }).fill('2001:db8:1::/64');
+        await dialog.getByRole('button', { name: 'Allocate', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        await expect(page.getByRole('button', { name: '2001:db8:1::/64', exact: true })).toBeVisible();
+        const items = (await rpc({ oneofKind: 'query', query: m.Query.create({ view: m.View.NETWORK, roots: [space], kinds: [m.AssetKind.PREFIX], columns: ['name', 'cidr', 'address_space'], limit: 10 }) })).page.items;
+        expect(items).toHaveLength(1);
+        expect(items[0].fields.find(f => f.name === 'cidr')?.value.text).toBe('2001:db8:1::/64');
+        expect(items[0].fields.find(f => f.name === 'address_space')?.value.text).toBe(`${space.assetId}/${space.incarnation}`);
+        expect(items[0].fields.some(f => f.name === 'name' && f.value.oneofKind === 'text')).toBe(false);
+      } finally { await page.close(); }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('prefix correction reviews domain changes and allocation ownership before acceptance', async ({ browser }) => {
+  // The confirmation must show canonical facts filled into an unresolved survivor, not internal keys.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-domain-review-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const scopes = [];
+      for (const [kind, name] of [[m.AssetKind.ADDRESS_SPACE, 'Address space'], [m.AssetKind.L2_DOMAIN, 'L2 domain'], [m.AssetKind.VRF, 'Routing context']]) scopes.push((await rpc({ oneofKind: 'write', write: m.Write.create({ kind, changes: [{ name: 'name', value: { oneofKind: 'text', text: `${name} ${width}` } }] }) })).mutation.targets[0]);
+      const canonical = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name: `Allocated subnet ${width}`, cidr: '192.0.2.0/24', addressSpace: scopes[0], link: scopes[1], routing: scopes[2], sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
+      const retained = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name: `Unresolved subnet ${width}`, cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
+      const comparison = (await rpc({ oneofKind: 'compareHostIdentity', compareHostIdentity: m.CompareHostIdentity.create({ left: canonical, right: retained }) })).hostIdentityComparison;
+      expect(comparison.left.domainLabels.find(f => f.name === 'address_space')?.value.text).toBe(`Address space ${width}`);
+      const page = await browser.newPage({ viewport: { width, height: 900 } }); page.setDefaultTimeout(5000);
+      try {
+        await page.goto(`${server.url}/#/?view=1&kind=${m.AssetKind.PREFIX}`);
+        for (const name of [`Allocated subnet ${width}`, `Unresolved subnet ${width}`]) await page.getByRole('checkbox', { name: `Select ${name}`, exact: true }).check();
+        await page.getByRole('button', { name: 'Compare identity', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await dialog.getByRole('button', { name: 'Plan identity correction', exact: true }).click();
+        await dialog.getByRole('radio', { name: /^Duplicate records of the same prefix/ }).check();
+        await dialog.getByRole('button', { name: 'Continue', exact: true }).click();
+        await dialog.getByRole('combobox', { name: 'Retained identity', exact: true }).selectOption({ label: `Unresolved subnet ${width}` });
+        await dialog.getByRole('button', { name: 'Keep all retained field values', exact: true }).click();
+        await dialog.getByRole('button', { name: 'Prepare correction preview', exact: true }).click();
+        const review = dialog.getByRole('region', { name: 'Prefix domain changes', exact: true });
+        for (const [index, label] of ['Address space', 'L2 domain', 'Routing context'].entries()) {
+          const row = review.locator('dl > div').filter({ has: page.locator('dt').filter({ hasText: new RegExp(`^${label}$`) }) });
+          await expect(row).toContainText('Before: Unknown');
+          await expect(row).toContainText(`After: ${label} ${width}`);
+          await expect(row.locator('details')).toContainText(`${scopes[index].assetId}/${scopes[index].incarnation}`);
+        }
+        await expect(review).toContainText('Canonical allocation ownership moves');
+        await expect(dialog).not.toContainText('allocation/');
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        await page.screenshot({ path: `test-results/prefix-domain-review-${width}.png`, fullPage: true });
+        await dialog.getByRole('button', { name: 'Accept identity correction', exact: true }).click();
+        await expect(dialog.getByRole('heading', { name: 'Correction applied', exact: true })).toBeVisible();
+        const item = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: retained }) })).detail.item;
+        for (const [index, field] of ['address_space', 'link_scope', 'routing_context'].entries()) expect(item.fields.find(f => f.name === field)?.value.text).toBe(`${scopes[index].assetId}/${scopes[index].incarnation}`);
+        // The public conditional update checks the exact allocation owner before accepting a no-op.
+        const basis = (await rpc({ oneofKind: 'query', query: m.Query.create({ columns: ['name'], limit: 1 }) })).page.revision;
+        const ownership = (await rpc({ oneofKind: 'network', network: m.Network.create({ target: retained, expected: item.revision, kind: m.AssetKind.PREFIX, cidr: '192.0.2.0/24', addressSpace: scopes[0], link: scopes[1], routing: scopes[2], sharing: m.SharedUse.EXCLUSIVE }) })).mutation;
+        expect(ownership.targets).toEqual([retained]);
+        expect(ownership.revision).toBe(basis);
+        await dialog.getByRole('button', { name: 'Reverse this correction', exact: true }).click();
+        await expect(dialog.getByRole('heading', { name: 'Correction reversed', exact: true })).toBeVisible();
+        const original = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: canonical }) })).detail.item;
+        const restored = (await rpc({ oneofKind: 'network', network: m.Network.create({ target: canonical, expected: original.revision, kind: m.AssetKind.PREFIX, cidr: '192.0.2.0/24', addressSpace: scopes[0], link: scopes[1], routing: scopes[2], sharing: m.SharedUse.EXCLUSIVE }) })).mutation;
+        expect(restored.targets).toEqual([canonical]);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      } finally { await page.close(); }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+for (const width of [1440, 390]) test(`prefix correction opens and accepts with more than 128 retained members at ${width}px`, async ({ browser }) => {
+  // Retained memberships need server validation, not an unused full attachment list in the form.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-large-prefix-review-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    {
+      const targets = [];
+      for (const name of [`Retained ${width}`, `Duplicate ${width}`]) targets.push((await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name, cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0]);
+      for (let index = 1; index <= 129; index++) await rpc({ oneofKind: 'address', address: m.Address.create({ address: `192.0.2.${index}/24`, prefix: targets[0] }) });
+      await rpc({ oneofKind: 'address', address: m.Address.create({ address: '192.0.2.240/24', prefix: targets[1] }) });
+      const page = await browser.newPage({ viewport: { width, height: 900 } }); page.setDefaultTimeout(5000);
+      try {
+        await page.goto(`${server.url}/#/?view=1&kind=${m.AssetKind.PREFIX}`);
+        for (const name of [`Retained ${width}`, `Duplicate ${width}`]) await page.getByRole('checkbox', { name: `Select ${name}`, exact: true }).check();
+        await page.getByRole('button', { name: 'Compare identity', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await dialog.getByRole('button', { name: 'Plan identity correction', exact: true }).click();
+        await dialog.getByRole('radio', { name: /^Duplicate records of the same prefix/ }).check();
+        await dialog.getByRole('button', { name: 'Continue', exact: true }).click();
+        await dialog.getByRole('combobox', { name: 'Retained identity', exact: true }).selectOption({ label: `Retained ${width}` });
+        await dialog.getByRole('button', { name: 'Keep all retained field values', exact: true }).click();
+        await dialog.getByRole('button', { name: 'Prepare correction preview', exact: true }).click();
+        await dialog.getByRole('button', { name: 'Accept identity correction', exact: true }).click();
+        await expect(dialog.getByRole('heading', { name: 'Correction applied', exact: true })).toBeVisible();
+        let cursor; const relations = [];
+        do {
+          const detail = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: targets[0], relationsCursor: cursor }) })).detail;
+          relations.push(...detail.relations); cursor = detail.relationsNext;
+        } while (cursor);
+        expect(relations).toHaveLength(130);
+        expect(relations.every(r => r.kind === m.RelationKind.MEMBER_OF && r.to?.assetId === targets[0].assetId)).toBe(true);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      } finally { await page.close(); }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('separately entered assignment masks create the reviewed prefix including slash zero', async ({ browser }) => {
+  // A submitted zero mask is known, and must behave exactly like a mask in the IP/CIDR input.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-mask-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const [width, mask, cidr] of [[1440, 24, '192.0.2.0/24'], [390, 0, '0.0.0.0/0']]) {
+      const page = await browser.newPage({ viewport: { width, height: 900 } }); page.setDefaultTimeout(5000);
+      try {
+        await page.goto(`${server.url}/#/?view=1`);
+        await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'address reference' });
+        await dialog.getByLabel('IP address', { exact: true }).fill('192.0.2.42');
+        await dialog.getByRole('button', { name: 'More known details', exact: true }).click();
+        await dialog.getByRole('combobox', { name: 'Known prefix length change', exact: true }).selectOption('set');
+        await dialog.getByLabel('Known prefix length', { exact: true }).fill(String(mask));
+        await expect(dialog.getByLabel('Prefix name (optional)', { exact: true })).toBeVisible();
+        await dialog.getByLabel('Prefix name (optional)', { exact: true }).fill(`Separate mask ${mask}`);
+        await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
+        await expect(dialog.getByRole('region', { name: 'Review known address' })).toContainText(cidr);
+        await dialog.getByRole('button', { name: 'Back to input', exact: true }).click();
+        await expect(dialog.getByLabel('Known prefix length', { exact: true })).toHaveValue(String(mask));
+        await expect(dialog.getByLabel('Prefix name (optional)', { exact: true })).toHaveValue(`Separate mask ${mask}`);
+        await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
+        await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        const detail = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: await openedTarget(page) }) })).detail;
+        const membership = detail.relations.find(relation => relation.kind === m.RelationKind.MEMBER_OF);
+        expect(membership).toBeDefined();
+        const prefix = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: membership.to }) })).detail.item;
+        expect(prefix.fields.find(f => f.name === 'cidr')?.value.text).toBe(cidr);
+        expect(prefix.fields.find(f => f.name === 'name')?.value.text).toBe(`Separate mask ${mask}`);
+      } finally { await page.close(); }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('changing the creation owner resets prefix choices without losing the address draft', async ({ page }) => {
+  // A prefix selected for one owner must not silently accompany a different creation context.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-owner-')); const server = await host(dir);
+  page.setDefaultTimeout(5000);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const owners = [];
+    for (const name of ['First server', 'Second server']) owners.push((await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: [{ name: 'name', value: { oneofKind: 'text', text: name } }] }) })).mutation.targets[0]);
+    const prefix = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name: 'Previously selected subnet', cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
+    const scope = owners.map(owner => `scope=${owner.assetId}`).join('&') + '&' + owners.map(owner => `scopeInc=${owner.incarnation}`).join('&');
+    await page.goto(`${server.url}/#/?view=1&${scope}`);
+    await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Create inside', { exact: true }).selectOption(`${owners[0].assetId}/${owners[0].incarnation}`);
+    await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'address reference' });
+    await dialog.getByLabel('IP address', { exact: true }).fill('192.0.2.42/24');
+    await dialog.getByLabel('Prefix relationship', { exact: true }).selectOption('existing');
+    await dialog.getByLabel('Existing prefix', { exact: true }).selectOption(`${prefix.assetId}/${prefix.incarnation}`);
+    await dialog.getByLabel('Create inside', { exact: true }).selectOption(`${owners[1].assetId}/${owners[1].incarnation}`);
+    await expect(dialog.getByLabel('IP address', { exact: true })).toHaveValue('192.0.2.42/24');
+    await expect(dialog.getByLabel('Prefix relationship', { exact: true })).toHaveValue('new');
+    await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
+    await expect(dialog.getByRole('region', { name: 'Review known address' })).toContainText('New prefix, namespace unknown');
+    await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    const detail = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: await openedTarget(page) }) })).detail;
+    const memberships = detail.relations.filter(relation => relation.kind === m.RelationKind.MEMBER_OF);
+    expect(memberships).toHaveLength(1);
+    expect(memberships[0].to.assetId).not.toBe(prefix.assetId);
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('network option searches cannot restore stale reference reads or cursors', async ({ page }) => {
+  // Hold a real selected-reference read while a later search acquires a newer inventory revision.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-network-option-race-')); const server = await host(dir);
+  let release;
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const space = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.ADDRESS_SPACE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Z retained namespace' } }] }) })).mutation.targets[0];
+    const csv = 'external_id,name\n' + Array.from({ length: 26 }, (_, i) => `${i},Alpha scope ${String(i).padStart(2, '0')}`).join('\n');
+    const preview = (await rpc({ oneofKind: 'import', import: m.Import.create({ source: 'option-race', kind: m.AssetKind.VRF, csv, mappings: [{ source: 'name', field: 'name' }] }) })).preview;
+    await rpc({ oneofKind: 'import', import: m.Import.create({ preview: preview.id }) });
+    const target = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.IP_ADDRESS, name: 'Scoped address', cidr: '192.0.2.10/32', addressSpace: space, sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
+    const waiting = Promise.withResolvers(); const held = Promise.withResolvers(); const delivered = Promise.withResolvers(); let first = true;
+    release = () => held.resolve();
+    await page.route(`**/${m.Workspace.typeName}/*`, async route => {
+      const bytes = route.request().postDataBuffer();
+      const request = bytes && m.Request.fromBinary(bytes.subarray(5, 5 + bytes.readUInt32BE(1)));
+      if (!first || request?.command.oneofKind !== 'read' || request.command.read.target?.assetId !== space.assetId) return route.continue();
+      first = false; const response = await route.fetch(); waiting.resolve(); await held.promise;
+      await route.fulfill({ response }); delivered.resolve();
+    });
+    await page.goto(`${server.url}/#/?view=1&asset=${target.assetId}&incarnation=${target.incarnation}`);
+    await page.getByRole('button', { name: 'Review network settings', exact: true }).click();
+    const dialog = page.getByRole('dialog'); await waiting.promise;
+    await dialog.getByLabel('Find scopes and groups', { exact: true }).fill('Beta');
+    await expect(dialog.getByRole('button', { name: 'More scope options', exact: true })).toBeHidden();
+    await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.VRF, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Beta latest scope' } }] }) });
+    await dialog.getByRole('button', { name: 'Find matching options', exact: true }).click();
+    const options = dialog.getByLabel('Routing context', { exact: true }).locator('option');
+    await expect(options).toHaveCount(2); await expect(options.last()).toContainText('Beta latest scope');
+    release(); await delivered.promise;
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await expect(options).toHaveCount(2); await expect(options.last()).toContainText('Beta latest scope');
+    await expect(dialog.getByRole('button', { name: 'More scope options', exact: true })).toBeHidden();
+    await expect(dialog.getByLabel('Address space', { exact: true })).toHaveValue(space.assetId);
+    await dialog.getByLabel('Find scopes and groups', { exact: true }).fill('');
+    await dialog.getByRole('button', { name: 'Find matching options', exact: true }).click();
+    await expect(dialog.getByRole('button', { name: 'More scope options', exact: true })).toBeVisible();
+    await dialog.getByLabel('Find scopes and groups', { exact: true }).fill('Beta');
+    await expect(dialog.getByRole('button', { name: 'More scope options', exact: true })).toBeHidden();
+    await dialog.getByLabel('Name', { exact: true }).fill('Latest revision edit');
+    await dialog.getByRole('button', { name: 'Apply reviewed settings', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    const item = (await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail.item;
+    expect(item.fields.find(f => f.name === 'name')?.value.text).toBe('Latest revision edit');
+  } finally { release?.(); await page.unrouteAll({ behavior: 'wait' }); await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('known address final review includes every submitted fact on desktop and phone', async ({ browser }) => {
+  // Reviewing an address must not silently conceal the meaning or accompanying accepted fields.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-address-review-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const definition = (await rpc({ oneofKind: 'definition', definition: m.Definition.create({ name: 'Purpose', type: m.FieldType.TEXT, kinds: [m.AssetKind.ADDRESS_REFERENCE] }) })).definitions.items[0];
+    for (const width of [1440, 390]) {
+      const page = await browser.newPage({ viewport: { width, height: 900 } }); page.setDefaultTimeout(5000);
+      try {
+        await page.goto(`${server.url}/#/?view=1`);
+        await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'address reference' });
+        await dialog.getByLabel('IP address', { exact: true }).fill('192.0.2.42');
+        await dialog.getByRole('button', { name: 'More known details', exact: true }).click();
+        await dialog.getByRole('combobox', { name: 'Known local VLAN tag change', exact: true }).selectOption('set');
+        await dialog.getByLabel('Known local VLAN tag', { exact: true }).fill('101');
+        await dialog.getByRole('combobox', { name: 'Address meaning change', exact: true }).selectOption('set');
+        await dialog.getByLabel('Address meaning', { exact: true }).selectOption('ADDRESS_MEANING_DESTINATION');
+        await dialog.getByLabel('Description', { exact: true }).fill('Printer management destination');
+        await dialog.getByRole('combobox', { name: 'Purpose change', exact: true }).selectOption('set');
+        await dialog.getByLabel('Purpose', { exact: true }).fill('Family printer');
+        await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
+        const review = dialog.getByRole('region', { name: 'Review known address', exact: true });
+        for (const value of ['destination', 'Known local VLAN tag', '101', 'Description', 'Printer management destination', 'Purpose', 'Family printer']) await expect(review).toContainText(value);
+        await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        const target = await openedTarget(page);
+        const item = (await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail.item;
+        expect(item.fields.find(f => f.name === 'meaning')?.value.text).toBe('ADDRESS_MEANING_DESTINATION');
+        expect(item.fields.find(f => f.name === 'vlan_tag')?.value.integer).toBe(101n);
+        expect(item.fields.find(f => f.name === 'description')?.value.text).toBe('Printer management destination');
+        expect(item.fields.find(f => f.name === definition.id)?.value.text).toBe('Family printer');
+      } finally { await page.close(); }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('phone local resources identify unnamed prefixes by CIDR', async ({ page }) => {
+  // The local navigation must describe a subnet, not substitute an opaque ID suffix.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-phone-prefix-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const space = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.ADDRESS_SPACE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Home namespace' } }] }) })).mutation.targets[0];
+    await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, cidr: '192.0.2.0/24', addressSpace: space, sharing: m.SharedUse.EXCLUSIVE }) });
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.goto(`${server.url}/#/?view=1&asset=${space.assetId}&incarnation=${space.incarnation}`);
+    const local = page.getByRole('region', { name: 'Local resources', exact: true });
+    await local.getByRole('button', { name: '192.0.2.0/24', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { level: 2 })).toHaveText('192.0.2.0/24');
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('inventory CSV exports retain the visible unnamed prefix CIDR', async ({ browser }) => {
+  // Export must use the displayed projection rather than silently dropping its fallback identity.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-export-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) });
+    const columns = ['name'];
+    for (let index = 0; index < 31; index++) {
+      const result = await rpc({ oneofKind: 'definition', definition: m.Definition.create({ name: `Selected field ${index}`, type: m.FieldType.TEXT, kinds: [m.AssetKind.PREFIX] }) });
+      columns.push(result.definitions.items[0].id);
+    }
+    for (const width of [1440, 390]) {
+      const page = await browser.newPage({ viewport: { width, height: 900 } });
+      try {
+        for (const view of [m.View.OVERVIEW, m.View.NETWORK]) {
+          await page.goto(`${server.url}/#/?view=${view}&kind=${m.AssetKind.PREFIX}&columns=${encodeURIComponent(columns.join(','))}`);
+          await expect(page.getByRole('button', { name: '192.0.2.0/24', exact: true })).toBeVisible();
+          await expect(page.getByRole('button', { name: '192.0.2.0/24', exact: true })).toHaveAttribute('title', '192.0.2.0/24');
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          if (width < 600 && await page.getByRole('button', { name: 'More', exact: true }).getAttribute('aria-expanded') !== 'true') await page.getByRole('button', { name: 'More', exact: true }).click();
+          const pending = page.waitForEvent('download');
+          await page.getByRole('button', { name: 'Export CSV', exact: true }).click();
+          const csv = await readFile(await (await pending).path(), 'utf8');
+          expect(csv.split('\n')[0].split(',')).toContain('cidr');
+          for (const column of columns) expect(csv.split('\n')[0].split(',')).toContain(column);
+          expect(csv).toContain('192.0.2.0/24');
+        }
+      } finally { await page.close(); }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('prefix searches invalidate old cursors and ignore late real responses', async ({ page }) => {
+  // Reordered transport delivery must not replace the current search or restore its old cursor.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-search-race-')); const server = await host(dir);
+  let release;
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const name of ['Alpha 1', 'Alpha 2', 'Alpha 3', 'Alpha 4', 'Beta']) await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name, cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) });
+    const waiting = Promise.withResolvers(); const held = Promise.withResolvers(); const delivered = Promise.withResolvers();
+    release = () => held.resolve();
+    await page.route(`**/${m.Workspace.typeName}/*`, async route => {
+      const bytes = route.request().postDataBuffer();
+      const request = bytes && m.Request.fromBinary(bytes.subarray(5, 5 + bytes.readUInt32BE(1)));
+      if (request?.command.oneofKind !== 'query' || request.command.query.search !== 'Alpha') return route.continue();
+      const response = await route.fetch(); waiting.resolve(); await held.promise;
+      await route.fulfill({ response }); delivered.resolve();
+    });
+    await page.goto(`${server.url}/#/?view=1`);
+    await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'address reference' });
+    await dialog.getByLabel('Prefix relationship', { exact: true }).selectOption('existing');
+    await expect(dialog.getByRole('button', { name: 'More prefixes', exact: true })).toBeVisible();
+    await dialog.getByLabel('Find a prefix', { exact: true }).fill('Alpha');
+    await expect(dialog.getByRole('button', { name: 'More prefixes', exact: true })).toBeHidden();
+    await dialog.getByRole('button', { name: 'Find prefixes', exact: true }).click();
+    await waiting.promise;
+    await dialog.getByLabel('Find a prefix', { exact: true }).fill('Beta');
+    await dialog.getByRole('button', { name: 'Find prefixes', exact: true }).click();
+    const options = dialog.getByLabel('Existing prefix', { exact: true }).locator('option');
+    await expect(options).toHaveCount(2); await expect(options.last()).toContainText('Beta');
+    release(); await delivered.promise;
+    // Let the browser consume and render the released real response before checking absence.
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await expect(options).toHaveCount(2); await expect(options.last()).toContainText('Beta');
+    await expect(dialog.getByRole('button', { name: 'More prefixes', exact: true })).toBeHidden();
+  } finally { release?.(); await page.unrouteAll({ behavior: 'wait' }); await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('CSV imports expose prefix allocations inside namespaces and canonical prefixes', async ({ browser }) => {
+  // Allocation-only parents must remain selectable in the same bounded import context.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-scoped-prefix-import-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const space = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.ADDRESS_SPACE, changes: [{ name: 'name', value: { oneofKind: 'text', text: `Import namespace ${width}` } }] }) })).mutation.targets[0];
+      const prefix = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name: `Import parent ${width}`, cidr: '192.0.2.0/24', addressSpace: space, sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
+      const page = await browser.newPage({ viewport: { width, height: 900 } });
+      page.setDefaultTimeout(5000);
+      try {
+        for (const [index, parent] of [space, prefix].entries()) {
+          await page.goto(`${server.url}/#/?view=1&scope=${parent.assetId}&scopeInc=${parent.incarnation}`);
+          if (width < 600 && await page.getByRole('button', { name: 'More', exact: true }).getAttribute('aria-expanded') !== 'true') await page.getByRole('button', { name: 'More', exact: true }).click();
+          await page.getByRole('button', { name: 'Import CSV', exact: true }).click();
+          const dialog = page.getByRole('dialog');
+          await dialog.getByRole('combobox', { name: 'New resource kind', exact: true }).selectOption(String(m.AssetKind.PREFIX));
+          await dialog.getByLabel('Source name').fill(`Scoped import ${width}-${index}`);
+          const cidr = index ? '192.0.2.0/25' : '198.51.100.0/24';
+          await dialog.getByLabel('CSV', { exact: true }).fill(`external_id,cidr\nsubnet,${cidr}`);
+          await dialog.getByLabel('CSV column').fill('cidr');
+          await dialog.getByRole('combobox', { name: 'Inventory field', exact: true }).selectOption('cidr');
+          await dialog.getByRole('button', { name: 'Prepare preview', exact: true }).click();
+          await expect(dialog.getByRole('heading', { name: 'Review 1 rows', exact: true })).toBeVisible();
+          await dialog.getByRole('button', { name: 'Accept reviewed rows', exact: true }).click();
+          await expect(dialog).toBeHidden();
+          const items = (await rpc({ oneofKind: 'query', query: m.Query.create({ view: m.View.NETWORK, roots: [space], kinds: [m.AssetKind.PREFIX], columns: ['cidr', 'address_space'], limit: 10 }) })).page.items;
+          const imported = items.find(item => item.fields.some(f => f.name === 'cidr' && f.value.text === cidr));
+          expect(imported).toBeDefined();
+          expect(imported.fields.find(f => f.name === 'address_space')?.value.text).toBe(`${space.assetId}/${space.incarnation}`);
+          if (index) {
+            // A Prefix is also a known-address context, not that address's ownership parent.
+            if (width < 600 && await page.getByRole('button', { name: 'More', exact: true }).getAttribute('aria-expanded') !== 'true') await page.getByRole('button', { name: 'More', exact: true }).click();
+            await page.getByRole('button', { name: 'Import CSV', exact: true }).click();
+            const known = page.getByRole('dialog');
+            await known.getByRole('combobox', { name: 'New resource kind', exact: true }).selectOption(String(m.AssetKind.ADDRESS_REFERENCE));
+            await known.getByLabel('Source name').fill(`Known address in prefix ${width}`);
+            const address = width === 1440 ? '192.0.2.9' : '192.0.2.10';
+            await known.getByLabel('CSV', { exact: true }).fill(`external_id,address\nendpoint,${address}/24`);
+            await known.getByLabel('CSV column').fill('address');
+            await known.getByRole('combobox', { name: 'Inventory field', exact: true }).selectOption('address');
+            await known.getByRole('button', { name: 'Prepare preview', exact: true }).click();
+            await known.getByRole('button', { name: 'Accept reviewed rows', exact: true }).click();
+            await expect(known).toBeHidden();
+            const facts = (await rpc({ oneofKind: 'query', query: m.Query.create({ kinds: [m.AssetKind.ADDRESS_REFERENCE], search: address, columns: ['address', 'binding'], limit: 10 }) })).page.items;
+            expect(facts).toHaveLength(1);
+            expect(facts[0].fields.some(f => f.name === 'binding')).toBe(false);
+            const detail = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: facts[0].target }) })).detail;
+            expect(detail.relations.some(r => r.kind === m.RelationKind.MEMBER_OF && r.to?.assetId === parent.assetId)).toBe(true);
+            expect(detail.relations.some(r => r.kind === m.RelationKind.CONTAINS && r.from?.assetId === parent.assetId)).toBe(false);
+          }
+        }
+      } finally { await page.close(); }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('prefix network edits explicitly remove labels on desktop and phone', async ({ browser }) => {
+  // Empty edited labels are explicit clears, not the preserve behavior of untouched fields.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-label-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const target = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name: `Temporary label ${width}`, cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
+      const page = await browser.newPage({ viewport: { width, height: 900 } });
+      try {
+        await page.goto(`${server.url}/#/?view=1&asset=${target.assetId}&incarnation=${target.incarnation}`);
+        await page.getByRole('button', { name: 'Review network settings', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await dialog.getByLabel('Name (optional)', { exact: true }).fill('');
+        await dialog.getByLabel('Address / prefix', { exact: true }).fill('192.0.2.0/25');
+        await dialog.getByRole('button', { name: 'Apply reviewed settings', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { level: 2 })).toHaveText('192.0.2.0/25');
+        const item = (await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail.item;
+        expect(item.target).toEqual(target);
+        expect(item.fields.find(f => f.name === 'cidr')?.value).toEqual({ oneofKind: 'text', text: '192.0.2.0/25' });
+        expect(item.fields.some(f => f.name === 'name' && f.value.oneofKind === 'text')).toBe(false);
+      } finally { await page.close(); }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+for (const width of [1440, 390]) test(`known prefix refinement, contextual creation, merge and CSV at ${width}px`, async ({ browser }) => {
+  // The same stored identities pass through the real desktop/phone forms and reviewed correction.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-refine-')); const server = await host(dir);
+  const page = await browser.newPage({ viewport: { width, height: 900 }, isMobile: width < 600, hasTouch: width < 600 });
+  page.setDefaultTimeout(5000);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const namespace = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.ADDRESS_SPACE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Workshop namespace' } }] }) })).mutation.targets[0];
+    const prefix = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name: 'Workshop subnet', cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
+    const path = `/#/?view=1&asset=${prefix.assetId}&incarnation=${prefix.incarnation}`;
+    await page.goto(server.url + path);
+    const creationContext = width < 600 ? page.getByRole('region', { name: 'Local resources', exact: true }) : page;
+    await creationContext.getByRole('button', { name: '+ Create resource', exact: true }).click();
+    let dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'address reference' });
+    await expect(dialog.getByLabel('Prefix relationship', { exact: true })).toHaveValue('existing');
+    await expect(dialog.getByLabel('Existing prefix', { exact: true })).toHaveValue(`${prefix.assetId}/${prefix.incarnation}`);
+    await dialog.getByLabel('IP address', { exact: true }).fill('192.0.2.20');
+    await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
+    await expect(dialog.getByRole('region', { name: 'Review known address' })).toContainText('Selected prefix');
+    await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await page.goto(server.url + path);
+    await page.getByRole('button', { name: 'Review network settings', exact: true }).click();
+    dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Address space', { exact: true }).selectOption(namespace.assetId);
+    await dialog.getByRole('button', { name: 'Apply reviewed settings', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole('region', { name: 'Resource details' })).toContainText(namespace.assetId);
+    const retained = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: prefix }) })).detail.item;
+    expect(retained.target).toEqual(prefix);
+    await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) });
+    await page.goto(`${server.url}/#/?view=1`);
+    await page.getByRole('checkbox', { name: 'Select Workshop subnet', exact: true }).check();
+    await page.getByRole('checkbox', { name: /^Select 192\.0\.2\.0\/24 \([0-9a-f]{8}\)$/ }).check();
+    await page.getByRole('button', { name: 'Compare identity', exact: true }).click();
+    dialog = page.getByRole('dialog');
+    await dialog.getByRole('button', { name: 'Plan identity correction', exact: true }).click();
+    await dialog.getByRole('radio', { name: 'Duplicate records of the same prefix', exact: true }).check();
+    await dialog.getByRole('button', { name: 'Continue', exact: true }).click();
+    await expect(dialog.getByRole('combobox', { name: 'Retained identity', exact: true }).getByRole('option', { name: /^192\.0\.2\.0\/24 \([0-9a-f]{8}\)$/ })).toHaveCount(1);
+    await dialog.getByRole('combobox', { name: 'Retained identity', exact: true }).selectOption({ label: 'Workshop subnet' });
+    await dialog.getByRole('button', { name: 'Keep all retained field values', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Prepare correction preview', exact: true }).click();
+    await expect(dialog.getByRole('heading', { name: 'Review identity correction', exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Accept identity correction', exact: true }).click();
+    await expect(dialog.getByRole('heading', { name: 'Correction applied', exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+    if (width < 600) await page.getByRole('button', { name: 'More', exact: true }).click();
+    await page.getByRole('button', { name: 'Import CSV', exact: true }).click();
+    dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Source name').fill(`Known prefix source ${width}`);
+    await dialog.getByRole('combobox', { name: 'New resource kind', exact: true }).selectOption(String(m.AssetKind.PREFIX));
+    await dialog.getByLabel('CSV', { exact: true }).fill('external_id,cidr\nprefix-1,198.51.100.0/24');
+    await dialog.getByLabel('CSV column').fill('cidr');
+    await dialog.getByRole('combobox', { name: 'Inventory field', exact: true }).selectOption('cidr');
+    await dialog.getByRole('button', { name: 'Prepare preview', exact: true }).click();
+    await expect(dialog.getByRole('heading', { name: 'Review 1 rows', exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Accept reviewed rows', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    const prefixes = (await rpc({ oneofKind: 'query', query: m.Query.create({ kinds: [m.AssetKind.PREFIX], columns: ['cidr'], limit: 10 }) })).page;
+    expect(prefixes.total).toBe(2n);
+    expect(prefixes.items.some(item => item.fields.some(field => field.value.oneofKind === 'text' && field.value.text === '198.51.100.0/24'))).toBe(true);
+    await expect(page.getByRole('button', { name: '198.51.100.0/24', exact: true })).toBeVisible();
+    if (width < 600 && await page.getByRole('button', { name: 'More', exact: true }).getAttribute('aria-expanded') !== 'true') await page.getByRole('button', { name: 'More', exact: true }).click();
+    await page.getByRole('button', { name: 'Import CSV', exact: true }).click();
+    dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Source name').fill(`Known address source ${width}`);
+    await dialog.getByRole('combobox', { name: 'New resource kind', exact: true }).selectOption(String(m.AssetKind.ADDRESS_REFERENCE));
+    await dialog.getByLabel('CSV', { exact: true }).fill('external_id,address,create_prefix,prefix_name\nendpoint-1,203.0.113.9/24,true,Remote subnet');
+    for (const [index, field] of ['address', 'create_prefix', 'prefix_name'].entries()) {
+      if (index) await dialog.getByRole('button', { name: 'Add mapping', exact: true }).click();
+      await dialog.getByLabel('CSV column', { exact: true }).nth(index).fill(field);
+      await dialog.getByRole('combobox', { name: 'Inventory field', exact: true }).nth(index).selectOption(field);
+    }
+    await dialog.getByRole('button', { name: 'Prepare preview', exact: true }).click();
+    await expect(dialog.getByRole('heading', { name: 'Review 1 rows', exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Accept reviewed rows', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await page.getByRole('button', { name: 'Remote subnet', exact: true }).click();
+    await expect(page.getByRole('button', { name: '203.0.113.9', exact: true })).toBeVisible();
+    await page.goto(server.url + path);
+    await page.getByRole('button', { name: 'Edit resource', exact: true }).click();
+    dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Name change', { exact: true }).selectOption('clear');
+    await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: '192.0.2.0/24', exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: `test-results/prefix-refinement-${width}.png`, fullPage: true });
+  } finally { await page.close(); await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('known IP/CIDR review preserves drafts and atomically creates an unresolved prefix on desktop and phone', async ({ browser }) => {
+  // A host address is not a network identity; review/back must not lose input or allocate an IP.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-known-prefix-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const page = await browser.newPage({ viewport: { width, height: 900 }, isMobile: width < 600, hasTouch: width < 600 });
+      page.setDefaultTimeout(5000);
+      try {
+        await page.goto(`${server.url}/#/?view=1`);
+        await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'address reference' });
+        const raw = '192.0.2.19/24 brd 192.0.2.254';
+        await dialog.getByLabel('IP address', { exact: true }).fill(raw);
+        await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
+        await expect(dialog.getByRole('region', { name: 'Review known address' })).toContainText('192.0.2.0/24');
+        await expect(dialog).toContainText('Calculated subnet broadcast: 192.0.2.255');
+        await expect(dialog).toContainText('192.0.2.254');
+        await dialog.getByRole('button', { name: 'Back to input', exact: true }).click();
+        await expect(dialog.getByLabel('IP address', { exact: true })).toHaveValue(raw);
+        await expect(dialog.getByLabel('Prefix relationship', { exact: true })).toHaveValue('new');
+        await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
+        await expect(dialog.getByRole('region', { name: 'Review known address' })).toContainText('192.0.2.0/24');
+        await page.screenshot({ path: `test-results/known-prefix-review-${width}.png` });
+        await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('192.0.2.19');
+        await page.reload();
+        await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('192.0.2.254');
+        await page.getByRole('button', { name: 'Edit resource', exact: true }).click();
+        await dialog.getByRole('button', { name: 'More known details', exact: true }).click();
+        await dialog.getByLabel('Explicit endpoint broadcast change', { exact: true }).selectOption('clear');
+        await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
+        await expect(dialog).toContainText('The recorded endpoint broadcast will be cleared.');
+        await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('term', { name: /^broadcast$/i })).toHaveCount(0);
+        await expect(page.getByRole('region', { name: 'Resource details' })).not.toContainText('192.0.2.254');
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        await page.screenshot({ path: `test-results/known-prefix-${width}.png`, fullPage: true });
+        await page.goto(`${server.url}/#/?view=1`);
+        await expect(page.getByRole('checkbox', { name: /^Select 192\.0\.2\.0\/24 \([0-9a-f]{8}\)$/ })).toHaveCount(width === 1440 ? 1 : 2);
+      } finally { await page.close(); }
+    }
+    const prefixes = (await rpc({ oneofKind: 'query', query: m.Query.create({ kinds: [m.AssetKind.PREFIX], columns: ['name','cidr','address_space'], limit: 10 }) })).page;
+    expect(prefixes.total).toBe(2n);
+    for (const item of prefixes.items) {
+      expect(item.fields.find(field => field.name === 'name')).toBeUndefined();
+      expect(item.fields.find(field => field.name === 'address_space')).toBeUndefined();
+      expect(item.fields.find(field => field.name === 'cidr')?.value).toEqual({ oneofKind: 'text', text: '192.0.2.0/24' });
+    }
+    const spaces = (await rpc({ oneofKind: 'query', query: m.Query.create({ kinds: [m.AssetKind.ADDRESS_SPACE], limit: 1 }) })).page;
+    expect(spaces.total).toBe(0n);
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 async function host(directory, fixture = 'operator', grants) {
   const args = ['--data', directory, '--ui', 'dist/app', '--fixture', fixture];
   if (grants) args.push('--grants', grants);
@@ -34,6 +628,15 @@ async function create(page, name, kind = 'DEVICE') {
   const hash = new URL(page.url()).hash;
   const params = new URLSearchParams(hash.slice(hash.indexOf('?') + 1));
   return { asset_id: params.get('asset'), incarnation: params.get('incarnation') };
+}
+
+async function openedTarget(page) {
+  // Saving closes the dialog before the asynchronous route and detail read complete.
+  await expect(page.getByRole('region', { name: 'Resource details', exact: true })).toBeVisible();
+  const params = new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
+  const target = { assetId: params.get('asset'), incarnation: params.get('incarnation') };
+  expect(target.assetId).not.toBeNull(); expect(target.incarnation).not.toBeNull();
+  return target;
 }
 
 async function workspaceClient(url) {
@@ -2824,6 +3427,7 @@ test('description edits persist for every resource kind on desktop and phone', a
           const description = `Updated ${m.AssetKind[kind]} at ${width}`;
           await dialog.getByLabel('Description', { exact: true }).fill(description);
           await expect(dialog.getByLabel('Description change', { exact: true })).toHaveValue('set');
+          if (kind === m.AssetKind.ADDRESS_REFERENCE) await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
           await dialog.getByRole('button', { name: /Save (resource|known address)/, exact: true }).click();
           await expect(dialog).toBeHidden();
           await page.reload();
@@ -3467,7 +4071,9 @@ test('network rename preserves scopes beyond the bounded options window', async 
       await page.goto(url);
       await page.getByRole('button', { name:'Review network settings', exact:true }).click();
       const dialog = page.getByRole('dialog');
-      await expect(dialog).toContainText('Showing a bounded selection');
+      await expect(dialog.getByRole('button', { name:'More scope options', exact:true })).toBeVisible();
+      await expect(dialog.getByLabel('L2 domain', { exact:true })).toHaveValue(link.assetId);
+      await expect(dialog.getByLabel('Routing context', { exact:true })).toHaveValue(routing.assetId);
       const name = `Renamed address ${width}`;
       await dialog.getByLabel('Name', { exact:true }).fill(name);
       await dialog.getByRole('button', { name:'Apply reviewed settings', exact:true }).click();
@@ -3639,6 +4245,7 @@ test('phone creates local components and returns through the original context', 
     await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'address reference' });
     await dialog.getByLabel('IP address', { exact: true }).fill('192.0.2.10');
     await expect(dialog.getByLabel('Address space', { exact: true })).toHaveCount(0);
+    await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
     await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
     await expect(dialog).toBeHidden();
     await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('192.0.2.10');
@@ -3938,6 +4545,7 @@ test('address mapping reviews a new allocation and commits its explicit assignme
     await dialog.getByRole('button',{name:'More known details',exact:true}).click();
     await dialog.getByLabel('Address meaning change',{exact:true}).selectOption('set');
     await dialog.getByLabel('Address meaning',{exact:true}).selectOption({label:'configured'});
+    await dialog.getByRole('button',{name:'Review known address',exact:true}).click();
     await dialog.getByRole('button',{name:'Save known address',exact:true}).click(); await expect(dialog).toBeHidden();
     await page.getByRole('button',{name:'Resolve address in broader scope',exact:true}).click();
     dialog = page.getByRole('dialog',{name:'Resolve address in broader scope',exact:true});
@@ -3970,7 +4578,7 @@ test('prefix context allocates and retrieves children without reselecting its na
     await expect(dialog).toContainText('Within Namespace under review');
     await expect(dialog.getByLabel('Address space',{exact:true})).toHaveCount(0);
     await dialog.getByLabel('Kind',{exact:true}).selectOption({label:'Prefix'});
-    await dialog.getByLabel('Name',{exact:true}).fill('Guest subnet');
+    await dialog.getByLabel('Name (optional)',{exact:true}).fill('Guest subnet');
     await dialog.getByLabel('Address / prefix',{exact:true}).fill('2001:db8:1::/64');
     await dialog.getByRole('button',{name:'Allocate',exact:true}).click(); await expect(dialog).toBeHidden();
     await page.getByRole('button',{name:'Guest subnet',exact:true}).click();
@@ -4094,6 +4702,7 @@ test('workspace creation starts with the relevant resource type', async ({ page 
     await page.getByRole('dialog').getByLabel('IP address', { exact: true }).fill('192.0.2.17');
     await expect(page.getByRole('dialog').getByLabel('Address space', { exact: true })).toHaveCount(0);
     await expect(page.getByRole('dialog').getByLabel('Routing context', { exact: true })).toHaveCount(0);
+    await page.getByRole('dialog').getByRole('button', { name: 'Review known address', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Save known address', exact: true }).click();
     await expect(page.getByRole('dialog')).toBeHidden();
     await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('192.0.2.17');

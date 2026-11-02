@@ -3,7 +3,9 @@ use super::*;
 pub(super) enum NetworkScope {
     Space(AssetRef),
     Link(AssetRef),
+    KnownPrefix(AssetRef),
     Prefix {
+        owner: AssetRef,
         space: AssetRef,
         block: ipnet::IpNet,
         link: Option<AssetRef>,
@@ -29,6 +31,10 @@ fn writable_fields(
             "prefix_length",
             "meaning",
             "zone",
+            "broadcast",
+            "prefix",
+            "create_prefix",
+            "prefix_name",
             "vlan_tag",
             "description",
         ]
@@ -102,6 +108,19 @@ impl Selection<'_> {
             let root = tx.visible_asset(self.context, target)?;
             let kind = wire::AssetKind::try_from(number(&root, "kind")? as i32)
                 .map_err(|_| Error::Corrupt)?;
+            if kind == wire::AssetKind::AddressReference
+                && self.context.field(target, kind as i32, "relations", false)
+            {
+                for relation in tx.working_relations(target)? {
+                    if relation.kind != wire::RelationKind::MemberOf as i32
+                        || parse_target(relation.from.as_ref())? != target
+                    {
+                        continue;
+                    }
+                    let parent = parse_target(relation.to.as_ref())?;
+                    if self.networks.iter().any(|scope| matches!(scope, NetworkScope::KnownPrefix(owner) | NetworkScope::Prefix { owner, .. } if *owner == parent)) { return Ok(()); }
+                }
+            }
             if kind == wire::AssetKind::Vlan {
                 if !self.context.field(target, kind as i32, "link_scope", false) {
                     return Err(Error::Denied);
@@ -138,6 +157,7 @@ impl Selection<'_> {
                         space: expected,
                         block,
                         link,
+                        ..
                     } if space == *expected
                         && self.context.field(target, kind as i32, "cidr", false)
                         && block.contains(&cidr.addr())
@@ -425,11 +445,15 @@ impl Tx<'_> {
         if !context.field(target, kind, "cidr", false)
             || !context.field(target, kind, "address_space", false)
         {
-            return Err(Error::Denied);
+            return Ok(Some(NetworkScope::KnownPrefix(target)));
         }
         let row = self
             .get(&format!("network/{}", network::identity(target)))?
             .ok_or(Error::Missing)?;
+        // An unresolved prefix has no allocation domain in which to infer children.
+        if !row.contains_key("address_space") {
+            return Ok(Some(NetworkScope::KnownPrefix(target)));
+        }
         let block: ipnet::IpNet = string(&row, "cidr")?.parse().map_err(|_| Error::Corrupt)?;
         let link = if network::link_local(block.addr()) {
             if !context.field(target, kind, "link_scope", false) {
@@ -440,6 +464,7 @@ impl Tx<'_> {
             None
         };
         Ok(Some(NetworkScope::Prefix {
+            owner: target,
             space: network::groups::reference(&string(&row, "address_space")?)?,
             block,
             link,
@@ -518,6 +543,18 @@ impl Tx<'_> {
     ) -> Result<Option<(AssetRef, wire::RelationKind, bool)>> {
         let selection = self.selection(context, working, true)?;
         let parent = parent.map(|p| parse_target(Some(p))).transpose()?;
+        if parent.is_none()
+            && child == wire::AssetKind::AddressReference
+            && !selection.networks.is_empty()
+            && selection.networks.iter().all(|scope| {
+                matches!(
+                    scope,
+                    NetworkScope::KnownPrefix(_) | NetworkScope::Prefix { .. }
+                )
+            })
+        {
+            return Ok(None);
+        }
         if selection.focus.is_some() && selection.focus != parent {
             return Err(Error::Invalid);
         }
@@ -599,7 +636,7 @@ impl Store {
                 if !context.field(parent, kind, "relations", true) {
                     continue;
                 }
-                let fields = if context.field(parent, kind, "name", false) {
+                let mut fields: Vec<wire::Field> = if context.field(parent, kind, "name", false) {
                     tx.get(&format!("{}/intent/name", asset_key(parent)))?
                         .as_ref()
                         .map(super::super::inventory::read_field)
@@ -609,6 +646,21 @@ impl Store {
                 } else {
                     Vec::new()
                 };
+                if kind == K::Prefix as i32 {
+                    let network = tx
+                        .get(&format!("network/{}", network::identity(parent)))?
+                        .ok_or(Error::Missing)?;
+                    let columns: Vec<_> = ["cidr", "address_space"]
+                        .into_iter()
+                        .filter(|field| context.field(parent, kind, field, false))
+                        .map(str::to_owned)
+                        .collect();
+                    fields.extend(
+                        super::addresses::visible_projection(context, &network, &columns)?
+                            .into_iter()
+                            .filter(|field| context.field(parent, kind, &field.name, false)),
+                    );
+                }
                 Some(api::Item {
                     target: Some(target_wire(parent)),
                     kind,
@@ -627,19 +679,45 @@ impl Store {
                     .map_err(|_| Error::Corrupt)?
                 {
                     None => &[K::IpAddress, K::Prefix, K::Vlan],
-                    Some(K::AddressSpace | K::Prefix) => &[K::IpAddress, K::Prefix],
+                    Some(K::AddressSpace) => &[K::IpAddress, K::Prefix],
+                    Some(K::Prefix)
+                        if parent_item.as_ref().is_some_and(|item| {
+                            item.fields
+                                .iter()
+                                .any(|field| field.name == "address_space")
+                        }) =>
+                    {
+                        &[K::IpAddress, K::Prefix]
+                    }
+                    Some(K::Prefix) => &[],
                     Some(K::L2Domain) => &[K::Vlan],
                     _ => &[],
                 };
                 for kind in available {
                     let target = new_target();
-                    if context.field(target, *kind as i32, "name", true)
+                    if (*kind == K::Prefix || context.field(target, *kind as i32, "name", true))
                         && context.field(target, *kind as i32, "network", true)
                     {
                         allocations.push(api::Creation {
                             kind: *kind as i32,
                             parent: parent_item.clone(),
-                            fields: Vec::new(),
+                            prefix_context: None,
+                            fields: if *kind == K::Prefix {
+                                ["name", "cidr", "address_space"]
+                                    .into_iter()
+                                    .filter(|field| {
+                                        context.field(
+                                            target,
+                                            *kind as i32,
+                                            if *field == "name" { "name" } else { "network" },
+                                            true,
+                                        )
+                                    })
+                                    .map(str::to_owned)
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            },
                         });
                     }
                 }
@@ -675,7 +753,9 @@ impl Store {
                 if let Some(parent) = &parent_item {
                     let parent_kind =
                         wire::AssetKind::try_from(parent.kind).map_err(|_| Error::Corrupt)?;
-                    if attachment(parent_kind, kind).is_none() {
+                    if attachment(parent_kind, kind).is_none()
+                        && !(parent_kind == K::Prefix && kind == K::AddressReference)
+                    {
                         continue;
                     }
                     if parent_kind == K::SoftwareInstallation && kind == K::VirtualMachine {
@@ -717,7 +797,12 @@ impl Store {
                 }
                 creations.push(api::Creation {
                     kind: raw,
-                    parent: parent_item.clone(),
+                    prefix_context: parent_item.clone().filter(|parent| {
+                        parent.kind == K::Prefix as i32 && kind == K::AddressReference
+                    }),
+                    parent: parent_item.clone().filter(|parent| {
+                        !(parent.kind == K::Prefix as i32 && kind == K::AddressReference)
+                    }),
                     fields,
                 });
             }

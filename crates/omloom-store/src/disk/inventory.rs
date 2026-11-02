@@ -876,6 +876,25 @@ impl Tx<'_> {
             }
             self.check_software_relation_replacement(old, from, from_kind, to, kind, detached)?;
         }
+        if kind == wire::RelationKind::MemberOf
+            && from_kind == wire::AssetKind::AddressReference
+            && to_kind == wire::AssetKind::Prefix
+        {
+            // The shared transaction serializes the address owner's single selected prefix.
+            let occupied = self.query(
+                "MATCH (r:OmRow {asset:$asset}) WHERE r.parent='relations' AND r.incarnation=$incarnation AND r.kind=$kind AND r.key<>$key MATCH (p:OmRow {key:'asset/'+r.to_asset}) WHERE p.kind=$prefix AND p.incarnation=r.to_incarnation RETURN {} AS p LIMIT 1",
+                params([
+                    ("asset", text(from.asset.to_string())),
+                    ("incarnation", text(from.incarnation.to_string())),
+                    ("kind", int(kind as u64)?),
+                    ("key", text(&key)),
+                    ("prefix", int(wire::AssetKind::Prefix as u64)?),
+                ]),
+            )?;
+            if !occupied.is_empty() {
+                return Err(Error::Conflict);
+            }
+        }
         let placement = match kind {
             wire::RelationKind::InstalledIn => Some((from, to)),
             wire::RelationKind::Contains | wire::RelationKind::HasPort => Some((to, from)),
@@ -1172,7 +1191,10 @@ pub(super) fn compatible(
             (from, to),
             (K::Device, K::Device) | (K::Service, K::Device | K::VirtualMachine)
         ),
-        R::MemberOf => matches!((from, to), (K::Interface, K::Lag) | (K::Device, K::Cluster)),
+        R::MemberOf => matches!(
+            (from, to),
+            (K::Interface, K::Lag) | (K::Device, K::Cluster) | (K::AddressReference, K::Prefix)
+        ),
         R::DependsOn => matches!((from, to), (K::Service, K::Service | K::Device)),
         R::ReleaseOf => from == K::SoftwareRelease && to == K::SoftwareProduct,
         R::InstalledRelease => from == K::SoftwareInstallation && to == K::SoftwareRelease,

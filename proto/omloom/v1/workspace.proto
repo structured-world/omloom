@@ -455,6 +455,9 @@ message Creation {
   // Applicable writable built-ins and stable company field identities. Omitted
   // fields are preserved; a parent grants neither their values nor permissions.
   repeated string fields = 3;
+  // Explicit Prefix context for known-address creation, with only permitted
+  // current discriminators. This supplies membership, never ownership or grants.
+  optional Item prefix_context = 4;
 }
 message Actions {
   // Server-derived bounded creation choices, never a client authority assertion.
@@ -517,6 +520,10 @@ message ItemContext {
   // differs from an explicit UNASSIGNED stop. Contacts and source identities
   // are not included; this projection is never persisted or an access grant.
   optional EffectiveResponsibility responsibility = 7;
+  // Current permitted Prefix CIDR for its title/tooltip when name is requested
+  // without cidr in overview/network page context. From the same snapshot;
+  // not an accepted name, an allocation proof or another stored value.
+  optional string prefix_cidr = 8;
 }
 message Read {
   // User-selected local target; the server rechecks current scope/incarnation.
@@ -1040,6 +1047,13 @@ message HostIdentitySubject {
   repeated string sources = 3;
   // Selected relation metadata, only when explicitly requested and both ends visible.
   repeated omloom.v1.Relation relations = 4;
+  // Permitted immutable domain facts used to assess duplicate compatibility.
+  // These explain Prefix CIDR/namespace; they are not selectable field copies.
+  repeated omloom.v1.Field domain_fields = 5;
+  // Current permitted names for the references in domain_fields, keyed by the
+  // corresponding field name. Values are text from the same comparison snapshot.
+  // A missing label does not hide the reference or grant access to its target.
+  repeated omloom.v1.Field domain_labels = 6;
 }
 message HostIdentityComparison {
   // Server-selected consistent application revision for both subjects.
@@ -1077,6 +1091,8 @@ enum IdentityDecision {
   IDENTITY_DECISION_KEEP_SEPARATE = 1;
   IDENTITY_DECISION_DISTINCT_INSTALLATIONS = 2;
   IDENTITY_DECISION_DUPLICATE_INSTALLATION = 3;
+  // Explicit duplicate Prefix conclusion; CIDR equality alone supplies no decision.
+  IDENTITY_DECISION_DUPLICATE_RESOURCE = 4;
 }
 message IdentityFieldChoice {
   // Exact accepted field being resolved on the selected duplicate.
@@ -1201,7 +1217,8 @@ message Address {
   optional omloom.v1.AssetRef target = 1;
   // Revision read for this reference, required for edits and absent on creation.
   optional uint64 expected = 2;
-  // User-known IPv4/IPv6 literal, without an invented mask or forwarding context.
+  // User-known IPv4/IPv6 literal or IP/CIDR, optionally followed by `brd IPv4`,
+  // at most 192 UTF-8 bytes, without an invented mask or forwarding context.
   // Required on creation; omission preserves it on edit without echoing a
   // field the caller may not read. A scoped literal uses the zone field.
   optional string address = 3;
@@ -1239,12 +1256,43 @@ message Address {
   // Intended participant priority for an explicitly selected VRRP assignment.
   // This is not observed election state and is absent for ordinary assignment.
   optional uint32 priority = 15;
+  // User-selected existing Prefix knowledge, independently of canonical binding.
+  // Omission preserves a prior relationship; clear_prefix explicitly removes it.
+  optional omloom.v1.AssetRef prefix = 16;
+  // User requests a new unresolved Prefix from the supplied assignment mask.
+  // The server derives CIDR and commits the prefix and fact together. Exclusive
+  // with prefix and clear_prefix; this never allocates an address.
+  bool create_prefix = 17;
+  // Optional user label for create_prefix, at most 160 UTF-8 bytes. An omitted
+  // label is derived for presentation, not stored as another source of truth.
+  optional string prefix_name = 18;
+  // User/source-supplied IPv4 endpoint broadcast, not a prefix allocation bound.
+  // IPv6 and incompatible prefix lengths reject this assertion.
+  optional string broadcast = 19;
+  // Explicit removal of the selected Prefix knowledge relationship.
+  bool clear_prefix = 20;
+  // Explicit removal of the broadcast claim; incompatible with broadcast.
+  bool clear_broadcast = 21;
 }
 message AddressAttributeChange {
   // Previously accepted current value from this exact interface/source.
   CurrentAddress before = 1;
   // Selected incoming value for the same address, without rewriting a service bind.
   CurrentAddress after = 2;
+}
+message AddressReview {
+  // Current installation revision used by the complete transient validation.
+  uint64 revision = 1;
+  // Server-normalized address, only when that field is currently readable.
+  optional string address = 2;
+  // Accepted assignment mask when supplied/known and readable; absent is unknown.
+  optional uint32 prefix_length = 3;
+  // Known host-local zone when readable; never an allocation namespace.
+  optional string zone = 4;
+  // Explicit endpoint broadcast when readable, separate from calculated broadcast.
+  optional string broadcast = 5;
+  // Canonical CIDR of the explicitly selected or newly proposed Prefix.
+  optional string prefix_cidr = 6;
 }
 message AddressDelta {
   // Selected import configuration whose current facts are being compared.
@@ -1298,6 +1346,8 @@ message Network {
   // Protocol VRID for VRRP, scoped to L2 domain and IP family, not a global identity.
   optional uint32 vrid = 9;
   // Explicit ordinary inventory name, not proof of observed network health.
+  // Optional for Prefix: empty preserves an existing label or creates an unnamed
+  // prefix. Clear an existing label explicitly with clear_name or a Write clear.
   string name = 10;
   // Select an unused address within this prefix atomically; no IPv6 enumeration.
   bool next_available = 11;
@@ -1319,6 +1369,10 @@ message Network {
   // namespace/link and checks prefix containment without inheriting grants.
   // Required for scoped creation; omitted when editing an existing allocation.
   optional omloom.v1.AssetRef parent = 17;
+  // User-requested removal of a Prefix label, committed with its network settings.
+  // False leaves the name semantics above unchanged. Cannot accompany a nonempty
+  // name or another resource kind; the server checks the name write permission.
+  bool clear_name = 18;
 }
 message Member {
   // Canonical address or typed address-group identity selected for this edit.
@@ -2360,6 +2414,8 @@ message Request {
     EvaluateRequirements evaluate_requirements = 33;
     // Query or explicitly refine physical planning through the common store boundary.
     Physical physical = 34;
+    // Validate a known-address command without committing resources or a draft.
+    Address preview_address = 35;
   }
 }
 message Reply {
@@ -2411,5 +2467,7 @@ message Reply {
     RequirementEvaluation requirement_evaluation = 22;
     // Bounded physical facts and plan validation over the same inventory revision.
     PhysicalView physical = 23;
+    // Transient validated known-address summary, not accepted inventory.
+    AddressReview address_review = 24;
   }
 }
