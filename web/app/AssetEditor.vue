@@ -25,7 +25,7 @@ const addressReview = ref<model.AddressReview>();
 const reviewedAddress = ref<model.Address>();
 const reviewedMeaning = computed(() => {
   const meaning = reviewedAddress.value?.meaning;
-  return meaning === undefined || meaning === model.AddressMeaning.UNSPECIFIED ? undefined : model.AddressMeaning[meaning]?.toLowerCase().replaceAll('_', ' ');
+  return meaning === undefined ? undefined : model.AddressMeaning[meaning]?.toLowerCase().replaceAll('_', ' ');
 });
 const reviewedWorking = ref<model.WorkingContext>();
 const derivedBroadcast = computed(() => {

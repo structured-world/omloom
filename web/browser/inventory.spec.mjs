@@ -48,6 +48,49 @@ test('CSV keeps the selected prefix among multiple import contexts on desktop an
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
 
+test('sparse address edits review explicit unspecified meaning and create a prefix on desktop and phone', async ({ browser }) => {
+  // Preserving an IP must still permit prefix creation, and explicit unknown meaning must be visible.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-sparse-address-review-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const target = (await rpc({ oneofKind: 'address', address: m.Address.create({ address: '192.0.2.9', meaning: m.AddressMeaning.DESTINATION }) })).mutation.targets[0];
+      expect((await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail.item.fields.find(f => f.name === 'meaning')?.value.text).toBe('ADDRESS_MEANING_DESTINATION');
+      const page = await browser.newPage({ viewport: { width, height: 900 }, isMobile: width < 600, hasTouch: width < 600 });
+      page.setDefaultTimeout(5000);
+      try {
+        await page.goto(`${server.url}/#/?view=1&asset=${target.assetId}&incarnation=${target.incarnation}`);
+        await page.getByRole('button', { name: 'Edit resource', exact: true }).click();
+        const dialog = page.getByRole('dialog', { name: 'Edit resource', exact: true });
+        await expect(dialog.getByRole('combobox', { name: 'IP address change', exact: true })).toHaveValue('preserve');
+        await dialog.getByRole('button', { name: 'More known details', exact: true }).click();
+        await dialog.getByRole('combobox', { name: 'Known prefix length change', exact: true }).selectOption('set');
+        await dialog.getByLabel('Known prefix length', { exact: true }).fill('24');
+        await dialog.getByRole('combobox', { name: 'Address meaning change', exact: true }).selectOption('set');
+        await dialog.getByRole('combobox', { name: 'Address meaning', exact: true }).selectOption('ADDRESS_MEANING_UNSPECIFIED');
+        await dialog.getByRole('combobox', { name: 'Prefix relationship', exact: true }).selectOption('new');
+        await dialog.getByLabel('Prefix name (optional)', { exact: true }).fill(`Sparse edit subnet ${width}`);
+        await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
+        const review = dialog.getByRole('region', { name: 'Review known address', exact: true });
+        await expect(review).toContainText('192.0.2.0/24');
+        await expect(review.locator('dt').filter({ hasText: /^Address meaning$/ })).toBeVisible();
+        await expect(review.locator('dd').filter({ hasText: /^unspecified$/ })).toBeVisible();
+        await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        const detail = (await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail;
+        expect(detail.item.target).toEqual(target);
+        expect(detail.item.fields.find(f => f.name === 'address')?.value.text).toBe('192.0.2.9');
+        // Unknown meaning removes the previous assertion instead of persisting a redundant default.
+        expect(detail.item.fields.find(f => f.name === 'meaning')).toBeUndefined();
+        const membership = detail.relations.filter(r => r.kind === m.RelationKind.MEMBER_OF);
+        expect(membership).toHaveLength(1);
+        expect((await rpc({ oneofKind: 'read', read: m.Read.create({ target: membership[0].to }) })).detail.item.fields.find(f => f.name === 'cidr')?.value.text).toBe('192.0.2.0/24');
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      } finally { await page.close(); }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('allocation form creates a canonical prefix without an optional label on desktop and phone', async ({ browser }) => {
   // The allocation form itself must accept an empty label, not just import or known-address paths.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-unnamed-prefix-allocation-')); const server = await host(dir);
