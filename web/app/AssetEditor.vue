@@ -251,7 +251,7 @@ async function save() {
 <p v-if="f.id === 'virtualization_role'" class="hint">{{ kind === AssetKind.DEVICE ? 'This retired field can only be cleared. Set virtualization roles on OS installations.' : 'Requires installed and enabled Hyper-V (Windows) or virtualization components (Linux). Leave unknown when unverified.' }}</p>
 </div></template>
 </template>
-<AddressPrefix v-if="known && !preparing" v-show="!addressReview" ref="prefixEditor" v-model="prefixChoice" :address="values.address ?? ''" :editing="!!item" :initial-prefix="initialPrefix" :working="working" />
+<AddressPrefix v-if="known && !preparing" :key="key(item?.target)+'/'+key(choice?.parent?.target)+'/'+key(initialPrefix?.target)" v-show="!addressReview" ref="prefixEditor" v-model="prefixChoice" :address="values.address ?? ''" :editing="!!item" :initial-prefix="initialPrefix" :working="working" />
 <section v-if="addressReview" aria-label="Review known address"><h3>Review known address</h3><dl>
 <dt>Address</dt><dd>{{ addressReview.address }}</dd>
 <dt>Assignment mask</dt><dd>{{ reviewedAddress?.clearPrefixLength ? 'Clear explicitly' : addressReview.prefixLength === undefined ? 'Unknown' : '/'+addressReview.prefixLength }}</dd>

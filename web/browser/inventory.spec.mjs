@@ -6,6 +6,39 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 
+test('changing the creation owner resets prefix choices without losing the address draft', async ({ page }) => {
+  // A prefix selected for one owner must not silently accompany a different creation context.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-owner-')); const server = await host(dir);
+  page.setDefaultTimeout(5000);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const owners = [];
+    for (const name of ['First server', 'Second server']) owners.push((await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: [{ name: 'name', value: { oneofKind: 'text', text: name } }] }) })).mutation.targets[0]);
+    const prefix = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name: 'Previously selected subnet', cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
+    const scope = owners.map(owner => `scope=${owner.assetId}`).join('&') + '&' + owners.map(owner => `scopeInc=${owner.incarnation}`).join('&');
+    await page.goto(`${server.url}/#/?view=1&${scope}`);
+    await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Create inside', { exact: true }).selectOption(`${owners[0].assetId}/${owners[0].incarnation}`);
+    await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'address reference' });
+    await dialog.getByLabel('IP address', { exact: true }).fill('192.0.2.42/24');
+    await dialog.getByLabel('Prefix relationship', { exact: true }).selectOption('existing');
+    await dialog.getByLabel('Existing prefix', { exact: true }).selectOption(`${prefix.assetId}/${prefix.incarnation}`);
+    await dialog.getByLabel('Create inside', { exact: true }).selectOption(`${owners[1].assetId}/${owners[1].incarnation}`);
+    await expect(dialog.getByLabel('IP address', { exact: true })).toHaveValue('192.0.2.42/24');
+    await expect(dialog.getByLabel('Prefix relationship', { exact: true })).toHaveValue('new');
+    await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
+    await expect(dialog.getByRole('region', { name: 'Review known address' })).toContainText('New prefix, namespace unknown');
+    await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    const params = new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
+    const detail = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: { assetId: params.get('asset'), incarnation: params.get('incarnation') } }) })).detail;
+    const memberships = detail.relations.filter(relation => relation.kind === m.RelationKind.MEMBER_OF);
+    expect(memberships).toHaveLength(1);
+    expect(memberships[0].to.assetId).not.toBe(prefix.assetId);
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('network option searches cannot restore stale reference reads or cursors', async ({ page }) => {
   // Hold a real selected-reference read while a later search acquires a newer inventory revision.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-network-option-race-')); const server = await host(dir);
