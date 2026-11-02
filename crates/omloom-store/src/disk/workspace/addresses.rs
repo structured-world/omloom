@@ -363,7 +363,14 @@ impl Tx<'_> {
         if request.changes.iter().any(|f| {
             matches!(
                 f.name.as_str(),
-                "name" | "serial" | "address" | "prefix_length" | "meaning" | "zone" | "binding"
+                "name"
+                    | "serial"
+                    | "address"
+                    | "prefix_length"
+                    | "meaning"
+                    | "zone"
+                    | "binding"
+                    | "broadcast"
             )
         }) {
             return Err(Error::Invalid);

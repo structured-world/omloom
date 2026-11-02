@@ -510,6 +510,29 @@ fn prefix_refinement_checks_members_beyond_one_page() -> TestResult {
     Ok(())
 }
 
+// Broadcast has one typed owner; arbitrary field changes cannot persist a second representation.
+#[test]
+fn address_changes_cannot_bypass_broadcast_validation() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let before = store.usage()?;
+    for address in ["2001:db8::8", "192.0.2.8", "192.0.2.8/31"] {
+        let request = api::Address {
+            address: Some(address.into()),
+            changes: vec![text_field("broadcast", "192.0.2.255")],
+            ..Default::default()
+        };
+        for command in [C::PreviewAddress(request.clone()), C::Address(request)] {
+            assert!(matches!(
+                command_at(&store, command, revision(&store)?),
+                Err(Error::Invalid)
+            ));
+            assert_eq!(store.usage()?, before);
+        }
+    }
+    Ok(())
+}
+
 // Generic relationship commands cannot bypass the address owner's range invariant.
 #[test]
 fn ordinary_membership_validates_the_known_address() -> TestResult {
