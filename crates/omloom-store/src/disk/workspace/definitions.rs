@@ -593,12 +593,31 @@ impl Tx<'_> {
             "name" | "serial" if kind == wire::AssetKind::AddressReference as i32 => {
                 Err(Error::Invalid)
             }
-            "address" | "prefix_length" | "meaning" | "zone" | "binding"
+            "address" | "prefix_length" | "meaning" | "zone" | "binding" | "broadcast"
+            | "prefix" | "create_prefix" | "prefix_name"
                 if kind == wire::AssetKind::AddressReference as i32 =>
             {
                 match (value.name.as_str(), value.value.as_ref()) {
-                    ("address", Some(field::Value::Text(s)))
-                        if s.parse::<std::net::IpAddr>().is_ok() =>
+                    ("address", Some(field::Value::Text(s))) => {
+                        let mut address = api::Address {
+                            address: Some(s.clone()),
+                            ..Default::default()
+                        };
+                        addresses::knowledge::normalize(&mut address)
+                    }
+                    ("broadcast", Some(field::Value::Text(s)))
+                        if s.parse::<std::net::Ipv4Addr>().is_ok() =>
+                    {
+                        Ok(())
+                    }
+                    ("prefix", Some(field::Value::Text(s)))
+                        if network::groups::reference(s).is_ok() =>
+                    {
+                        Ok(())
+                    }
+                    ("create_prefix", Some(field::Value::Flag(_))) => Ok(()),
+                    ("prefix_name", Some(field::Value::Text(s)))
+                        if s.len() <= 160 && !s.chars().any(char::is_control) =>
                     {
                         Ok(())
                     }
@@ -619,12 +638,24 @@ impl Tx<'_> {
                         Ok(())
                     }
                     (
-                        "prefix_length" | "zone" | "binding",
+                        "prefix_length" | "zone" | "binding" | "broadcast" | "prefix",
                         Some(field::Value::Clear(EXPLICIT_CLEAR)),
                     ) => Ok(()),
                     _ => Err(Error::Invalid),
                 }
             }
+            "cidr" if kind == wire::AssetKind::Prefix as i32 => match &value.value {
+                Some(field::Value::Text(s))
+                    if s.len() <= 64 && s.parse::<ipnet::IpNet>().is_ok() =>
+                {
+                    Ok(())
+                }
+                _ => Err(Error::Invalid),
+            },
+            "address_space" if kind == wire::AssetKind::Prefix as i32 => match &value.value {
+                Some(field::Value::Text(s)) if network::groups::reference(s).is_ok() => Ok(()),
+                _ => Err(Error::Invalid),
+            },
             "name" | "description" | "serial" => match value.value.as_ref() {
                 Some(field::Value::Text(s))
                     if s.len() <= (if value.name == "name" { 160 } else { 2048 })
@@ -632,7 +663,11 @@ impl Tx<'_> {
                 {
                     Ok(())
                 }
-                Some(field::Value::Clear(EXPLICIT_CLEAR)) if value.name != "name" => Ok(()),
+                Some(field::Value::Clear(EXPLICIT_CLEAR))
+                    if value.name != "name" || kind == wire::AssetKind::Prefix as i32 =>
+                {
+                    Ok(())
+                }
                 _ => Err(Error::Invalid),
             },
             _ => {

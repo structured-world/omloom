@@ -74,7 +74,7 @@ fn csv_value(
         || matches!(name, "prefix_length" | "vlan_tag" | "drive_bays")
     {
         field::Value::Integer(value.parse().map_err(|_| Error::Invalid)?)
-    } else if kind == Some(api::FieldType::Boolean as i32) {
+    } else if kind == Some(api::FieldType::Boolean as i32) || name == "create_prefix" {
         match value {
             "true" => field::Value::Flag(true),
             "false" => field::Value::Flag(false),
@@ -104,13 +104,17 @@ impl Store {
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<api::Reply> {
-        if let Some(id) = request.preview {
+        if let Some(id) = &request.preview {
             id.parse::<AuthorityId>().map_err(|_| Error::Invalid)?;
             if !request.csv.is_empty() || !request.mappings.is_empty() {
                 return Err(Error::Invalid);
             }
             let key = format!("preview/{id}");
             let mut tx = self.begin()?;
+            let input = request.encode_to_vec();
+            if let Some(saved) = tx.creation_outcome(context, working, &input, "csv")? {
+                return Ok(reply(api::reply::Result::Mutation(saved)));
+            }
             tx.selection(context, working, true)?;
             let row = tx.get(&key)?.ok_or(Error::Expired)?;
             if string(&row, "owner")? != context.actor {
@@ -140,7 +144,7 @@ impl Store {
                     .get(&format!("{key}/{}", line.row))?
                     .ok_or(Error::Corrupt)?;
                 let external = string(&mapping, "object_id")?;
-                let target = tx.context_write(context, change, working, now)?;
+                let target = tx.context_import_write(context, change, working, now)?;
                 let mut data = target_props(target);
                 data.insert("source".into(), text(&source));
                 tx.put(
@@ -153,6 +157,7 @@ impl Store {
                 targets.push(target_wire(target));
             }
             tx.delete(&key)?;
+            tx.save_creation_outcome(context, working, &input, &targets, now, "csv")?;
             return Ok(mutation(tx.commit()?, targets));
         }
         if request.csv.len() > MAX_CSV
@@ -185,7 +190,9 @@ impl Store {
             if !destinations.insert(&selected.field) {
                 return Err(Error::Invalid);
             }
-            super::assets::validate_column(&selected.field, &definitions)?;
+            if !["prefix", "prefix_name", "create_prefix"].contains(&selected.field.as_str()) {
+                super::assets::validate_column(&selected.field, &definitions)?;
+            }
             let index = headers
                 .iter()
                 .position(|h| h == selected.source)
@@ -234,7 +241,6 @@ impl Store {
                     && matches!(
                         typed_kind,
                         wire::AssetKind::IpAddress
-                            | wire::AssetKind::Prefix
                             | wire::AssetKind::Vlan
                             | wire::AssetKind::AddressGroup
                     )
@@ -242,7 +248,7 @@ impl Store {
                     diagnostic = "resource kind (use reviewed network allocation)".into();
                     return Err(Error::Invalid);
                 }
-                if target.is_none() {
+                if target.is_none() && typed_kind != wire::AssetKind::Prefix {
                     tx.creation_parent(context, working, request.parent.as_ref(), typed_kind)?;
                 }
                 let expected = existing
@@ -255,6 +261,21 @@ impl Store {
                     diagnostic = format!("column '{}'", headers.get(*index).ok_or(Error::Invalid)?);
                     let cell = line.get(*index).ok_or(Error::Invalid)?;
                     if cell.is_empty()
+                        && typed_kind == wire::AssetKind::Prefix
+                        && matches!(*name, "name" | "address_space")
+                    {
+                        continue;
+                    }
+                    if cell.is_empty()
+                        && typed_kind == wire::AssetKind::AddressReference
+                        && matches!(
+                            *name,
+                            "prefix" | "prefix_name" | "broadcast" | "create_prefix"
+                        )
+                    {
+                        continue;
+                    }
+                    if cell.is_empty()
                         && typed_kind == wire::AssetKind::Device
                         && omloom_contracts::equipment::FIELDS.contains(name)
                     {
@@ -262,7 +283,21 @@ impl Store {
                     }
                     let field =
                         csv_value(name, cell, &definitions, &claim_budget, &mut claim_inputs)?;
-                    tx.require_changes(context, write_target, kind, std::slice::from_ref(&field))?;
+                    if typed_kind == wire::AssetKind::Prefix
+                        && matches!(*name, "cidr" | "address_space")
+                    {
+                        tx.validate_field(kind, &field)?;
+                        if !context.field(write_target, kind, "network", true) {
+                            return Err(Error::Denied);
+                        }
+                    } else {
+                        tx.require_changes(
+                            context,
+                            write_target,
+                            kind,
+                            std::slice::from_ref(&field),
+                        )?;
+                    }
                     fields.push(field);
                 }
                 let change = api::Write {
@@ -280,6 +315,15 @@ impl Store {
                     diagnostic = "address facts (IP family, mask and local zone; resolve canonical mappings separately)".into();
                     tx.preview_address(&change)?;
                 }
+                if typed_kind == wire::AssetKind::Prefix
+                    && (change.target.is_none()
+                        || change
+                            .changes
+                            .iter()
+                            .any(|field| ["cidr", "address_space"].contains(&field.name.as_str())))
+                {
+                    tx.prefix_write(context, change.clone())?;
+                }
                 tx.validate_software_state(write_target, typed_kind, &change.changes)?;
                 Ok((external, change))
             })();
@@ -290,6 +334,25 @@ impl Store {
         }
         if rows.is_empty() {
             return Err(Error::Invalid);
+        }
+        if rows.iter().all(|(_, row)| row.change.is_some()) {
+            let mut simulation = self.begin()?;
+            for (_, row) in &mut rows {
+                if let Some(change) = row.change.clone()
+                    && matches!(
+                        wire::AssetKind::try_from(change.kind),
+                        Ok(wire::AssetKind::Prefix | wire::AssetKind::AddressReference)
+                    )
+                    && let Err(error) =
+                        simulation.context_import_write(context, change, working, now)
+                {
+                    row.change = None;
+                    row.diagnostic = format!(
+                        "Row {}: network facts cannot be accepted: {error}. Review prefix, namespace and relationship permissions.",
+                        row.row
+                    );
+                }
+            }
         }
         let valid = rows.iter().all(|(_, r)| r.change.is_some());
         let mut preview = api::Preview {

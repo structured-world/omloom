@@ -10,7 +10,7 @@ const csv = ref(''); const source = ref(''); const kind = ref<number>(AssetKind.
 const actions = ref<model.Actions>(); const parent = ref('');
 const revision = ref<bigint>();
 const parents = computed(() => [...new Map(actions.value?.creations.flatMap(c => c.parent?.target ? [[key(c.parent.target), c.parent] as const] : [])).values()]);
-const choices = computed(() => actions.value?.creations.filter(c => key(c.parent?.target) === parent.value) ?? []);
+const choices = computed(() => [...(actions.value?.creations ?? []), ...(actions.value?.allocations.filter(c => c.kind === AssetKind.PREFIX) ?? [])].filter(c => key(c.parent?.target) === parent.value));
 const choice = computed(() => choices.value.find(c => c.kind === kind.value));
 watch(choices, options => { if (!options.some(c => c.kind === kind.value) && options[0]) kind.value = options[0].kind; });
 onMounted(async () => { try {
@@ -19,7 +19,8 @@ onMounted(async () => { try {
   if (parents.value.length === 1) parent.value = key(parents.value[0]!.target);
 } catch (e) { error.value = String(e); } });
 const mappings = ref([{ source: 'name', field: 'name' }]);
-const destinations = computed(() => [{ id: 'name', name: 'Name' }, { id: 'dns_name', name: 'DNS name' }, { id: 'description', name: 'Description' }, { id: 'serial', name: 'Serial number' }, { id: 'address', name: 'IP address' }, { id: 'prefix_length', name: 'Known prefix length' }, { id: 'meaning', name: 'Address meaning' }, { id: 'zone', name: 'Known local IPv6 zone' }, ...equipmentFields.map(id=>({id,name:id.replaceAll('_',' ')})), ...softwareFields(choice.value?.fields ?? []).filter(f=>!equipmentFields.includes(f.id)), ...props.definitions.filter(d => !d.retired && d.kinds.includes(kind.value))].filter(f => choice.value?.fields.includes(f.id)));
+const networkInputs = [ { id: 'cidr', name: 'Prefix CIDR' }, { id: 'address_space', name: 'Address space reference' }, { id: 'broadcast', name: 'Explicit endpoint broadcast' }, { id: 'prefix', name: 'Selected prefix reference' }, { id: 'create_prefix', name: 'Ensure prefix membership' }, { id: 'prefix_name', name: 'Optional prefix name' } ];
+const destinations = computed(() => [{ id: 'name', name: 'Name' }, { id: 'dns_name', name: 'DNS name' }, { id: 'description', name: 'Description' }, { id: 'serial', name: 'Serial number' }, { id: 'address', name: 'IP address' }, { id: 'prefix_length', name: 'Known prefix length' }, { id: 'meaning', name: 'Address meaning' }, { id: 'zone', name: 'Known local IPv6 zone' }, ...networkInputs, ...equipmentFields.map(id=>({id,name:id.replaceAll('_',' ')})), ...softwareFields(choice.value?.fields ?? []).filter(f=>!equipmentFields.includes(f.id)), ...props.definitions.filter(d => !d.retired && d.kinds.includes(kind.value))].filter(f => choice.value?.fields.includes(f.id)));
 async function run(apply: boolean) {
   error.value = '';
   try {

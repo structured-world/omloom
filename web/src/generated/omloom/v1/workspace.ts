@@ -894,6 +894,13 @@ export interface Creation {
      * @generated from protobuf field: repeated string fields = 3
      */
     fields: string[];
+    /**
+     * Explicit Prefix context for known-address creation, with only permitted
+     * current discriminators. This supplies membership, never ownership or grants.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.Item prefix_context = 4
+     */
+    prefixContext?: Item;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Actions
@@ -2444,6 +2451,13 @@ export interface HostIdentitySubject {
      * @generated from protobuf field: repeated omloom.v1.Relation relations = 4
      */
     relations: Relation[];
+    /**
+     * Permitted immutable domain facts used to assess duplicate compatibility.
+     * These explain Prefix CIDR/namespace; they are not selectable field copies.
+     *
+     * @generated from protobuf field: repeated omloom.v1.Field domain_fields = 5
+     */
+    domainFields: Field[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.HostIdentityComparison
@@ -2835,7 +2849,8 @@ export interface Address {
      */
     expected?: bigint;
     /**
-     * User-known IPv4/IPv6 literal, without an invented mask or forwarding context.
+     * User-known IPv4/IPv6 literal or IP/CIDR, optionally followed by `brd IPv4`,
+     * at most 192 UTF-8 bytes, without an invented mask or forwarding context.
      * Required on creation; omission preserves it on edit without echoing a
      * field the caller may not read. A scoped literal uses the zone field.
      *
@@ -2924,6 +2939,47 @@ export interface Address {
      * @generated from protobuf field: optional uint32 priority = 15
      */
     priority?: number;
+    /**
+     * User-selected existing Prefix knowledge, independently of canonical binding.
+     * Omission preserves a prior relationship; clear_prefix explicitly removes it.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef prefix = 16
+     */
+    prefix?: AssetRef;
+    /**
+     * User requests a new unresolved Prefix from the supplied assignment mask.
+     * The server derives CIDR and commits the prefix and fact together. Exclusive
+     * with prefix and clear_prefix; this never allocates an address.
+     *
+     * @generated from protobuf field: bool create_prefix = 17
+     */
+    createPrefix: boolean;
+    /**
+     * Optional user label for create_prefix, at most 160 UTF-8 bytes. An omitted
+     * label is derived for presentation, not stored as another source of truth.
+     *
+     * @generated from protobuf field: optional string prefix_name = 18
+     */
+    prefixName?: string;
+    /**
+     * User/source-supplied IPv4 endpoint broadcast, not a prefix allocation bound.
+     * IPv6 and incompatible prefix lengths reject this assertion.
+     *
+     * @generated from protobuf field: optional string broadcast = 19
+     */
+    broadcast?: string;
+    /**
+     * Explicit removal of the selected Prefix knowledge relationship.
+     *
+     * @generated from protobuf field: bool clear_prefix = 20
+     */
+    clearPrefix: boolean;
+    /**
+     * Explicit removal of the broadcast claim; incompatible with broadcast.
+     *
+     * @generated from protobuf field: bool clear_broadcast = 21
+     */
+    clearBroadcast: boolean;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.AddressAttributeChange
@@ -2941,6 +2997,47 @@ export interface AddressAttributeChange {
      * @generated from protobuf field: omloom.workspace.v1.CurrentAddress after = 2
      */
     after?: CurrentAddress;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.AddressReview
+ */
+export interface AddressReview {
+    /**
+     * Current installation revision used by the complete transient validation.
+     *
+     * @generated from protobuf field: uint64 revision = 1
+     */
+    revision: bigint;
+    /**
+     * Server-normalized address, only when that field is currently readable.
+     *
+     * @generated from protobuf field: optional string address = 2
+     */
+    address?: string;
+    /**
+     * Accepted assignment mask when supplied/known and readable; absent is unknown.
+     *
+     * @generated from protobuf field: optional uint32 prefix_length = 3
+     */
+    prefixLength?: number;
+    /**
+     * Known host-local zone when readable; never an allocation namespace.
+     *
+     * @generated from protobuf field: optional string zone = 4
+     */
+    zone?: string;
+    /**
+     * Explicit endpoint broadcast when readable, separate from calculated broadcast.
+     *
+     * @generated from protobuf field: optional string broadcast = 5
+     */
+    broadcast?: string;
+    /**
+     * Canonical CIDR of the explicitly selected or newly proposed Prefix.
+     *
+     * @generated from protobuf field: optional string prefix_cidr = 6
+     */
+    prefixCidr?: string;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.AddressDelta
@@ -3091,6 +3188,8 @@ export interface Network {
     vrid?: number;
     /**
      * Explicit ordinary inventory name, not proof of observed network health.
+     * Optional for Prefix: empty preserves an existing label or creates an unnamed
+     * prefix. Clear an existing label explicitly through the ordinary Write field.
      *
      * @generated from protobuf field: string name = 10
      */
@@ -5695,6 +5794,14 @@ export interface Request {
          */
         physical: Physical;
     } | {
+        oneofKind: "previewAddress";
+        /**
+         * Validate a known-address command without committing resources or a draft.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.Address preview_address = 35
+         */
+        previewAddress: Address;
+    } | {
         oneofKind: undefined;
     };
 }
@@ -5891,6 +5998,14 @@ export interface Reply {
          * @generated from protobuf field: omloom.workspace.v1.PhysicalView physical = 23
          */
         physical: PhysicalView;
+    } | {
+        oneofKind: "addressReview";
+        /**
+         * Transient validated known-address summary, not accepted inventory.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.AddressReview address_review = 24
+         */
+        addressReview: AddressReview;
     } | {
         oneofKind: undefined;
     };
@@ -6389,7 +6504,13 @@ export enum IdentityDecision {
     /**
      * @generated from protobuf enum value: IDENTITY_DECISION_DUPLICATE_INSTALLATION = 3;
      */
-    DUPLICATE_INSTALLATION = 3
+    DUPLICATE_INSTALLATION = 3,
+    /**
+     * Explicit duplicate Prefix conclusion; CIDR equality alone supplies no decision.
+     *
+     * @generated from protobuf enum value: IDENTITY_DECISION_DUPLICATE_RESOURCE = 4;
+     */
+    DUPLICATE_RESOURCE = 4
 }
 /**
  * @generated from protobuf enum omloom.workspace.v1.HostNetworkPart
@@ -7272,7 +7393,8 @@ class Creation$Type extends MessageType<Creation> {
         super("omloom.workspace.v1.Creation", [
             { no: 1, name: "kind", kind: "enum", T: () => ["omloom.v1.AssetKind", AssetKind, "ASSET_KIND_"] },
             { no: 2, name: "parent", kind: "message", T: () => Item },
-            { no: 3, name: "fields", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ }
+            { no: 3, name: "fields", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "prefix_context", kind: "message", T: () => Item }
         ]);
     }
 }
@@ -7943,7 +8065,8 @@ class HostIdentitySubject$Type extends MessageType<HostIdentitySubject> {
             { no: 1, name: "item", kind: "message", T: () => Item },
             { no: 2, name: "identity", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostIdentityObservation },
             { no: 3, name: "sources", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
-            { no: 4, name: "relations", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Relation }
+            { no: 4, name: "relations", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Relation },
+            { no: 5, name: "domain_fields", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Field }
         ]);
     }
 }
@@ -8192,7 +8315,13 @@ class Address$Type extends MessageType<Address> {
             { no: 12, name: "changes", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Field },
             { no: 13, name: "allocation", kind: "message", T: () => Network },
             { no: 14, name: "interface", kind: "message", T: () => AssetRef },
-            { no: 15, name: "priority", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ }
+            { no: 15, name: "priority", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ },
+            { no: 16, name: "prefix", kind: "message", T: () => AssetRef },
+            { no: 17, name: "create_prefix", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 18, name: "prefix_name", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 19, name: "broadcast", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 20, name: "clear_prefix", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 21, name: "clear_broadcast", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
         ]);
     }
 }
@@ -8213,6 +8342,23 @@ class AddressAttributeChange$Type extends MessageType<AddressAttributeChange> {
  * @generated MessageType for protobuf message omloom.workspace.v1.AddressAttributeChange
  */
 export const AddressAttributeChange = new AddressAttributeChange$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class AddressReview$Type extends MessageType<AddressReview> {
+    constructor() {
+        super("omloom.workspace.v1.AddressReview", [
+            { no: 1, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 2, name: "address", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "prefix_length", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ },
+            { no: 4, name: "zone", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 5, name: "broadcast", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 6, name: "prefix_cidr", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.AddressReview
+ */
+export const AddressReview = new AddressReview$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class AddressDelta$Type extends MessageType<AddressDelta> {
     constructor() {
@@ -9324,7 +9470,8 @@ class Request$Type extends MessageType<Request> {
             { no: 31, name: "resolve_identity", kind: "message", oneof: "command", T: () => ResolveIdentity },
             { no: 32, name: "prepare_vm_placement", kind: "message", oneof: "command", T: () => PrepareVmPlacement },
             { no: 33, name: "evaluate_requirements", kind: "message", oneof: "command", T: () => EvaluateRequirements },
-            { no: 34, name: "physical", kind: "message", oneof: "command", T: () => Physical }
+            { no: 34, name: "physical", kind: "message", oneof: "command", T: () => Physical },
+            { no: 35, name: "preview_address", kind: "message", oneof: "command", T: () => Address }
         ]);
     }
 }
@@ -9358,7 +9505,8 @@ class Reply$Type extends MessageType<Reply> {
             { no: 20, name: "resolved_identity", kind: "message", oneof: "result", T: () => ResolvedIdentity },
             { no: 21, name: "vm_placement_review", kind: "message", oneof: "result", T: () => VmPlacementReview },
             { no: 22, name: "requirement_evaluation", kind: "message", oneof: "result", T: () => RequirementEvaluation },
-            { no: 23, name: "physical", kind: "message", oneof: "result", T: () => PhysicalView }
+            { no: 23, name: "physical", kind: "message", oneof: "result", T: () => PhysicalView },
+            { no: 24, name: "address_review", kind: "message", oneof: "result", T: () => AddressReview }
         ]);
     }
 }

@@ -368,6 +368,12 @@ impl Store {
                 working.as_ref().ok_or(Error::Invalid)?,
                 now,
             ),
+            C::PreviewAddress(address) => self.workspace_preview_address(
+                context,
+                address,
+                working.as_ref().ok_or(Error::Invalid)?,
+                now,
+            ),
             C::HostNetwork(evidence) => self.workspace_host_network(
                 context,
                 evidence,

@@ -22,16 +22,16 @@ async function renderer(name) {
   return (await import(pathToFileURL(outfile).href)).render;
 }
 
-async function equipmentFormatter() {
+async function apiFormatter(name = 'input') {
   const outfile=resolve('dist/presentation/equipment-api.mjs');
   await build({entryPoints:['web/app/api.ts'],bundle:true,platform:'node',format:'esm',packages:'external',outfile});
   globalThis.location=new URL('http://127.0.0.1');
-  return (await import(pathToFileURL(outfile).href)).input;
+  return (await import(pathToFileURL(outfile).href))[name];
 }
 
 test('equipment references keep opaque issuer key and basis distinguishable',async()=>{
   // Delimiters in opaque components cannot disguise distinct references.
-  const input=await equipmentFormatter();
+  const input=await apiFormatter();
   const left={issuer:'a / b',key:'c',basis:'v1'};
   const right={issuer:'a',key:'b / c',basis:'v1'};
   for(const mode of ['model','alternatives']){
@@ -43,10 +43,25 @@ test('equipment references keep opaque issuer key and basis distinguishable',asy
 
 test('incomplete equipment alternatives name the field that remains unknown',async()=>{
   // A drive bus or manufacturer alternative is not an unresolved model identity.
-  const input=await equipmentFormatter();
+  const input=await apiFormatter();
   for(const name of ['model','variant','manufacturer','drive_bus']){
     const claim={name,value:{oneofKind:'equipment',equipment:{basis:'Partial label',assertion:{oneofKind:'alternatives',alternatives:{candidates:[],excluded:[],exhaustive:false}}}}};
     assert.ok(input(claim).includes(`Incomplete alternatives; other ${name.replaceAll('_',' ')} values remain unknown`));
+  }
+});
+
+test('unnamed prefix labels use CIDR instead of clear markers', async () => {
+  // Clearing an optional label must preserve a useful, distinguishable identity choice.
+  const resourceName = await apiFormatter('resourceName');
+  const identityName = await apiFormatter('identityName');
+  const kinds = await apiFormatter('AssetKind');
+  const nulls = await apiFormatter('NullValue');
+  const target = { assetId: 'example-resource', incarnation: 'current' };
+  const cidr = { name: 'cidr', value: { oneofKind: 'text', text: '192.0.2.0/24' } };
+  for (const name of [undefined, { name: 'name', value: { oneofKind: 'clear', clear: nulls.NULL_VALUE } }]) {
+    const item = { kind: kinds.PREFIX, target, fields: name ? [name] : [] };
+    assert.equal(resourceName(item, [cidr]), '192.0.2.0/24');
+    assert.equal(identityName(item, [cidr]), '192.0.2.0/24 (resource)');
   }
 });
 

@@ -369,6 +369,27 @@ Network offers recording a known IP independently of allocation. A bare IPv4
 or IPv6 address needs no name, mask, namespace or VRF. Optional configured
 versus destination meaning, assignment mask and host-local IPv6 zone remain
 unknown unless supplied. Equal addresses on unrelated resources stay separate.
+Paste an IP/CIDR, optionally followed by `brd IPv4`, to review the host address
+without losing its host bits. Choose a new prefix with unknown namespace, an
+explicit existing prefix, or the address alone. A new prefix and its membership
+are committed atomically with the address. A prefix name is optional. The review
+shows a calculated subnet broadcast separately from an explicit endpoint setting;
+IPv6 and IPv4 /31 or /32 do not acquire a directed broadcast setting.
+
+An unresolved prefix is current knowledge, not an allocation or a VRF. It has no
+allocation uniqueness key. Equal CIDRs remain separate until explicitly reviewed.
+Its focused list includes declared members, rather than guessing membership from
+matching address text. Supply the namespace later to refine the same identity;
+ordinary scoped uniqueness and any existing canonical bindings are then checked.
+Compare two prefixes to review duplicate records and retain one identity. Different
+CIDRs, incompatible namespaces, protected references and hidden evidence cannot be
+silently reconciled. This uses the same reviewed correction and bounded reversal
+as other inventory identities, without transferring grants or credentials.
+
+Creation and import acceptance use the reviewed application revision. Repeating
+the same request at that revision recovers its bounded outcome while retained;
+expired outcomes do not permit an old revision to create the resources again.
+No raw request history or automatic address/version stream is stored.
 Allocate IP / prefix is a separate action in an address space or prefix;
 Create address space returns without losing the allocation draft.
 An explicit prefix container supplies its declared namespace and enforces its
@@ -472,9 +493,19 @@ resource or recreating a duplicate; reversing the correction restores that bindi
 Preparing a replacement atomically reclaims that importer's earlier review-only
 drafts and their rows. Failed preparation preserves the prior draft; another
 importer's previews remain under their own expiry and revision checks.
-New IPs, prefixes, VLANs and shared groups use the network allocation form,
-which checks their typed scopes and uniqueness. The generic CSV preview rejects
-these creation modes instead of promising a change that cannot be accepted.
+Known address CSV fields accept the same IP/CIDR grammar and explicit prefix
+selection or creation. Prefix rows accept `cidr`, optional `name` and optional
+`address_space`. Preview validates these through the same transaction owner and
+acceptance atomically applies the reviewed batch. Reimporting an unchanged source
+does not create another prefix, even when `prefix_name` is supplied. For an
+existing source row, `create_prefix` preserves a matching declared membership
+and its refined namespace and name; it never searches the estate for equal CIDRs.
+Empty optional `prefix`, `prefix_name`, `broadcast` and `create_prefix` CSV cells
+are omitted, allowing rows with different amounts of known information in one batch.
+The name option applies to a newly created prefix. A direct new-prefix command
+creates an independent identity instead. Canonical IP allocations, VLANs and shared groups
+use the allocation form with typed scopes and uniqueness; generic CSV does not
+promise those creation modes.
 
 Export applies the current object and field projection before counts and output.
 Spreadsheet CSV prefixes dangerous text with an apostrophe, including leading

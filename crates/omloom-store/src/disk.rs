@@ -22,7 +22,7 @@ use std::{
 type Properties = BTreeMap<String, Value>;
 type Result<T> = std::result::Result<T, Error>;
 const ROOT: &str = "installation";
-const SCHEMA_VERSION: u64 = 22;
+const SCHEMA_VERSION: u64 = 23;
 const PHYSICAL_TEXT: &[&str] = &["basis", "mounting", "item", "enclosure", "old_item"];
 const PHYSICAL_NUMBERS: &[&str] = &[
     "material_count",
@@ -399,6 +399,11 @@ impl Store {
         for name in ["candidate", "cursor", "snapshot"] {
             schema.add_property(PropertyDef::new(name, PropertyType::String));
         }
+        schema.add_property(PropertyDef::new("broadcast", PropertyType::String));
+        schema.add_property(PropertyDef::new(
+            "targets",
+            PropertyType::Array(Box::new(PropertyType::String)),
+        ));
         schema.add_property(PropertyDef::new(
             "virtualization_role",
             PropertyType::String,
@@ -568,6 +573,9 @@ impl Store {
                     .keys()
                     .filter(|key| !current.properties.contains_key(*key))
                     .any(|key| {
+                        if key == "broadcast" || key == "targets" {
+                            return false;
+                        }
                         if PHYSICAL_TEXT.contains(&key.as_str())
                             || PHYSICAL_NUMBERS.contains(&key.as_str())
                         {

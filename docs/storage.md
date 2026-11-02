@@ -168,8 +168,8 @@ envelope, but are **application accounting**, not total filesystem allocation.
 Pinned detail and unresolved work count against their budgets. Admission fails
 atomically when it cannot fit; it does not evict safety state.
 
-This unreleased storage format uses schema version 22. Supported versions 2
-through 21 upgrade in bounded restartable batches, including asset name/sort
+This unreleased storage format uses schema version 23. Supported versions 2
+through 22 upgrade in bounded restartable batches, including asset name/sort
 projections from accepted intent, normalized IP
 ordering and source-scoped current observation facts with separate freshness
 and accounting. No inventory history is added. The upgrade keeps restore fences
@@ -177,6 +177,14 @@ and admission accounting. Earlier experimental layouts are refused with
 `SchemaVersion`, never silently overwritten. See the
 [observation contract](inventory.md#current-network-observations) for migration
 of previously unavailable per-fact dates.
+Version 23 supports an explicit current endpoint broadcast and bounded reviewed
+creation outcomes. Outcomes retain the actor, request digest and resulting
+identities under the existing detail lifecycle, rather than request payloads or
+inventory snapshots. Their purpose is recovery after a lost creation/import
+reply; after reclamation, the old application revision rejects another admission.
+An unresolved prefix uses the existing current network record without a namespace
+or allocation index entry. Refinement admits that same identity into the real
+namespace under the normal uniqueness checks.
 Version 10 also identifies the software/workload kinds and immutable runtime
 namespace/uniqueness records. A container owns at most one namespace fence and
 one fully qualified instance claim. Explicit inventory removal reclaims both;

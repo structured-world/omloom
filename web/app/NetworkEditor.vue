@@ -22,6 +22,8 @@ const groupMode = ref(props.group ? 'existing' : 'new');
 const selectedGroup = ref(props.group?.target?.assetId ?? ''); const groupName = ref('');
 const lookup = ref(''); const coverage = ref('');
 const revision = ref<bigint>();
+const nameTouched = ref(false);
+const optionsCursor = ref<string>();
 const reviewed = ref<model.WorkingContext>();
 const contextItems = computed(() => {
   const selected = [space.value, link.value, routing.value, selectedGroup.value];
@@ -45,15 +47,13 @@ async function reviewContext() {
   } catch (e) { if (turn === reviewTurn) error.value = String(e); }
 }
 const matchingGroups = computed(() => items.value.filter(i => i.kind === K.ADDRESS_GROUP && input(i.fields.find(f => f.name === 'sharing')) === `SHARED_USE_${model.SharedUse[sharing.value]}`));
-async function loadOptions() {
+async function loadOptions(cursor?: string) {
   try {
     error.value = ''; coverage.value = '';
     const retained = items.value.filter(i => [space.value, link.value, routing.value, selectedGroup.value].includes(i.target?.assetId ?? ''));
-    const found: model.Item[] = []; let cursor: string | undefined;
-    do {
-      const r = await call({ oneofKind: 'query', query: model.Query.create({ roots: props.working.roots, kinds: [K.ADDRESS_SPACE, K.L2_DOMAIN, K.VRF, K.ADDRESS_GROUP], columns: ['name', 'sharing', 'vrid', 'link_scope'], search: lookup.value, limit: 100, cursor }) });
-      if (r.oneofKind !== 'page') throw Error('Unexpected response'); found.push(...r.page.items); cursor = r.page.next; revision.value = r.page.revision;
-    } while (cursor && found.length < 1000);
+    const r = await call({ oneofKind: 'query', query: model.Query.create({ roots: props.working.roots, kinds: [K.ADDRESS_SPACE, K.L2_DOMAIN, K.VRF, K.ADDRESS_GROUP], columns: ['name', 'sharing', 'vrid', 'link_scope'], search: lookup.value, limit: 25, cursor }) });
+    if (r.oneofKind !== 'page') throw Error('Unexpected response');
+    const found = r.page.items; optionsCursor.value = r.page.next; revision.value = r.page.revision;
     const choices = new Map([...retained, ...found].map(i => [i.target?.assetId, i]));
     // Accepted references can lie outside the bounded choices, but are not implicit clears.
     const selected = [space.value, link.value, routing.value, selectedGroup.value];
@@ -76,7 +76,7 @@ async function loadOptions() {
     if (cursor) coverage.value = 'Showing a bounded selection. Search for a scope or group name to narrow the options.';
   } catch (e) { error.value = String(e); }
 }
-onMounted(loadOptions);
+onMounted(() => loadOptions());
 function targetRef(id: string): AssetRef | undefined {
   if (!id) return undefined;
   const target = items.value.find(i => i.target?.assetId === id)?.target;
@@ -93,7 +93,7 @@ async function save() {
     if (shared && groupMode.value === 'existing' && (!chosen || input(chosen.fields.find(f => f.name === 'sharing')) !== `SHARED_USE_${model.SharedUse[sharing.value]}`)) throw Error('Select a group with the reviewed address mechanism.');
     const selectedVrrp = !!chosen && sharing.value === model.SharedUse.VRRP;
     const request = model.Network.create({
-      target: props.item?.target, expected: props.item?.revision, name: name.value, kind: kind.value, parent: props.item ? undefined : container.value?.target,
+      target: props.item?.target, expected: props.item?.revision, name: props.item?.kind === K.PREFIX && !nameTouched.value ? '' : name.value, kind: kind.value, parent: props.item ? undefined : container.value?.target,
       cidr: vlan || groupEdit ? '' : cidr.value, addressSpace: vlan || groupEdit ? undefined : targetRef(space.value),
       link: selectedVrrp ? undefined : targetRef(link.value), routing: vlan || groupEdit ? undefined : targetRef(routing.value),
       sharing: chosen ? model.SharedUse.UNSPECIFIED : vlan || kind.value === K.PREFIX ? model.SharedUse.EXCLUSIVE : sharing.value,
@@ -113,8 +113,8 @@ async function save() {
     <p class="hint">Address space controls uniqueness. L2 and routing scopes are independent; matching names, CIDRs or VLAN IDs never merge them.</p>
     <label v-if="parents.length > 1">Allocation container<select v-model="parent" required><option value="">Select a container</option><option v-for="p in parents" :key="p.target?.assetId" :value="p.target?.assetId">{{ display(p.fields.find(f => f.name === 'name')) }}</option></select></label>
     <p v-else-if="container" class="hint">Within {{ display(container.fields.find(f => f.name === 'name')) }}</p>
-    <label>Name<input v-model="name" required maxlength="160"></label>
-    <label>Find scopes and groups<input v-model="lookup" maxlength="256" @keydown.enter.prevent="loadOptions"></label><button type="button" @click="loadOptions">Find matching options</button><p v-if="coverage" class="hint">{{ coverage }}</p>
+    <label>{{ kind === K.PREFIX ? 'Name (optional)' : 'Name' }}<input v-model="name" :required="kind !== K.PREFIX" maxlength="160" @input="nameTouched = true"></label>
+    <label>Find scopes and groups<input v-model="lookup" maxlength="256" @keydown.enter.prevent="loadOptions()"></label><button type="button" @click="loadOptions()">Find matching options</button><button v-if="optionsCursor" type="button" @click="loadOptions(optionsCursor)">More scope options</button><p v-if="coverage" class="hint">{{ coverage }}</p>
     <label for="network-kind">Kind</label>
     <select id="network-kind" v-model="kind" :disabled="!!item"><option v-if="item || availableKinds.includes(K.IP_ADDRESS)" :value="K.IP_ADDRESS">IP address</option><option v-if="item || availableKinds.includes(K.PREFIX)" :value="K.PREFIX">Prefix</option><option v-if="item || availableKinds.includes(K.VLAN)" :value="K.VLAN">Scoped VLAN</option><option v-if="item?.kind === K.ADDRESS_GROUP" :value="K.ADDRESS_GROUP">Shared address group</option></select>
     <label v-if="[K.IP_ADDRESS, K.PREFIX].includes(kind)">Address / prefix<input v-model="cidr" required placeholder="192.0.2.1/24 or 2001:db8::1/64" maxlength="64"></label>
@@ -122,7 +122,7 @@ async function save() {
     <template v-for="entry in [{ name: 'Address space', kind: K.ADDRESS_SPACE }, { name: 'L2 domain', kind: K.L2_DOMAIN }, { name: 'Routing context', kind: K.VRF }]" :key="entry.kind">
       <template v-if="!(container && (entry.kind === K.ADDRESS_SPACE || (container.kind === K.L2_DOMAIN && entry.kind === K.L2_DOMAIN))) && (kind === K.ADDRESS_GROUP ? entry.kind === K.L2_DOMAIN && sharing === model.SharedUse.VRRP : kind !== K.VLAN || entry.kind === K.L2_DOMAIN) && !(kind === K.IP_ADDRESS && sharing === model.SharedUse.VRRP && groupMode === 'existing' && entry.kind === K.L2_DOMAIN)">
         <label :for="`scope-${entry.kind}`">{{ entry.name }}</label>
-        <select :id="`scope-${entry.kind}`" :value="entry.kind === K.ADDRESS_SPACE ? space : entry.kind === K.L2_DOMAIN ? link : routing" :required="entry.kind === K.ADDRESS_SPACE || (entry.kind === K.L2_DOMAIN && (kind === K.VLAN || sharing === model.SharedUse.VRRP))" @change="entry.kind === K.ADDRESS_SPACE ? space = ($event.target as HTMLSelectElement).value : entry.kind === K.L2_DOMAIN ? link = ($event.target as HTMLSelectElement).value : routing = ($event.target as HTMLSelectElement).value">
+        <select :id="`scope-${entry.kind}`" :value="entry.kind === K.ADDRESS_SPACE ? space : entry.kind === K.L2_DOMAIN ? link : routing" :required="(entry.kind === K.ADDRESS_SPACE && kind === K.IP_ADDRESS) || (entry.kind === K.L2_DOMAIN && (kind === K.VLAN || sharing === model.SharedUse.VRRP))" @change="entry.kind === K.ADDRESS_SPACE ? space = ($event.target as HTMLSelectElement).value : entry.kind === K.L2_DOMAIN ? link = ($event.target as HTMLSelectElement).value : routing = ($event.target as HTMLSelectElement).value">
           <option value="">Select {{ entry.name.toLowerCase() }}</option><option v-for="i in items.filter(i => i.kind === entry.kind)" :key="i.target?.assetId" :value="i.target?.assetId">{{ display(i.fields.find(f => f.name === 'name')) }} · {{ i.target?.assetId.slice(-6) }}</option>
         </select>
         <button v-if="entry.kind === K.ADDRESS_SPACE" type="button" @click="creatingScope = true">Create address space</button>

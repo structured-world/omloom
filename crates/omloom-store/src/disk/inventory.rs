@@ -1172,7 +1172,10 @@ pub(super) fn compatible(
             (from, to),
             (K::Device, K::Device) | (K::Service, K::Device | K::VirtualMachine)
         ),
-        R::MemberOf => matches!((from, to), (K::Interface, K::Lag) | (K::Device, K::Cluster)),
+        R::MemberOf => matches!(
+            (from, to),
+            (K::Interface, K::Lag) | (K::Device, K::Cluster) | (K::AddressReference, K::Prefix)
+        ),
         R::DependsOn => matches!((from, to), (K::Service, K::Service | K::Device)),
         R::ReleaseOf => from == K::SoftwareRelease && to == K::SoftwareProduct,
         R::InstalledRelease => from == K::SoftwareInstallation && to == K::SoftwareRelease,

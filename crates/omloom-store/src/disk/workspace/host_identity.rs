@@ -181,7 +181,8 @@ impl Tx<'_> {
             Ok(wire::AssetKind::Device
                 | wire::AssetKind::VirtualMachine
                 | wire::AssetKind::SoftwareInstallation
-                | wire::AssetKind::Interface)
+                | wire::AssetKind::Interface
+                | wire::AssetKind::Prefix)
         ) {
             return Err(Error::Invalid);
         }
@@ -200,6 +201,19 @@ impl Tx<'_> {
             }
         }
         Ok(api::HostIdentitySubject {
+            domain_fields: if kind == wire::AssetKind::Prefix as i32 {
+                let network = self
+                    .get(&format!("network/{}", network::identity(target)))?
+                    .ok_or(Error::Missing)?;
+                let columns = ["cidr", "address_space", "link_scope", "routing_context"]
+                    .into_iter()
+                    .filter(|f| context.field(target, kind, f, false))
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                network::projection(&network, &columns)?
+            } else {
+                Vec::new()
+            },
             item: Some(api::Item {
                 target: Some(target_wire(target)),
                 kind,

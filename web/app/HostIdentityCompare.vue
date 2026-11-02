@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue';
 import Dialog from './Dialog.vue';
 import HostIdentityEvidence from './HostIdentityEvidence.vue';
-import { call, model, display, label, key, AssetKind as K, RelationKind as R, type AssetRef } from './api';
+import { call, model, display, identityName as name, label, key, AssetKind as K, RelationKind as R, type AssetRef } from './api';
 const props = defineProps<{ left: AssetRef; right: AssetRef; working: model.WorkingContext }>();
 const emit = defineEmits<{ close: []; changed: [] }>();
 const comparison = ref<model.HostIdentityComparison>();
@@ -15,7 +15,6 @@ const drafts=ref<Draft[]>([]);
 const plan=ref<model.IdentityCorrectionView>();const receipt=ref<model.IdentityCorrectionApplied>();
 const layer=ref(K.SOFTWARE_INSTALLATION);const layerSearch=ref('');const layerPage=ref(model.Page.create());
 const layerLeft=ref<model.Item>();const layerRight=ref<model.Item>();
-const name=(item:model.Item|undefined)=>display(item?.fields.find(v=>v.name==='name'));
 const physical=(r:model.IdentityImpact['before'])=>r && [R.HAS_PORT,R.CARRIES,R.INSTALLED_IN,R.CONNECTED_TO,R.ON].includes(r.kind);
 const duplicate=(draft:Draft)=>draft.keep==='left'?draft.pair.right:draft.pair.left;
 const retained=(draft:Draft)=>draft.keep==='left'?draft.pair.left:draft.pair.right;
@@ -85,34 +84,36 @@ onMounted(load);
 </script>
 <template><Dialog title="Compare identity" @close="!busy && emit('close')">
 <template v-if="step==='compare'">
-<p>Compare hardware and installed operating systems separately. Different IPs do not prove different machines. Matching identifiers may be cloned, movable or reported by the same underlying source.</p>
+<p v-if="comparison?.left?.item?.kind !== K.PREFIX">Compare hardware and installed operating systems separately. Different IPs do not prove different machines. Matching identifiers may be cloned, movable or reported by the same underlying source.</p>
 <p v-if="busy" role="status">Loading the two selected resources…</p>
 <p v-if="error" role="alert">{{ error }}</p>
 <template v-if="comparison">
 <p>Current comparison at revision {{ comparison.revision.toString() }}. This read changes no inventory, grants or connections.</p>
 <p v-if="matches.length">Some identifiers match within the same layer and namespace. This supports review, not automatic merging or authenticated target verification.</p>
+<p v-else-if="comparison.left?.item?.kind === K.PREFIX">Compare the declared CIDR, namespace and relationships. Equal address text alone does not establish the same network.</p>
 <p v-else>No matching identity claims are available in this comparison. Missing evidence does not prove that these are different machines.</p>
 <div class="identity-pair"><section v-for="(subject, index) in [comparison.left, comparison.right]" :key="index" :aria-label="index === 0 ? 'First identity' : 'Second identity'">
-<template v-if="subject?.item"><h3>{{ display(subject.item.fields.find(v => v.name === 'name')) }}</h3>
-<p>{{ label(subject.item.kind) }}</p><dl><template v-for="field in subject.item.fields.filter(v => v.name !== 'name')" :key="field.name"><dt>{{ field.name.replaceAll('_', ' ') }}</dt><dd>{{ display(field) }}</dd></template></dl>
+<template v-if="subject?.item"><h3>{{ name(subject.item, subject.domainFields) }}</h3>
+<p>{{ label(subject.item.kind) }}</p><dl><template v-for="field in [...subject.item.fields.filter(v => v.name !== 'name'), ...subject.domainFields]" :key="field.name"><dt>{{ field.name.replaceAll('_', ' ') }}</dt><dd>{{ display(field) }}</dd></template></dl>
 <HostIdentityEvidence :observations="subject.identity" />
-<p v-if="!subject.identity.length">No identity evidence is available to this view. Do not infer hardware or installation continuity from the name.</p>
+<p v-if="!subject.identity.length && subject.item.kind !== K.PREFIX">No identity evidence is available to this view. Do not infer hardware or installation continuity from the name.</p>
 </template></section></div></template>
 <footer><button @click="emit('close')">Back</button><button v-if="error" :disabled="busy" @click="load">Retry comparison</button><button :disabled="busy||!comparison" @click="start">Plan identity correction</button></footer>
 </template>
 <template v-else-if="step==='decision'">
-<h3>What do these records represent?</h3><p>Identifiers support review; they cannot prove that two records are the same machine.</p>
+<h3>What do these records represent?</h3><p>Identifiers support review; they cannot establish that these records describe the same resource.</p>
 <label><input v-model="decision" type="radio" :value="model.IdentityDecision.KEEP_SEPARATE">Different or not established: keep separate</label>
-<label><input v-model="decision" type="radio" :value="model.IdentityDecision.DISTINCT_INSTALLATIONS">Same hardware, different OS installations</label>
-<label><input v-model="decision" type="radio" :value="model.IdentityDecision.DUPLICATE_INSTALLATION">Duplicate records of the same hardware and installation</label>
-<p>Separate OS installations retain their own services, interfaces and addresses. Duplicate installations require an explicit mapping at each layer.</p>
+<label v-if="comparison?.left?.item?.kind !== K.PREFIX"><input v-model="decision" type="radio" :value="model.IdentityDecision.DISTINCT_INSTALLATIONS">Same hardware, different OS installations</label>
+<label v-if="comparison?.left?.item?.kind !== K.PREFIX"><input v-model="decision" type="radio" :value="model.IdentityDecision.DUPLICATE_INSTALLATION">Duplicate records of the same hardware and installation</label>
+<label v-if="comparison?.left?.item?.kind === K.PREFIX"><input v-model="decision" type="radio" :value="model.IdentityDecision.DUPLICATE_RESOURCE">Duplicate records of the same prefix, with compatible namespace</label>
+<p v-if="comparison?.left?.item?.kind !== K.PREFIX">Separate OS installations retain their own services, interfaces and addresses. Duplicate installations require an explicit mapping at each layer.</p>
 <footer><button :disabled="busy" @click="step='compare'">Back</button><button :disabled="decision===model.IdentityDecision.UNSPECIFIED||busy" @click="decision===model.IdentityDecision.KEEP_SEPARATE?emit('close'):step='mapping'">Continue</button></footer>
 </template>
 <template v-else-if="step==='mapping'">
 <h3>Choose retained identities and values</h3>
 <section v-for="(draft,index) in drafts" :key="index" class="mapping" :aria-label="'Layer mapping '+(index+1)">
 <h4>{{ label(draft.pair.left?.item?.kind??K.UNSPECIFIED) }}</h4>
-<label>Retained identity<select v-model="draft.keep" @change="configure(draft)"><option :value="undefined" disabled>Choose explicitly</option><option value="left">{{ name(draft.pair.left?.item) }}</option><option value="right">{{ name(draft.pair.right?.item) }}</option></select></label>
+<label>Retained identity<select v-model="draft.keep" @change="configure(draft)"><option :value="undefined" disabled>Choose explicitly</option><option value="left">{{ name(draft.pair.left?.item, draft.pair.left?.domainFields) }}</option><option value="right">{{ name(draft.pair.right?.item, draft.pair.right?.domainFields) }}</option></select></label>
 <template v-if="draft.keep"><p>Retire {{ name(duplicate(draft)?.item) }}. Retain {{ name(retained(draft)?.item) }}.</p>
 <button type="button" @click="duplicate(draft)?.item?.fields.forEach(field=>draft.fields[field.name]='retained')">Keep all retained field values</button>
 <label v-for="field in duplicate(draft)?.item?.fields" :key="field.name">{{ field.name }}: duplicate {{ display(field) }}<select v-model="draft.fields[field.name]" :aria-label="'Resolve '+field.name+' in mapping '+(index+1)"><option :value="undefined" disabled>Choose explicitly</option><option value="retained">Keep retained: {{ display(retained(draft)?.item?.fields.find(v=>v.name===field.name)) }}</option><option value="duplicate">Use duplicate: {{ display(field) }}</option></select></label>

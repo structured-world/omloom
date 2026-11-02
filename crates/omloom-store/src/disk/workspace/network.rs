@@ -2,6 +2,7 @@ use super::*;
 use ipnet::IpNet;
 use std::net::IpAddr;
 pub(super) mod groups;
+mod knowledge;
 
 pub(super) fn identity(target: AssetRef) -> String {
     format!("{}/{}", target.asset, target.incarnation)
@@ -179,7 +180,20 @@ impl Store {
             return self.workspace_vlan(context, request, working, now);
         }
         let mut tx = self.begin()?;
+        let input = if kind == K::Prefix && request.target.is_none() {
+            Some(request.encode_to_vec())
+        } else {
+            None
+        };
+        if let Some(input) = &input
+            && let Some(saved) = tx.creation_outcome(context, working, input, "prefix")?
+        {
+            return Ok(reply(api::reply::Result::Mutation(saved)));
+        }
         let targets = self.workspace_network_in(&mut tx, context, request, working, now)?;
+        if let Some(input) = input {
+            tx.save_creation_outcome(context, working, &input, &targets, now, "prefix")?;
+        }
         Ok(mutation(tx.commit()?, targets))
     }
 
@@ -200,6 +214,9 @@ impl Store {
             return Err(Error::Invalid);
         }
         tx.resolve_allocation_parent(context, working, &mut request)?;
+        if kind == K::Prefix && request.address_space.is_none() {
+            return tx.workspace_unresolved_prefix(context, request, working, now);
+        }
         let space = parse_target(request.address_space.as_ref())?;
         let routing = request
             .routing
@@ -291,10 +308,14 @@ impl Store {
                 target: old_target.map(target_wire),
                 expected: request.expected,
                 kind: request.kind,
-                changes: vec![wire::Field {
-                    name: "name".into(),
-                    value: Some(field::Value::Text(request.name)),
-                }],
+                changes: if request.name.is_empty() && kind == K::Prefix {
+                    Vec::new()
+                } else {
+                    vec![wire::Field {
+                        name: "name".into(),
+                        value: Some(field::Value::Text(request.name)),
+                    }]
+                },
                 parent: None,
             },
             now,
@@ -407,11 +428,18 @@ impl Store {
         if let Some(group) = group {
             data.insert("group".into(), text(identity(group)));
         }
-        if old
-            .as_ref()
-            .is_some_and(|p| p.get("namespace") != data.get("namespace"))
+        if kind == K::Prefix
+            && old.as_ref().is_some_and(|row| {
+                row.get("address_space") != data.get("address_space")
+                    || row.get("cidr") != data.get("cidr")
+            })
         {
-            tx.delete(&string(old.as_ref().ok_or(Error::Corrupt)?, "namespace")?)?;
+            tx.check_prefix_members(context, target, &data)?;
+        }
+        if let Some(previous) = old.as_ref().and_then(|p| p.get("namespace"))
+            && Some(previous) != data.get("namespace")
+        {
+            tx.delete(previous.as_str().ok_or(Error::Corrupt)?)?;
         }
         tx.put(
             &owner_key,
@@ -612,12 +640,16 @@ impl Store {
                 "vlan_id",
                 "address",
                 "prefix_length",
+                "broadcast",
                 "meaning",
                 "zone",
                 "binding",
                 "name",
             ]
+            .into_iter()
+            .filter(|field| context.field(target, kind, field, false))
             .map(str::to_owned);
+            let columns: Vec<_> = columns.collect();
             fields.extend(
                 addresses::visible_projection(context, row, &columns)?
                     .into_iter()
@@ -793,7 +825,10 @@ impl Tx<'_> {
                     return Err(Error::Invalid);
                 }
                 (
-                    Some(groups::reference(&string(&network, "address_space")?)?),
+                    network
+                        .get("address_space")
+                        .map(|v| groups::reference(v.as_str().ok_or(Error::Corrupt)?))
+                        .transpose()?,
                     if link_local(block.addr()) {
                         Some(groups::reference(&string(&network, "link_scope")?)?)
                     } else {
@@ -859,7 +894,9 @@ impl Tx<'_> {
             // A replacement needs every stored setting to be readable. Name
             // lives on the asset root; absent optional settings cannot be lost.
             if columns.iter().any(|field| {
-                (*field == "name"
+                ((*field == "name"
+                    && (request.kind != wire::AssetKind::Prefix as i32
+                        || !request.name.is_empty()))
                     || existing
                         .as_ref()
                         .is_some_and(|row| row.contains_key(*field)))

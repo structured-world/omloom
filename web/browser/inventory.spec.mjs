@@ -6,6 +6,155 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 
+for (const width of [1440, 390]) test(`known prefix refinement, contextual creation, merge and CSV at ${width}px`, async ({ browser }) => {
+  // The same stored identities pass through the real desktop/phone forms and reviewed correction.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-refine-')); const server = await host(dir);
+  const page = await browser.newPage({ viewport: { width, height: 900 }, isMobile: width < 600, hasTouch: width < 600 });
+  page.setDefaultTimeout(5000);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const namespace = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.ADDRESS_SPACE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Workshop namespace' } }] }) })).mutation.targets[0];
+    const prefix = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name: 'Workshop subnet', cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
+    const path = `/#/?view=1&asset=${prefix.assetId}&incarnation=${prefix.incarnation}`;
+    await page.goto(server.url + path);
+    await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+    let dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'address reference' });
+    await expect(dialog.getByLabel('Prefix relationship', { exact: true })).toHaveValue('existing');
+    await expect(dialog.getByLabel('Existing prefix', { exact: true })).toHaveValue(`${prefix.assetId}/${prefix.incarnation}`);
+    await dialog.getByLabel('IP address', { exact: true }).fill('192.0.2.20');
+    await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
+    await expect(dialog.getByRole('region', { name: 'Review known address' })).toContainText('Selected prefix');
+    await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await page.goto(server.url + path);
+    await page.getByRole('button', { name: 'Review network settings', exact: true }).click();
+    dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Address space', { exact: true }).selectOption(namespace.assetId);
+    await dialog.getByRole('button', { name: 'Apply reviewed settings', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole('region', { name: 'Resource details' })).toContainText(namespace.assetId);
+    const retained = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: prefix }) })).detail.item;
+    expect(retained.target).toEqual(prefix);
+    await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) });
+    await page.goto(`${server.url}/#/?view=1`);
+    await page.getByRole('checkbox', { name: 'Select Workshop subnet', exact: true }).check();
+    await page.getByRole('checkbox', { name: /^Select 192\.0\.2\.0\/24 \([0-9a-f]{8}\)$/ }).check();
+    await page.getByRole('button', { name: 'Compare identity', exact: true }).click();
+    dialog = page.getByRole('dialog');
+    await dialog.getByRole('button', { name: 'Plan identity correction', exact: true }).click();
+    await dialog.getByRole('radio', { name: 'Duplicate records of the same prefix, with compatible namespace', exact: true }).check();
+    await dialog.getByRole('button', { name: 'Continue', exact: true }).click();
+    await expect(dialog.getByRole('combobox', { name: 'Retained identity', exact: true }).getByRole('option', { name: /^192\.0\.2\.0\/24 \([0-9a-f]{8}\)$/ })).toHaveCount(1);
+    await dialog.getByRole('combobox', { name: 'Retained identity', exact: true }).selectOption({ label: 'Workshop subnet' });
+    await dialog.getByRole('button', { name: 'Keep all retained field values', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Prepare correction preview', exact: true }).click();
+    await expect(dialog.getByRole('heading', { name: 'Review identity correction', exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Accept identity correction', exact: true }).click();
+    await expect(dialog.getByRole('heading', { name: 'Correction applied', exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+    if (width < 600) await page.getByRole('button', { name: 'More', exact: true }).click();
+    await page.getByRole('button', { name: 'Import CSV', exact: true }).click();
+    dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Source name').fill(`Known prefix source ${width}`);
+    await dialog.getByRole('combobox', { name: 'New resource kind', exact: true }).selectOption(String(m.AssetKind.PREFIX));
+    await dialog.getByLabel('CSV', { exact: true }).fill('external_id,cidr\nprefix-1,198.51.100.0/24');
+    await dialog.getByLabel('CSV column').fill('cidr');
+    await dialog.getByRole('combobox', { name: 'Inventory field', exact: true }).selectOption('cidr');
+    await dialog.getByRole('button', { name: 'Prepare preview', exact: true }).click();
+    await expect(dialog.getByRole('heading', { name: 'Review 1 rows', exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Accept reviewed rows', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    const prefixes = (await rpc({ oneofKind: 'query', query: m.Query.create({ kinds: [m.AssetKind.PREFIX], columns: ['cidr'], limit: 10 }) })).page;
+    expect(prefixes.total).toBe(2n);
+    expect(prefixes.items.some(item => item.fields.some(field => field.value.oneofKind === 'text' && field.value.text === '198.51.100.0/24'))).toBe(true);
+    await expect(page.getByRole('button', { name: '198.51.100.0/24', exact: true })).toBeVisible();
+    if (width < 600 && await page.getByRole('button', { name: 'More', exact: true }).getAttribute('aria-expanded') !== 'true') await page.getByRole('button', { name: 'More', exact: true }).click();
+    await page.getByRole('button', { name: 'Import CSV', exact: true }).click();
+    dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Source name').fill(`Known address source ${width}`);
+    await dialog.getByRole('combobox', { name: 'New resource kind', exact: true }).selectOption(String(m.AssetKind.ADDRESS_REFERENCE));
+    await dialog.getByLabel('CSV', { exact: true }).fill('external_id,address,create_prefix,prefix_name\nendpoint-1,203.0.113.9/24,true,Remote subnet');
+    for (const [index, field] of ['address', 'create_prefix', 'prefix_name'].entries()) {
+      if (index) await dialog.getByRole('button', { name: 'Add mapping', exact: true }).click();
+      await dialog.getByLabel('CSV column', { exact: true }).nth(index).fill(field);
+      await dialog.getByRole('combobox', { name: 'Inventory field', exact: true }).nth(index).selectOption(field);
+    }
+    await dialog.getByRole('button', { name: 'Prepare preview', exact: true }).click();
+    await expect(dialog.getByRole('heading', { name: 'Review 1 rows', exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Accept reviewed rows', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await page.getByRole('button', { name: 'Remote subnet', exact: true }).click();
+    await expect(page.getByRole('button', { name: '203.0.113.9', exact: true })).toBeVisible();
+    await page.goto(server.url + path);
+    await page.getByRole('button', { name: 'Edit resource', exact: true }).click();
+    dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Name change', { exact: true }).selectOption('clear');
+    await dialog.getByRole('button', { name: 'Save resource', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: '192.0.2.0/24', exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: `test-results/prefix-refinement-${width}.png`, fullPage: true });
+  } finally { await page.close(); await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('known IP/CIDR review preserves drafts and atomically creates an unresolved prefix on desktop and phone', async ({ browser }) => {
+  // A host address is not a network identity; review/back must not lose input or allocate an IP.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-known-prefix-'));
+  const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const page = await browser.newPage({ viewport: { width, height: 900 }, isMobile: width < 600, hasTouch: width < 600 });
+      page.setDefaultTimeout(5000);
+      try {
+        await page.goto(`${server.url}/#/?view=1`);
+        await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'address reference' });
+        const raw = '192.0.2.19/24 brd 192.0.2.254';
+        await dialog.getByLabel('IP address', { exact: true }).fill(raw);
+        await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
+        await expect(dialog.getByRole('region', { name: 'Review known address' })).toContainText('192.0.2.0/24');
+        await expect(dialog).toContainText('Calculated subnet broadcast: 192.0.2.255');
+        await expect(dialog).toContainText('192.0.2.254');
+        await dialog.getByRole('button', { name: 'Back to input', exact: true }).click();
+        await expect(dialog.getByLabel('IP address', { exact: true })).toHaveValue(raw);
+        await expect(dialog.getByLabel('Prefix relationship', { exact: true })).toHaveValue('new');
+        await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
+        await page.screenshot({ path: `test-results/known-prefix-review-${width}.png` });
+        await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('192.0.2.19');
+        await page.reload();
+        await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('192.0.2.254');
+        await page.getByRole('button', { name: 'Edit resource', exact: true }).click();
+        await dialog.getByRole('button', { name: 'More known details', exact: true }).click();
+        await dialog.getByLabel('Explicit endpoint broadcast change', { exact: true }).selectOption('clear');
+        await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
+        await expect(dialog).toContainText('The recorded endpoint broadcast will be cleared.');
+        await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('term', { name: /^broadcast$/i })).toHaveCount(0);
+        await expect(page.getByRole('region', { name: 'Resource details' })).not.toContainText('192.0.2.254');
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        await page.screenshot({ path: `test-results/known-prefix-${width}.png`, fullPage: true });
+        await page.goto(`${server.url}/#/?view=1`);
+        await expect(page.getByRole('checkbox', { name: /^Select 192\.0\.2\.0\/24 \([0-9a-f]{8}\)$/ })).toHaveCount(width === 1440 ? 1 : 2);
+      } finally { await page.close(); }
+    }
+    const prefixes = (await rpc({ oneofKind: 'query', query: m.Query.create({ kinds: [m.AssetKind.PREFIX], columns: ['name','cidr','address_space'], limit: 10 }) })).page;
+    expect(prefixes.total).toBe(2n);
+    for (const item of prefixes.items) {
+      expect(item.fields.find(field => field.name === 'name')).toBeUndefined();
+      expect(item.fields.find(field => field.name === 'address_space')).toBeUndefined();
+      expect(item.fields.find(field => field.name === 'cidr')?.value).toEqual({ oneofKind: 'text', text: '192.0.2.0/24' });
+    }
+    const spaces = (await rpc({ oneofKind: 'query', query: m.Query.create({ kinds: [m.AssetKind.ADDRESS_SPACE], limit: 1 }) })).page;
+    expect(spaces.total).toBe(0n);
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 async function host(directory, fixture = 'operator', grants) {
   const args = ['--data', directory, '--ui', 'dist/app', '--fixture', fixture];
   if (grants) args.push('--grants', grants);
@@ -2824,6 +2973,7 @@ test('description edits persist for every resource kind on desktop and phone', a
           const description = `Updated ${m.AssetKind[kind]} at ${width}`;
           await dialog.getByLabel('Description', { exact: true }).fill(description);
           await expect(dialog.getByLabel('Description change', { exact: true })).toHaveValue('set');
+          if (kind === m.AssetKind.ADDRESS_REFERENCE) await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
           await dialog.getByRole('button', { name: /Save (resource|known address)/, exact: true }).click();
           await expect(dialog).toBeHidden();
           await page.reload();
@@ -3639,6 +3789,7 @@ test('phone creates local components and returns through the original context', 
     await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'address reference' });
     await dialog.getByLabel('IP address', { exact: true }).fill('192.0.2.10');
     await expect(dialog.getByLabel('Address space', { exact: true })).toHaveCount(0);
+    await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
     await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
     await expect(dialog).toBeHidden();
     await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('192.0.2.10');
@@ -3938,6 +4089,7 @@ test('address mapping reviews a new allocation and commits its explicit assignme
     await dialog.getByRole('button',{name:'More known details',exact:true}).click();
     await dialog.getByLabel('Address meaning change',{exact:true}).selectOption('set');
     await dialog.getByLabel('Address meaning',{exact:true}).selectOption({label:'configured'});
+    await dialog.getByRole('button',{name:'Review known address',exact:true}).click();
     await dialog.getByRole('button',{name:'Save known address',exact:true}).click(); await expect(dialog).toBeHidden();
     await page.getByRole('button',{name:'Resolve address in broader scope',exact:true}).click();
     dialog = page.getByRole('dialog',{name:'Resolve address in broader scope',exact:true});
@@ -3970,7 +4122,7 @@ test('prefix context allocates and retrieves children without reselecting its na
     await expect(dialog).toContainText('Within Namespace under review');
     await expect(dialog.getByLabel('Address space',{exact:true})).toHaveCount(0);
     await dialog.getByLabel('Kind',{exact:true}).selectOption({label:'Prefix'});
-    await dialog.getByLabel('Name',{exact:true}).fill('Guest subnet');
+    await dialog.getByLabel('Name (optional)',{exact:true}).fill('Guest subnet');
     await dialog.getByLabel('Address / prefix',{exact:true}).fill('2001:db8:1::/64');
     await dialog.getByRole('button',{name:'Allocate',exact:true}).click(); await expect(dialog).toBeHidden();
     await page.getByRole('button',{name:'Guest subnet',exact:true}).click();
@@ -4094,6 +4246,7 @@ test('workspace creation starts with the relevant resource type', async ({ page 
     await page.getByRole('dialog').getByLabel('IP address', { exact: true }).fill('192.0.2.17');
     await expect(page.getByRole('dialog').getByLabel('Address space', { exact: true })).toHaveCount(0);
     await expect(page.getByRole('dialog').getByLabel('Routing context', { exact: true })).toHaveCount(0);
+    await page.getByRole('dialog').getByRole('button', { name: 'Review known address', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Save known address', exact: true }).click();
     await expect(page.getByRole('dialog')).toBeHidden();
     await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('192.0.2.17');

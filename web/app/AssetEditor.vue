@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import Dialog from './Dialog.vue';
 import PlacementPicker from './PlacementSearch.vue';
 import InitialAddresses from './InitialAddresses.vue';
+import AddressPrefix from './AddressPrefix.vue';
 import ObserveHypervisor from './ObserveHypervisor.vue';
 import EquipmentField from './EquipmentField.vue';
 import { equipmentFields as equipmentNames } from './equipment-fields';
@@ -18,6 +19,20 @@ const hypervisor = ref(!!props.initialHypervisor || (!props.item && props.view =
 const placement = ref<model.Item>(); const placementReady = ref(true); const placementBusy = ref(false);
 const placementActions = ref<model.Actions>();
 const initialAddresses = ref([model.InitialAddress.create()]);
+const prefixChoice = ref<Partial<model.Address>>({});
+const prefixEditor = ref<InstanceType<typeof AddressPrefix>>();
+const addressReview = ref<model.AddressReview>();
+const reviewedAddress = ref<model.Address>();
+const reviewedWorking = ref<model.WorkingContext>();
+const derivedBroadcast = computed(() => {
+  const review = addressReview.value;
+  if (!review?.address || review.prefixLength === undefined || review.prefixLength >= 31 || review.address.includes(':')) return undefined;
+  const octets = review.address.split('.').map(Number);
+  const value = octets.reduce((ip, octet) => ip * 256 + octet, 0);
+  const hosts = 2 ** (32 - review.prefixLength);
+  const broadcast = Math.floor(value / hosts) * hosts + hosts - 1;
+  return [24,16,8,0].map(shift => Math.floor(broadcast / 2 ** shift) % 256).join('.');
+});
 const values = reactive<Record<string, string>>({});
 const equipmentChanges = reactive<Record<string, import('./api').Field | undefined>>({});
 const equipmentValidity = reactive<Record<string,boolean>>({});
@@ -32,6 +47,7 @@ const parents = computed(() => [...new Map(actions.value?.creations.flatMap(c =>
 const choices = computed(() => actions.value?.creations.filter(c => key(c.parent?.target) === selectedParent.value) ?? []);
 const baseChoice = computed(() => choices.value.find(c => c.kind === kind.value));
 const choice = computed(() => placement.value ? placementActions.value?.creations.find(c => c.kind === kind.value && key(c.parent?.target) === key(placement.value?.target)) : baseChoice.value);
+const initialPrefix = computed(() => choice.value?.prefixContext);
 const placementKind = computed(() => !props.item && (kind.value === AssetKind.VIRTUAL_MACHINE && baseChoice.value?.parent?.kind !== AssetKind.SOFTWARE_INSTALLATION ? 'hypervisor' : !baseChoice.value?.parent && kind.value === AssetKind.SOFTWARE_INSTALLATION && (hypervisor.value || (modes.virtualization_role === 'set' && values.virtualization_role === virtualizationChoices[0]!.value)) ? 'server' : undefined));
 const placementRoots = computed(() => baseChoice.value?.parent?.target ? [baseChoice.value.parent.target] : props.working.roots);
 const resourceType = computed({
@@ -66,6 +82,7 @@ const fields = computed<EditorField[]>(() => {
     { id: 'vlan_tag', name: 'Known local VLAN tag', type: model.FieldType.INTEGER, choices: [], advanced: true },
     { id: 'meaning', name: 'Address meaning', type: model.FieldType.CHOICE, choices: Object.values(model.AddressMeaning).filter((v): v is number => typeof v === 'number').map(v => `ADDRESS_MEANING_${model.AddressMeaning[v]!}`), advanced: true },
     { id: 'zone', name: 'Known local IPv6 zone', type: model.FieldType.TEXT, choices: [], advanced: true },
+    { id: 'broadcast', name: 'Explicit endpoint broadcast', type: model.FieldType.TEXT, choices: [], advanced: true },
     { id: 'description', name: 'Description', type: model.FieldType.TEXT, choices: [], advanced: true },
   ] : [
     { id: 'name', name: 'Name', type: model.FieldType.TEXT, choices: [], advanced: false },
@@ -132,12 +149,17 @@ onMounted(async () => {
 async function save() {
   busy.value = true; error.value = '';
   try {
+    if (known.value && reviewedAddress.value && reviewedWorking.value) {
+      const reply = await call({ oneofKind: 'address', address: reviewedAddress.value }, reviewedWorking.value);
+      if (reply.oneofKind !== 'mutation') throw Error('Unexpected address response');
+      emit('saved', props.item ? undefined : reply.mutation.targets[0]); return;
+    }
     if (kind.value === undefined || !actions.value || (!props.item && !choice.value)) throw Error('Choose a resource and its actual parent');
     if(equipmentFields.value.some(name=>equipmentValidity[name]===false))throw Error('Correct the equipment input before saving.');
     const changes = fields.value.filter(f => modes[f.id] !== 'preserve').map(f => typedField(f.id, f.type, values[f.id] ?? '', modes[f.id] === 'clear'));
     for(const name of equipmentFields.value){const change=equipmentChanges[name];if(change)changes.push(change);}
     if (placementKind.value && !placementReady.value) throw Error('Choose a listed placement or clear the search to leave it unknown');
-    if (props.item && !changes.length) { emit('saved'); return; }
+    if (props.item && !changes.length && !known.value) { emit('saved'); return; }
     const working = model.WorkingContext.create({ ...props.working, focus: props.working.focus && placement.value?.target ? placement.value.target : props.working.focus, expected: placementActions.value?.revision ?? actions.value.revision });
     const parent: AssetRef | undefined = props.item ? undefined : choice.value?.parent?.target;
     const addresses: model.InitialAddress[] = [];
@@ -150,7 +172,33 @@ async function save() {
         addresses.push(model.InitialAddress.create({ address: parts[0], prefixLength: parts.length === 2 ? Number(parts[1]) : value.prefixLength, vlanTag: value.vlanTag, interfaceName: value.interfaceName }));
       }
     }
-    const reply = await call(addresses.length ? { oneofKind: 'create', create: model.Create.create({ kind: kind.value, changes, parent, addresses }) } : { oneofKind: 'write', write: model.Write.create({ target: props.item?.target, expected: props.item?.revision, kind: kind.value, changes, parent }) }, working);
+    let command: model.Request['command'];
+    if (known.value) {
+      const extra = prefixEditor.value?.request() ?? {};
+      const address = model.Address.create({ ...extra, target: props.item?.target, expected: props.item?.revision, parent });
+      for (const change of changes) {
+        if (change.name === 'address') address.address = values.address;
+        else if (change.name === 'prefix_length') { if (modes.prefix_length === 'clear') address.clearPrefixLength = true; else address.prefixLength = Number(values.prefix_length); }
+        else if (change.name === 'zone') { if (modes.zone === 'clear') address.clearZone = true; else address.zone = values.zone; }
+        else if (change.name === 'broadcast') { if (modes.broadcast === 'clear') address.clearBroadcast = true; else address.broadcast = values.broadcast; }
+        else if (change.name === 'meaning') address.meaning = model.AddressMeaning[values.meaning!.replace('ADDRESS_MEANING_','') as keyof typeof model.AddressMeaning] as model.AddressMeaning;
+        else address.changes.push(change);
+      }
+      if (address.prefix && (working.focus || working.roots.length)) {
+        const references = [...working.roots, parent, props.item?.target, address.prefix].filter((target): target is AssetRef => !!target);
+        working.roots = [...new Map(references.map(target => [key(target), target])).values()];
+        working.focus = undefined;
+      }
+      const refreshed = await call({ oneofKind: 'prepare', prepare: model.Prepare.create({ view: props.view }) }, model.WorkingContext.create({ ...working, expected: undefined }));
+      if (refreshed.oneofKind !== 'actions') throw Error('The current address context is unavailable');
+      working.expected = refreshed.actions.revision;
+      const preview = await call({ oneofKind: 'previewAddress', previewAddress: address }, working);
+      if (preview.oneofKind !== 'addressReview') throw Error('Address review is unavailable');
+      addressReview.value = preview.addressReview; reviewedAddress.value = address;
+      reviewedWorking.value = model.WorkingContext.create({ ...working, expected: preview.addressReview.revision });
+      return;
+    } else command = addresses.length ? { oneofKind: 'create', create: model.Create.create({ kind: kind.value, changes, parent, addresses }) } : { oneofKind: 'write', write: model.Write.create({ target: props.item?.target, expected: props.item?.revision, kind: kind.value, changes, parent }) };
+    const reply = await call(command, working);
     if (reply.oneofKind !== 'mutation') throw Error('Unexpected resource response');
     emit('saved', props.item ? undefined : reply.mutation.targets[0]);
   } catch (e) { error.value = String(e); } finally { busy.value = false; }
@@ -158,7 +206,7 @@ async function save() {
 </script>
 <template><Dialog :title="item ? 'Edit resource' : known ? 'Record known address' : 'Create resource'" @close="emit('close')"><form @submit.prevent="save">
 <p v-if="preparing" role="status">Checking available actions…</p>
-<template v-else>
+<template v-else-if="!addressReview">
 <p v-if="known" class="hint">Record what you know. Network, VRF and mask may remain unknown. This does not reserve an address.</p>
 <p v-else class="hint">This action changes accepted inventory in the selected context.</p>
 <p v-if="kind === AssetKind.CONTAINER" class="hint">Container IDs belong to an actual runtime. Link that runtime in a broader scope; a replacement gets a new container identity.</p>
@@ -189,17 +237,27 @@ async function save() {
 <button v-if="known" type="button" :aria-expanded="more" @click="more = !more">{{ more ? 'Hide additional facts' : 'More known details' }}</button>
 <template v-for="f in fields" :key="f.id"><div v-if="!f.advanced || more" class="field-edit">
 <label :for="'value-'+f.id">{{ f.name }}</label>
-<select v-if="f.id !== 'virtualization_role' && (item || !['name','address','description'].includes(f.id))" v-model="modes[f.id]" :aria-label="f.name+' change'"><option value="preserve">{{ item ? 'Preserve' : 'Leave unknown' }}</option><option value="set">Set</option><option v-if="!['name','address','meaning'].includes(f.id)" value="clear">Clear explicitly</option></select>
+<select v-if="f.id !== 'virtualization_role' && (item || !['name','address','description'].includes(f.id))" v-model="modes[f.id]" :aria-label="f.name+' change'"><option value="preserve">{{ item ? 'Preserve' : 'Leave unknown' }}</option><option value="set">Set</option><option v-if="!['name','address','meaning'].includes(f.id) || (f.id === 'name' && kind === AssetKind.PREFIX)" value="clear">Clear explicitly</option></select>
 <select v-if="f.id === 'virtualization_role'" :id="'value-'+f.id" v-model="roleInput" class="role-selector"><option v-if="item" value="preserve">Keep current value</option><option value="unknown">{{ kind === AssetKind.DEVICE ? 'Clear retired device role' : 'Unknown' }}</option><template v-if="kind === AssetKind.SOFTWARE_INSTALLATION"><option v-for="c in virtualizationChoices" :key="c.value" :value="c.value">{{ c.label }}</option></template></select>
 <select v-else-if="f.type === model.FieldType.BOOLEAN" :id="'value-'+f.id" v-model="values[f.id]" :disabled="modes[f.id] !== 'set'" :required="modes[f.id] === 'set'"><option disabled value="">Choose true or false</option><option value="true">True</option><option value="false">False</option></select>
 <select v-else-if="f.choices.length" :id="'value-'+f.id" v-model="values[f.id]" :disabled="modes[f.id] !== 'set'" :required="modes[f.id] === 'set'"><option disabled value="">Choose a value</option><option v-for="value in f.choices" :key="value" :value="value">{{ f.id === 'meaning' ? value.replace('ADDRESS_MEANING_', '').toLowerCase() : f.id === 'virtualization_role' ? virtualizationChoices.find(c => c.value === value)?.label : softwareChoiceLabel(f.id, value) }}</option></select>
 <textarea v-else-if="f.id === 'description' || f.id === 'compose_files'" :id="'value-'+f.id" v-model="values[f.id]" rows="2" maxlength="2048" :disabled="modes[f.id] === 'clear'" @input="modes[f.id] = !item && values[f.id] === '' ? 'preserve' : 'set'"></textarea>
 <!-- Integer text goes directly to BigInt; number inputs round valid int64 values. -->
-<input v-else :id="'value-'+f.id" v-model="values[f.id]" :type="f.type === model.FieldType.DATE ? 'date' : 'text'" :inputmode="f.type === model.FieldType.INTEGER ? 'numeric' : undefined" :disabled="modes[f.id] !== 'set'" :required="modes[f.id] === 'set' && ['name','address'].includes(f.id)" :maxlength="f.id === 'name' ? 160 : f.id === 'address' ? 64 : 2048" @input="modes[f.id] = 'set'">
+<input v-else :id="'value-'+f.id" v-model="values[f.id]" :type="f.type === model.FieldType.DATE ? 'date' : 'text'" :inputmode="f.type === model.FieldType.INTEGER ? 'numeric' : undefined" :disabled="modes[f.id] !== 'set'" :required="modes[f.id] === 'set' && ['name','address'].includes(f.id)" :maxlength="f.id === 'name' ? 160 : f.id === 'address' ? 192 : 2048" @input="modes[f.id] = 'set'">
 <p v-if="f.id === 'virtualization_role'" class="hint">{{ kind === AssetKind.DEVICE ? 'This retired field can only be cleared. Set virtualization roles on OS installations.' : 'Requires installed and enabled Hyper-V (Windows) or virtualization components (Linux). Leave unknown when unverified.' }}</p>
 </div></template>
 </template>
-<p v-if="error" role="alert">{{ error }}</p><footer><button type="button" @click="emit('close')">Cancel</button><button class="primary" :disabled="busy || preparing || placementBusy || (!!placementKind && !placementReady) || (!item && !choice)">{{ busy ? 'Saving…' : known ? 'Save known address' : 'Save resource' }}</button></footer>
+<AddressPrefix v-if="known && !preparing" v-show="!addressReview" ref="prefixEditor" v-model="prefixChoice" :address="values.address ?? ''" :editing="!!item" :initial-prefix="initialPrefix" :working="working" />
+<section v-if="addressReview" aria-label="Review known address"><h3>Review known address</h3><dl><dt>Address</dt><dd>{{ addressReview.address }}</dd><dt>Assignment mask</dt><dd>{{ addressReview.prefixLength === undefined ? 'Unknown' : '/'+addressReview.prefixLength }}</dd><template v-if="addressReview.prefixCidr"><dt>{{ reviewedAddress?.createPrefix ? 'New prefix, namespace unknown' : 'Selected prefix' }}</dt><dd>{{ addressReview.prefixCidr }}</dd></template><template v-if="addressReview.broadcast"><dt>Explicit endpoint broadcast</dt><dd>{{ addressReview.broadcast }}</dd></template></dl><p>No allocation, interface assignment, route or provider effect is implied.</p><button type="button" @click="addressReview = undefined; reviewedAddress = undefined; reviewedWorking = undefined">Back to input</button></section>
+<p v-if="addressReview?.zone" class="hint">Host-local zone: {{ addressReview.zone }}</p>
+<p v-if="addressReview && reviewedAddress?.clearBroadcast">The recorded endpoint broadcast will be cleared.</p>
+<p v-if="addressReview && reviewedAddress?.clearPrefix">The prefix relationship will be removed; the prefix remains.</p>
+<p v-if="addressReview && reviewedAddress?.prefix" class="hint">Selected prefix reference: {{ reviewedAddress.prefix.assetId }}/{{ reviewedAddress.prefix.incarnation }}</p>
+<p v-if="addressReview && reviewedAddress?.createPrefix && reviewedAddress.prefixName" class="hint">New prefix name: {{ reviewedAddress.prefixName }}</p>
+<p v-if="addressReview && derivedBroadcast" class="hint">Calculated subnet broadcast: {{ derivedBroadcast }}. This is a display calculation, not a recorded endpoint setting.</p>
+<p v-else-if="addressReview?.address?.includes(':')" class="hint">IPv6 has no broadcast address.</p>
+<p v-else-if="addressReview?.prefixLength === 31 || addressReview?.prefixLength === 32" class="hint">This mask has no directed broadcast. A /31 may describe a point-to-point link.</p>
+<p v-if="error" role="alert">{{ error }}</p><footer><button type="button" @click="emit('close')">Cancel</button><button class="primary" :disabled="busy || preparing || placementBusy || (!!placementKind && !placementReady) || (!item && !choice)">{{ busy ? 'Saving…' : known ? addressReview ? 'Save known address' : 'Review known address' : 'Save resource' }}</button></footer>
 </form></Dialog></template>
 <style scoped>
 .field-edit > .hint, .field-edit > .role-selector, .field-edit > textarea { grid-column:1/-1; }

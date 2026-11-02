@@ -1,5 +1,5 @@
 import { GrpcWebFetchTransport } from '@protobuf-ts/grpcweb-transport';
-import { Request, Workspace, FieldType, type Reply, type WorkingContext } from '../src/generated/omloom/v1/workspace';
+import { Request, Workspace, FieldType, type Item, type Reply, type WorkingContext } from '../src/generated/omloom/v1/workspace';
 import { AssetKind, NullValue, type Field, type AssetRef, type EquipmentAlternative, type EquipmentExclusion, type EquipmentReference } from '../src/generated/omloom/v1/contracts';
 import { softwareChoiceLabel } from './software-fields';
 export * as model from '../src/generated/omloom/v1/workspace';
@@ -34,6 +34,17 @@ export function display(field: Field | undefined): string {
   if (field?.value.oneofKind === 'clear') return '(cleared)';
   if (field?.value.oneofKind === 'text' && field.value.text === '') return '(empty)';
   return field ? softwareChoiceLabel(field.name, input(field)) : '';
+}
+export function resourceName(item: Item | undefined, domainFields: Field[] = []): string {
+  return input(item?.fields.find(field => field.name === 'name'))
+    || input(item?.fields.find(field => field.name === 'cidr'))
+    || input(domainFields.find(field => field.name === 'cidr'));
+}
+export function identityName(item: Item | undefined, domainFields: Field[] = []): string {
+  const name = input(item?.fields.find(field => field.name === 'name'));
+  if (name) return name;
+  if (!item?.target) return '';
+  return `${resourceName(item, domainFields) || label(item.kind)} (${item.target.assetId.slice(-8)})`;
 }
 function referenceLabel(value:EquipmentReference):string {
   return `issuer: ${JSON.stringify(value.issuer)}; key: ${JSON.stringify(value.key)}; basis: ${JSON.stringify(value.basis)}`;
