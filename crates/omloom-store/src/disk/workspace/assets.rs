@@ -2,6 +2,11 @@ use super::*;
 
 mod paging;
 
+struct ContextWrite {
+    target: AssetRef,
+    prefix: Option<AssetRef>,
+}
+
 pub(super) fn prefix_title_context(query: &api::Query) -> bool {
     query.include_context
         && matches!(
@@ -1522,8 +1527,17 @@ impl Store {
         {
             return Ok(reply(api::reply::Result::Mutation(saved)));
         }
-        let target = tx.context_write(context, write, working, now)?;
-        let targets = vec![target_wire(target)];
+        let written = tx.context_write_with_prefix(
+            context,
+            write,
+            working,
+            now,
+            addresses::knowledge::PrefixCreation::New,
+        )?;
+        let mut targets = vec![target_wire(written.target)];
+        if let Some(prefix) = written.prefix {
+            targets.push(target_wire(prefix));
+        }
         if let Some(input) = input {
             tx.save_creation_outcome(
                 context,
@@ -1699,6 +1713,7 @@ impl Tx<'_> {
             now,
             addresses::knowledge::PrefixCreation::New,
         )
+        .map(|written| written.target)
     }
     pub(super) fn context_import_write(
         &mut self,
@@ -1714,6 +1729,7 @@ impl Tx<'_> {
             now,
             addresses::knowledge::PrefixCreation::RefreshRelated,
         )
+        .map(|written| written.target)
     }
     fn context_write_with_prefix(
         &mut self,
@@ -1722,7 +1738,7 @@ impl Tx<'_> {
         working: &api::WorkingContext,
         now: u64,
         prefix_creation: addresses::knowledge::PrefixCreation,
-    ) -> Result<AssetRef> {
+    ) -> Result<ContextWrite> {
         if write.target.is_none() && write.kind == wire::AssetKind::PhysicalPosition as i32 {
             return Err(Error::Invalid);
         }
@@ -1743,7 +1759,7 @@ impl Tx<'_> {
             let clear = request.clear_prefix;
             let target = self.workspace_address(context, request, working, now)?;
             self.set_address_prefix(context, target, prefix, clear, working, now)?;
-            return Ok(target);
+            return Ok(ContextWrite { target, prefix });
         }
         if write.kind == wire::AssetKind::Prefix as i32
             && (write.target.is_none()
@@ -1756,7 +1772,10 @@ impl Tx<'_> {
             let store = self.store;
             let targets =
                 store.workspace_network_in(self, context, network, working, now, changes)?;
-            return parse_target(targets.first());
+            return Ok(ContextWrite {
+                target: parse_target(targets.first())?,
+                prefix: None,
+            });
         }
         let parent = if write.target.is_none() {
             self.creation_parent(
@@ -1776,7 +1795,10 @@ impl Tx<'_> {
         let kind = wire::AssetKind::try_from(write.kind).map_err(|_| Error::Invalid)?;
         let target = self.workspace_write(context, write, now)?;
         self.attach_created(context, target, kind, parent, now)?;
-        Ok(target)
+        Ok(ContextWrite {
+            target,
+            prefix: None,
+        })
     }
 }
 

@@ -24,6 +24,90 @@ fn revision(store: &Store) -> Result<u64, Error> {
     Ok(page.revision)
 }
 
+// Clearing or replacing membership records the removal actor in the same commit.
+#[test]
+fn prefix_relationship_removal_keeps_attributed_audit() -> TestResult {
+    for clear in [true, false] {
+        let dir = tempfile::tempdir()?;
+        let store = Store::open(dir.path(), policy())?;
+        let R::Mutation(saved) = command_at(
+            &store,
+            C::Address(api::Address {
+                address: Some("192.0.2.9/24".into()),
+                create_prefix: true,
+                ..Default::default()
+            }),
+            revision(&store)?,
+        )?
+        else {
+            panic!("address")
+        };
+        let target = saved.targets[0].clone();
+        let R::Detail(detail) = call(
+            &store,
+            &operator(),
+            C::Read(api::Read {
+                target: Some(target.clone()),
+                ..Default::default()
+            }),
+        )?
+        else {
+            panic!("detail")
+        };
+        let old = detail
+            .relations
+            .iter()
+            .find(|relation| relation.kind == wire::RelationKind::MemberOf as i32)
+            .ok_or("membership")?;
+        let owner = format!("relation/{}", old.relation_id);
+        let before = store.activity(&owner, 10)?;
+        let prefix = if clear {
+            None
+        } else {
+            let R::Mutation(prefix) = command_at(
+                &store,
+                C::Network(api::Network {
+                    kind: K::Prefix as i32,
+                    cidr: "192.0.2.0/25".into(),
+                    sharing: api::SharedUse::Exclusive as i32,
+                    ..Default::default()
+                }),
+                revision(&store)?,
+            )?
+            else {
+                panic!("replacement prefix")
+            };
+            Some(prefix.targets[0].clone())
+        };
+        let mut actor = operator();
+        actor.actor = "prefix-editor".into();
+        store.workspace(
+            &actor,
+            api::Request {
+                working: Some(api::WorkingContext {
+                    expected: Some(store.usage()?.revision),
+                    ..Default::default()
+                }),
+                command: Some(C::Address(api::Address {
+                    target: Some(target),
+                    expected: Some(detail.item.ok_or("item")?.revision),
+                    clear_prefix: clear,
+                    prefix,
+                    ..Default::default()
+                })),
+            },
+            200,
+        )?;
+        let after = store.activity(&owner, 10)?;
+        assert_eq!(after.len(), before.len() + 1, "clear={clear}");
+        assert_eq!(after[0].action, "relation.removed");
+        assert_eq!(after[0].actor, actor.actor);
+        assert_eq!(after[0].revision, old.revision + 1);
+        assert_eq!(&after[1..], before.as_slice());
+    }
+    Ok(())
+}
+
 // A preview ID recovers an accepted import even when the caller omitted a revision.
 #[test]
 fn csv_unscoped_apply_recovers_lost_reply_after_reopen() -> TestResult {
@@ -1865,6 +1949,27 @@ fn generic_knowledge_creation_recovers_its_original_outcome() -> TestResult {
             ..Default::default()
         });
         let saved = command_at(&store, command.clone(), base)?;
+        let R::Mutation(mutation) = &saved else {
+            panic!("mutation")
+        };
+        assert_eq!(
+            mutation.targets.len(),
+            if kind == K::AddressReference { 2 } else { 1 }
+        );
+        if kind == K::AddressReference {
+            let R::Detail(prefix) = call(
+                &store,
+                &operator(),
+                C::Read(api::Read {
+                    target: Some(mutation.targets[1].clone()),
+                    ..Default::default()
+                }),
+            )?
+            else {
+                panic!("created prefix")
+            };
+            assert_eq!(prefix.item.ok_or("prefix item")?.kind, K::Prefix as i32);
+        }
         let usage = store.usage()?;
         assert_eq!(command_at(&store, command, base)?, saved);
         assert_eq!(store.usage()?, usage);

@@ -462,8 +462,7 @@ impl Tx<'_> {
             if prefix == Some(previous) {
                 return Ok(());
             }
-            self.unlink_correction_relation(&relation.relation_id)?;
-            self.delete(&format!("relation/{}", relation.relation_id))?;
+            self.remove_binding_relation(relation, &context.actor, now)?;
         }
         let Some(prefix) = prefix else {
             return Ok(());
