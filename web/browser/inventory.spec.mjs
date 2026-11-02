@@ -101,6 +101,36 @@ test('sparse address edits review explicit unspecified meaning and create a pref
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
 
+test('retained assignment masks create prefixes without resetting meaning on desktop and phone', async ({ browser }) => {
+  // A retained mask must reach the relationship editor without resubmitting it as a change.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-retained-prefix-mask-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const target = (await rpc({ oneofKind: 'address', address: m.Address.create({ address: '192.0.2.9/24', meaning: m.AddressMeaning.DESTINATION }) })).mutation.targets[0];
+      const page = await browser.newPage({ viewport: { width, height: 900 }, isMobile: width < 600, hasTouch: width < 600 });
+      page.setDefaultTimeout(5000);
+      try {
+        await page.goto(`${server.url}/#/?view=1&asset=${target.assetId}&incarnation=${target.incarnation}`);
+        await page.getByRole('button', { name: 'Edit resource', exact: true }).click();
+        const dialog = page.getByRole('dialog', { name: 'Edit resource', exact: true });
+        await dialog.getByRole('button', { name: 'More known details', exact: true }).click();
+        await expect(dialog.getByRole('combobox', { name: 'Known prefix length change', exact: true })).toHaveValue('preserve');
+        await expect(dialog.getByRole('combobox', { name: 'Address meaning change', exact: true })).toHaveValue('preserve');
+        await dialog.getByRole('combobox', { name: 'Prefix relationship', exact: true }).selectOption('new');
+        await dialog.getByLabel('Prefix name (optional)', { exact: true }).fill(`Retained subnet ${width}`);
+        await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
+        await expect(dialog.getByRole('region', { name: 'Review known address', exact: true })).toContainText('192.0.2.0/24');
+        await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        const detail = (await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail;
+        expect(detail.item.fields.find(f => f.name === 'meaning')?.value.text).toBe('ADDRESS_MEANING_DESTINATION');
+        expect(detail.relations.filter(r => r.kind === m.RelationKind.MEMBER_OF)).toHaveLength(1);
+      } finally { await page.close(); }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('network options retain earlier pages and reset unselected search results on desktop and phone', async ({ browser }) => {
   // Loading another page must not lose choices; a new search retains only explicit selections.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-network-option-pages-')); const server = await host(dir);

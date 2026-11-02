@@ -45,7 +45,7 @@ const equipmentToAdd = ref('');
 const equipmentFields = computed(()=>(kind.value===AssetKind.DEVICE||kind.value===AssetKind.PHYSICAL_COMPONENT) ? (props.item ? actions.value?.fields : choice.value?.fields)?.filter(f=>equipmentNames.includes(f)) ?? [] : []);
 function addEquipment(){if(equipmentFields.value.includes(equipmentToAdd.value)&&!selectedEquipment.value.includes(equipmentToAdd.value))selectedEquipment.value.push(equipmentToAdd.value);equipmentToAdd.value='';}
 const modes = reactive<Record<string, string>>({});
-const submittedMask = computed(() => modes.prefix_length === 'set' && values.prefix_length !== undefined && values.prefix_length !== '' ? Number(values.prefix_length) : undefined);
+const submittedMask = computed(() => modes.prefix_length !== 'clear' && values.prefix_length !== undefined && values.prefix_length !== '' ? Number(values.prefix_length) : undefined);
 const error = ref(''); const busy = ref(false); const preparing = ref(true); const more = ref(false);
 type EditorField = { id: string; name: string; type: model.FieldType; choices: string[]; advanced: boolean };
 const parents = computed(() => [...new Map(actions.value?.creations.flatMap(c => c.parent?.target ? [[key(c.parent.target), c.parent] as const] : [])).values()]);
