@@ -6,6 +6,35 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 
+test('allocation form creates a canonical prefix without an optional label on desktop and phone', async ({ browser }) => {
+  // The allocation form itself must accept an empty label, not just import or known-address paths.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-unnamed-prefix-allocation-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const space = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.ADDRESS_SPACE, changes: [{ name: 'name', value: { oneofKind: 'text', text: `Allocation namespace ${width}` } }] }) })).mutation.targets[0];
+      const page = await browser.newPage({ viewport: { width, height: 900 } }); page.setDefaultTimeout(5000);
+      try {
+        await page.goto(`${server.url}/#/?view=1&scope=${space.assetId}&scopeInc=${space.incarnation}`);
+        await page.getByRole('button', { name: 'Allocate IP / prefix', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await dialog.getByLabel('Kind', { exact: true }).selectOption({ label: 'Prefix' });
+        await expect(dialog.getByLabel('Name (optional)', { exact: true })).toHaveValue('');
+        await expect(dialog.getByLabel('Name (optional)', { exact: true })).toHaveJSProperty('required', false);
+        await dialog.getByLabel('Address / prefix', { exact: true }).fill('2001:db8:1::/64');
+        await dialog.getByRole('button', { name: 'Allocate', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        await expect(page.getByRole('button', { name: '2001:db8:1::/64', exact: true })).toBeVisible();
+        const items = (await rpc({ oneofKind: 'query', query: m.Query.create({ view: m.View.NETWORK, roots: [space], kinds: [m.AssetKind.PREFIX], columns: ['name', 'cidr', 'address_space'], limit: 10 }) })).page.items;
+        expect(items).toHaveLength(1);
+        expect(items[0].fields.find(f => f.name === 'cidr')?.value.text).toBe('2001:db8:1::/64');
+        expect(items[0].fields.find(f => f.name === 'address_space')?.value.text).toBe(`${space.assetId}/${space.incarnation}`);
+        expect(items[0].fields.some(f => f.name === 'name' && f.value.oneofKind === 'text')).toBe(false);
+      } finally { await page.close(); }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('prefix correction reviews domain changes and allocation ownership before acceptance', async ({ browser }) => {
   // The confirmation must show canonical facts filled into an unresolved survivor, not internal keys.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-domain-review-')); const server = await host(dir);
@@ -74,8 +103,7 @@ test('separately entered assignment masks create the reviewed prefix including s
         await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
         await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
         await expect(dialog).toBeHidden();
-        const params = new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
-        const detail = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: { assetId: params.get('asset'), incarnation: params.get('incarnation') } }) })).detail;
+        const detail = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: await openedTarget(page) }) })).detail;
         const membership = detail.relations.find(relation => relation.kind === m.RelationKind.MEMBER_OF);
         expect(membership).toBeDefined();
         const prefix = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: membership.to }) })).detail.item;
@@ -111,8 +139,7 @@ test('changing the creation owner resets prefix choices without losing the addre
     await expect(dialog.getByRole('region', { name: 'Review known address' })).toContainText('New prefix, namespace unknown');
     await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
     await expect(dialog).toBeHidden();
-    const params = new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
-    const detail = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: { assetId: params.get('asset'), incarnation: params.get('incarnation') } }) })).detail;
+    const detail = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: await openedTarget(page) }) })).detail;
     const memberships = detail.relations.filter(relation => relation.kind === m.RelationKind.MEMBER_OF);
     expect(memberships).toHaveLength(1);
     expect(memberships[0].to.assetId).not.toBe(prefix.assetId);
@@ -193,8 +220,7 @@ test('known address final review includes every submitted fact on desktop and ph
         for (const value of ['destination', 'Known local VLAN tag', '101', 'Description', 'Printer management destination', 'Purpose', 'Family printer']) await expect(review).toContainText(value);
         await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
         await expect(dialog).toBeHidden();
-        const params = new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
-        const target = { assetId: params.get('asset'), incarnation: params.get('incarnation') };
+        const target = await openedTarget(page);
         const item = (await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail.item;
         expect(item.fields.find(f => f.name === 'meaning')?.value.text).toBe('ADDRESS_MEANING_DESTINATION');
         expect(item.fields.find(f => f.name === 'vlan_tag')?.value.integer).toBe(101n);
@@ -355,7 +381,8 @@ for (const width of [1440, 390]) test(`known prefix refinement, contextual creat
     const prefix = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name: 'Workshop subnet', cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
     const path = `/#/?view=1&asset=${prefix.assetId}&incarnation=${prefix.incarnation}`;
     await page.goto(server.url + path);
-    await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+    const creationContext = width < 600 ? page.getByRole('region', { name: 'Local resources', exact: true }) : page;
+    await creationContext.getByRole('button', { name: '+ Create resource', exact: true }).click();
     let dialog = page.getByRole('dialog');
     await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'address reference' });
     await expect(dialog.getByLabel('Prefix relationship', { exact: true })).toHaveValue('existing');
@@ -522,6 +549,15 @@ async function create(page, name, kind = 'DEVICE') {
   const hash = new URL(page.url()).hash;
   const params = new URLSearchParams(hash.slice(hash.indexOf('?') + 1));
   return { asset_id: params.get('asset'), incarnation: params.get('incarnation') };
+}
+
+async function openedTarget(page) {
+  // Saving closes the dialog before the asynchronous route and detail read complete.
+  await expect(page.getByRole('region', { name: 'Resource details', exact: true })).toBeVisible();
+  const params = new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
+  const target = { assetId: params.get('asset'), incarnation: params.get('incarnation') };
+  expect(target.assetId).not.toBeNull(); expect(target.incarnation).not.toBeNull();
+  return target;
 }
 
 async function workspaceClient(url) {
