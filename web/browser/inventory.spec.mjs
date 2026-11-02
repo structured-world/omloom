@@ -91,6 +91,44 @@ test('sparse address edits review explicit unspecified meaning and create a pref
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
 
+test('network options retain earlier pages and reset unselected search results on desktop and phone', async ({ browser }) => {
+  // Loading another page must not lose choices; a new search retains only explicit selections.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-network-option-pages-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const spaces = [];
+    for (let i = 0; i < 32; i++) spaces.push((await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.ADDRESS_SPACE, changes: [{ name: 'name', value: { oneofKind: 'text', text: `Paged scope ${String(i).padStart(2, '0')}` } }] }) })).mutation.targets[0]);
+    for (const width of [1440, 390]) {
+      const target = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name: `Paged prefix ${width}`, cidr: width === 1440 ? '192.0.2.0/24' : '198.51.100.0/24', sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
+      const page = await browser.newPage({ viewport: { width, height: 900 }, isMobile: width < 600, hasTouch: width < 600 });
+      page.setDefaultTimeout(5000);
+      try {
+        await page.goto(`${server.url}/#/?view=1&asset=${target.assetId}&incarnation=${target.incarnation}`);
+        await page.getByRole('button', { name: 'Review network settings', exact: true }).click();
+        const dialog = page.getByRole('dialog', { name: 'Review network settings', exact: true });
+        const options = dialog.getByRole('combobox', { name: 'Address space', exact: true });
+        await expect(options.locator('option')).toHaveCount(26);
+        await dialog.getByRole('button', { name: 'More scope options', exact: true }).click();
+        await expect(options.locator('option')).toHaveCount(33);
+        await expect(options.locator(`option[value="${spaces[0].assetId}"]`)).toHaveCount(1);
+        await expect(options.locator(`option[value="${spaces[31].assetId}"]`)).toHaveCount(1);
+        await options.selectOption(spaces[0].assetId);
+        await dialog.getByLabel('Find scopes and groups', { exact: true }).fill('Paged scope 31');
+        await dialog.getByRole('button', { name: 'Find matching options', exact: true }).click();
+        await expect(options.locator('option')).toHaveCount(3);
+        await expect(options).toHaveValue(spaces[0].assetId);
+        await expect(options.locator(`option[value="${spaces[1].assetId}"]`)).toHaveCount(0);
+        const broader = dialog.getByRole('button', { name: 'Review broader network context', exact: true });
+        if (await broader.isVisible()) { await broader.click(); await expect(dialog.getByRole('status')).toContainText('Context reviewed'); }
+        await dialog.getByRole('button', { name: 'Apply reviewed settings', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        expect((await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail.item.fields.find(f => f.name === 'address_space')?.value.text).toBe(`${spaces[0].assetId}/${spaces[0].incarnation}`);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      } finally { await page.close(); }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('allocation form creates a canonical prefix without an optional label on desktop and phone', async ({ browser }) => {
   // The allocation form itself must accept an empty label, not just import or known-address paths.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-unnamed-prefix-allocation-')); const server = await host(dir);

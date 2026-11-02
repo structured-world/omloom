@@ -58,7 +58,7 @@ async function loadOptions(cursor?: string) {
     if (r.oneofKind !== 'page') throw Error('Unexpected response');
     const retained = items.value.filter(i => [space.value, link.value, routing.value, selectedGroup.value].includes(i.target?.assetId ?? ''));
     const found = r.page.items;
-    const choices = new Map([...retained, ...found].map(i => [i.target?.assetId, i]));
+    const choices = new Map([...(cursor ? items.value : retained), ...found].map(i => [i.target?.assetId, i]));
     // Accepted references can lie outside the bounded choices, but are not implicit clears.
     const selected = [space.value, link.value, routing.value, selectedGroup.value];
     const references: AssetRef[] = [];
