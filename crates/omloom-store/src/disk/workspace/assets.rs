@@ -1534,7 +1534,8 @@ impl Store {
             now,
             addresses::knowledge::PrefixCreation::New,
         )?;
-        let mut targets = vec![target_wire(written.target)];
+        let mut targets = Vec::with_capacity(if written.prefix.is_some() { 2 } else { 1 });
+        targets.push(target_wire(written.target));
         if let Some(prefix) = written.prefix {
             targets.push(target_wire(prefix));
         }
