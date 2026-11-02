@@ -7,33 +7,69 @@ impl Tx<'_> {
         prefix: AssetRef,
         proposed: &Properties,
     ) -> Result<()> {
-        for relation in self.working_relations(prefix)? {
-            if relation.kind != wire::RelationKind::MemberOf as i32
-                || parse_target(relation.to.as_ref())? != prefix
-            {
-                continue;
+        let mut after = String::new();
+        loop {
+            let members = self.query(
+                "MATCH (r:OmRow {to_asset:$prefix}) WHERE r.parent='relations' AND r.kind=$kind AND r.to_incarnation=$incarnation AND r.key>$after RETURN properties(r) AS p ORDER BY r.key LIMIT 129",
+                params([
+                    ("prefix", text(prefix.asset.to_string())),
+                    ("incarnation", text(prefix.incarnation.to_string())),
+                    ("kind", int(wire::RelationKind::MemberOf as u64)?),
+                    ("after", text(&after)),
+                ]),
+            )?;
+            let count = members.len().min(128);
+            if count == 0 {
+                return Ok(());
             }
-            let address = parse_target(relation.from.as_ref())?;
-            let row = self.visible_asset(context, address)?;
-            if number(&row, "kind")? != wire::AssetKind::AddressReference as u64 {
-                continue;
+            let mut keys = Vec::with_capacity(count * 2);
+            for member in &members[..count] {
+                let address = crate::disk::target(member)?;
+                keys.push(text(asset_key(address)));
+                keys.push(text(format!("network/{}", identity(address))));
             }
-            let fact = self
-                .get(&format!("network/{}", identity(address)))?
-                .ok_or(Error::Missing)?;
-            if !context.field(prefix, wire::AssetKind::Prefix as i32, "relations", false)
-                || !context.field(
-                    address,
-                    wire::AssetKind::AddressReference as i32,
-                    "relations",
-                    false,
-                )
-            {
-                return Err(Error::Denied);
+            let rows = self.query(
+                "UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN properties(n) AS p",
+                params([("keys", Value::Array(keys))]),
+            )?;
+            let by_key = rows
+                .iter()
+                .map(|row| {
+                    let key = row
+                        .get("key")
+                        .and_then(Value::as_str)
+                        .ok_or(Error::Corrupt)?;
+                    Ok((key, row))
+                })
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            for member in &members[..count] {
+                let address = crate::disk::target(member)?;
+                let row = by_key
+                    .get(asset_key(address).as_str())
+                    .ok_or(Error::Missing)?;
+                self.require_visible_asset(context, address, row)?;
+                if number(row, "kind")? != wire::AssetKind::AddressReference as u64 {
+                    continue;
+                }
+                let key = format!("network/{}", identity(address));
+                let fact = by_key.get(key.as_str()).ok_or(Error::Missing)?;
+                if !context.field(prefix, wire::AssetKind::Prefix as i32, "relations", false)
+                    || !context.field(
+                        address,
+                        wire::AssetKind::AddressReference as i32,
+                        "relations",
+                        false,
+                    )
+                {
+                    return Err(Error::Denied);
+                }
+                self.check_prefix_fact(context, address, fact, proposed)?;
             }
-            self.check_prefix_fact(context, address, &fact, proposed)?;
+            if members.len() == count {
+                return Ok(());
+            }
+            after = string(&members[count - 1], "key")?;
         }
-        Ok(())
     }
 
     pub(in crate::disk::workspace) fn check_prefix_fact(

@@ -437,14 +437,26 @@ impl Tx<'_> {
         self.execute(query, Some(values))
     }
     fn visible_asset(&self, context: &Context, target: AssetRef) -> Result<Properties> {
-        let row = self.asset(target)?;
-        if number(&row, "adoption")? != wire::Adoption::Adopted as u64 {
+        let row = self.get(&asset_key(target))?.ok_or(Error::Missing)?;
+        self.require_visible_asset(context, target, &row)?;
+        Ok(row)
+    }
+    fn require_visible_asset(
+        &self,
+        context: &Context,
+        target: AssetRef,
+        row: &Properties,
+    ) -> Result<()> {
+        if crate::disk::target(row)? != target {
+            return Err(Error::Conflict);
+        }
+        if number(row, "adoption")? != wire::Adoption::Adopted as u64 {
             return Err(Error::Missing);
         }
-        if !context.readable(target, number(&row, "kind")? as i32) {
+        if !context.readable(target, number(row, "kind")? as i32) {
             return Err(Error::Denied);
         }
-        Ok(row)
+        Ok(())
     }
     fn require_changes(
         &self,

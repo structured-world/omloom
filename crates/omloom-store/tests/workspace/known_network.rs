@@ -343,6 +343,173 @@ fn generic_relation_cannot_add_a_second_selected_prefix() -> TestResult {
     Ok(())
 }
 
+// Refinement validates ordinary subnet populations without treating a read page as a degree limit.
+#[test]
+fn prefix_refinement_checks_members_beyond_one_page() -> TestResult {
+    for count in [128, 129] {
+        let dir = tempfile::tempdir()?;
+        let mut store = Store::open(dir.path(), policy())?;
+        let space = create(&store, &operator(), K::AddressSpace, "namespace")?;
+        let R::Mutation(saved) = command_at(
+            &store,
+            C::Network(api::Network {
+                kind: K::Prefix as i32,
+                cidr: "192.0.2.0/24".into(),
+                sharing: api::SharedUse::Exclusive as i32,
+                ..Default::default()
+            }),
+            revision(&store)?,
+        )?
+        else {
+            panic!("prefix")
+        };
+        let prefix = saved.targets[0].clone();
+        let mut addresses = Vec::new();
+        for host in 0..count {
+            let R::Mutation(saved) = command_at(
+                &store,
+                C::Address(api::Address {
+                    address: Some(format!("192.0.2.{host}")),
+                    prefix: Some(prefix.clone()),
+                    ..Default::default()
+                }),
+                revision(&store)?,
+            )?
+            else {
+                panic!("member address")
+            };
+            addresses.push(saved.targets[0].clone());
+        }
+        #[cfg(feature = "diagnostics")]
+        store.set_diagnostic_query_check(|db, statement| {
+            if statement.starts_with("MATCH (r:OmRow {to_asset:$prefix})") {
+                let plan = db.explain_cypher(statement).expect("prefix member plan");
+                eprintln!("prefix member plan: {plan}");
+                assert!(plan.contains("IndexScan"), "{plan}");
+            }
+        });
+        let R::Detail(detail) = call(
+            &store,
+            &operator(),
+            C::Read(api::Read {
+                target: Some(prefix.clone()),
+                ..Default::default()
+            }),
+        )?
+        else {
+            panic!("prefix detail")
+        };
+        let request = api::Network {
+            target: Some(prefix.clone()),
+            expected: Some(detail.item.ok_or("item")?.revision),
+            kind: K::Prefix as i32,
+            cidr: "192.0.2.0/24".into(),
+            address_space: Some(space.clone()),
+            sharing: api::SharedUse::Exclusive as i32,
+            ..Default::default()
+        };
+        let base = revision(&store)?;
+        let before = store.usage()?;
+        let started = std::time::Instant::now();
+        let result = command_at(&store, C::Network(request), base);
+        eprintln!(
+            "prefix refinement: members={count}, elapsed={:?}, retained_bytes={:?}, rows={:?}, outcome={:?}",
+            started.elapsed(),
+            before.bytes,
+            before.rows,
+            result.as_ref().err()
+        );
+        assert!(result.is_ok(), "refinement of {count} members: {result:?}");
+        let R::Detail(detail) = call(
+            &store,
+            &operator(),
+            C::Read(api::Read {
+                target: Some(prefix),
+                ..Default::default()
+            }),
+        )?
+        else {
+            panic!("refined prefix")
+        };
+        let incompatible = api::Network {
+            target: detail.item.as_ref().and_then(|i| i.target.clone()),
+            expected: detail.item.as_ref().map(|i| i.revision),
+            kind: K::Prefix as i32,
+            cidr: "192.0.2.0/25".into(),
+            address_space: Some(space.clone()),
+            sharing: api::SharedUse::Exclusive as i32,
+            ..Default::default()
+        };
+        if count == 129 {
+            let before = store.usage()?;
+            let mut cursor = None;
+            let mut last: Option<wire::Relation> = None;
+            loop {
+                let R::Detail(page) = call(
+                    &store,
+                    &operator(),
+                    C::Read(api::Read {
+                        target: incompatible.target.clone(),
+                        relations_cursor: cursor,
+                        ..Default::default()
+                    }),
+                )?
+                else {
+                    panic!("members page")
+                };
+                for relation in page.relations {
+                    if relation.kind == wire::RelationKind::MemberOf as i32
+                        && last
+                            .as_ref()
+                            .is_none_or(|old| old.relation_id < relation.relation_id)
+                    {
+                        last = Some(relation);
+                    }
+                }
+                cursor = page.relations_next;
+                if cursor.is_none() {
+                    break;
+                }
+            }
+            let hidden = last.ok_or("last membership")?.from.ok_or("member")?;
+            let mut restricted = operator();
+            let mut allowed = addresses
+                .iter()
+                .filter(|a| **a != hidden)
+                .map(AssetRef::try_from)
+                .collect::<Result<Vec<_>, _>>()?;
+            allowed.push(AssetRef::try_from(
+                incompatible.target.as_ref().ok_or("prefix")?,
+            )?);
+            allowed.push(AssetRef::try_from(&space)?);
+            restricted.grants[0].scope = Scope::Targets(allowed);
+            let mut enlarged = incompatible.clone();
+            enlarged.cidr = "192.0.2.0/23".into();
+            assert!(matches!(
+                store.workspace(
+                    &restricted,
+                    api::Request {
+                        command: Some(C::Network(enlarged)),
+                        working: Some(api::WorkingContext {
+                            expected: Some(revision(&store)?),
+                            ..Default::default()
+                        }),
+                    },
+                    100
+                ),
+                Err(Error::Denied)
+            ));
+            assert_eq!(store.usage()?, before);
+            assert!(matches!(
+                command_at(&store, C::Network(incompatible), revision(&store)?),
+                Err(Error::Conflict)
+            ));
+            assert_eq!(store.usage()?, before);
+        }
+    }
+    Ok(())
+}
+
 // Generic relationship commands cannot bypass the address owner's range invariant.
 #[test]
 fn ordinary_membership_validates_the_known_address() -> TestResult {
