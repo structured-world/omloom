@@ -235,6 +235,114 @@ fn allocation_resolution_revalidates_prefix_namespace() -> TestResult {
     Ok(())
 }
 
+// The generic relation writer must preserve the address command's single selected prefix slot.
+#[test]
+fn generic_relation_cannot_add_a_second_selected_prefix() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut created = Vec::new();
+    for _ in 0..2 {
+        let R::Mutation(saved) = command_at(
+            &store,
+            C::Address(api::Address {
+                address: Some("192.0.2.8/24".into()),
+                create_prefix: true,
+                ..Default::default()
+            }),
+            revision(&store)?,
+        )?
+        else {
+            panic!("address with prefix")
+        };
+        created.push(saved.targets);
+    }
+    let relation = |prefix: wire::AssetRef| {
+        C::Relation(api::Relationship {
+            relation: Some(wire::Relation {
+                from: Some(created[0][0].clone()),
+                to: Some(prefix),
+                kind: wire::RelationKind::MemberOf as i32,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+    };
+    let before = store.usage()?;
+    command_at(&store, relation(created[0][1].clone()), revision(&store)?)?;
+    assert_eq!(store.usage()?, before);
+    assert!(matches!(
+        command_at(&store, relation(created[1][1].clone()), revision(&store)?),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.usage()?, before);
+    let R::Detail(detail) = call(
+        &store,
+        &operator(),
+        C::Read(api::Read {
+            target: Some(created[0][0].clone()),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("detail")
+    };
+    command_at(
+        &store,
+        C::Address(api::Address {
+            target: Some(created[0][0].clone()),
+            expected: Some(detail.item.ok_or("item")?.revision),
+            clear_prefix: true,
+            ..Default::default()
+        }),
+        revision(&store)?,
+    )?;
+    let base = revision(&store)?;
+    let barrier = std::sync::Barrier::new(2);
+    let outcomes = std::thread::scope(|scope| {
+        let left = scope.spawn(|| {
+            barrier.wait();
+            command_at(&store, relation(created[0][1].clone()), base)
+        });
+        let right = scope.spawn(|| {
+            barrier.wait();
+            command_at(&store, relation(created[1][1].clone()), base)
+        });
+        [
+            left.join().expect("first selection"),
+            right.join().expect("second selection"),
+        ]
+    });
+    let mut committed = 0;
+    for outcome in outcomes {
+        match outcome {
+            Ok(R::Mutation(_)) => committed += 1,
+            Err(Error::Conflict) => {}
+            other => panic!("unexpected selection result: {other:?}"),
+        }
+    }
+    assert_eq!(committed, 1);
+    let R::Detail(detail) = call(
+        &store,
+        &operator(),
+        C::Read(api::Read {
+            target: Some(created[0][0].clone()),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("selected prefix")
+    };
+    assert_eq!(
+        detail
+            .relations
+            .iter()
+            .filter(|r| r.kind == wire::RelationKind::MemberOf as i32)
+            .count(),
+        1
+    );
+    Ok(())
+}
+
 // Generic relationship commands cannot bypass the address owner's range invariant.
 #[test]
 fn ordinary_membership_validates_the_known_address() -> TestResult {
