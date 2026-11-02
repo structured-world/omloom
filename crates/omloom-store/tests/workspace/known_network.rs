@@ -63,6 +63,101 @@ fn csv_unscoped_apply_recovers_lost_reply_after_reopen() -> TestResult {
     Ok(())
 }
 
+// The trusted record API must enforce the same CIDR and allocation boundaries as workspace writes.
+#[test]
+fn public_prefix_membership_enforces_network_facts() -> TestResult {
+    for mismatch in ["cidr", "namespace", "link", "none"] {
+        let dir = tempfile::tempdir()?;
+        let store = Store::open(dir.path(), policy())?;
+        let actor = operator();
+        let space = create(&store, &actor, K::AddressSpace, "namespace")?;
+        let other = create(&store, &actor, K::AddressSpace, "other namespace")?;
+        let link = create(&store, &actor, K::L2Domain, "link")?;
+        let other_link = create(&store, &actor, K::L2Domain, "other link")?;
+        let ip = if mismatch == "link" {
+            "fe80::1"
+        } else if mismatch == "cidr" {
+            "198.51.100.1"
+        } else {
+            "192.0.2.1"
+        };
+        let mut targets = Vec::new();
+        for (kind, cidr, namespace, local_link) in [
+            (
+                K::Prefix,
+                if mismatch == "link" {
+                    "fe80::/64".into()
+                } else {
+                    "192.0.2.0/24".into()
+                },
+                space.clone(),
+                (mismatch == "link").then_some(link.clone()),
+            ),
+            (
+                K::IpAddress,
+                format!("{ip}/{}", if mismatch == "link" { 128 } else { 32 }),
+                if mismatch == "namespace" {
+                    other.clone()
+                } else {
+                    space.clone()
+                },
+                (mismatch == "link").then_some(other_link),
+            ),
+        ] {
+            let R::Mutation(saved) = command_at(
+                &store,
+                C::Network(api::Network {
+                    kind: kind as i32,
+                    cidr,
+                    address_space: Some(namespace),
+                    link: local_link,
+                    name: "allocation".into(),
+                    sharing: api::SharedUse::Exclusive as i32,
+                    ..Default::default()
+                }),
+                revision(&store)?,
+            )?
+            else {
+                panic!("allocation")
+            };
+            targets.push(saved.targets[0].clone());
+        }
+        let R::Mutation(saved) = command_at(
+            &store,
+            C::Address(api::Address {
+                address: Some(ip.into()),
+                binding: Some(targets[1].clone()),
+                zone: (mismatch == "link").then(|| "en0".into()),
+                ..Default::default()
+            }),
+            revision(&store)?,
+        )?
+        else {
+            panic!("known address")
+        };
+        let record = admit(wire::record::Body::Relation(wire::Relation {
+            relation_id: omloom_contracts::ids::RelationId::generate().to_string(),
+            authority_id: omloom_contracts::ids::AuthorityId::generate().to_string(),
+            revision: 1,
+            kind: wire::RelationKind::MemberOf as i32,
+            from: Some(saved.targets[0].clone()),
+            to: Some(targets[0].clone()),
+        }));
+        let usage = store.usage()?;
+        let result = store.save_relation(&record, None, &actor.actor, 100);
+        if mismatch == "none" {
+            assert_eq!(result?, 1);
+        } else {
+            assert!(
+                matches!(result, Err(Error::Conflict)),
+                "{mismatch}: {result:?}"
+            );
+            assert_eq!(store.usage()?, usage);
+        }
+    }
+    Ok(())
+}
+
 // Prefix address membership cannot become an interface participant, including by retyping.
 #[test]
 fn prefix_cannot_acquire_interface_participants() -> TestResult {

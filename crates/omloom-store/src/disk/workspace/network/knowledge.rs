@@ -93,16 +93,7 @@ impl Tx<'_> {
             return Err(Error::Denied);
         }
         self.check_prefix_binding(context, address, fact, prefix)?;
-        let block: ipnet::IpNet = string(prefix, "cidr")?
-            .parse()
-            .map_err(|_| Error::Corrupt)?;
-        let ip: std::net::IpAddr = string(fact, "address")?
-            .parse()
-            .map_err(|_| Error::Corrupt)?;
-        if !block.contains(&ip) {
-            return Err(Error::Conflict);
-        }
-        Ok(())
+        crate::disk::inventory::prefix_fact_matches(fact, prefix)
     }
 
     pub(in crate::disk::workspace) fn check_prefix_binding(
@@ -112,9 +103,9 @@ impl Tx<'_> {
         fact: &Properties,
         prefix: &Properties,
     ) -> Result<()> {
-        let Some(space) = prefix.get("address_space") else {
+        if !prefix.contains_key("address_space") {
             return Ok(());
-        };
+        }
         let Some(binding) = fact.get("binding") else {
             return Ok(());
         };
@@ -147,9 +138,6 @@ impl Tx<'_> {
         let allocation = self
             .get(&format!("network/{}", identity(binding)))?
             .ok_or(Error::Missing)?;
-        if allocation.get("address_space") != Some(space) {
-            return Err(Error::Conflict);
-        }
         let ip: std::net::IpAddr = string(fact, "address")?
             .parse()
             .map_err(|_| Error::Corrupt)?;
@@ -167,11 +155,8 @@ impl Tx<'_> {
             ) {
                 return Err(Error::Denied);
             }
-            if allocation.get("link_scope") != prefix.get("link_scope") {
-                return Err(Error::Conflict);
-            }
         }
-        Ok(())
+        crate::disk::inventory::prefix_allocation_matches(&allocation, prefix, ip)
     }
 
     pub(in crate::disk::workspace) fn prefix_write(

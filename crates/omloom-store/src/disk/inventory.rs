@@ -4,9 +4,39 @@ use prost::Message;
 #[derive(Clone, Copy)]
 enum RelationEdit<'a> {
     Ordinary,
+    Record,
     Rebound,
     RetainingEnd(&'a str),
     Physical { plan: &'a str, actual: bool },
+}
+
+pub(super) fn prefix_fact_matches(fact: &Properties, prefix: &Properties) -> Result<()> {
+    let block: ipnet::IpNet = string(prefix, "cidr")?
+        .parse()
+        .map_err(|_| Error::Corrupt)?;
+    let address: std::net::IpAddr = string(fact, "address")?
+        .parse()
+        .map_err(|_| Error::Corrupt)?;
+    if !block.contains(&address) {
+        return Err(Error::Conflict);
+    }
+    Ok(())
+}
+
+pub(super) fn prefix_allocation_matches(
+    allocation: &Properties,
+    prefix: &Properties,
+    address: std::net::IpAddr,
+) -> Result<()> {
+    if allocation.get("address_space") != prefix.get("address_space")
+        || (match address {
+            std::net::IpAddr::V4(ip) => ip.is_link_local(),
+            std::net::IpAddr::V6(ip) => ip.is_unicast_link_local(),
+        } && allocation.get("link_scope") != prefix.get("link_scope"))
+    {
+        return Err(Error::Conflict);
+    }
+    Ok(())
 }
 
 pub(super) fn field_props(field: &wire::Field) -> Result<Properties> {
@@ -632,7 +662,8 @@ impl Store {
             return Err(Error::Invalid);
         };
         let mut tx = self.begin()?;
-        let revision = tx.save_typed_relation(relation, expected, actor, now)?;
+        let revision =
+            tx.save_relation_inner(relation, expected, actor, now, RelationEdit::Record)?;
         tx.commit()?;
         Ok(revision)
     }
@@ -817,7 +848,9 @@ impl Tx<'_> {
         edit: RelationEdit<'_>,
     ) -> Result<u64> {
         let (detached, retained_end) = match edit {
-            RelationEdit::Ordinary | RelationEdit::Physical { .. } => (false, None),
+            RelationEdit::Ordinary | RelationEdit::Record | RelationEdit::Physical { .. } => {
+                (false, None)
+            }
             RelationEdit::Rebound => (true, None),
             RelationEdit::RetainingEnd(end) => (true, Some(end)),
         };
@@ -880,6 +913,29 @@ impl Tx<'_> {
             && from_kind == wire::AssetKind::AddressReference
             && to_kind == wire::AssetKind::Prefix
         {
+            // Workspace commands authorize and validate these facts before writing.
+            // Raw records check them here; correction rebinds validate the normalized result.
+            if matches!(edit, RelationEdit::Record) {
+                let fact = self
+                    .get(&format!("network/{}/{}", from.asset, from.incarnation))?
+                    .ok_or(Error::Missing)?;
+                let prefix = self
+                    .get(&format!("network/{}/{}", to.asset, to.incarnation))?
+                    .ok_or(Error::Missing)?;
+                if prefix.contains_key("address_space")
+                    && let Some(binding) = fact.get("binding")
+                {
+                    let binding = binding.as_str().ok_or(Error::Corrupt)?;
+                    let allocation = self
+                        .get(&format!("network/{binding}"))?
+                        .ok_or(Error::Missing)?;
+                    let address = string(&fact, "address")?
+                        .parse()
+                        .map_err(|_| Error::Corrupt)?;
+                    prefix_allocation_matches(&allocation, &prefix, address)?;
+                }
+                prefix_fact_matches(&fact, &prefix)?;
+            }
             // The shared transaction serializes the address owner's single selected prefix.
             let occupied = self.query(
                 "MATCH (r:OmRow {asset:$asset}) WHERE r.parent='relations' AND r.incarnation=$incarnation AND r.kind=$kind AND r.key<>$key MATCH (p:OmRow {key:'asset/'+r.to_asset}) WHERE p.kind=$prefix AND p.incarnation=r.to_incarnation RETURN {} AS p LIMIT 1",
