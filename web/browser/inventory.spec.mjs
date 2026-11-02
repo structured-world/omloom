@@ -6,6 +6,44 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 
+test('prefix searches invalidate old cursors and ignore late real responses', async ({ page }) => {
+  // Reordered transport delivery must not replace the current search or restore its old cursor.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-search-race-')); const server = await host(dir);
+  let release;
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const name of ['Alpha 1', 'Alpha 2', 'Alpha 3', 'Alpha 4', 'Beta']) await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name, cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) });
+    const waiting = Promise.withResolvers(); const held = Promise.withResolvers(); const delivered = Promise.withResolvers();
+    release = () => held.resolve();
+    await page.route(`**/${m.Workspace.typeName}/*`, async route => {
+      const bytes = route.request().postDataBuffer();
+      const request = bytes && m.Request.fromBinary(bytes.subarray(5, 5 + bytes.readUInt32BE(1)));
+      if (request?.command.oneofKind !== 'query' || request.command.query.search !== 'Alpha') return route.continue();
+      const response = await route.fetch(); waiting.resolve(); await held.promise;
+      await route.fulfill({ response }); delivered.resolve();
+    });
+    await page.goto(`${server.url}/#/?view=1`);
+    await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'address reference' });
+    await dialog.getByLabel('Prefix relationship', { exact: true }).selectOption('existing');
+    await expect(dialog.getByRole('button', { name: 'More prefixes', exact: true })).toBeVisible();
+    await dialog.getByLabel('Find a prefix', { exact: true }).fill('Alpha');
+    await expect(dialog.getByRole('button', { name: 'More prefixes', exact: true })).toBeHidden();
+    await dialog.getByRole('button', { name: 'Find prefixes', exact: true }).click();
+    await waiting.promise;
+    await dialog.getByLabel('Find a prefix', { exact: true }).fill('Beta');
+    await dialog.getByRole('button', { name: 'Find prefixes', exact: true }).click();
+    const options = dialog.getByLabel('Existing prefix', { exact: true }).locator('option');
+    await expect(options).toHaveCount(2); await expect(options.last()).toContainText('Beta');
+    release(); await delivered.promise;
+    // Let the browser consume and render the released real response before checking absence.
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await expect(options).toHaveCount(2); await expect(options.last()).toContainText('Beta');
+    await expect(dialog.getByRole('button', { name: 'More prefixes', exact: true })).toBeHidden();
+  } finally { release?.(); await page.unrouteAll({ behavior: 'wait' }); await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('CSV imports expose prefix allocations inside namespaces and canonical prefixes', async ({ browser }) => {
   // Allocation-only parents must remain selectable in the same bounded import context.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-scoped-prefix-import-')); const server = await host(dir);

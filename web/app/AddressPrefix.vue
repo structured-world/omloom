@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, useId } from 'vue';
+import { computed, ref, useId, watch } from 'vue';
 import { call, model, AssetKind as K, input, key } from './api';
 const props = defineProps<{ address: string; editing?: boolean; initialPrefix?: model.Item; working: model.WorkingContext }>();
 const id = useId();
@@ -7,6 +7,8 @@ const choice = defineModel<Partial<model.Address>>({ required: true });
 const mode = ref(props.editing ? 'preserve' : props.initialPrefix ? 'existing' : 'new');
 const name = ref(''); const search = ref(''); const selected = ref(props.initialPrefix ? key(props.initialPrefix.target) : '');
 const candidates = ref<model.Item[]>(props.initialPrefix ? [props.initialPrefix] : []); const cursor = ref<string>(); const error = ref('');
+let searchTurn = 0;
+watch(search, () => { searchTurn++; cursor.value = undefined; error.value = ''; }, { flush: 'sync' });
 const cidr = computed(() => /\/\d+/.test(props.address));
 function update() {
   const result: Partial<model.Address> = mode.value === 'new' && cidr.value ? { createPrefix: true, prefixName: name.value || undefined }
@@ -16,19 +18,23 @@ function update() {
   return result;
 }
 async function load(more = false) {
+  const next = more ? cursor.value : undefined;
+  if (more && !next) return;
+  const turn = ++searchTurn;
   try {
     error.value = '';
     const result = await call({ oneofKind: 'query', query: model.Query.create({
       kinds: [K.PREFIX], columns: ['name','cidr','address_space'], search: search.value,
-      limit: 3, cursor: more ? cursor.value : undefined,
+      limit: 3, cursor: next,
     }) });
+    if (turn !== searchTurn) return;
     if (result.oneofKind !== 'page') throw Error('Prefixes are unavailable');
     const kept = candidates.value.find(item => key(item.target) === selected.value);
     if (!more && kept && !result.page.items.some(item => key(item.target) === selected.value)) result.page.items.unshift(kept);
     if (more && candidates.value.length + result.page.items.length > 128) throw Error('Narrow the search to find another prefix. The current selection is preserved.');
     candidates.value = more ? [...candidates.value, ...result.page.items] : result.page.items;
     cursor.value = result.page.next;
-  } catch (e) { error.value = String(e); }
+  } catch (e) { if (turn === searchTurn) error.value = String(e); }
 }
 defineExpose({ request: () => { const result = update(); if (mode.value === 'existing' && !result.prefix) throw Error('Select an existing prefix'); return result; } });
 </script>
