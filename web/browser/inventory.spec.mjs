@@ -122,6 +122,7 @@ test('known IP/CIDR review preserves drafts and atomically creates an unresolved
         await expect(dialog.getByLabel('IP address', { exact: true })).toHaveValue(raw);
         await expect(dialog.getByLabel('Prefix relationship', { exact: true })).toHaveValue('new');
         await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
+        await expect(dialog.getByRole('region', { name: 'Review known address' })).toContainText('192.0.2.0/24');
         await page.screenshot({ path: `test-results/known-prefix-review-${width}.png` });
         await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
         await expect(dialog).toBeHidden();
