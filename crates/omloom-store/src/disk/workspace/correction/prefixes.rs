@@ -21,6 +21,8 @@ impl Tx<'_> {
         }
         self.require_no_ipam_references(target)?;
         self.require_no_physical_reservations(target)?;
+        // Interface participants belong to canonical addresses or address groups.
+        // Known addresses join a prefix through MemberOf relations instead.
         if !self
             .children(&format!("members/{}", network::identity(target)))?
             .is_empty()

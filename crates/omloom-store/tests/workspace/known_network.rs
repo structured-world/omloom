@@ -24,6 +24,129 @@ fn revision(store: &Store) -> Result<u64, Error> {
     Ok(page.revision)
 }
 
+// Prefix address membership cannot become an interface participant, including by retyping.
+#[test]
+fn prefix_cannot_acquire_interface_participants() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let space = create(&store, &actor, K::AddressSpace, "namespace")?;
+    let interface = create(&store, &actor, K::Interface, "interface")?;
+    let mut targets = Vec::new();
+    for (kind, cidr, name) in [
+        (K::Prefix, "192.0.2.0/24", "prefix"),
+        (K::IpAddress, "192.0.2.10/32", "address"),
+    ] {
+        let R::Mutation(saved) = command_at(
+            &store,
+            C::Network(api::Network {
+                kind: kind as i32,
+                cidr: cidr.into(),
+                name: name.into(),
+                address_space: Some(space.clone()),
+                sharing: api::SharedUse::Exclusive as i32,
+                ..Default::default()
+            }),
+            revision(&store)?,
+        )?
+        else {
+            panic!("allocation")
+        };
+        targets.push(saved.targets[0].clone());
+    }
+    let read = |target: &wire::AssetRef| -> Result<api::Item, Error> {
+        let R::Detail(detail) = call(
+            &store,
+            &actor,
+            C::Read(api::Read {
+                target: Some(target.clone()),
+                ..Default::default()
+            }),
+        )?
+        else {
+            return Err(Error::Corrupt);
+        };
+        detail.item.ok_or(Error::Missing)
+    };
+    let before = store.usage()?;
+    assert!(matches!(
+        command_at(
+            &store,
+            C::Member(api::Member {
+                address: Some(targets[0].clone()),
+                interface: Some(interface.clone()),
+                expected: read(&targets[0])?.revision,
+                ..Default::default()
+            }),
+            revision(&store)?
+        ),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
+
+    command_at(
+        &store,
+        C::Member(api::Member {
+            address: Some(targets[1].clone()),
+            interface: Some(interface.clone()),
+            expected: read(&targets[1])?.revision,
+            ..Default::default()
+        }),
+        revision(&store)?,
+    )?;
+    let before = store.usage()?;
+    let address = read(&targets[1])?;
+    assert!(matches!(
+        command_at(
+            &store,
+            C::Network(api::Network {
+                target: Some(targets[1].clone()),
+                expected: Some(address.revision),
+                kind: K::Prefix as i32,
+                name: "prefix".into(),
+                cidr: "192.0.2.0/24".into(),
+                address_space: Some(space),
+                sharing: api::SharedUse::Exclusive as i32,
+                ..Default::default()
+            }),
+            revision(&store)?
+        ),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.usage()?, before);
+
+    let mut retyped = asset();
+    retyped.target = Some(targets[1].clone());
+    retyped.kind = K::Prefix as i32;
+    retyped.revision = address.revision + 1;
+    assert!(matches!(
+        store.save_asset(
+            &admit(wire::record::Body::Asset(retyped)),
+            Some(address.revision),
+            "operator",
+            100
+        ),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.usage()?, before);
+    let R::Detail(detail) = call(
+        &store,
+        &actor,
+        C::Read(api::Read {
+            target: Some(targets[1].clone()),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("address")
+    };
+    assert_eq!(detail.item.ok_or("item")?.kind, K::IpAddress as i32);
+    assert_eq!(detail.participants.len(), 1);
+    assert_eq!(detail.participants[0].interface.as_ref(), Some(&interface));
+    assert!(read(&targets[0])?.kind == K::Prefix as i32);
+    Ok(())
+}
+
 // Generic relationship commands cannot bypass the address owner's range invariant.
 #[test]
 fn ordinary_membership_validates_the_known_address() -> TestResult {
