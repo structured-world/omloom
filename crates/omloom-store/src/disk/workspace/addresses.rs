@@ -128,14 +128,6 @@ impl Store {
         {
             return Ok(reply(api::reply::Result::Mutation(saved)));
         }
-        let selected_prefix = tx.prepare_address_prefix(
-            context,
-            &mut request,
-            working,
-            now,
-            knowledge::PrefixCreation::New,
-        )?;
-        let clear_prefix = request.clear_prefix;
         if (request.allocation.is_some() || request.interface.is_some())
             && working.expected.is_none()
         {
@@ -176,6 +168,14 @@ impl Store {
                     .ok_or(Error::Corrupt)?,
             );
         }
+        let selected_prefix = tx.prepare_address_prefix(
+            context,
+            &mut request,
+            working,
+            now,
+            knowledge::PrefixCreation::New,
+        )?;
+        let clear_prefix = request.clear_prefix;
         let assignment = request.interface.take();
         let priority = request.priority.take();
         if priority.is_some() && assignment.is_none() {

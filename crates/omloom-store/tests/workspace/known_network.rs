@@ -147,6 +147,94 @@ fn prefix_cannot_acquire_interface_participants() -> TestResult {
     Ok(())
 }
 
+// Resolving an allocation must recheck both preserved and explicitly selected prefix membership.
+#[test]
+fn allocation_resolution_revalidates_prefix_namespace() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let first = create(&store, &actor, K::AddressSpace, "first")?;
+    let other = create(&store, &actor, K::AddressSpace, "other")?;
+    let R::Mutation(prefix) = command_at(
+        &store,
+        C::Network(api::Network {
+            kind: K::Prefix as i32,
+            cidr: "192.0.2.0/24".into(),
+            address_space: Some(first),
+            sharing: api::SharedUse::Exclusive as i32,
+            ..Default::default()
+        }),
+        revision(&store)?,
+    )?
+    else {
+        panic!("prefix")
+    };
+    let prefix = prefix.targets[0].clone();
+    let R::Mutation(address) = command_at(
+        &store,
+        C::Address(api::Address {
+            address: Some("192.0.2.8".into()),
+            prefix: Some(prefix.clone()),
+            ..Default::default()
+        }),
+        revision(&store)?,
+    )?
+    else {
+        panic!("address")
+    };
+    let address = address.targets[0].clone();
+    let R::Detail(detail) = call(
+        &store,
+        &actor,
+        C::Read(api::Read {
+            target: Some(address.clone()),
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("detail")
+    };
+    let expected = detail.item.ok_or("item")?.revision;
+    let base = revision(&store)?;
+    let before = store.usage()?;
+    for selected in [None, Some(prefix)] {
+        let request = api::Address {
+            target: Some(address.clone()),
+            expected: Some(expected),
+            prefix: selected,
+            allocation: Some(Box::new(api::Network {
+                kind: K::IpAddress as i32,
+                name: "wrong namespace".into(),
+                cidr: "192.0.2.8/32".into(),
+                address_space: Some(other.clone()),
+                sharing: api::SharedUse::Exclusive as i32,
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        for command in [C::PreviewAddress(request.clone()), C::Address(request)] {
+            assert!(matches!(
+                command_at(&store, command, base),
+                Err(Error::Conflict)
+            ));
+            assert_eq!(store.usage()?, before);
+        }
+    }
+    let R::Page(page) = call(
+        &store,
+        &actor,
+        C::Query(api::Query {
+            kinds: vec![K::IpAddress as i32],
+            ..query()
+        }),
+    )?
+    else {
+        panic!("allocations")
+    };
+    assert_eq!(page.total, 0);
+    Ok(())
+}
+
 // Generic relationship commands cannot bypass the address owner's range invariant.
 #[test]
 fn ordinary_membership_validates_the_known_address() -> TestResult {
