@@ -1437,14 +1437,26 @@ impl Store {
             ))
         .then(|| write.encode_to_vec());
         if let Some(input) = &input
-            && let Some(saved) = tx.creation_outcome(context, working, input, "knowledge-write")?
+            && let Some(saved) = tx.creation_outcome(
+                context,
+                working,
+                input,
+                addresses::knowledge::Outcome::Revision("knowledge-write"),
+            )?
         {
             return Ok(reply(api::reply::Result::Mutation(saved)));
         }
         let target = tx.context_write(context, write, working, now)?;
         let targets = vec![target_wire(target)];
         if let Some(input) = input {
-            tx.save_creation_outcome(context, working, &input, &targets, now, "knowledge-write")?;
+            tx.save_creation_outcome(
+                context,
+                working,
+                &input,
+                &targets,
+                now,
+                addresses::knowledge::Outcome::Revision("knowledge-write"),
+            )?;
         }
         Ok(mutation(tx.commit()?, targets))
     }

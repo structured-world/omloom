@@ -112,7 +112,12 @@ impl Store {
             let key = format!("preview/{id}");
             let mut tx = self.begin()?;
             let input = request.encode_to_vec();
-            if let Some(saved) = tx.creation_outcome(context, working, &input, "csv")? {
+            if let Some(saved) = tx.creation_outcome(
+                context,
+                working,
+                &input,
+                addresses::knowledge::Outcome::Csv(id),
+            )? {
                 return Ok(reply(api::reply::Result::Mutation(saved)));
             }
             tx.selection(context, working, true)?;
@@ -157,7 +162,14 @@ impl Store {
                 targets.push(target_wire(target));
             }
             tx.delete(&key)?;
-            tx.save_creation_outcome(context, working, &input, &targets, now, "csv")?;
+            tx.save_creation_outcome(
+                context,
+                working,
+                &input,
+                &targets,
+                now,
+                addresses::knowledge::Outcome::Csv(id),
+            )?;
             return Ok(mutation(tx.commit()?, targets));
         }
         if request.csv.len() > MAX_CSV

@@ -201,13 +201,25 @@ impl Store {
             None
         };
         if let Some(input) = &input
-            && let Some(saved) = tx.creation_outcome(context, working, input, "prefix")?
+            && let Some(saved) = tx.creation_outcome(
+                context,
+                working,
+                input,
+                addresses::knowledge::Outcome::Revision("prefix"),
+            )?
         {
             return Ok(reply(api::reply::Result::Mutation(saved)));
         }
         let targets = self.workspace_network_in(&mut tx, context, request, working, now)?;
         if let Some(input) = input {
-            tx.save_creation_outcome(context, working, &input, &targets, now, "prefix")?;
+            tx.save_creation_outcome(
+                context,
+                working,
+                &input,
+                &targets,
+                now,
+                addresses::knowledge::Outcome::Revision("prefix"),
+            )?;
         }
         Ok(mutation(tx.commit()?, targets))
     }

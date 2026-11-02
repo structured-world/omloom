@@ -5,6 +5,29 @@ pub(in crate::disk::workspace) enum PrefixCreation {
     RefreshRelated,
 }
 
+pub(in crate::disk::workspace) enum Outcome<'a> {
+    Revision(&'a str),
+    Csv(&'a str),
+}
+
+impl Outcome<'_> {
+    fn key(&self, working: &api::WorkingContext) -> Option<String> {
+        match self {
+            Self::Revision(_) => working
+                .expected
+                .map(|base| format!("mutation-outcome/{base}")),
+            Self::Csv(id) => Some(format!("mutation-outcome/preview/{id}")),
+        }
+    }
+
+    fn domain(&self) -> &str {
+        match self {
+            Self::Revision(domain) => domain,
+            Self::Csv(_) => "csv",
+        }
+    }
+}
+
 pub(in crate::disk::workspace) fn normalize(request: &mut api::Address) -> Result<()> {
     parse_input(request)?;
     if request.broadcast.is_some() && request.target.is_none() && request.prefix_length.is_none() {
@@ -248,16 +271,16 @@ impl Tx<'_> {
         context: &Context,
         working: &api::WorkingContext,
         input: &[u8],
-        domain: &str,
+        outcome: Outcome<'_>,
     ) -> Result<Option<api::Mutation>> {
-        let Some(base) = working.expected else {
+        let Some(key) = outcome.key(working) else {
             return Ok(None);
         };
-        let Some(row) = self.get(&format!("mutation-outcome/{base}"))? else {
+        let Some(row) = self.get(&key)? else {
             return Ok(None);
         };
         if string(&row, "actor")? != context.actor
-            || binary(&row, "digest")? != fingerprint(working, input, domain)
+            || binary(&row, "digest")? != fingerprint(working, input, outcome.domain())
         {
             return Err(Error::Conflict);
         }
@@ -280,7 +303,14 @@ impl Tx<'_> {
             targets.push(target_wire(target));
         }
         Ok(Some(api::Mutation {
-            revision: base.checked_add(1).ok_or(Error::Limit)?,
+            revision: match outcome {
+                Outcome::Revision(_) => working
+                    .expected
+                    .ok_or(Error::Corrupt)?
+                    .checked_add(1)
+                    .ok_or(Error::Limit)?,
+                Outcome::Csv(_) => number(&row, "revision")?,
+            },
             targets,
             affected: 0,
         }))
@@ -293,35 +323,40 @@ impl Tx<'_> {
         input: &[u8],
         targets: &[wire::AssetRef],
         now: u64,
-        domain: &str,
+        outcome: Outcome<'_>,
     ) -> Result<()> {
-        let Some(base) = working.expected else {
+        let Some(key) = outcome.key(working) else {
             return Ok(());
         };
-        if base != number(&self.root, "revision")? {
+        let base = number(&self.root, "revision")?;
+        if working.expected.is_some_and(|expected| expected != base) {
             return Err(Error::Conflict);
         }
-        // Detail expires under the existing bounded cleanup. The mandatory old
-        // revision then rejects replay instead of admitting another creation.
-        self.put(
-            &format!("mutation-outcome/{base}"),
-            "mutation-outcomes",
-            Class::Detail,
-            props([
-                ("actor", text(&context.actor)),
-                ("at", int(now)?),
-                ("digest", Value::Binary(fingerprint(working, input, domain))),
-                (
-                    "targets",
-                    Value::Array(
-                        targets
-                            .iter()
-                            .map(|t| parse_target(Some(t)).map(|t| text(network::identity(t))))
-                            .collect::<Result<_>>()?,
-                    ),
+        let mut data = props([
+            ("actor", text(&context.actor)),
+            ("at", int(now)?),
+            (
+                "digest",
+                Value::Binary(fingerprint(working, input, outcome.domain())),
+            ),
+            (
+                "targets",
+                Value::Array(
+                    targets
+                        .iter()
+                        .map(|t| parse_target(Some(t)).map(|t| text(network::identity(t))))
+                        .collect::<Result<_>>()?,
                 ),
-            ]),
-        )?;
+            ),
+        ]);
+        if matches!(outcome, Outcome::Csv(_)) {
+            data.insert(
+                "revision".into(),
+                int(base.checked_add(1).ok_or(Error::Limit)?)?,
+            );
+        }
+        // Expiry leaves the old creation revision or consumed preview inadmissible.
+        self.put(&key, "mutation-outcomes", Class::Detail, data)?;
         Ok(())
     }
 

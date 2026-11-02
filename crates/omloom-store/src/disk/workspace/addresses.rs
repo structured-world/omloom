@@ -124,7 +124,12 @@ impl Store {
         let mut tx = self.begin()?;
         if !preview
             && let Some(input) = &replay
-            && let Some(saved) = tx.creation_outcome(context, working, input, "address")?
+            && let Some(saved) = tx.creation_outcome(
+                context,
+                working,
+                input,
+                knowledge::Outcome::Revision("address"),
+            )?
         {
             return Ok(reply(api::reply::Result::Mutation(saved)));
         }
@@ -271,7 +276,14 @@ impl Store {
             return Ok(reply(api::reply::Result::AddressReview(summary)));
         }
         if let Some(input) = replay {
-            tx.save_creation_outcome(context, working, &input, &targets, now, "address")?;
+            tx.save_creation_outcome(
+                context,
+                working,
+                &input,
+                &targets,
+                now,
+                knowledge::Outcome::Revision("address"),
+            )?;
         }
         Ok(mutation(tx.commit()?, targets))
     }

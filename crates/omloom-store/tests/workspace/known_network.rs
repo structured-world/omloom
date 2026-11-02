@@ -24,6 +24,45 @@ fn revision(store: &Store) -> Result<u64, Error> {
     Ok(page.revision)
 }
 
+// A preview ID recovers an accepted import even when the caller omitted a revision.
+#[test]
+fn csv_unscoped_apply_recovers_lost_reply_after_reopen() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let R::Preview(preview) = call(
+        &store,
+        &actor,
+        C::Import(api::Import {
+            source: "unscoped-preview".into(),
+            kind: K::AddressReference as i32,
+            csv: "external_id,address\nendpoint,192.0.2.31\n".into(),
+            mappings: vec![api::Mapping {
+                source: "address".into(),
+                field: "address".into(),
+            }],
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("import preview")
+    };
+    assert!(preview.id.is_some(), "{preview:?}");
+    let apply = C::Import(api::Import {
+        preview: preview.id,
+        ..Default::default()
+    });
+    let accepted = call(&store, &actor, apply.clone())?;
+    let usage = store.usage()?;
+    assert_eq!(call(&store, &actor, apply.clone())?, accepted);
+    assert_eq!(store.usage()?, usage);
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    assert_eq!(call(&store, &actor, apply)?, accepted);
+    assert_eq!(store.usage()?, usage);
+    Ok(())
+}
+
 // Prefix address membership cannot become an interface participant, including by retyping.
 #[test]
 fn prefix_cannot_acquire_interface_participants() -> TestResult {
