@@ -1,5 +1,7 @@
 use super::*;
 
+mod paging;
+
 pub(super) fn prefix_title_context(query: &api::Query) -> bool {
     query.include_context
         && matches!(
@@ -437,26 +439,13 @@ impl Store {
             return Err(Error::Expired);
         }
         let fingerprint = query_fingerprint(&query, context);
-        let offset = match &query.cursor {
-            None => 0u64,
+        let position = match &query.cursor {
+            None => paging::Position::Offset(0),
             Some(cursor) => {
-                if cursor.len() > 256 {
-                    return Err(Error::Invalid);
-                }
-                let parts: Vec<_> = cursor.split(':').collect();
-                if parts.len() != 4
-                    || parts[0].parse::<u64>().ok() != Some(revision)
-                    || parts[1] != fingerprint
-                    || parts[2].parse::<u64>().ok() != Some(context.authority_revision)
-                {
-                    return Err(Error::Expired);
-                }
-                parts[3].parse().map_err(|_| Error::Invalid)?
+                page_position(cursor, revision, &fingerprint, context.authority_revision)?
+                    .parse()?
             }
         };
-        if offset > 100_000 {
-            return Err(Error::Limit);
-        }
         let mut values = HashMap::new();
         let mut clauses = vec![
             "a.parent='assets'".to_owned(),
@@ -471,6 +460,7 @@ impl Store {
         ));
         let mut entry = "MATCH (a:OmRow {parent:'assets'})".to_owned();
         let mut prefix_membership_entry = false;
+        let mut prefix_entries = None;
         let mut bindings = vec!["a".to_owned()];
         let mut predicate_joins = Vec::new();
         if query.omit_host_local
@@ -703,6 +693,15 @@ impl Store {
             selection.members = Some(tx.working_scope(context, &working.roots)?);
         }
         if let Some(roots) = &selection.members {
+            let split_prefixes = query.responsibility.is_none()
+                && !query.unplaced
+                && !selection.networks.is_empty()
+                && selection.networks.len() == roots.len()
+                && selection.networks.iter().all(|scope| match scope {
+                    working::NetworkScope::KnownPrefix(owner)
+                    | working::NetworkScope::Prefix { owner, .. } => roots.contains(owner),
+                    _ => false,
+                });
             let narrow_prefixes = !selection.networks.is_empty()
                 && selection.networks.len() == roots.len()
                 && selection.networks.iter().all(|scope| matches!(scope, working::NetworkScope::KnownPrefix(owner) if roots.contains(owner)))
@@ -736,12 +735,13 @@ impl Store {
                 )
             )];
             let mut networks = Vec::new();
+            let mut candidate_networks = Vec::new();
             let namespace_visible = visible_clause(context, Some("address_space"), &mut values);
             for scope in &selection.networks {
                 use working::NetworkScope as N;
                 if let N::KnownPrefix(owner) | N::Prefix { owner, .. } = scope {
                     let member_visible = visible_clause(context, Some("relations"), &mut values);
-                    if narrow_prefixes {
+                    if narrow_prefixes || split_prefixes {
                         selected.push(format!(
                             "(a.kind={} AND {member_visible})",
                             wire::AssetKind::AddressReference as i32
@@ -766,17 +766,21 @@ impl Store {
                         continue;
                     }
                 };
-                let mut terms = vec![format!(
+                let namespace = format!(
                     "ns.address_space={}",
                     parameter(&mut values, text(network::identity(space)))
-                )];
+                );
+                let mut terms = vec![namespace.clone()];
+                let mut candidate_terms = vec![namespace];
                 if let N::Prefix { block, link, .. } = scope {
                     terms.push(visible_clause(context, Some("cidr"), &mut values));
-                    terms.push(format!(
+                    let range = format!(
                         "ns.ip_order>={} AND ns.ip_order<={}",
                         parameter(&mut values, text(network::address_order(block.network()))),
                         parameter(&mut values, text(network::address_order(block.broadcast())))
-                    ));
+                    );
+                    terms.push(range.clone());
+                    candidate_terms.push(range);
                     terms.push(format!(
                         "(a.kind<>{} OR ns.prefix_len>={})",
                         wire::AssetKind::Prefix as i32,
@@ -784,13 +788,81 @@ impl Store {
                     ));
                     if let Some(link) = link {
                         terms.push(visible_clause(context, Some("link_scope"), &mut values));
-                        terms.push(format!(
+                        let link = format!(
                             "ns.link_scope={}",
                             parameter(&mut values, text(network::identity(*link)))
-                        ));
+                        );
+                        terms.push(link.clone());
+                        candidate_terms.push(link);
                     }
                 }
                 networks.push(format!("({})", terms.join(" AND ")));
+                candidate_networks.push(format!("({})", candidate_terms.join(" AND ")));
+            }
+            if split_prefixes && !narrow_prefixes {
+                // Disjoint kinds permit exact summed counts and bounded sorted-page merging.
+                // Start from indexed membership or network records, not all inventory assets.
+                prefix_membership_entry = true;
+                let scopes = parameter(
+                    &mut values,
+                    Value::Array(
+                        roots
+                            .iter()
+                            .map(|target| {
+                                Value::Map(props([
+                                    ("asset", text(target.asset.to_string())),
+                                    ("incarnation", text(target.incarnation.to_string())),
+                                ]))
+                            })
+                            .collect(),
+                    ),
+                );
+                let keys = parameter(
+                    &mut values,
+                    Value::Array(
+                        roots
+                            .iter()
+                            .map(|target| {
+                                text(format!("network/{}/{}", target.asset, target.incarnation))
+                            })
+                            .collect(),
+                    ),
+                );
+                let members = format!(
+                    "UNWIND {scopes} AS prefix_scope MATCH (membership:OmRow {{to_asset:prefix_scope.asset}}) WHERE membership.parent='relations' AND membership.kind={} AND membership.to_incarnation=prefix_scope.incarnation MATCH (a:OmRow {{key:'asset/'+membership.asset}}) WHERE a.incarnation=membership.incarnation AND a.kind={} OPTIONAL MATCH (ns:OmRow {{key:'network/'+a.asset+'/'+a.incarnation}}) WITH a, ns",
+                    wire::RelationKind::MemberOf as i32,
+                    wire::AssetKind::AddressReference as i32
+                );
+                let network_entry = if candidate_networks.is_empty() {
+                    format!("UNWIND {keys} AS prefix_key MATCH (ns:OmRow {{key:prefix_key}})")
+                } else {
+                    format!(
+                        "MATCH (ns:OmRow {{parent:'networks'}}) WHERE ns.key IN {keys} OR ({})",
+                        candidate_networks.join(" OR ")
+                    )
+                };
+                let allocations = format!(
+                    "{network_entry} MATCH (a:OmRow {{key:'asset/'+ns.asset}}) WHERE a.incarnation=ns.incarnation AND a.kind IN [{},{}] WITH a, ns",
+                    wire::AssetKind::Prefix as i32,
+                    wire::AssetKind::IpAddress as i32
+                );
+                let allows = |kind| {
+                    (view_kinds.is_empty() || view_kinds.contains(&kind))
+                        && (query.kinds.is_empty() || query.kinds.contains(&(kind as i32)))
+                };
+                let want_members = allows(wire::AssetKind::AddressReference);
+                let want_allocations =
+                    allows(wire::AssetKind::Prefix) || allows(wire::AssetKind::IpAddress);
+                prefix_entries = Some(if want_allocations {
+                    if want_members {
+                        vec![members, allocations]
+                    } else {
+                        vec![allocations]
+                    }
+                } else {
+                    vec![members]
+                });
+                bindings.push("ns".into());
             }
             if !networks.is_empty() {
                 network_scope = true;
@@ -904,7 +976,7 @@ impl Store {
                 });
             }
         }
-        if network_scope {
+        if network_scope && prefix_entries.is_none() {
             predicate_joins.push(format!(" WITH {}, 'network/'+a.asset+'/'+a.incarnation AS scope_key OPTIONAL MATCH (ns:OmRow) WHERE ns.key=scope_key",bindings.join(", ")));
             bindings.push("ns".into());
         }
@@ -1039,22 +1111,19 @@ impl Store {
             }
         }
         clauses.retain(|clause| clause != "true");
-        let base = format!(
-            "{entry}{} WITH {} WHERE {}",
+        let tail = format!(
+            "{} WITH {} WHERE {}",
             predicate_joins.join(""),
             bindings.join(", "),
             clauses.join(" AND ")
         );
-        let count = tx.raw(
-            &format!("{base} RETURN count(DISTINCT a.key) AS total"),
-            values.clone(),
-        )?;
-        let total = count
-            .first()
-            .and_then(|r| r.get("total"))
-            .and_then(Value::as_int)
-            .and_then(|n| u64::try_from(n).ok())
-            .ok_or(Error::Corrupt)?;
+        let bases = match prefix_entries {
+            Some(entries) => entries
+                .into_iter()
+                .map(|entry| format!("{entry}{tail}"))
+                .collect::<Vec<_>>(),
+            None => vec![format!("{entry}{tail}")],
+        };
         let sort = match query.sort.as_str() {
             "" | "name" => format!(
                 "CASE WHEN {} THEN a.name_sort ELSE a.asset END",
@@ -1063,12 +1132,19 @@ impl Store {
             "kind" => "a.kind".into(),
             _ => return Err(Error::Invalid),
         };
-        let direction = if query.descending { "DESC" } else { "ASC" };
         let limit = query.limit;
-        values.insert("offset".into(), int(offset)?);
-        values.insert("limit".into(), int(u64::from(limit))?);
-        let selected = tx.raw(&format!("{base} RETURN DISTINCT a.key AS key, {sort} AS ordering ORDER BY ordering {direction}, key ASC SKIP $offset LIMIT $limit"), values)?;
+        let selected = paging::select(
+            &tx,
+            &bases,
+            values,
+            &sort,
+            query.descending,
+            limit,
+            position,
+        )?;
+        let total = selected.total;
         let keys: Vec<_> = selected
+            .rows
             .iter()
             .map(|p| string(p, "key").map(text))
             .collect::<Result<_>>()?;
@@ -1081,6 +1157,7 @@ impl Store {
             .map(|row| Ok((string(&row, "key")?, row)))
             .collect::<Result<BTreeMap<_, _>>>()?;
         let rows = selected
+            .rows
             .iter()
             .map(|item| by_key.remove(&string(item, "key")?).ok_or(Error::Corrupt))
             .collect::<Result<Vec<_>>>()?;
@@ -1225,9 +1302,8 @@ impl Store {
             ..Default::default()
         }
         .encoded_len();
-        // Three decimal u64 components and separators bound the cursor without
-        // allocating a placeholder on every page, including terminal pages.
-        let cursor_bytes = 3 * 20 + 3 + fingerprint.len();
+        // Reserve both cohort positions when a page merges disjoint sources.
+        let cursor_bytes = 2 * 20 + 3 + fingerprint.len() + selected.position.max_bytes();
         bytes += 1 + prost::length_delimiter_len(cursor_bytes) + cursor_bytes;
         let envelope = 1 + prost::length_delimiter_len(MAX_REPLY_BYTES);
         let mut emitted = 0;
@@ -1255,15 +1331,15 @@ impl Store {
         if self.usage()?.revision != revision {
             return Err(Error::Expired);
         }
-        let next_offset = offset.checked_add(emitted as u64).ok_or(Error::Limit)?;
+        let next_position = selected.advance(emitted)?;
         Ok(api::Page {
             items,
             contexts,
             total,
             revision,
-            next: if next_offset < total {
+            next: if next_position.rank()? < total {
                 Some(format!(
-                    "{revision}:{fingerprint}:{}:{next_offset}",
+                    "{revision}:{fingerprint}:{}:{next_position}",
                     context.authority_revision
                 ))
             } else {

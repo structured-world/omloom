@@ -2582,7 +2582,12 @@ fn canonical_prefix_scope_qualifies_mixed_current_members() -> TestResult {
                 kind: kind as i32,
                 cidr: cidr.into(),
                 address_space: Some(namespace),
-                name: if cidr == "192.0.2.3/32" { "Other allocation" } else { "Cohort allocation" }.into(),
+                name: if cidr == "192.0.2.3/32" {
+                    "Other allocation"
+                } else {
+                    "Cohort allocation"
+                }
+                .into(),
                 sharing: api::SharedUse::Exclusive as i32,
                 ..Default::default()
             }),
@@ -2669,7 +2674,8 @@ fn canonical_prefix_scope_qualifies_mixed_current_members() -> TestResult {
         ..Default::default()
     };
     store.set_diagnostic_query_check(|db, statement| {
-        if statement.contains("membership:OmRow") && statement.contains("count(DISTINCT a.key)") {
+        if statement.contains("count(DISTINCT a.key)") {
+            assert!(!statement.starts_with("MATCH (a:OmRow {parent:'assets'})"));
             eprintln!(
                 "canonical prefix count plan:\n{}",
                 db.explain_plan(statement, None)
@@ -2695,6 +2701,18 @@ fn canonical_prefix_scope_qualifies_mixed_current_members() -> TestResult {
         .map(|item| item.target.ok_or(Error::Missing))
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(identities(&actual), identities(&expected));
+    let R::Page(searched) = call(
+        &store,
+        &actor,
+        C::Query(api::Query {
+            search: "cohort".into(),
+            ..scoped.clone()
+        }),
+    )?
+    else {
+        panic!("scoped search")
+    };
+    assert_eq!(searched.total, expected.len() as u64);
     let mut samples = Vec::new();
     for _ in 0..5 {
         let start = std::time::Instant::now();
@@ -2715,25 +2733,56 @@ fn canonical_prefix_scope_qualifies_mixed_current_members() -> TestResult {
     assert_eq!(store.usage()?, usage);
     for sort in ["name", "kind"] {
         for descending in [false, true] {
-            let R::Page(reference) = call(&store, &actor, C::Query(api::Query {
-                roots: Vec::new(), search: "cohort".into(), sort: sort.into(), descending,
-                ..scoped.clone()
-            }))? else { panic!("native reference ordering") };
+            let R::Page(reference) = call(
+                &store,
+                &actor,
+                C::Query(api::Query {
+                    roots: Vec::new(),
+                    search: "cohort".into(),
+                    sort: sort.into(),
+                    descending,
+                    ..scoped.clone()
+                }),
+            )?
+            else {
+                panic!("native reference ordering")
+            };
             assert_eq!(reference.total, expected.len() as u64);
             let mut cursor = None;
             let mut ordered = Vec::new();
             loop {
-                let R::Page(page) = call(&store, &actor, C::Query(api::Query {
-                    limit: 1, cursor, sort: sort.into(), descending, ..scoped.clone()
-                }))? else { panic!("prefix continuation") };
+                let R::Page(page) = call(
+                    &store,
+                    &actor,
+                    C::Query(api::Query {
+                        limit: 1,
+                        cursor,
+                        sort: sort.into(),
+                        descending,
+                        ..scoped.clone()
+                    }),
+                )?
+                else {
+                    panic!("prefix continuation")
+                };
                 assert_eq!(page.total, reference.total);
                 assert_eq!(page.items.len(), 1);
                 ordered.push(page.items[0].target.clone());
                 cursor = page.next;
-                if cursor.is_none() { break; }
+                if cursor.is_none() {
+                    break;
+                }
                 assert!(ordered.len() < expected.len());
             }
-            assert_eq!(ordered, reference.items.into_iter().map(|item| item.target).collect::<Vec<_>>(), "{sort}, descending={descending}");
+            assert_eq!(
+                ordered,
+                reference
+                    .items
+                    .into_iter()
+                    .map(|item| item.target)
+                    .collect::<Vec<_>>(),
+                "{sort}, descending={descending}"
+            );
         }
     }
     assert_eq!(store.usage()?, usage);
@@ -2764,6 +2813,115 @@ fn canonical_prefix_scope_qualifies_mixed_current_members() -> TestResult {
             .iter()
             .all(|item| item.kind != K::AddressReference as i32)
     );
+    assert_eq!(store.usage()?, usage);
+    Ok(())
+}
+
+// Overlapping scopes must deduplicate members before counting and sorting either source.
+#[test]
+fn overlapping_prefix_roots_deduplicate_current_members_before_pagination() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let space = create(&store, &actor, K::AddressSpace, "namespace")?;
+    let mut roots = Vec::new();
+    for cidr in ["192.0.2.0/24", "192.0.2.0/25"] {
+        let R::Mutation(saved) = command_at(
+            &store,
+            C::Network(api::Network {
+                kind: K::Prefix as i32,
+                cidr: cidr.into(),
+                address_space: Some(space.clone()),
+                name: "Prefix".into(),
+                sharing: api::SharedUse::Exclusive as i32,
+                ..Default::default()
+            }),
+            revision(&store)?,
+        )?
+        else {
+            panic!("prefix")
+        };
+        roots.push(saved.targets[0].clone());
+    }
+    command_at(
+        &store,
+        C::Address(api::Address {
+            address: Some("192.0.2.1".into()),
+            prefix: Some(roots[0].clone()),
+            ..Default::default()
+        }),
+        revision(&store)?,
+    )?;
+    command_at(
+        &store,
+        C::Network(api::Network {
+            kind: K::IpAddress as i32,
+            cidr: "192.0.2.2/32".into(),
+            address_space: Some(space),
+            name: "Allocation".into(),
+            sharing: api::SharedUse::Exclusive as i32,
+            ..Default::default()
+        }),
+        revision(&store)?,
+    )?;
+    let usage = store.usage()?;
+    for kinds in [
+        vec![
+            K::Prefix as i32,
+            K::IpAddress as i32,
+            K::AddressReference as i32,
+        ],
+        vec![K::AddressReference as i32],
+        vec![K::Prefix as i32],
+    ] {
+        for descending in [false, true] {
+            let query = api::Query {
+                kinds: kinds.clone(),
+                columns: vec!["name".into()],
+                view: api::View::Network as i32,
+                sort: "name".into(),
+                descending,
+                limit: 25,
+                ..Default::default()
+            };
+            let R::Page(reference) = call(&store, &actor, C::Query(query.clone()))? else {
+                panic!("reference")
+            };
+            let mut cursor = None;
+            let mut actual = Vec::new();
+            loop {
+                let R::Page(page) = call(
+                    &store,
+                    &actor,
+                    C::Query(api::Query {
+                        roots: roots.clone(),
+                        cursor,
+                        limit: 1,
+                        ..query.clone()
+                    }),
+                )?
+                else {
+                    panic!("scoped page")
+                };
+                assert_eq!(page.total, reference.total);
+                assert_eq!(page.items.len(), 1);
+                actual.push(page.items[0].target.clone());
+                cursor = page.next;
+                if cursor.is_none() {
+                    break;
+                }
+                assert!(actual.len() < reference.items.len());
+            }
+            assert_eq!(
+                actual,
+                reference
+                    .items
+                    .into_iter()
+                    .map(|item| item.target)
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
     assert_eq!(store.usage()?, usage);
     Ok(())
 }
