@@ -6,6 +6,30 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 
+test('inventory CSV exports retain the visible unnamed prefix CIDR', async ({ browser }) => {
+  // Export must use the displayed projection rather than silently dropping its fallback identity.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-export-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) });
+    for (const width of [1440, 390]) {
+      const page = await browser.newPage({ viewport: { width, height: 900 } });
+      try {
+        for (const view of [m.View.OVERVIEW, m.View.NETWORK]) {
+          await page.goto(`${server.url}/#/?view=${view}&kind=${m.AssetKind.PREFIX}`);
+          await expect(page.getByRole('button', { name: '192.0.2.0/24', exact: true })).toBeVisible();
+          if (width < 600 && await page.getByRole('button', { name: 'More', exact: true }).getAttribute('aria-expanded') !== 'true') await page.getByRole('button', { name: 'More', exact: true }).click();
+          const pending = page.waitForEvent('download');
+          await page.getByRole('button', { name: 'Export CSV', exact: true }).click();
+          const csv = await readFile(await (await pending).path(), 'utf8');
+          expect(csv.split('\n')[0].split(',')).toContain('cidr');
+          expect(csv).toContain('192.0.2.0/24');
+        }
+      } finally { await page.close(); }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('prefix searches invalidate old cursors and ignore late real responses', async ({ page }) => {
   // Reordered transport delivery must not replace the current search or restore its old cursor.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-search-race-')); const server = await host(dir);

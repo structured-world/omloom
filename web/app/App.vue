@@ -170,6 +170,11 @@ function rowAddresses(item: model.Item) {
   return [K.SERVICE, K.INTERFACE].includes(item.kind) ? 'Address not known' : '';
 }
 const detailName = computed(() => resourceName(detail.value?.item));
+function inventoryProjection() {
+  const projection = model.Query.create(query.value);
+  if ([model.View.OVERVIEW, model.View.NETWORK].includes(projection.view) && projection.columns.includes('name') && !projection.columns.includes('cidr')) projection.columns.push('cidr');
+  return projection;
+}
 let generation = 0;
 let loadedQuery = '';
 async function load() {
@@ -183,9 +188,7 @@ async function load() {
     if (turn === generation) { detail.value = next; networkCursor.value = undefined; }
   }).catch(e => { if (turn === generation) { detail.value = undefined; error.value = String(e); } }) : Promise.resolve();
   try {
-    const projection = model.Query.create(query.value);
-    if ([model.View.OVERVIEW, model.View.NETWORK].includes(projection.view) && projection.columns.includes('name') && !projection.columns.includes('cidr')) projection.columns.push('cidr');
-    const result = await call({ oneofKind: 'query', query: projection });
+    const result = await call({ oneofKind: 'query', query: inventoryProjection() });
     if (turn !== generation) return;
     if (result.oneofKind !== 'page') throw Error('Unexpected inventory response');
     page.value = result.page;
@@ -332,7 +335,7 @@ async function useView(v: model.SavedView) {
 }
 async function exportCsv() {
   try {
-    const result = await call({ oneofKind: 'export', export: { query: query.value, spreadsheet: true } });
+    const result = await call({ oneofKind: 'export', export: { query: inventoryProjection(), spreadsheet: true } });
     if (result.oneofKind !== 'download') return;
     const url = URL.createObjectURL(new Blob([result.download.csv], { type: 'text/csv;charset=utf-8' }));
     const link = document.createElement('a'); link.href = url; link.download = 'omloom-inventory.csv'; link.click(); URL.revokeObjectURL(url);
