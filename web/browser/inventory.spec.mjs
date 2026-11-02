@@ -62,6 +62,16 @@ test('sparse address edits review explicit unspecified meaning and create a pref
         await page.goto(`${server.url}/#/?view=1&asset=${target.assetId}&incarnation=${target.incarnation}`);
         await page.getByRole('button', { name: 'Edit resource', exact: true }).click();
         const dialog = page.getByRole('dialog', { name: 'Edit resource', exact: true });
+        // A mask-only edit must preserve the existing meaning through the UI request path.
+        await dialog.getByRole('button', { name: 'More known details', exact: true }).click();
+        await expect(dialog.getByRole('combobox', { name: 'Address meaning change', exact: true })).toHaveValue('preserve');
+        await dialog.getByRole('combobox', { name: 'Known prefix length change', exact: true }).selectOption('set');
+        await dialog.getByLabel('Known prefix length', { exact: true }).fill('24');
+        await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
+        await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        expect((await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail.item.fields.find(f => f.name === 'meaning')?.value.text).toBe('ADDRESS_MEANING_DESTINATION');
+        await page.getByRole('button', { name: 'Edit resource', exact: true }).click();
         await expect(dialog.getByRole('combobox', { name: 'IP address change', exact: true })).toHaveValue('preserve');
         await dialog.getByRole('button', { name: 'More known details', exact: true }).click();
         await dialog.getByRole('combobox', { name: 'Known prefix length change', exact: true }).selectOption('set');

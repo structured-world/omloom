@@ -16,6 +16,10 @@ cargo check --locked -p omloom-store --no-default-features --target thumbv7em-no
 # Keep the default-feature runtime checks, using the same workspace selection
 # so Cargo reuses dependency features instead of building package-specific graphs.
 cargo build --locked --workspace --all-targets
+if [ "$(uname -s)" = Linux ]; then
+  mold --version
+  readelf -p .comment target/debug/omloom-dev | grep 'mold'
+fi
 du -sh target
 df -h .
 target/debug/examples/smoke

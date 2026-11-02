@@ -2713,6 +2713,19 @@ fn canonical_prefix_scope_qualifies_mixed_current_members() -> TestResult {
         panic!("scoped search")
     };
     assert_eq!(searched.total, expected.len() as u64);
+    let R::Page(narrowed) = call(
+        &store,
+        &actor,
+        C::Query(api::Query {
+            search: "member".into(),
+            ..scoped.clone()
+        }),
+    )?
+    else {
+        panic!("narrowed search")
+    };
+    assert_eq!(narrowed.total, 1);
+    assert_eq!(narrowed.items[0].target.as_ref(), expected.last());
     let mut samples = Vec::new();
     for _ in 0..5 {
         let start = std::time::Instant::now();
