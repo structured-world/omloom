@@ -400,6 +400,9 @@ The network-settings operation replaces the configuration and requires read
 access to all its stored settings; absent optional settings need no read grant.
 Projected omissions cannot implicitly clear hidden
 VRF or L2 references. Use the resource field editor for an independent name change.
+An explicit Prefix label removal can also accompany a network-settings edit in
+the same conditional transaction. An untouched empty name preserves the label;
+the `clear_name` input requests removal and requires permission to change it.
 Participant assignment can explicitly search across permitted inventory from an
 IPAM scope. Before committing, review the allocation, its shared group when
 applicable, and the selected interface; browsing scope and permissions stay unchanged.

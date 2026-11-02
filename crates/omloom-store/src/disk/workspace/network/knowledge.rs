@@ -221,6 +221,7 @@ impl Tx<'_> {
             match (field.name.as_str(), field.value) {
                 ("cidr", Some(field::Value::Text(value))) => result.cidr = value,
                 ("name", Some(field::Value::Text(value))) => result.name = value,
+                ("name", Some(field::Value::Clear(_))) => result.clear_name = true,
                 ("address_space", Some(field::Value::Text(value))) => {
                     result.address_space = Some(target_wire(groups::reference(&value)?))
                 }
@@ -262,14 +263,7 @@ impl Tx<'_> {
                 target: request.target.clone(),
                 expected: request.expected,
                 kind: request.kind,
-                changes: if request.name.trim().is_empty() {
-                    Vec::new()
-                } else {
-                    vec![wire::Field {
-                        name: "name".into(),
-                        value: Some(field::Value::Text(request.name.trim().into())),
-                    }]
-                },
+                changes: prefix_name_changes(request.name.trim().into(), request.clear_name),
                 parent: None,
             },
             now,

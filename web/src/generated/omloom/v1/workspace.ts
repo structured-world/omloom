@@ -3189,7 +3189,7 @@ export interface Network {
     /**
      * Explicit ordinary inventory name, not proof of observed network health.
      * Optional for Prefix: empty preserves an existing label or creates an unnamed
-     * prefix. Clear an existing label explicitly through the ordinary Write field.
+     * prefix. Clear an existing label explicitly with clear_name or a Write clear.
      *
      * @generated from protobuf field: string name = 10
      */
@@ -3242,6 +3242,14 @@ export interface Network {
      * @generated from protobuf field: optional omloom.v1.AssetRef parent = 17
      */
     parent?: AssetRef;
+    /**
+     * User-requested removal of a Prefix label, committed with its network settings.
+     * False leaves the name semantics above unchanged. Cannot accompany a nonempty
+     * name or another resource kind; the server checks the name write permission.
+     *
+     * @generated from protobuf field: bool clear_name = 18
+     */
+    clearName: boolean;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Member
@@ -8424,7 +8432,8 @@ class Network$Type extends MessageType<Network> {
             { no: 14, name: "group_name", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 15, name: "expected_group", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 16, name: "previous_group_revision", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
-            { no: 17, name: "parent", kind: "message", T: () => AssetRef }
+            { no: 17, name: "parent", kind: "message", T: () => AssetRef },
+            { no: 18, name: "clear_name", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
         ]);
     }
 }

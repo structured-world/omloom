@@ -7,6 +7,20 @@ mod knowledge;
 pub(super) fn identity(target: AssetRef) -> String {
     format!("{}/{}", target.asset, target.incarnation)
 }
+fn prefix_name_changes(name: String, clear: bool) -> Vec<wire::Field> {
+    debug_assert!(!clear || name.is_empty());
+    if name.is_empty() && !clear {
+        return Vec::new();
+    }
+    vec![wire::Field {
+        name: "name".into(),
+        value: Some(if clear {
+            field::Value::Clear(wire::NullValue::NullValue as i32)
+        } else {
+            field::Value::Text(name)
+        }),
+    }]
+}
 pub(super) fn address_order(address: IpAddr) -> String {
     match address {
         IpAddr::V4(ip) => format!("4/{:08x}", u32::from(ip)),
@@ -94,7 +108,8 @@ impl Store {
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<api::Reply> {
-        if request.address_space.is_some()
+        if request.clear_name
+            || request.address_space.is_some()
             || request.routing.is_some()
             || !request.cidr.is_empty()
             || request.vrid.is_some()
@@ -210,6 +225,9 @@ impl Store {
         if !matches!(kind, K::IpAddress | K::Prefix) {
             return Err(Error::Invalid);
         }
+        if request.clear_name && (kind != K::Prefix || !request.name.trim().is_empty()) {
+            return Err(Error::Invalid);
+        }
         if request.vlan_id.is_some() {
             return Err(Error::Invalid);
         }
@@ -308,8 +326,8 @@ impl Store {
                 target: old_target.map(target_wire),
                 expected: request.expected,
                 kind: request.kind,
-                changes: if request.name.is_empty() && kind == K::Prefix {
-                    Vec::new()
+                changes: if kind == K::Prefix {
+                    prefix_name_changes(request.name, request.clear_name)
                 } else {
                     vec![wire::Field {
                         name: "name".into(),

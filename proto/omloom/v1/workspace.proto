@@ -1339,7 +1339,7 @@ message Network {
   optional uint32 vrid = 9;
   // Explicit ordinary inventory name, not proof of observed network health.
   // Optional for Prefix: empty preserves an existing label or creates an unnamed
-  // prefix. Clear an existing label explicitly through the ordinary Write field.
+  // prefix. Clear an existing label explicitly with clear_name or a Write clear.
   string name = 10;
   // Select an unused address within this prefix atomically; no IPv6 enumeration.
   bool next_available = 11;
@@ -1361,6 +1361,10 @@ message Network {
   // namespace/link and checks prefix containment without inheriting grants.
   // Required for scoped creation; omitted when editing an existing allocation.
   optional omloom.v1.AssetRef parent = 17;
+  // User-requested removal of a Prefix label, committed with its network settings.
+  // False leaves the name semantics above unchanged. Cannot accompany a nonempty
+  // name or another resource kind; the server checks the name write permission.
+  bool clear_name = 18;
 }
 message Member {
   // Canonical address or typed address-group identity selected for this edit.

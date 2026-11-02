@@ -846,6 +846,127 @@ fn link_local_prefix_membership_checks_the_allocation_link() -> TestResult {
     Ok(())
 }
 
+// A combined network refinement and label removal is one authorized conditional write.
+#[test]
+fn prefix_cidr_and_label_clear_commit_together() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let space = create(&store, &operator(), K::AddressSpace, "namespace")?;
+    for namespace in [None, Some(space)] {
+        let R::Mutation(saved) = command_at(
+            &store,
+            C::Network(api::Network {
+                kind: K::Prefix as i32,
+                name: "Temporary label".into(),
+                cidr: "192.0.2.0/24".into(),
+                address_space: namespace,
+                sharing: api::SharedUse::Exclusive as i32,
+                ..Default::default()
+            }),
+            revision(&store)?,
+        )?
+        else {
+            panic!("prefix")
+        };
+        let target = saved.targets[0].clone();
+        let before_invalid = store.usage()?;
+        for kind in [K::Prefix, K::IpAddress, K::Vlan, K::AddressGroup] {
+            assert!(matches!(
+                command_at(
+                    &store,
+                    C::Network(api::Network {
+                        target: Some(target.clone()),
+                        kind: kind as i32,
+                        name: if kind == K::Prefix {
+                            "Contradictory label".into()
+                        } else {
+                            String::new()
+                        },
+                        clear_name: true,
+                        cidr: "192.0.2.0/25".into(),
+                        sharing: api::SharedUse::Exclusive as i32,
+                        ..Default::default()
+                    }),
+                    revision(&store)?,
+                ),
+                Err(Error::Invalid)
+            ));
+            assert_eq!(store.usage()?, before_invalid);
+        }
+        let R::Detail(detail) = call(
+            &store,
+            &operator(),
+            C::Read(api::Read {
+                target: Some(target.clone()),
+                ..Default::default()
+            }),
+        )?
+        else {
+            panic!("prefix detail")
+        };
+        let write = api::Write {
+            target: Some(target.clone()),
+            expected: Some(detail.item.ok_or("item")?.revision),
+            kind: K::Prefix as i32,
+            changes: vec![
+                text_field("cidr", "192.0.2.0/25"),
+                wire::Field {
+                    name: "name".into(),
+                    value: Some(wire::field::Value::Clear(wire::NullValue::NullValue as i32)),
+                },
+            ],
+            ..Default::default()
+        };
+        command_at(&store, C::Write(write.clone()), revision(&store)?)?;
+        let R::Detail(detail) = call(
+            &store,
+            &operator(),
+            C::Read(api::Read {
+                target: Some(target.clone()),
+                ..Default::default()
+            }),
+        )?
+        else {
+            panic!("refined prefix")
+        };
+        let item = detail.item.ok_or("item")?;
+        assert_eq!(item.target.as_ref(), Some(&target));
+        assert_eq!(
+            item.fields.iter().find(|f| f.name == "cidr"),
+            Some(&text_field("cidr", "192.0.2.0/25"))
+        );
+        assert!(
+            item.fields
+                .iter()
+                .all(|f| f.name != "name" || matches!(f.value, Some(wire::field::Value::Clear(_))))
+        );
+        let mut repeated = write;
+        repeated.expected = Some(item.revision);
+        let before = store.usage()?;
+        command_at(&store, C::Write(repeated.clone()), revision(&store)?)?;
+        assert_eq!(store.usage()?, before);
+        let mut restricted = operator();
+        restricted.grants[0].write = Fields::Selected(vec!["cidr".into(), "network".into()]);
+        repeated.changes[0] = text_field("cidr", "192.0.2.0/24");
+        assert!(matches!(
+            store.workspace(
+                &restricted,
+                api::Request {
+                    command: Some(C::Write(repeated)),
+                    working: Some(api::WorkingContext {
+                        expected: Some(revision(&store)?),
+                        ..Default::default()
+                    }),
+                },
+                100
+            ),
+            Err(Error::Denied)
+        ));
+        assert_eq!(store.usage()?, before);
+    }
+    Ok(())
+}
+
 // Generic relationship commands cannot bypass the address owner's range invariant.
 #[test]
 fn ordinary_membership_validates_the_known_address() -> TestResult {
