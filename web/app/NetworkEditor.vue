@@ -24,6 +24,8 @@ const lookup = ref(''); const coverage = ref('');
 const revision = ref<bigint>();
 const nameTouched = ref(false);
 const optionsCursor = ref<string>();
+let optionsTurn = 0;
+watch(lookup, () => { optionsTurn++; optionsCursor.value = undefined; coverage.value = ''; error.value = ''; }, { flush: 'sync' });
 const reviewed = ref<model.WorkingContext>();
 const contextItems = computed(() => {
   const selected = [space.value, link.value, routing.value, selectedGroup.value];
@@ -48,12 +50,14 @@ async function reviewContext() {
 }
 const matchingGroups = computed(() => items.value.filter(i => i.kind === K.ADDRESS_GROUP && input(i.fields.find(f => f.name === 'sharing')) === `SHARED_USE_${model.SharedUse[sharing.value]}`));
 async function loadOptions(cursor?: string) {
+  const turn = ++optionsTurn;
   try {
     error.value = ''; coverage.value = '';
-    const retained = items.value.filter(i => [space.value, link.value, routing.value, selectedGroup.value].includes(i.target?.assetId ?? ''));
     const r = await call({ oneofKind: 'query', query: model.Query.create({ roots: props.working.roots, kinds: [K.ADDRESS_SPACE, K.L2_DOMAIN, K.VRF, K.ADDRESS_GROUP], columns: ['name', 'sharing', 'vrid', 'link_scope'], search: lookup.value, limit: 25, cursor }) });
+    if (turn !== optionsTurn) return;
     if (r.oneofKind !== 'page') throw Error('Unexpected response');
-    const found = r.page.items; optionsCursor.value = r.page.next; revision.value = r.page.revision;
+    const retained = items.value.filter(i => [space.value, link.value, routing.value, selectedGroup.value].includes(i.target?.assetId ?? ''));
+    const found = r.page.items;
     const choices = new Map([...retained, ...found].map(i => [i.target?.assetId, i]));
     // Accepted references can lie outside the bounded choices, but are not implicit clears.
     const selected = [space.value, link.value, routing.value, selectedGroup.value];
@@ -69,12 +73,14 @@ async function loadOptions(cursor?: string) {
     for (const target of references) {
       if (!selected.includes(target.assetId) || choices.get(target.assetId)?.target?.incarnation === target.incarnation) continue;
       const r = await call({ oneofKind: 'read', read: model.Read.create({ target }) }, model.WorkingContext.create({ focus: target }));
+      if (turn !== optionsTurn) return;
       if (r.oneofKind !== 'detail' || !r.detail.item) throw Error('The selected scope is unavailable. Reload or explicitly choose another scope.');
       choices.set(target.assetId, r.detail.item);
     }
-    items.value = [...choices.values()];
+    for (const item of items.value) if (!choices.has(item.target?.assetId) && [space.value, link.value, routing.value, selectedGroup.value].includes(item.target?.assetId ?? '')) choices.set(item.target?.assetId, item);
+    items.value = [...choices.values()]; optionsCursor.value = r.page.next; revision.value = r.page.revision;
     if (cursor) coverage.value = 'Showing a bounded selection. Search for a scope or group name to narrow the options.';
-  } catch (e) { error.value = String(e); }
+  } catch (e) { if (turn === optionsTurn) error.value = String(e); }
 }
 onMounted(() => loadOptions());
 function targetRef(id: string): AssetRef | undefined {

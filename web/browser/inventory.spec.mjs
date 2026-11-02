@@ -6,6 +6,53 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 
+test('network option searches cannot restore stale reference reads or cursors', async ({ page }) => {
+  // Hold a real selected-reference read while a later search acquires a newer inventory revision.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-network-option-race-')); const server = await host(dir);
+  let release;
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const space = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.ADDRESS_SPACE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Z retained namespace' } }] }) })).mutation.targets[0];
+    const csv = 'external_id,name\n' + Array.from({ length: 26 }, (_, i) => `${i},Alpha scope ${String(i).padStart(2, '0')}`).join('\n');
+    const preview = (await rpc({ oneofKind: 'import', import: m.Import.create({ source: 'option-race', kind: m.AssetKind.VRF, csv, mappings: [{ source: 'name', field: 'name' }] }) })).preview;
+    await rpc({ oneofKind: 'import', import: m.Import.create({ preview: preview.id }) });
+    const target = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.IP_ADDRESS, name: 'Scoped address', cidr: '192.0.2.10/32', addressSpace: space, sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
+    const waiting = Promise.withResolvers(); const held = Promise.withResolvers(); const delivered = Promise.withResolvers(); let first = true;
+    release = () => held.resolve();
+    await page.route(`**/${m.Workspace.typeName}/*`, async route => {
+      const bytes = route.request().postDataBuffer();
+      const request = bytes && m.Request.fromBinary(bytes.subarray(5, 5 + bytes.readUInt32BE(1)));
+      if (!first || request?.command.oneofKind !== 'read' || request.command.read.target?.assetId !== space.assetId) return route.continue();
+      first = false; const response = await route.fetch(); waiting.resolve(); await held.promise;
+      await route.fulfill({ response }); delivered.resolve();
+    });
+    await page.goto(`${server.url}/#/?view=1&asset=${target.assetId}&incarnation=${target.incarnation}`);
+    await page.getByRole('button', { name: 'Review network settings', exact: true }).click();
+    const dialog = page.getByRole('dialog'); await waiting.promise;
+    await dialog.getByLabel('Find scopes and groups', { exact: true }).fill('Beta');
+    await expect(dialog.getByRole('button', { name: 'More scope options', exact: true })).toBeHidden();
+    await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.VRF, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Beta latest scope' } }] }) });
+    await dialog.getByRole('button', { name: 'Find matching options', exact: true }).click();
+    const options = dialog.getByLabel('Routing context', { exact: true }).locator('option');
+    await expect(options).toHaveCount(2); await expect(options.last()).toContainText('Beta latest scope');
+    release(); await delivered.promise;
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await expect(options).toHaveCount(2); await expect(options.last()).toContainText('Beta latest scope');
+    await expect(dialog.getByRole('button', { name: 'More scope options', exact: true })).toBeHidden();
+    await expect(dialog.getByLabel('Address space', { exact: true })).toHaveValue(space.assetId);
+    await dialog.getByLabel('Find scopes and groups', { exact: true }).fill('');
+    await dialog.getByRole('button', { name: 'Find matching options', exact: true }).click();
+    await expect(dialog.getByRole('button', { name: 'More scope options', exact: true })).toBeVisible();
+    await dialog.getByLabel('Find scopes and groups', { exact: true }).fill('Beta');
+    await expect(dialog.getByRole('button', { name: 'More scope options', exact: true })).toBeHidden();
+    await dialog.getByLabel('Name', { exact: true }).fill('Latest revision edit');
+    await dialog.getByRole('button', { name: 'Apply reviewed settings', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    const item = (await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail.item;
+    expect(item.fields.find(f => f.name === 'name')?.value.text).toBe('Latest revision edit');
+  } finally { release?.(); await page.unrouteAll({ behavior: 'wait' }); await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('known address final review includes every submitted fact on desktop and phone', async ({ browser }) => {
   // Reviewing an address must not silently conceal the meaning or accompanying accepted fields.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-address-review-')); const server = await host(dir);
@@ -3796,7 +3843,9 @@ test('network rename preserves scopes beyond the bounded options window', async 
       await page.goto(url);
       await page.getByRole('button', { name:'Review network settings', exact:true }).click();
       const dialog = page.getByRole('dialog');
-      await expect(dialog).toContainText('Showing a bounded selection');
+      await expect(dialog.getByRole('button', { name:'More scope options', exact:true })).toBeVisible();
+      await expect(dialog.getByLabel('L2 domain', { exact:true })).toHaveValue(link.assetId);
+      await expect(dialog.getByLabel('Routing context', { exact:true })).toHaveValue(routing.assetId);
       const name = `Renamed address ${width}`;
       await dialog.getByLabel('Name', { exact:true }).fill(name);
       await dialog.getByRole('button', { name:'Apply reviewed settings', exact:true }).click();
