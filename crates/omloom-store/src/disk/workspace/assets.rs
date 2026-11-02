@@ -814,8 +814,7 @@ impl Store {
                 let cidr = parameter(&mut values, text(format!("{ip}/")));
                 if level_only || prefix_membership_entry {
                     predicate_joins.push(
-                        " MATCH (ip:OmRow) WHERE ip.key='network/'+a.asset+'/'+a.incarnation"
-                            .into(),
+                        " MATCH (ip:OmRow {key:'network/'+a.asset+'/'+a.incarnation})".into(),
                     );
                     clauses.push(format!(
                         "(ip.cidr STARTS WITH {cidr} OR ip.address={literal})"
@@ -866,7 +865,7 @@ impl Store {
                 let fields = parameter(&mut values, strings(&searchable));
                 let matches = value_matches.join(" OR ");
                 if level_only || prefix_membership_entry {
-                    predicate_joins.push(format!(" MATCH (s:OmRow) WHERE s.parent=a.key AND s.layer='intent' AND s.field IN {fields} AND ({matches})"));
+                    predicate_joins.push(format!(" MATCH (s:OmRow {{parent:a.key}}) WHERE s.layer='intent' AND s.field IN {fields} AND ({matches})"));
                 } else {
                     entry = format!(
                         "MATCH (s:OmRow {{layer:'intent'}}) WHERE s.field IN {fields} AND ({matches}) MATCH (a:OmRow) WHERE a.key=s.parent"
