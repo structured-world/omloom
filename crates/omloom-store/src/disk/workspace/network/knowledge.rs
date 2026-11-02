@@ -150,6 +150,27 @@ impl Tx<'_> {
         if allocation.get("address_space") != Some(space) {
             return Err(Error::Conflict);
         }
+        let ip: std::net::IpAddr = string(fact, "address")?
+            .parse()
+            .map_err(|_| Error::Corrupt)?;
+        if link_local(ip) {
+            if !context.field(
+                crate::disk::target(prefix)?,
+                wire::AssetKind::Prefix as i32,
+                "link_scope",
+                false,
+            ) || !context.field(
+                binding,
+                wire::AssetKind::IpAddress as i32,
+                "link_scope",
+                false,
+            ) {
+                return Err(Error::Denied);
+            }
+            if allocation.get("link_scope") != prefix.get("link_scope") {
+                return Err(Error::Conflict);
+            }
+        }
         Ok(())
     }
 

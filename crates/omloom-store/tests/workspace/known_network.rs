@@ -730,6 +730,122 @@ fn scoped_prefix_search_never_returns_unrelated_addresses() -> TestResult {
     Ok(())
 }
 
+// Equal link-local CIDRs in one address space remain distinct on different links.
+#[test]
+fn link_local_prefix_membership_checks_the_allocation_link() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let space = create(&store, &operator(), K::AddressSpace, "namespace")?;
+    let first = create(&store, &operator(), K::L2Domain, "first link")?;
+    let other = create(&store, &operator(), K::L2Domain, "other link")?;
+    for (cidr, address, host, zone) in [
+        ("fe80::/64", "fe80::8", "fe80::8/128", Some("en0")),
+        ("169.254.0.0/16", "169.254.0.8", "169.254.0.8/32", None),
+    ] {
+        let mut prefixes = Vec::new();
+        for link in [&first, &other] {
+            let R::Mutation(saved) = command_at(
+                &store,
+                C::Network(api::Network {
+                    kind: K::Prefix as i32,
+                    cidr: cidr.into(),
+                    address_space: Some(space.clone()),
+                    link: Some(link.clone()),
+                    sharing: api::SharedUse::Exclusive as i32,
+                    ..Default::default()
+                }),
+                revision(&store)?,
+            )?
+            else {
+                panic!("prefix")
+            };
+            prefixes.push(saved.targets[0].clone());
+        }
+        let R::Mutation(allocation) = command_at(
+            &store,
+            C::Network(api::Network {
+                kind: K::IpAddress as i32,
+                name: "link-local address".into(),
+                cidr: host.into(),
+                address_space: Some(space.clone()),
+                link: Some(other.clone()),
+                sharing: api::SharedUse::Exclusive as i32,
+                ..Default::default()
+            }),
+            revision(&store)?,
+        )?
+        else {
+            panic!("allocation")
+        };
+        let R::Mutation(saved) = command_at(
+            &store,
+            C::Address(api::Address {
+                address: Some(address.into()),
+                zone: zone.map(str::to_owned),
+                binding: Some(allocation.targets[0].clone()),
+                ..Default::default()
+            }),
+            revision(&store)?,
+        )?
+        else {
+            panic!("address")
+        };
+        let target = saved.targets[0].clone();
+        let membership = |prefix: &wire::AssetRef| {
+            C::Relation(api::Relationship {
+                relation: Some(wire::Relation {
+                    from: Some(target.clone()),
+                    to: Some(prefix.clone()),
+                    kind: wire::RelationKind::MemberOf as i32,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+        };
+        let before = store.usage()?;
+        assert!(matches!(
+            command_at(&store, membership(&prefixes[0]), revision(&store)?),
+            Err(Error::Conflict)
+        ));
+        assert_eq!(store.usage()?, before);
+        let mut restricted = operator();
+        restricted.grants[0].read = Fields::Selected(
+            [
+                "name",
+                "relations",
+                "address",
+                "binding",
+                "cidr",
+                "address_space",
+                "network",
+                "zone",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        );
+        for prefix in &prefixes {
+            assert!(matches!(
+                store.workspace(
+                    &restricted,
+                    api::Request {
+                        command: Some(membership(prefix)),
+                        working: Some(api::WorkingContext {
+                            expected: Some(revision(&store)?),
+                            ..Default::default()
+                        }),
+                    },
+                    100
+                ),
+                Err(Error::Denied)
+            ));
+            assert_eq!(store.usage()?, before);
+        }
+        command_at(&store, membership(&prefixes[1]), revision(&store)?)?;
+    }
+    Ok(())
+}
+
 // Generic relationship commands cannot bypass the address owner's range invariant.
 #[test]
 fn ordinary_membership_validates_the_known_address() -> TestResult {
