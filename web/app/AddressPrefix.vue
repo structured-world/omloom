@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, useId, watch } from 'vue';
 import { call, model, AssetKind as K, input, key } from './api';
-const props = defineProps<{ address: string; editing?: boolean; initialPrefix?: model.Item; working: model.WorkingContext }>();
+const props = defineProps<{ address: string; prefixLength?: number; editing?: boolean; initialPrefix?: model.Item; working: model.WorkingContext }>();
 const id = useId();
 const choice = defineModel<Partial<model.Address>>({ required: true });
 const mode = ref(props.editing ? 'preserve' : props.initialPrefix ? 'existing' : 'new');
@@ -9,7 +9,7 @@ const name = ref(''); const search = ref(''); const selected = ref(props.initial
 const candidates = ref<model.Item[]>(props.initialPrefix ? [props.initialPrefix] : []); const cursor = ref<string>(); const error = ref('');
 let searchTurn = 0;
 watch(search, () => { searchTurn++; cursor.value = undefined; error.value = ''; }, { flush: 'sync' });
-const cidr = computed(() => /\/\d+/.test(props.address));
+const cidr = computed(() => props.prefixLength !== undefined || /\/\d+/.test(props.address));
 function update() {
   const result: Partial<model.Address> = mode.value === 'new' && cidr.value ? { createPrefix: true, prefixName: name.value || undefined }
     : mode.value === 'existing' ? { prefix: candidates.value.find(i => key(i.target) === selected.value)?.target }

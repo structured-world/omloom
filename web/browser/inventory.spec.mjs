@@ -6,6 +6,44 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 
+test('separately entered assignment masks create the reviewed prefix including slash zero', async ({ browser }) => {
+  // A submitted zero mask is known, and must behave exactly like a mask in the IP/CIDR input.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-mask-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const [width, mask, cidr] of [[1440, 24, '192.0.2.0/24'], [390, 0, '0.0.0.0/0']]) {
+      const page = await browser.newPage({ viewport: { width, height: 900 } }); page.setDefaultTimeout(5000);
+      try {
+        await page.goto(`${server.url}/#/?view=1`);
+        await page.getByRole('button', { name: '+ Create resource', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await dialog.getByLabel('Resource kind', { exact: true }).selectOption({ label: 'address reference' });
+        await dialog.getByLabel('IP address', { exact: true }).fill('192.0.2.42');
+        await dialog.getByRole('button', { name: 'More known details', exact: true }).click();
+        await dialog.getByRole('combobox', { name: 'Known prefix length change', exact: true }).selectOption('set');
+        await dialog.getByLabel('Known prefix length', { exact: true }).fill(String(mask));
+        await expect(dialog.getByLabel('Prefix name (optional)', { exact: true })).toBeVisible();
+        await dialog.getByLabel('Prefix name (optional)', { exact: true }).fill(`Separate mask ${mask}`);
+        await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
+        await expect(dialog.getByRole('region', { name: 'Review known address' })).toContainText(cidr);
+        await dialog.getByRole('button', { name: 'Back to input', exact: true }).click();
+        await expect(dialog.getByLabel('Known prefix length', { exact: true })).toHaveValue(String(mask));
+        await expect(dialog.getByLabel('Prefix name (optional)', { exact: true })).toHaveValue(`Separate mask ${mask}`);
+        await dialog.getByRole('button', { name: 'Review known address', exact: true }).click();
+        await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        const params = new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
+        const detail = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: { assetId: params.get('asset'), incarnation: params.get('incarnation') } }) })).detail;
+        const membership = detail.relations.find(relation => relation.kind === m.RelationKind.MEMBER_OF);
+        expect(membership).toBeDefined();
+        const prefix = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: membership.to }) })).detail.item;
+        expect(prefix.fields.find(f => f.name === 'cidr')?.value.text).toBe(cidr);
+        expect(prefix.fields.find(f => f.name === 'name')?.value.text).toBe(`Separate mask ${mask}`);
+      } finally { await page.close(); }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('changing the creation owner resets prefix choices without losing the address draft', async ({ page }) => {
   // A prefix selected for one owner must not silently accompany a different creation context.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-owner-')); const server = await host(dir);

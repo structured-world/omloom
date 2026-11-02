@@ -45,6 +45,7 @@ const equipmentToAdd = ref('');
 const equipmentFields = computed(()=>(kind.value===AssetKind.DEVICE||kind.value===AssetKind.PHYSICAL_COMPONENT) ? (props.item ? actions.value?.fields : choice.value?.fields)?.filter(f=>equipmentNames.includes(f)) ?? [] : []);
 function addEquipment(){if(equipmentFields.value.includes(equipmentToAdd.value)&&!selectedEquipment.value.includes(equipmentToAdd.value))selectedEquipment.value.push(equipmentToAdd.value);equipmentToAdd.value='';}
 const modes = reactive<Record<string, string>>({});
+const submittedMask = computed(() => modes.prefix_length === 'set' && values.prefix_length !== undefined && values.prefix_length !== '' ? Number(values.prefix_length) : undefined);
 const error = ref(''); const busy = ref(false); const preparing = ref(true); const more = ref(false);
 type EditorField = { id: string; name: string; type: model.FieldType; choices: string[]; advanced: boolean };
 const parents = computed(() => [...new Map(actions.value?.creations.flatMap(c => c.parent?.target ? [[key(c.parent.target), c.parent] as const] : [])).values()]);
@@ -251,7 +252,7 @@ async function save() {
 <p v-if="f.id === 'virtualization_role'" class="hint">{{ kind === AssetKind.DEVICE ? 'This retired field can only be cleared. Set virtualization roles on OS installations.' : 'Requires installed and enabled Hyper-V (Windows) or virtualization components (Linux). Leave unknown when unverified.' }}</p>
 </div></template>
 </template>
-<AddressPrefix v-if="known && !preparing" :key="key(item?.target)+'/'+key(choice?.parent?.target)+'/'+key(initialPrefix?.target)" v-show="!addressReview" ref="prefixEditor" v-model="prefixChoice" :address="values.address ?? ''" :editing="!!item" :initial-prefix="initialPrefix" :working="working" />
+<AddressPrefix v-if="known && !preparing" :key="key(item?.target)+'/'+key(choice?.parent?.target)+'/'+key(initialPrefix?.target)" v-show="!addressReview" ref="prefixEditor" v-model="prefixChoice" :address="values.address ?? ''" :prefix-length="submittedMask" :editing="!!item" :initial-prefix="initialPrefix" :working="working" />
 <section v-if="addressReview" aria-label="Review known address"><h3>Review known address</h3><dl>
 <dt>Address</dt><dd>{{ addressReview.address }}</dd>
 <dt>Assignment mask</dt><dd>{{ reviewedAddress?.clearPrefixLength ? 'Clear explicitly' : addressReview.prefixLength === undefined ? 'Unknown' : '/'+addressReview.prefixLength }}</dd>
