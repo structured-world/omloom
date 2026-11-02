@@ -2582,7 +2582,7 @@ fn canonical_prefix_scope_qualifies_mixed_current_members() -> TestResult {
                 kind: kind as i32,
                 cidr: cidr.into(),
                 address_space: Some(namespace),
-                name: "Allocation".into(),
+                name: if cidr == "192.0.2.3/32" { "Other allocation" } else { "Cohort allocation" }.into(),
                 sharing: api::SharedUse::Exclusive as i32,
                 ..Default::default()
             }),
@@ -2601,6 +2601,7 @@ fn canonical_prefix_scope_qualifies_mixed_current_members() -> TestResult {
         C::Address(api::Address {
             address: Some("192.0.2.1".into()),
             prefix: Some(prefix.clone()),
+            changes: vec![text_field("description", "Cohort member")],
             ..Default::default()
         }),
         revision(&store)?,
@@ -2711,6 +2712,30 @@ fn canonical_prefix_scope_qualifies_mixed_current_members() -> TestResult {
         usage.bytes.iter().sum::<u64>(),
         usage.rows.iter().sum::<u64>()
     );
+    assert_eq!(store.usage()?, usage);
+    for sort in ["name", "kind"] {
+        for descending in [false, true] {
+            let R::Page(reference) = call(&store, &actor, C::Query(api::Query {
+                roots: Vec::new(), search: "cohort".into(), sort: sort.into(), descending,
+                ..scoped.clone()
+            }))? else { panic!("native reference ordering") };
+            assert_eq!(reference.total, expected.len() as u64);
+            let mut cursor = None;
+            let mut ordered = Vec::new();
+            loop {
+                let R::Page(page) = call(&store, &actor, C::Query(api::Query {
+                    limit: 1, cursor, sort: sort.into(), descending, ..scoped.clone()
+                }))? else { panic!("prefix continuation") };
+                assert_eq!(page.total, reference.total);
+                assert_eq!(page.items.len(), 1);
+                ordered.push(page.items[0].target.clone());
+                cursor = page.next;
+                if cursor.is_none() { break; }
+                assert!(ordered.len() < expected.len());
+            }
+            assert_eq!(ordered, reference.items.into_iter().map(|item| item.target).collect::<Vec<_>>(), "{sort}, descending={descending}");
+        }
+    }
     assert_eq!(store.usage()?, usage);
     let mut restricted = actor;
     restricted.grants = vec![
