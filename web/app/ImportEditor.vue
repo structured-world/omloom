@@ -9,8 +9,9 @@ const emit = defineEmits<{ close: []; saved: [] }>();
 const csv = ref(''); const source = ref(''); const kind = ref<number>(AssetKind.DEVICE); const preview = ref<model.Preview>(); const error = ref('');
 const actions = ref<model.Actions>(); const parent = ref('');
 const revision = ref<bigint>();
-const parents = computed(() => [...new Map(actions.value?.creations.flatMap(c => c.parent?.target ? [[key(c.parent.target), c.parent] as const] : [])).values()]);
-const choices = computed(() => [...(actions.value?.creations ?? []), ...(actions.value?.allocations.filter(c => c.kind === AssetKind.PREFIX) ?? [])].filter(c => key(c.parent?.target) === parent.value));
+const available = computed(() => [...(actions.value?.creations ?? []), ...(actions.value?.allocations.filter(c => c.kind === AssetKind.PREFIX) ?? [])]);
+const parents = computed(() => [...new Map(available.value.flatMap(c => c.parent?.target ? [[key(c.parent.target), c.parent] as const] : [])).values()]);
+const choices = computed(() => available.value.filter(c => key(c.parent?.target) === parent.value));
 const choice = computed(() => choices.value.find(c => c.kind === kind.value));
 watch(choices, options => { if (!options.some(c => c.kind === kind.value) && options[0]) kind.value = options[0].kind; });
 onMounted(async () => { try {

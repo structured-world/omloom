@@ -6,6 +6,42 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 
+test('CSV imports expose prefix allocations inside namespaces and canonical prefixes', async ({ browser }) => {
+  // Allocation-only parents must remain selectable in the same bounded import context.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-scoped-prefix-import-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const space = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.ADDRESS_SPACE, changes: [{ name: 'name', value: { oneofKind: 'text', text: `Import namespace ${width}` } }] }) })).mutation.targets[0];
+      const prefix = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name: `Import parent ${width}`, cidr: '192.0.2.0/24', addressSpace: space, sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
+      const page = await browser.newPage({ viewport: { width, height: 900 } });
+      page.setDefaultTimeout(5000);
+      try {
+        for (const [index, parent] of [space, prefix].entries()) {
+          await page.goto(`${server.url}/#/?view=1&scope=${parent.assetId}&scopeInc=${parent.incarnation}`);
+          if (width < 600 && await page.getByRole('button', { name: 'More', exact: true }).getAttribute('aria-expanded') !== 'true') await page.getByRole('button', { name: 'More', exact: true }).click();
+          await page.getByRole('button', { name: 'Import CSV', exact: true }).click();
+          const dialog = page.getByRole('dialog');
+          await dialog.getByRole('combobox', { name: 'New resource kind', exact: true }).selectOption(String(m.AssetKind.PREFIX));
+          await dialog.getByLabel('Source name').fill(`Scoped import ${width}-${index}`);
+          const cidr = index ? '192.0.2.0/25' : '198.51.100.0/24';
+          await dialog.getByLabel('CSV', { exact: true }).fill(`external_id,cidr\nsubnet,${cidr}`);
+          await dialog.getByLabel('CSV column').fill('cidr');
+          await dialog.getByRole('combobox', { name: 'Inventory field', exact: true }).selectOption('cidr');
+          await dialog.getByRole('button', { name: 'Prepare preview', exact: true }).click();
+          await expect(dialog.getByRole('heading', { name: 'Review 1 rows', exact: true })).toBeVisible();
+          await dialog.getByRole('button', { name: 'Accept reviewed rows', exact: true }).click();
+          await expect(dialog).toBeHidden();
+          const items = (await rpc({ oneofKind: 'query', query: m.Query.create({ view: m.View.NETWORK, roots: [space], kinds: [m.AssetKind.PREFIX], columns: ['cidr', 'address_space'], limit: 10 }) })).page.items;
+          const imported = items.find(item => item.fields.some(f => f.name === 'cidr' && f.value.text === cidr));
+          expect(imported).toBeDefined();
+          expect(imported.fields.find(f => f.name === 'address_space')?.value.text).toBe(`${space.assetId}/${space.incarnation}`);
+        }
+      } finally { await page.close(); }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('prefix network edits explicitly remove labels on desktop and phone', async ({ browser }) => {
   // Empty edited labels are explicit clears, not the preserve behavior of untouched fields.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-label-')); const server = await host(dir);
