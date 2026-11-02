@@ -6,6 +6,32 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 
+test('prefix network edits explicitly remove labels on desktop and phone', async ({ browser }) => {
+  // Empty edited labels are explicit clears, not the preserve behavior of untouched fields.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-label-')); const server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    for (const width of [1440, 390]) {
+      const target = (await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, name: `Temporary label ${width}`, cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) })).mutation.targets[0];
+      const page = await browser.newPage({ viewport: { width, height: 900 } });
+      try {
+        await page.goto(`${server.url}/#/?view=1&asset=${target.assetId}&incarnation=${target.incarnation}`);
+        await page.getByRole('button', { name: 'Review network settings', exact: true }).click();
+        const dialog = page.getByRole('dialog');
+        await dialog.getByLabel('Name (optional)', { exact: true }).fill('');
+        await dialog.getByLabel('Address / prefix', { exact: true }).fill('192.0.2.0/25');
+        await dialog.getByRole('button', { name: 'Apply reviewed settings', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { level: 2 })).toHaveText('192.0.2.0/25');
+        const item = (await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail.item;
+        expect(item.target).toEqual(target);
+        expect(item.fields.find(f => f.name === 'cidr')?.value).toEqual({ oneofKind: 'text', text: '192.0.2.0/25' });
+        expect(item.fields.some(f => f.name === 'name' && f.value.oneofKind === 'text')).toBe(false);
+      } finally { await page.close(); }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 for (const width of [1440, 390]) test(`known prefix refinement, contextual creation, merge and CSV at ${width}px`, async ({ browser }) => {
   // The same stored identities pass through the real desktop/phone forms and reviewed correction.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-prefix-refine-')); const server = await host(dir);

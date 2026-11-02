@@ -94,6 +94,7 @@ async function save() {
     const selectedVrrp = !!chosen && sharing.value === model.SharedUse.VRRP;
     const request = model.Network.create({
       target: props.item?.target, expected: props.item?.revision, name: props.item?.kind === K.PREFIX && !nameTouched.value ? '' : name.value, kind: kind.value, parent: props.item ? undefined : container.value?.target,
+      clearName: props.item?.kind === K.PREFIX && nameTouched.value && !name.value.trim(),
       cidr: vlan || groupEdit ? '' : cidr.value, addressSpace: vlan || groupEdit ? undefined : targetRef(space.value),
       link: selectedVrrp ? undefined : targetRef(link.value), routing: vlan || groupEdit ? undefined : targetRef(routing.value),
       sharing: chosen ? model.SharedUse.UNSPECIFIED : vlan || kind.value === K.PREFIX ? model.SharedUse.EXCLUSIVE : sharing.value,
