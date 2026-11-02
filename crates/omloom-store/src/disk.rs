@@ -22,7 +22,23 @@ use std::{
 type Properties = BTreeMap<String, Value>;
 type Result<T> = std::result::Result<T, Error>;
 const ROOT: &str = "installation";
-const SCHEMA_VERSION: u64 = 14;
+const SCHEMA_VERSION: u64 = 22;
+const PHYSICAL_TEXT: &[&str] = &["basis", "mounting", "item", "enclosure", "old_item"];
+const PHYSICAL_NUMBERS: &[&str] = &[
+    "material_count",
+    "expected",
+    "x_start",
+    "x_length",
+    "y_start",
+    "y_length",
+    "z_start",
+    "z_length",
+    "max_mass_g",
+    "demand_mw",
+    "capacity_mw",
+    "cooling_mw",
+    "cooling_capacity_mw",
+];
 const MAX_CHILDREN: usize = 2048;
 mod deltas;
 mod inventory;
@@ -374,6 +390,12 @@ impl Store {
         }
         let mut schema = LabelSchema::new_node_id("OmRow");
         schema.add_property(PropertyDef::new("key", PropertyType::String).not_null());
+        for name in PHYSICAL_TEXT {
+            schema.add_property(PropertyDef::new(*name, PropertyType::String));
+        }
+        for name in PHYSICAL_NUMBERS {
+            schema.add_property(PropertyDef::new(*name, PropertyType::Int));
+        }
         for name in ["candidate", "cursor", "snapshot"] {
             schema.add_property(PropertyDef::new(name, PropertyType::String));
         }
@@ -546,6 +568,11 @@ impl Store {
                     .keys()
                     .filter(|key| !current.properties.contains_key(*key))
                     .any(|key| {
+                        if PHYSICAL_TEXT.contains(&key.as_str())
+                            || PHYSICAL_NUMBERS.contains(&key.as_str())
+                        {
+                            return false;
+                        }
                         if [
                             "issuer",
                             "subject",

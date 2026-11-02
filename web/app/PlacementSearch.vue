@@ -1,12 +1,22 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
 import { call, model, AssetKind as K, input, key, type AssetRef } from './api';
-const props = defineProps<{ kind: 'server' | 'hypervisor'; roots: AssetRef[] }>();
+const props = defineProps<{ kind: 'server' | 'hypervisor' | 'equipment' | 'component' | 'enclosure' | 'port' | 'power' | 'material'; roots: AssetRef[]; direct?:boolean }>();
 const emit = defineEmits<{ select: [item?: model.Item]; ready: [value: boolean] }>();
 const search = ref(''); const selected = ref<model.Item>(); const opened = ref(false);
 const page = ref(model.Page.create()); const loading = ref(false); const error = ref('');
 const active = ref(0); const control = ref<HTMLInputElement>(); const id = useId();
-const title = computed(() => props.kind === 'server' ? 'Server' : 'Hypervisor');
+const config = computed(() => ({
+  server: {title:'Server',plural:'servers',view:model.View.HARDWARE,kinds:[K.DEVICE]},
+  hypervisor: {title:'Hypervisor',plural:'hypervisors',view:model.View.VIRTUALIZATION,kinds:[K.SOFTWARE_INSTALLATION]},
+  equipment: {title:'Equipment',plural:'equipment',view:model.View.HARDWARE,kinds:[K.DEVICE]},
+  component: {title:'Component',plural:'components',view:model.View.HARDWARE,kinds:[K.PHYSICAL_COMPONENT]},
+  enclosure: {title:'Enclosure',plural:'enclosures',view:model.View.HARDWARE,kinds:[K.RACK,K.PHYSICAL_POSITION]},
+  port: {title:'Physical port',plural:'physical ports',view:model.View.HARDWARE,kinds:[K.PORT]},
+  power: {title:'Power feed',plural:'power feeds',view:model.View.HARDWARE,kinds:[K.POWER_FEED]},
+  material: {title:'Physical resource',plural:'physical resources',view:model.View.HARDWARE,kinds:[K.DEVICE,K.PHYSICAL_COMPONENT,K.CABLE,K.RACK]},
+})[props.kind]);
+const title = computed(() => config.value.title);
 let generation = 0; let pending: ReturnType<typeof setTimeout> | undefined;
 const name = (item: model.Item) => input(item.fields.find(f => f.name === 'name')) || item.target!.assetId.slice(-8);
 function cancel() { generation++; if (pending !== undefined) clearTimeout(pending); pending = undefined; loading.value = false; }
@@ -22,9 +32,9 @@ async function load(cursor?: string) {
   const turn = ++generation; loading.value = true; error.value = '';
   try {
     const reply = await call({ oneofKind: 'query', query: model.Query.create({
-      roots: props.roots, view: props.kind === 'server' ? model.View.HARDWARE : model.View.VIRTUALIZATION,
-      kinds: [props.kind === 'server' ? K.DEVICE : K.SOFTWARE_INSTALLATION],
-      columns: ['name'], search: search.value, cursor, limit: 25, includeContext: true,
+      roots: props.roots, view: config.value.view,
+      kinds: config.value.kinds,
+      columns: ['name'], search: search.value, cursor, limit: 25, includeContext: true, levelOnly:props.direct===true,
     }) });
     if (reply.oneofKind !== 'page') throw Error('Placement choices are unavailable');
     if (turn === generation) { page.value = reply.page; active.value = search.value && reply.page.items.length ? 1 : 0; }
@@ -68,7 +78,7 @@ function owner(item: model.Item) {
 <li><button :id="id+'-option-0'" role="option" type="button" :aria-selected="!selected" :class="{ active: active === 0 }" @mousedown.prevent @click="choose()">Unknown</button></li>
 <li v-for="(item, index) in loading ? [] : page.items" :key="key(item.target)"><button :id="id+'-option-'+(index+1)" role="option" type="button" :aria-selected="key(selected?.target) === key(item.target)" :aria-label="'Use '+kind+': '+name(item)" :class="{ active: active === index+1 }" @mousedown.prevent @click="choose(item)"><strong>{{ name(item) }}</strong><small v-if="owner(item)">{{ owner(item) }}</small></button></li>
 </ul>
-<p v-if="!loading && !error && !page.items.length" class="hint">No matching {{ kind === 'server' ? 'servers' : 'hypervisors' }} in this scope.</p>
+<p v-if="!loading && !error && !page.items.length" class="hint">No matching {{ config.plural }} in this scope.</p>
 <button v-if="!loading && page.next" type="button" @mousedown.prevent @click="load(page.next)">Next placement choices</button>
 <p v-if="error" role="alert">{{ error }}</p>
 </div></div></template>

@@ -1,5 +1,33 @@
 use super::*;
 
+impl Tx<'_> {
+    fn restore_correction_row(&mut self, key: &str, before: &Option<Properties>) -> Result<()> {
+        match before {
+            None => self.delete(key)?,
+            Some(before) => {
+                let parent = string(before, "parent")?;
+                let class = match number(before, "class")? {
+                    0 => Class::Inventory,
+                    5 => Class::Checkpoint,
+                    _ => return Err(Error::Corrupt),
+                };
+                let mut data = strip(before.clone());
+                if parent == "assets" {
+                    let prior = number(before, "revision")?;
+                    let revision = match self.get(key)? {
+                        Some(current) => number(&current, "revision")?.max(prior).checked_add(1),
+                        None => prior.checked_add(2),
+                    }
+                    .ok_or(Error::Limit)?;
+                    data.insert("revision".into(), int(revision)?);
+                }
+                self.put(key, &parent, class, data)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Store {
     pub(super) fn undo_identity_correction(
         &self,
@@ -122,33 +150,10 @@ impl Store {
             tx.unlink_correction_relation(item)?;
         }
         for (key, before) in &inverse.rows {
-            if key.starts_with("relation/") {
+            if key.starts_with("relation/") || key.starts_with("physical-pose/") {
                 continue;
             }
-            match before {
-                None => tx.delete(key)?,
-                Some(before) => {
-                    let parent = string(before, "parent")?;
-                    let class = match number(before, "class")? {
-                        0 => Class::Inventory,
-                        5 => Class::Checkpoint,
-                        _ => return Err(Error::Corrupt),
-                    };
-                    let mut data = strip(before.clone());
-                    if parent == "assets" {
-                        let prior = number(before, "revision")?;
-                        let revision = match tx.get(key)? {
-                            Some(current) => {
-                                number(&current, "revision")?.max(prior).checked_add(1)
-                            }
-                            None => prior.checked_add(2),
-                        }
-                        .ok_or(Error::Limit)?;
-                        data.insert("revision".into(), int(revision)?);
-                    }
-                    tx.put(key, &parent, class, data)?;
-                }
-            }
+            tx.restore_correction_row(key, before)?;
         }
         for (key, before) in &inverse.rows {
             if !key.starts_with("relation/") {
@@ -170,6 +175,12 @@ impl Store {
             restored.revision = expected.checked_add(1).ok_or(Error::Limit)?;
             tx.save_rebound_relation(&restored, expected, &context.actor, now)?;
             tx.rebind_correction_responsibility(context, &original, &restored)?;
+        }
+        // Rebinding invalidates geometry, so restore dependent poses after their exact bindings.
+        for (key, before) in &inverse.rows {
+            if key.starts_with("physical-pose/") {
+                tx.restore_correction_row(key, before)?;
+            }
         }
         // Validate the fully restored topology, including retired roots, before
         // committing. A partial restoration is never exposed to another reader.

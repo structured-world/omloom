@@ -119,9 +119,11 @@ async fn deadline_terminates_the_owned_child() {
         .await;
     #[cfg(not(windows))]
     let result = runner.run("/bin/sleep", &["5"]).await;
-    assert_eq!(
-        result.err().expect("deadline failure"),
-        "Command deadline exceeded"
-    );
+    let message = result.err().expect("deadline failure");
+    assert!(message.starts_with("Command deadline exceeded"));
+    #[cfg(windows)]
+    assert!(message.contains("cmd.exe"));
+    #[cfg(not(windows))]
+    assert!(message.contains("/bin/sleep"));
     assert_eq!(runner.remaining, initial);
 }

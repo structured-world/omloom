@@ -17,6 +17,7 @@ mod host_import;
 mod interface_facts;
 mod network;
 pub(super) mod network_facts;
+mod physical;
 mod projection;
 mod requirements;
 mod responsibility;
@@ -259,6 +260,7 @@ impl Store {
         use api::request::Command as C;
         let working = request.working;
         match request.command.ok_or(Error::Invalid)? {
+            C::Physical(value) => self.workspace_physical(context, value, working.as_ref(), now),
             C::ObserveProxmox(_) => Err(Error::Invalid),
             C::Identity(_) => Ok(reply(api::reply::Result::Identity(api::Identity {
                 name: context.actor.clone(),

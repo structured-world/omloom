@@ -13,6 +13,7 @@ fn capacity_increase_resumes_quota_bound_name_migration()
         }; CLASSES],
         total_bytes: 8_388_608,
         detail_age_ms: 1000,
+        physical_reservation_max_ms: 1000,
         review_age_ms: 500,
         review_per_source: crate::Budget {
             rows: 128,
@@ -157,6 +158,7 @@ fn old_strict_catalog_upgrades_without_recreating_the_database()
         }; CLASSES],
         total_bytes: 8_388_608,
         detail_age_ms: 1000,
+        physical_reservation_max_ms: 1000,
         review_age_ms: 500,
         review_per_source: crate::Budget {
             rows: 128,
@@ -329,6 +331,7 @@ fn network_projection_upgrade_resumes_without_removing_restore_fence()
         }; CLASSES],
         total_bytes: 8_388_608,
         detail_age_ms: 1000,
+        physical_reservation_max_ms: 1000,
         review_age_ms: 500,
         review_per_source: crate::Budget {
             rows: 128,

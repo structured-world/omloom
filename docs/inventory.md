@@ -599,6 +599,16 @@ atomic no-replace operation; an interrupted collection cannot publish a partial
 frame. Reports contain private host facts. Keep them outside version control.
 The check command prints coverage and counts, without inventory names or IPs.
 
+External commands have a ten-second deadline within the ninety-second collection
+budget. A timed-out child is terminated and reaped; diagnostics identify the
+executable and, for Windows PowerShell sources, the module and native cmdlets,
+without dumping scripts or their output. Timeouts leave coverage unavailable.
+Optional source failures remain in the report's coverage. If required identity
+or interface evidence cannot be collected, the command reports collection
+unavailable and exits successfully without writing a report or replacing an
+existing file. This is not a verified inventory or an empty scan. Invalid
+arguments, malformed report frames and file publication errors remain errors.
+
 In the workspace, choose **Import host report**, supply a source name and select
 the resources to adopt. Select required parents together with their components.
 Match an existing resource only after checking its identity and incarnation.
@@ -748,6 +758,162 @@ Direct ownership stays unchanged. The review identifies permitted inherited
 facets bound to the old placement; those become source-unavailable after its
 revision changes. Review their administrative source separately in the existing
 responsibility editor. The new host never silently becomes the owner.
+
+## Physical plans and cable ends
+
+Physical plans use the same accepted inventory, revision checks and requirement
+evaluation as ordinary resource work. Saving a draft does not reserve capacity
+or report installation. Reservation and attributed manual completion are separate
+commands. Completed effects survive cancellation of remaining work.
+
+Reservation requests must fit the host's configured `physical_reservation_max_ms`
+duration. The development host sets a 24-hour ceiling. This new-admission setting
+does not change the durable quota/retention identity or invalidate accepted holds.
+An expired deadline alone does not prove reserved work was not performed;
+unresolved holds require explicit reconciliation before reuse.
+
+A required postcondition can remain unknown after work is reported; an old observation is
+not automatically evidence of the new result.
+
+Recorded power-path separation is another condition in that same evaluator.
+Select two feeds and, when known, their terminal boundaries. A visible shared
+UPS is a counterexample without needing to read its private upstream supplies.
+A positive result requires explicitly complete source lists through the selected
+boundaries. Missing boundaries allow counterexamples only; an early boundary
+cannot hide known dependencies. Record current source-list coverage in physical
+facts and use ordinary Powered by relationships for the actual topology.
+These checks do not certify live power, electrical safety or surviving capacity.
+The same condition can be saved as a physical step's postcondition.
+
+Rack elevations project the recorded enclosure frame. Rear viewing mirrors the
+horizontal axis and orders reported bodies from far to near; proposed placements
+remain explicit overlays. Switching faces changes no inventory coordinates.
+The reported coordinate table keeps exact values available, including geometry
+that cannot be drawn, in pages of 25 without loading neighboring infrastructure.
+Installed parts are fetched one server page at a time. Continuations are bound
+to the enclosure, working scope, permissions and inventory revision. A page is
+not a claim of complete occupancy or free capacity; admission checks all relevant
+current occupants and reservations independently of the displayed page.
+An optional sourced rail grid records its top Y coordinate, unit count, lowest
+printed number and numbering direction on the current rack profile. Cabinet
+height does not supply these facts. Printed U selection follows this declaration
+and rounds allocation height outward to half-U increments without changing the
+equipment dimensions. Without the declaration, the geometric offset editor and
+explicit coordinate drafts remain available and do not claim printed rack units.
+Space reuse after a removal requires the corresponding prerequisite in the common
+plan. A future removal does not free current occupancy for an independent step.
+Uncertain overlap between old and new loads keeps capacity unqualified. Manual
+reports record work already performed, including discrepancies, and do not
+certify physical fit or dispatch another operation.
+An enclosure replacement can include an explicitly reviewed incoming allocation
+on that same step. Reporting it commits the new binding and its reported pose
+atomically. The previous allocation can be selected as a proposal for review;
+it does not supply the incoming dimensions, cable attachment or physical proof.
+
+Named ends belong to a retained cable. Their definition, accepted destination
+intent and reported attachment are distinct. A confirmed loose end releases its
+physical binding while preserving intent unless explicitly cleared. An unknown
+attachment retains possible occupancy and cannot make that socket available to
+another cable. Replacing a component never transfers its cable attachment or
+service evidence to the replacement by position or name.
+
+Cable-end transitions are ordinary steps in a physical plan. Repeated work on
+the same end references the earlier step's recorded result. Conflicting socket
+claims require a preceding release through the shared dependency graph; a plan
+cannot promise a free socket to two ends at once. Retries and reads do not append
+connection histories. Endpoint visibility and relationship rights are checked
+before displaying or changing the attachment.
+
+One DAC or AOC is one adopted cable assembly, including inseparable end modules.
+Record only its real named ends and known internal channel numbers. Breakout
+legs share that assembly identity; each declared channel has at most two ends.
+Missing channel data is unknown. These declarations do not certify polarity,
+speed, signal continuity or service health.
+
+Replacement plans retain explicit endpoint judgments separately from the
+component event. Unmapped ports remain visible when a smaller replacement has
+fewer ports. Whole-port and individual-channel allocations cannot overlap;
+accepted breakout lanes require a current sourced port-channel declaration.
+Correspondence does not transfer configuration, grants, credentials or wiring.
+An exact-binding postcondition uses the common requirement evaluator and fails
+when its reviewed relation is removed, recreated or changed.
+
+The replacement review explains its current evidence using versioned rules and
+strength labels, without invented probabilities. Confirm, reject and defer are
+attributed judgments, not installation reports. Current decisions contribute
+once to fixed-window local quality counts; correcting a decision replaces its
+contribution atomically. Deferral is unlabelled, not a negative example. Counts
+are available under the complete contributing read-grant and working scope,
+including read-only auditors. Changing authority or field access invalidates
+that projection.
+These are workspace review counts, not counts for the currently opened enclosure.
+Opening another resource does not create another aggregate partition.
+The configured detail-retention period bounds the correction/count window;
+expired counts use ordinary bounded cleanup. Minimal current disposition stays
+with active plan work to prevent recounting unchanged evidence, and terminal
+plan detail follows its existing lifecycle. No raw training corpus or automatic
+retraining is created. Acceptance counts do not establish accuracy or recall.
+
+An optional sourced mating contract identifies one exact declared interface and
+its complementary sides. Matching connector labels alone cannot establish fit;
+different contract revisions remain unqualified. The declaration checks only
+that interface, not signal compatibility, power safety or working service.
+Normal reserved cable completion rechecks the current endpoint declarations.
+Explicit actual-state reporting can retain an incompatible connection without
+asserting physical fit or service health.
+
+Equipment may also declare six service/connector margins in its enclosing
+coordinate frame. A missing declaration is unqualified, while explicit zero is
+a supplied measurement. Admission checks material bodies against neighboring
+declared service spaces and the candidate's service space against other bodies.
+Empty service spaces may overlap each other. An interior envelope does not
+certify an outside maintenance aisle or a cable route.
+
+A plan can retain up to 64 material requirements, each with a scalar positive
+quantity and optional sourced equipment claims or physical specifications. These
+are plan-local intentions, not assets, orders or promised stock. Even a large
+quantity creates no rows per unreceived unit. Current occupancy and power-source
+completeness cannot be asserted for proposed equipment.
+
+A selected requested unit can be placed and reserve space before receipt, using
+its declared dimensions and demand. The placement references its line and unit,
+not a fabricated inventory ID. Other plans account for that reserved geometry,
+clearance and load. Receipt supplies the real adopted incarnation to the same
+step; installation cannot be recorded while that unit remains unreceived.
+
+Explicit receipt or reuse links an adopted resource to one requested unit.
+Receipt may be partial and can continue after reservation. It neither installs
+the resource nor proves compatibility or health. Real allocations use the same
+serialized-part locks as plan steps.
+Normal completion rechecks a received unit's actual dimensions and demands through
+the common physical admission mechanism, excluding only the hold being consumed.
+An explicit actual-state report remains available for work already performed;
+it does not establish compatibility or healthy service.
+Cancellation releases unused materials but preserves holds for unresolved effects.
+An allocation already used by a step
+cannot be silently replaced. Terminal BOM detail follows the existing finite
+cleanup lifecycle. Equal input, including equivalent quantity spellings, writes
+no additional revision or history.
+
+Selected serialized materials combine step targets and real BOM allocations.
+Moving and placing the same retained component counts it once. The list separates related
+reported work from outstanding reservations and includes a serial only when
+that current field is permitted. Export reloads the authorized plan first; it
+does not order equipment, copy credentials or retain an inventory snapshot.
+
+An explicit availability profile selects an enclosure region, recipient and
+permitted capacity constraints. Its recipient also needs current availability
+permission; knowing a profile ID is insufficient. The response contains that
+region's result without occupant names, counts or silhouettes. Revocation stops
+new disclosure, and restored data cannot certify fresh availability. This is
+advisory information, separate from atomic reservation.
+
+Usable dimensions do not prove empty space. Record the bounded region whose
+current occupants are completely represented before qualifying its availability.
+Outside that region remains unknown. Whole-enclosure mass, power and cooling
+checks need coverage of their contributing area. Withdrawing this statement
+releases neither installed occupancy nor unresolved reservations. Drafts and
+attributed reports of actual work remain available without a complete survey.
 
 ## Verification
 

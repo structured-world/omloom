@@ -3,13 +3,14 @@ import {ref,computed} from 'vue';
 import {call,model,enumLabel,AssetKind,type AssetRef} from './api';
 import {equipmentFields} from './equipment-fields';
 import type {Field} from '../src/generated/omloom/v1/contracts';
-const props=defineProps<{target:AssetRef;kind:AssetKind;working:model.WorkingContext}>();
+const props=defineProps<{target:AssetRef;kind:AssetKind;working:model.WorkingContext;plan?:boolean}>();
+const emit=defineEmits<{configure:[query:model.EvaluateRequirements]}>();
 const field=ref('');const value=ref('');const comparison=ref(model.RequirementComparison.EQUAL);
 const layer=ref(model.RequirementLayer.ACCEPTED);const busy=ref(false);const error=ref('');
 const result=ref<model.RequirementEvaluation>();
 const units:Record<string,string>={drive_bays:'count',height:'mm',width:'mm',depth:'mm',weight:'g',power_rating:'W'};
 const numeric=computed(()=>field.value in units);
-const fields=computed(()=>props.kind===AssetKind.PROVIDER_ACCOUNT?['delegation']:equipmentFields);
+const fields=computed(()=>props.kind===AssetKind.PROVIDER_ACCOUNT?['delegation']:[...equipmentFields,'description']);
 const stateTitle=computed(()=>result.value?.state===model.RequirementState.SATISFIED?'Recorded evidence matches':result.value?.state===model.RequirementState.FAILED?'Requirement not satisfied':'Requirement not established');
 function changed(){
   result.value=undefined;error.value='';
@@ -32,8 +33,10 @@ async function check(){
         expected={oneofKind:'equipment',equipment:{basis:'Requested constraint',assertion:{oneofKind:'quantity',quantity:{lower:fixed,upper:fixed,unit:units[field.value]!,scale}}}};
       }
     }else expected={oneofKind:'text',text:value.value};
+    const query=model.EvaluateRequirements.create({anchor:props.target,root:0,nodes:[{expression:{oneofKind:'field',field:{target:props.target,expected:{name:field.value,value:expected},comparison:comparison.value,layer:layer.value}}}]});
+    if(props.plan){emit('configure',query);return;}
     busy.value=true;
-    const response=await call({oneofKind:'evaluateRequirements',evaluateRequirements:model.EvaluateRequirements.create({anchor:props.target,root:0,nodes:[{expression:{oneofKind:'field',field:{target:props.target,expected:{name:field.value,value:expected},comparison:comparison.value,layer:layer.value}}}]})},props.working);
+    const response=await call({oneofKind:'evaluateRequirements',evaluateRequirements:query},props.working);
     if(response.oneofKind!=='requirementEvaluation')throw Error('Requirement result unavailable.');
     result.value=response.requirementEvaluation;
   }catch(e){error.value=String(e);}finally{busy.value=false;}
@@ -41,15 +44,15 @@ async function check(){
 </script>
 <template>
 <details class="requirements-panel">
-<summary>Check recorded requirements</summary>
-<p>Inspect current evidence for this resource. Matching conditions do not authorize an operation, verify a live path or certify physical fit.</p>
+<summary>{{plan?'Configure a postcondition':'Check recorded requirements'}}</summary>
+<p>{{plan?'Select the condition evaluated after reported work. Dated samples need qualified post-effect evidence; an old successful sample cannot verify this step.':'Inspect current evidence for this resource. Matching conditions do not authorize an operation, verify a live path or certify physical fit.'}}</p>
 <form @submit.prevent="check" @input="changed" @change="changed">
 <fieldset :disabled="busy">
 <label>Required fact<select v-model="field" required><option disabled value="">Choose a fact</option><option v-for="name in fields" :key="name" :value="name">{{name.replaceAll('_',' ')}}</option></select></label>
 <label>Evidence layer<select v-model="layer"><option :value="model.RequirementLayer.ACCEPTED">Accepted configuration</option><option :value="model.RequirementLayer.OBSERVED">Dated observations</option></select></label>
 <label>Required comparison<select v-model="comparison"><option disabled :value="model.RequirementComparison.UNSPECIFIED">Choose a comparison</option><option v-if="!numeric||field==='drive_bays'" :value="model.RequirementComparison.EQUAL">Equals</option><option v-if="numeric" :value="model.RequirementComparison.MINIMUM">At least</option><option v-if="numeric" :value="model.RequirementComparison.MAXIMUM">At most</option></select></label>
 <label>Required value<span v-if="numeric"> ({{units[field]}})</span><select v-if="field==='delegation'" v-model="value" required><option disabled value="">Select capability</option><option :value="'ACCOUNT_DELEGATION_SCOPED'">Scoped delegation</option><option :value="'ACCOUNT_DELEGATION_OWNER_ONLY'">Owner action</option></select><input v-else v-model="value" :inputmode="numeric?'decimal':'text'" maxlength="160" required /></label>
-<button type="submit" :disabled="!field||!value||comparison===model.RequirementComparison.UNSPECIFIED">{{busy?'Checking…':'Check requirement'}}</button>
+<button type="submit" :disabled="!field||!value||comparison===model.RequirementComparison.UNSPECIFIED">{{busy?'Checking…':plan?'Use this postcondition':'Check requirement'}}</button>
 </fieldset>
 </form>
 <p v-if="error" role="alert">{{error}}</p>

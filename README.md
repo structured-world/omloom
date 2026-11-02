@@ -38,6 +38,9 @@ including bounded quantities, model alternatives and supported exclusions,
 then be refined without changing their identity.
 The workspace can [check recorded requirements](docs/inventory.md#recorded-requirements)
 against permitted current facts, preserving missing, stale and conflicting evidence.
+It includes [physical planning](docs/inventory.md#physical-plans-and-cable-ends) with exact
+rack elevations, cable ends, material requirements, reservations and reviewed
+component replacement. Manual results remain separate from verified service health.
 
 ## License
 

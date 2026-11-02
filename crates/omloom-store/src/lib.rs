@@ -6,6 +6,8 @@
 
 extern crate alloc;
 
+pub mod physical;
+pub mod plans;
 pub mod requirements;
 
 /// Independently bounded data classes. Recovery checkpoints never expire with detail.
@@ -38,6 +40,9 @@ pub struct Policy {
     pub review_age_ms: u64,
     pub review_per_source: Budget,
     pub batch_rows: u16,
+    /// Host ceiling for new physical reservation durations, in milliseconds.
+    /// Admission-only: changing it neither expires existing holds nor changes durable accounting policy.
+    pub physical_reservation_max_ms: u64,
 }
 impl Policy {
     pub fn valid(&self) -> bool {
@@ -53,6 +58,8 @@ impl Policy {
             && self.review_per_source.bytes <= i64::MAX as u64
             && self.batch_rows > 0
             && self.batch_rows <= 128
+            && self.physical_reservation_max_ms > 0
+            && self.physical_reservation_max_ms <= i64::MAX as u64
             && self.classes.iter().all(|b| {
                 b.rows > 0 && b.rows <= i64::MAX as u64 && b.bytes > 0 && b.bytes <= i64::MAX as u64
             })

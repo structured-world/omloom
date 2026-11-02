@@ -221,6 +221,36 @@ fn identity(value: &Option<EquipmentReference>) -> (&str, &str, &str) {
         None => ("", "", ""),
     }
 }
+/// Normalize an owned bounded claim for changed-only storage and returned plans.
+pub fn canonicalize(value: &mut EquipmentClaim) -> Result<(), Error> {
+    validate(value)?;
+    canonicalize_validated(value);
+    Ok(())
+}
+fn canonicalize_validated(value: &mut EquipmentClaim) {
+    if let Some(equipment_claim::Assertion::Quantity(q)) = &mut value.assertion {
+        while q.scale > 0
+            && q.lower.is_none_or(|n| n % 10 == 0)
+            && q.upper.is_none_or(|n| n % 10 == 0)
+        {
+            if let Some(n) = &mut q.lower {
+                *n /= 10;
+            }
+            if let Some(n) = &mut q.upper {
+                *n /= 10;
+            }
+            q.scale -= 1;
+        }
+    }
+    if let Some(equipment_claim::Assertion::Alternatives(v)) = &mut value.assertion {
+        v.candidates.sort_unstable_by(|a, b| {
+            (&a.value, identity(&a.reference)).cmp(&(&b.value, identity(&b.reference)))
+        });
+        v.excluded.sort_unstable_by(|a, b| {
+            (&a.value, identity(&a.reference)).cmp(&(&b.value, identity(&b.reference)))
+        });
+    }
+}
 /// One bounded semantic encoding for retries, changed-only storage and CSV.
 /// Candidate/exclusion order is irrelevant; source and interpretation basis are not.
 pub fn encode(value: &EquipmentClaim) -> Result<Vec<u8>, Error> {
@@ -244,28 +274,7 @@ pub fn encode(value: &EquipmentClaim) -> Result<Vec<u8>, Error> {
         return Ok(value.encode_to_vec());
     }
     let mut value = value.clone();
-    if let Some(equipment_claim::Assertion::Quantity(q)) = &mut value.assertion {
-        while q.scale > 0
-            && q.lower.is_none_or(|n| n % 10 == 0)
-            && q.upper.is_none_or(|n| n % 10 == 0)
-        {
-            if let Some(n) = &mut q.lower {
-                *n /= 10;
-            }
-            if let Some(n) = &mut q.upper {
-                *n /= 10;
-            }
-            q.scale -= 1;
-        }
-    }
-    if let Some(equipment_claim::Assertion::Alternatives(v)) = &mut value.assertion {
-        v.candidates.sort_unstable_by(|a, b| {
-            (&a.value, identity(&a.reference)).cmp(&(&b.value, identity(&b.reference)))
-        });
-        v.excluded.sort_unstable_by(|a, b| {
-            (&a.value, identity(&a.reference)).cmp(&(&b.value, identity(&b.reference)))
-        });
-    }
+    canonicalize_validated(&mut value);
     Ok(value.encode_to_vec())
 }
 
