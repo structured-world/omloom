@@ -141,8 +141,8 @@ impl Tx<'_> {
         let ip: std::net::IpAddr = string(fact, "address")?
             .parse()
             .map_err(|_| Error::Corrupt)?;
-        if link_local(ip) {
-            if !context.field(
+        if link_local(ip)
+            && (!context.field(
                 crate::disk::target(prefix)?,
                 wire::AssetKind::Prefix as i32,
                 "link_scope",
@@ -152,9 +152,9 @@ impl Tx<'_> {
                 wire::AssetKind::IpAddress as i32,
                 "link_scope",
                 false,
-            ) {
-                return Err(Error::Denied);
-            }
+            ))
+        {
+            return Err(Error::Denied);
         }
         crate::disk::inventory::prefix_allocation_matches(&allocation, prefix, ip)
     }
