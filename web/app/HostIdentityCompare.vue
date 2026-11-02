@@ -117,7 +117,7 @@ onMounted(load);
 <template v-if="comparison">
 <p>Current comparison at revision {{ comparison.revision.toString() }}. This read changes no inventory, grants or connections.</p>
 <p v-if="matches.length">Some identifiers match within the same layer and namespace. This supports review, not automatic merging or authenticated target verification.</p>
-<p v-else-if="comparison.left?.item?.kind === K.PREFIX">Compare the declared CIDR, namespace and relationships. Equal address text alone does not establish the same network.</p>
+<p v-else-if="comparison.left?.item?.kind === K.PREFIX">Compare the declared CIDR and namespace. Equal address text alone does not establish the same network.</p>
 <p v-else>No matching identity claims are available in this comparison. Missing evidence does not prove that these are different machines.</p>
 <div class="identity-pair"><section v-for="(subject, index) in [comparison.left, comparison.right]" :key="index" :aria-label="index === 0 ? 'First identity' : 'Second identity'">
 <template v-if="subject?.item"><h3>{{ name(subject.item, subject.domainFields) }}</h3>
