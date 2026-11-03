@@ -8,6 +8,8 @@ async function setup(page, url, width = 1440) {
   const target = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Measured server' } }, { name: 'description', value: { oneofKind: 'text', text: 'Preserve this description' } }] }) })).mutation.targets[0];
   await page.setViewportSize({ width, height: 900 });
   await page.goto(`${url}/#/?asset=${target.assetId}&incarnation=${target.incarnation}`);
+  // Hash navigation can finish while the previous resource card is still mounted.
+  await expect(page.getByRole('region', { name: 'Resource details', exact: true }).getByText(target.assetId, { exact: true })).toBeVisible();
   const panel = page.locator('.requirements-panel');
   await panel.getByText('Check recorded requirements', { exact: true }).click();
   await panel.getByRole('combobox', { name: 'Required fact', exact: true }).selectOption('drive_bays');

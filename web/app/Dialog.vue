@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, useId } from 'vue';
-defineProps<{ title: string; dismissible?: boolean }>();
+withDefaults(defineProps<{ title: string; dismissible?: boolean }>(), { dismissible: true });
 const emit = defineEmits<{ close: [] }>();
 const dialog = ref<HTMLDialogElement>();
 const titleId = useId();
