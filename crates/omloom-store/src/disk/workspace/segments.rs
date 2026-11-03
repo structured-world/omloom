@@ -7,6 +7,10 @@ enum ParticipationChoice {
     Several,
 }
 
+fn rejected(error: Error) -> Error {
+    Error::Rejected(Box::new(error))
+}
+
 fn summary(context: &Context, target: AssetRef, row: &Properties) -> Result<api::Item> {
     let kind = number(row, "kind")? as i32;
     let fields = if context.field(target, kind, "name", false) {
@@ -57,14 +61,18 @@ impl Store {
             return Ok(reply(api::reply::Result::Mutation(saved)));
         }
         if !preview && working.expected != Some(number(&tx.root, "revision")?) {
-            return Err(Error::Conflict);
+            return Err(rejected(Error::Conflict));
         }
-        let review = tx.prepare_segment(context, &request, working)?;
+        let review = tx
+            .prepare_segment(context, &request, working)
+            .map_err(|error| if preview { error } else { rejected(error) })?;
         if preview {
             tx.commit()?;
             return Ok(reply(api::reply::Result::SegmentReview(review)));
         }
-        let targets = tx.apply_segment(context, request, &review, Vec::new(), now)?;
+        let targets = tx
+            .apply_segment(context, request, &review, Vec::new(), now)
+            .map_err(rejected)?;
         if tx.changed {
             tx.save_creation_outcome(
                 context,
@@ -73,7 +81,8 @@ impl Store {
                 &targets,
                 now,
                 addresses::knowledge::Outcome::Revision("segment"),
-            )?;
+            )
+            .map_err(rejected)?;
         }
         Ok(mutation(tx.commit()?, targets))
     }

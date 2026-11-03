@@ -444,15 +444,20 @@ fn foreign_assertion_and_hidden_merge_endpoint_preserve_all_state() -> TestResul
         ..proposal(std::slice::from_ref(&vm))
     };
     for command in [C::PreviewSegment(request.clone()), C::Segment(request)] {
-        assert!(matches!(
-            run(
-                &store,
-                &actor,
-                command,
-                selection(&store, &[vm.clone(), segment.clone()])?
-            ),
-            Err(Error::Conflict)
-        ));
+        let saving = matches!(command, C::Segment(_));
+        let result = run(
+            &store,
+            &actor,
+            command,
+            selection(&store, &[vm.clone(), segment.clone()])?,
+        );
+        if saving {
+            assert!(
+                matches!(result, Err(Error::Rejected(error)) if matches!(*error, Error::Conflict))
+            );
+        } else {
+            assert!(matches!(result, Err(Error::Conflict)));
+        }
     }
     let mut limited = actor.clone();
     limited.grants[0].scope = Scope::Targets(vec![
@@ -768,7 +773,7 @@ fn interface_candidates_and_admission_stop_at_another_vm() -> TestResult {
             C::Segment(request),
             selection(&store, std::slice::from_ref(&vm))?
         ),
-        Err(Error::Denied)
+        Err(Error::Rejected(error)) if matches!(*error, Error::Denied)
     ));
     assert_eq!(store.usage()?, before);
     Ok(())
@@ -843,7 +848,7 @@ fn multiple_participations_need_an_explicit_interface_or_assertion() -> TestResu
     ));
     assert!(matches!(
         run(&store, &actor, C::Segment(request.clone()), working.clone()),
-        Err(Error::Conflict)
+        Err(Error::Rejected(error)) if matches!(*error, Error::Conflict)
     ));
     let mut request = request;
     request.participants[0].interface = Some(interfaces[0].clone());
@@ -1025,8 +1030,42 @@ fn segment_admission_rejects_denied_and_stale_selections_without_partial_state()
     let before = store.usage()?;
     assert!(matches!(
         run(&store, &actor, C::Segment(proposal(&subjects)), working),
-        Err(Error::Conflict)
+        Err(Error::Rejected(error)) if matches!(*error, Error::Conflict)
     ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// Only pre-commit rejection is confirmed; a denied receipt read leaves the accepted outcome intact.
+#[test]
+fn rejected_save_and_denied_saved_outcome_remain_distinct() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let vm = create(&store, &actor, K::VirtualMachine, "VM")?;
+    let working = selection(&store, std::slice::from_ref(&vm))?;
+    let request = C::Segment(proposal(std::slice::from_ref(&vm)));
+    let mut denied = actor.clone();
+    denied.grants[0].write = Fields::Selected(vec!["name".into()]);
+    let before = store.usage()?;
+    assert!(matches!(
+        run(&store, &denied, request.clone(), working.clone()),
+        Err(Error::Rejected(error)) if matches!(*error, Error::Denied)
+    ));
+    assert_eq!(store.usage()?, before);
+    let R::Mutation(saved) = run(&store, &actor, request.clone(), working.clone())? else {
+        panic!("mutation");
+    };
+    denied.grants[0].scope = Scope::Kinds(vec![K::Device]);
+    let before = store.usage()?;
+    assert!(matches!(
+        run(&store, &denied, request.clone(), working.clone()),
+        Err(Error::Denied)
+    ));
+    let R::Mutation(replayed) = run(&store, &actor, request, working)? else {
+        panic!("mutation");
+    };
+    assert_eq!(replayed.targets, saved.targets);
     assert_eq!(store.usage()?, before);
     Ok(())
 }

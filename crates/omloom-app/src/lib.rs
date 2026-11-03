@@ -89,6 +89,14 @@ fn status(code: Code, reason: &str, message: &str) -> Status {
     Status::with_error_details(code, message, details)
 }
 fn failure(error: Error) -> Status {
+    if let Error::Rejected(cause) = error {
+        let mut status = failure(*cause);
+        status.metadata_mut().insert(
+            "omloom-mutation-outcome",
+            tonic::metadata::MetadataValue::from_static("not-committed"),
+        );
+        return status;
+    }
     let (code, reason, message) = match error {
         Error::HostClassificationRequired => (
             Code::InvalidArgument,

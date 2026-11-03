@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import Dialog from './Dialog.vue';
-import { call, model, key, identityName, AssetKind as K } from './api';
+import { call, model, key, identityName, requestMessage, AssetKind as K } from './api';
 const props = defineProps<{ subjects: model.Item[]; membership?: model.SegmentMembership }>();
 const emit = defineEmits<{ close: []; saved: [] }>();
 const mode = ref(props.membership ? 'existing' : 'new');
@@ -87,16 +87,18 @@ async function preview() {
 }
 async function save() {
   if (!reviewed.value) return;
+  const retrying = pending.value;
   busy.value = true; pending.value = true; error.value = '';
   try {
     const reply = await call({ oneofKind: 'segment', segment: reviewed.value.request }, reviewed.value.working);
     if (reply.oneofKind !== 'mutation') throw Error('No mutation receipt was returned.');
     emit('saved');
   } catch(e) {
-    // ABORTED reports a rejected revision; transport failures leave the outcome unknown.
-    if (e instanceof Error && 'code' in e && e.code === 'ABORTED') {
+    const meta = e instanceof Error && 'meta' in e ? e.meta : undefined;
+    // A rejected retry cannot settle an earlier attempt that may still have committed.
+    if (!retrying && meta && typeof meta === 'object' && 'omloom-mutation-outcome' in meta && meta['omloom-mutation-outcome'] === 'not-committed') {
       pending.value = false; reviewed.value = undefined;
-      error.value = 'State changed. Your draft is retained. Review participation again before saving.';
+      error.value = `${requestMessage(e)} Your draft is retained. Review participation again before saving.`;
     } else {
       error.value = `${String(e)} The reviewed command is retained. Retry it before preparing a different change.`;
     }

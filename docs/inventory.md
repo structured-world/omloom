@@ -542,6 +542,14 @@ layers, with a 1,024-node work ceiling, never another VM or a lateral gateway.
 Continuations expire when inventory or authority changes. Read-only projections
 write nothing. Mutation retries retain the reviewed command and use the common
 finite outcome custody; unchanged accepted input creates no inventory history.
+For segment saves, a canonical gRPC error may carry the
+`omloom-mutation-outcome: not-committed` metadata only when that invocation
+stopped before commit, outside saved-outcome disclosure. It does not settle an
+earlier attempt. A rejected first save keeps the editable draft; after a lost
+reply, retain and retry the exact reviewed command even if a retry is rejected.
+Commit failures and failures while disclosing saved outcomes do not carry this
+confirmation. Failed membership loads discard the previous page and continuation;
+Refresh reloads the first current authorized page.
 
 Two explicitly selected L2 domains can use **Compare identity** and the existing
 reviewed correction workflow. Participation transfers require explicit review;

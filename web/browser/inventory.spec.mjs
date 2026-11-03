@@ -7,6 +7,63 @@ import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { workspaceClient } from './workspace-client.mjs';
 
+for (const width of [1440, 390]) test(`segment rejection preserves the draft and uncertain retries at ${width}px`, async ({ page }) => {
+  // Host-side revocation distinguishes a rejected first save from an uncertain prior attempt.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-segment-rejection-'));
+  let server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const vm = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.VIRTUAL_MACHINE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Revoked VM' } }] }) })).mutation.targets[0];
+    const port = Number(new URL(server.url).port);
+    const denied = join(dir, 'denied.json');
+    const hidden = join(dir, 'hidden.json');
+    await writeFile(denied, JSON.stringify([{ selection: { scope: 'all' }, read: { mode: 'all' }, write: { mode: 'selected', fields: ['name'] }, writable: true }]));
+    await writeFile(hidden, JSON.stringify([{ selection: { scope: 'kinds', kinds: ['ASSET_KIND_DEVICE'] }, read: { mode: 'all' }, write: { mode: 'all' }, writable: true }]));
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`${server.url}/#/?asset=${vm.assetId}&incarnation=${vm.incarnation}`);
+    await page.getByRole('button', { name: 'Record shared segment', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Shared L2 segment', exact: true });
+    await dialog.getByLabel('Name (optional)', { exact: true }).fill('Revoked draft');
+    await dialog.getByRole('button', { name: 'Review participation', exact: true }).click();
+    await expect(dialog.getByRole('region', { name: 'Membership summary' })).toBeVisible();
+    await server.stop(); server = await host(dir, 'operator', denied, port);
+    const rejected = page.waitForResponse(response => response.url().endsWith('/omloom.workspace.v1.Workspace/Call'));
+    await dialog.getByRole('button', { name: 'Save reviewed participation', exact: true }).click();
+    const rejection = await rejected;
+    await expect(dialog.getByLabel('Name (optional)', { exact: true })).toBeVisible();
+    await expect(dialog.getByLabel('Name (optional)', { exact: true })).toHaveValue('Revoked draft');
+    expect(rejection.headers()['omloom-mutation-outcome']).toBe('not-committed');
+    await expect(dialog.getByRole('button', { name: 'Retry reviewed command', exact: true })).toHaveCount(0);
+    await server.stop(); server = await host(dir, 'operator', undefined, port);
+    await dialog.getByRole('button', { name: 'Review participation', exact: true }).click();
+    await expect(dialog.getByRole('region', { name: 'Membership summary' })).toBeVisible();
+    const lose = async route => {
+      const request = m.Request.fromBinary(route.request().postDataBuffer().subarray(5));
+      if (request.command.oneofKind === 'segment') {
+        if (width === 1440) await route.fetch();
+        await route.abort('failed');
+      } else await route.continue();
+    };
+    await page.route('**/omloom.workspace.v1.Workspace/Call', lose);
+    await dialog.getByRole('button', { name: 'Save reviewed participation', exact: true }).click();
+    await expect(dialog.getByRole('alert')).toContainText('reviewed command is retained');
+    await page.unroute('**/omloom.workspace.v1.Workspace/Call', lose);
+    await server.stop(); server = await host(dir, 'operator', width === 1440 ? hidden : denied, port);
+    const retried = page.waitForResponse(response => response.url().endsWith('/omloom.workspace.v1.Workspace/Call'));
+    await dialog.getByRole('button', { name: 'Retry reviewed command', exact: true }).click();
+    expect((await retried).headers()['omloom-mutation-outcome']).toBe(width === 1440 ? undefined : 'not-committed');
+    await expect(dialog.getByRole('alert')).toContainText('reviewed command is retained');
+    await expect(dialog.getByRole('button', { name: 'Retry reviewed command', exact: true })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Review participation', exact: true })).toHaveCount(0);
+    await server.stop(); server = await host(dir, 'operator', undefined, port);
+    await dialog.getByRole('button', { name: 'Retry reviewed command', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    const segments = (await rpc({ oneofKind: 'query', query: m.Query.create({ kinds: [m.AssetKind.L2_DOMAIN], columns: ['name'], limit: 25 }) })).page;
+    expect(segments.total).toBe(1n);
+    expect(segments.items[0].fields).toEqual([{ name: 'name', value: { oneofKind: 'text', text: 'Revoked draft' } }]);
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('segment panels preserve reading without offering writes to viewers on desktop and phone', async ({ page }) => {
   // Both fixtures read the same disk state; only the operator receives editing controls.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-segment-viewer-'));
@@ -792,8 +849,8 @@ test('known IP/CIDR review preserves drafts and atomically creates an unresolved
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
 
-async function host(directory, fixture = 'operator', grants) {
-  const args = ['--data', directory, '--ui', 'dist/app', '--fixture', fixture];
+async function host(directory, fixture = 'operator', grants, port = 0) {
+  const args = ['--data', directory, '--ui', 'dist/app', '--fixture', fixture, '--port', String(port)];
   if (grants) args.push('--grants', grants);
   const child = spawn('target/debug/omloom-dev', args, { stdio: ['ignore', 'pipe', 'pipe'] });
   const url = await new Promise((resolve, reject) => {
