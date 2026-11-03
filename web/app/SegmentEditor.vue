@@ -76,6 +76,7 @@ async function preview() {
   busy.value = true; error.value = ''; reviewed.value = undefined;
   try {
     if (mode.value === 'existing' && !chosen.value?.target) throw Error('Choose an existing segment.');
+    if (mode.value === 'new' && name.value && new TextEncoder().encode(name.value).byteLength > 160) throw Error('Segment name must use at most 160 UTF-8 bytes.');
     const request = model.Segment.create({ target: mode.value === 'existing' ? chosen.value?.target : undefined, name: mode.value === 'new' && name.value ? name.value : undefined, participants: participants.value.map(p => ({ subject: p.subject.target, interface: p.interface?.target, relationId: p.relationId })) });
     const working = context();
     const reply = await call({ oneofKind: 'previewSegment', previewSegment: request }, working);

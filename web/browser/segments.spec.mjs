@@ -2,6 +2,38 @@ import { test, expect } from '@playwright/test';
 import { withFieldHost } from './field-host.mjs';
 import { workspaceClient } from './workspace-client.mjs';
 
+for (const width of [1440, 390]) test(`segment names validate UTF-8 bytes before preview at ${width}px`, async ({ page }) => {
+  // Unicode labels at the byte limit remain valid; longer drafts must not reach the server.
+  await withFieldHost(async url => {
+    const { m, rpc } = await workspaceClient(url);
+    const vm = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.VIRTUAL_MACHINE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Unicode VM' } }] }) })).mutation.targets[0];
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`${url}/#/?asset=${vm.assetId}&incarnation=${vm.incarnation}`);
+    await page.getByRole('button', { name: 'Record shared segment', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Shared L2 segment', exact: true });
+    let previews = 0;
+    page.on('request', request => {
+      if (request.url().endsWith('/omloom.workspace.v1.Workspace/Call') && m.Request.fromBinary(request.postDataBuffer().subarray(5)).command.oneofKind === 'previewSegment') previews++;
+    });
+    const name = dialog.getByLabel('Name (optional)', { exact: true });
+    await name.fill('é'.repeat(81));
+    await dialog.getByRole('button', { name: 'Review participation', exact: true }).click();
+    await expect(dialog.getByRole('alert')).toContainText('160 UTF-8 bytes');
+    expect(previews).toBe(0);
+    await expect(name).toHaveValue('é'.repeat(81));
+    await expect(dialog.getByRole('region', { name: 'Membership summary' })).toHaveCount(0);
+    await name.fill('é'.repeat(80));
+    await dialog.getByRole('button', { name: 'Review participation', exact: true }).click();
+    await expect(dialog.getByRole('region', { name: 'Membership summary' })).toContainText('é'.repeat(80));
+    expect(previews).toBe(1);
+    await dialog.getByRole('button', { name: 'Save reviewed participation', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    const segments = (await rpc({ oneofKind: 'query', query: m.Query.create({ kinds: [m.AssetKind.L2_DOMAIN], columns: ['name'], limit: 1 }) })).page;
+    expect(segments.total).toBe(1n);
+    expect(segments.items[0].fields).toEqual([{ name: 'name', value: { oneofKind: 'text', text: 'é'.repeat(80) } }]);
+  });
+});
+
 for (const width of [1440, 390]) test(`segment revision conflict preserves an editable draft at ${width}px`, async ({ page }) => {
   // A confirmed rejection permits a fresh review without losing the selected VM or interface.
   await withFieldHost(async url => {
