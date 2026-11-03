@@ -396,3 +396,58 @@ fn concurrent_acceptance_settles_to_one_refresh_outcome() -> TestResult {
     assert_eq!(read(&store, &accepted.targets[2])?.observed.len(), 1);
     Ok(())
 }
+
+// Batch membership uses the same relation visibility as individual scope
+// checks. A readable interface cannot disclose or cross a hidden parent path.
+#[test]
+fn source_options_and_refresh_do_not_cross_hidden_ownership_edges() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let mut store = Store::open(dir.path(), policy())?;
+    let accepted = adopt(&store)?;
+    let mut request = refresh(&store, &accepted.targets[0])?;
+    let mut actor = operator();
+    store.set_diagnostic_query_check(|db, statement| {
+        if statement.contains("AS parent, a.key AS child")
+            || statement.starts_with("UNWIND $keys AS key MATCH (n:OmRow {key:key})")
+        {
+            let plan = db.explain_cypher(statement).expect("source lookup plan");
+            eprintln!("source lookup plan: {plan}");
+            assert!(
+                plan.contains("IndexScan"),
+                "source lookups must start from indexed selected keys"
+            );
+        }
+    });
+    actor.grants[0].read = Fields::Selected(vec![
+        "name".into(),
+        "identity_evidence".into(),
+        "current_addresses".into(),
+    ]);
+    let before = store.usage()?;
+    let Reply::HostSourceOptions(options) = call(
+        &store,
+        &actor,
+        Command::HostSources(api::HostSources {
+            host: Some(accepted.targets[0].clone()),
+            report: request.report.clone(),
+        }),
+    )?
+    else {
+        return Err(Error::Corrupt.into());
+    };
+    assert_eq!(
+        options.sources[0]
+            .matches
+            .iter()
+            .map(|m| m.key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["hardware"]
+    );
+    request.selection.retain(|m| m.key == "interface/en0");
+    assert!(matches!(
+        call(&store, &actor, Command::HostImport(request)),
+        Err(Error::Denied)
+    ));
+    assert_eq!(before, store.usage()?);
+    Ok(())
+}

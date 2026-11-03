@@ -181,7 +181,6 @@ impl Store {
             roots: vec![target_wire(host)],
             ..Default::default()
         };
-        let within_host = tx.selection(context, &scope, false)?;
         let mut sources = Vec::new();
         let mut total_matches = 0usize;
         for row in tx.fact_rows(&format!("{}/host-mappings", asset_key(host)), MAX_IMPORT)? {
@@ -220,6 +219,11 @@ impl Store {
                 .iter()
                 .map(|row| Ok((string(row, "key")?, row)))
                 .collect::<Result<BTreeMap<_, _>>>()?;
+            let targets = mapped
+                .iter()
+                .map(super::super::super::target)
+                .collect::<Result<Vec<_>>>()?;
+            let within_host = tx.owned_focuses(context, &scope.roots, &targets)?;
             for node in &report.findings {
                 let Some(mapped) =
                     by_key.get(&mapping(importer, &name, &report.source_basis, &node.key))
@@ -235,10 +239,8 @@ impl Store {
                     Err(Error::Denied | Error::Missing) => continue,
                     Err(error) => return Err(error),
                 }
-                match within_host.contains(target, &tx) {
-                    Ok(()) => {}
-                    Err(Error::Denied | Error::Missing) => continue,
-                    Err(error) => return Err(error),
+                if !within_host.contains(&target) {
+                    continue;
                 }
                 if node.kind != wire::AssetKind::Unspecified as i32
                     && number(asset, "kind")? as i32 != node.kind

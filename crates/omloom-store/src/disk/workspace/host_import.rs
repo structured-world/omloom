@@ -173,6 +173,40 @@ impl Tx<'_> {
                 return Err(Error::Invalid);
             }
         }
+        let refresh_members = if let Some(refresh) = &request.refresh {
+            let keys = request
+                .selection
+                .iter()
+                .map(|node| {
+                    text(mapping(
+                        &importer,
+                        &request.source,
+                        &report.source_basis,
+                        &node.key,
+                    ))
+                })
+                .collect();
+            let rows = self.query(
+                "UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN properties(n) AS p LIMIT 129",
+                params([("keys", Value::Array(keys))]),
+            )?;
+            let targets = rows
+                .iter()
+                .map(super::super::target)
+                .collect::<Result<Vec<_>>>()?;
+            Some(self.owned_focuses(
+                context,
+                &[refresh.host.clone().ok_or(Error::Invalid)?],
+                &targets,
+            )?)
+        } else {
+            None
+        };
+        let refresh_is_working_scope = request.refresh.as_ref().is_some_and(|refresh| {
+            working.focus.is_none()
+                && working.roots.len() == 1
+                && working.roots.first() == refresh.host.as_ref()
+        });
         let mut resolved = BTreeMap::<&str, AssetRef>::new();
         let mut rows = Vec::with_capacity(request.selection.len());
         for node in &report.findings {
@@ -223,13 +257,10 @@ impl Tx<'_> {
                 return Err(Error::Conflict);
             }
             let existing = explicit.or(prior);
-            if let Some(refresh) = &request.refresh {
-                let scope = api::WorkingContext {
-                    roots: vec![refresh.host.clone().ok_or(Error::Invalid)?],
-                    ..Default::default()
-                };
-                self.selection(context, &scope, false)?
-                    .contains(existing.ok_or(Error::Conflict)?, self)?;
+            if let Some(members) = &refresh_members
+                && !members.contains(&existing.ok_or(Error::Conflict)?)
+            {
+                return Err(Error::Denied);
             }
             let mut kind = node.kind;
             let expected = if let Some(target) = existing {
@@ -247,8 +278,10 @@ impl Tx<'_> {
                 } else if actual_kind != kind {
                     return Err(Error::Invalid);
                 }
-                self.selection(context, working, false)?
-                    .contains(target, self)?;
+                if !refresh_is_working_scope {
+                    self.selection(context, working, false)?
+                        .contains(target, self)?;
+                }
                 Some(number(&row, "revision")?)
             } else {
                 if kind == wire::AssetKind::Unspecified as i32 {
