@@ -776,7 +776,10 @@ impl Store {
                     continue;
                 }
                 let prospective = new_target();
-                let fields = writable_fields(context, prospective, kind, &definitions);
+                let mut fields = writable_fields(context, prospective, kind, &definitions);
+                if kind == K::L2Domain && context.field(prospective, raw, "relations", true) {
+                    fields.push("participants".into());
+                }
                 if parent.is_some() && !context.field(prospective, raw, "relations", true) {
                     continue;
                 }

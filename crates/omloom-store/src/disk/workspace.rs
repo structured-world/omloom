@@ -21,6 +21,7 @@ mod physical;
 mod projection;
 mod requirements;
 mod responsibility;
+mod segments;
 mod software;
 mod source_layout;
 mod typed_values;
@@ -352,6 +353,30 @@ impl Store {
                 network,
                 working.as_ref().ok_or(Error::Invalid)?,
                 now,
+            ),
+            C::Segment(value) => self.workspace_segment(
+                context,
+                value,
+                working.as_ref().ok_or(Error::Invalid)?,
+                now,
+                false,
+            ),
+            C::PreviewSegment(value) => self.workspace_segment(
+                context,
+                value,
+                working.as_ref().ok_or(Error::Invalid)?,
+                now,
+                true,
+            ),
+            C::SegmentMemberships(value) => self.workspace_segment_memberships(
+                context,
+                value,
+                working.as_ref().ok_or(Error::Invalid)?,
+            ),
+            C::SegmentInterfaces(value) => self.workspace_segment_interfaces(
+                context,
+                value,
+                working.as_ref().ok_or(Error::Invalid)?,
             ),
             C::Member(member) => self.workspace_member(
                 context,

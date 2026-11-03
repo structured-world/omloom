@@ -1763,6 +1763,14 @@ impl Tx<'_> {
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<AssetRef> {
+        if write.kind == wire::AssetKind::L2Domain as i32
+            && write
+                .changes
+                .iter()
+                .any(|field| field.name == "participants")
+        {
+            return self.import_segment(context, write, working, now);
+        }
         self.context_write_with_prefix(
             context,
             write,
@@ -2027,7 +2035,11 @@ impl Tx<'_> {
                 return Ok(target);
             }
         }
-        if !(network && kind == wire::AssetKind::Prefix && write.changes.is_empty()) {
+        if network && kind == wire::AssetKind::L2Domain && write.changes.is_empty() {
+            if !context.field(target, write.kind, "network", true) {
+                return Err(Error::Denied);
+            }
+        } else if !(network && kind == wire::AssetKind::Prefix && write.changes.is_empty()) {
             self.require_changes(context, target, write.kind, &write.changes)?;
         }
         self.validate_software_state(target, kind, &write.changes)?;

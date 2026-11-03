@@ -182,7 +182,8 @@ impl Tx<'_> {
                 | wire::AssetKind::VirtualMachine
                 | wire::AssetKind::SoftwareInstallation
                 | wire::AssetKind::Interface
-                | wire::AssetKind::Prefix)
+                | wire::AssetKind::Prefix
+                | wire::AssetKind::L2Domain)
         ) {
             return Err(Error::Invalid);
         }

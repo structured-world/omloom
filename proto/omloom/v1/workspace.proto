@@ -1380,6 +1380,82 @@ message Network {
   // name or another resource kind; the server checks the name write permission.
   bool clear_name = 18;
 }
+message SegmentParticipant {
+  // User-selected accepted VM incarnation. Selection never moves this resource.
+  omloom.v1.AssetRef subject = 1;
+  // Explicit known interface of this VM, never a nested VM's interface. Absent
+  // creates an unknown-interface assertion if none exists; a coarser claim
+  // preserves a unique existing participation. Multiple candidates need a choice.
+  // With relation_id supplied, absence explicitly refines that assertion to unknown.
+  optional omloom.v1.AssetRef interface = 2;
+  // Existing participation selected for refinement. Omit to add a membership;
+  // other memberships remain untouched. The server checks current endpoints.
+  optional string relation_id = 3;
+}
+message Segment {
+  // User-selected existing L2 domain. Absent creates a new distinct domain;
+  // matching labels, VLAN identifiers and prefixes never select one implicitly.
+  optional omloom.v1.AssetRef target = 1;
+  // Optional accepted label, at most 160 UTF-8 bytes. Omission preserves an
+  // existing label or creates an unnamed domain. Empty explicitly clears it.
+  optional string name = 2;
+  // Explicit bounded VM selection and only the attachments to add or refine.
+  // Requires 1..127 unique subjects; each endpoint keeps independent authority.
+  repeated SegmentParticipant participants = 3;
+}
+message SegmentParticipantView {
+  // Current permitted VM identity, edit revision and name for this selection.
+  Item subject = 1;
+  // Current permitted interface context, absent when its identity is unknown.
+  optional Item interface = 2;
+  // Existing selected assertion, with its independent relation identity/revision.
+  optional omloom.v1.Relation relation = 3;
+}
+message SegmentReview {
+  // Exact current application revision used by this read-only assessment.
+  uint64 revision = 1;
+  // Selected existing domain, absent for a proposed new distinct domain.
+  optional Item segment = 2;
+  // Exact reviewed subjects and known interfaces, without sibling expansion.
+  repeated SegmentParticipantView participants = 3;
+}
+message SegmentMemberships {
+  // User-selected VM or L2 domain incarnations, at most 127. VM reads include
+  // owned interfaces only, with a bounded ownership traversal, never peer VMs.
+  repeated omloom.v1.AssetRef targets = 1;
+  // Server-issued continuation bound to selection, permissions and revision.
+  optional string cursor = 2;
+}
+message SegmentInterfaces {
+  // Explicit accepted VM whose own network-bearing layers may be inspected.
+  // Interfaces belonging to another, nested VM are never candidates.
+  omloom.v1.AssetRef subject = 1;
+  // Optional user-entered name search, at most 256 UTF-8 bytes. Only permitted
+  // current name fields contribute; no addresses or unknown names are invented.
+  string search = 2;
+  // Server-issued continuation bound to subject, search, working selection,
+  // current inventory and authority. Omit to start a new bounded selection.
+  optional string cursor = 3;
+}
+message SegmentMembership {
+  // Actual permitted source of the assertion: a VM or a known interface.
+  Item source = 1;
+  // Current permitted L2 domain, which asserts membership, not reachability.
+  Item segment = 2;
+  // The same attributed relation used by resource cards and refinement.
+  omloom.v1.Relation relation = 3;
+  // Current permitted VM owning the interface, absent when unknown, restricted
+  // or ambiguous. It never expands the domain read into another VM's contents.
+  optional Item subject = 4;
+}
+message SegmentMembershipPage {
+  // Current authorized assertion page, at most 25 entries in relation-ID order.
+  repeated SegmentMembership entries = 1;
+  // Exact application revision of this single read transaction.
+  uint64 revision = 2;
+  // Opaque continuation, absent when this selection has no further entries.
+  optional string next = 3;
+}
 message Member {
   // Canonical address or typed address-group identity selected for this edit.
   // Memberships never duplicate an address or create a second participant list.
@@ -2422,6 +2498,14 @@ message Request {
     Physical physical = 34;
     // Validate a known-address command without committing resources or a draft.
     Address preview_address = 35;
+    // Atomically record/refine selected VM memberships, never a provider effect.
+    Segment segment = 36;
+    // Validate the same proposal without persisting a draft or reservation.
+    Segment preview_segment = 37;
+    // Read only explicitly selected network memberships, with no durable writes.
+    SegmentMemberships segment_memberships = 38;
+    // Read bounded interface candidates under the same VM boundary as admission.
+    SegmentInterfaces segment_interfaces = 39;
   }
 }
 message Reply {
@@ -2475,5 +2559,9 @@ message Reply {
     PhysicalView physical = 23;
     // Transient validated known-address summary, not accepted inventory.
     AddressReview address_review = 24;
+    // Current authorized subjects and proposed segment membership, not connectivity proof.
+    SegmentReview segment_review = 25;
+    // Bounded network projection over the same relation identities as cards.
+    SegmentMembershipPage segment_membership_page = 26;
   }
 }

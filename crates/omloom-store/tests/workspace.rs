@@ -34,6 +34,8 @@ mod projections;
 mod requirements;
 #[path = "workspace/responsibility.rs"]
 mod responsibility;
+#[path = "workspace/segments.rs"]
+mod segments;
 #[path = "workspace/software.rs"]
 mod software;
 #[path = "workspace/typed_values.rs"]

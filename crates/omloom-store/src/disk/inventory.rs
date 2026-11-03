@@ -1228,7 +1228,9 @@ pub(super) fn compatible(
         R::StoredOn => matches!((from, to), (K::VirtualMachine, K::Storage)),
         R::On => matches!(
             (from, to),
-            (K::Storage | K::Vrf, K::Device) | (K::Interface, K::Vlan | K::L2Domain | K::Vrf)
+            (K::Storage | K::Vrf, K::Device)
+                | (K::Interface, K::Vlan | K::L2Domain | K::Vrf)
+                | (K::VirtualMachine, K::L2Domain)
         ),
         R::Uses => matches!(
             (from, to),

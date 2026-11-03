@@ -67,7 +67,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 field.number(),
                 field.label() == Label::Repeated,
                 field.oneof_index.map_or(0, |index| index + 1),
-                if message.name() == "EquipmentAlternatives"
+                if (message.name() == "Segment" && field.name() == "participants")
+                    || (message.name() == "SegmentMemberships" && field.name() == "targets")
+                {
+                    127
+                } else if message.name() == "EquipmentAlternatives"
                     && matches!(field.name(), "candidates" | "excluded")
                 {
                     16
