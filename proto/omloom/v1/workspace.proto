@@ -1214,6 +1214,35 @@ message HostImport {
   // Explicitly selected network sections of the selected installation. Empty
   // means none; unselected routes/rules/binds never enter preview custody.
   repeated HostNetworkPart network_parts = 5;
+  // Existing-only refresh selected by the operator. The source name above must
+  // be empty on input; the server resolves its own retained source binding.
+  HostRefresh refresh = 6;
+}
+message HostRefresh {
+  // Operator-confirmed adopted device or VM incarnation, never inferred from IP.
+  omloom.v1.AssetRef host = 1;
+  // Opaque source reference returned for this host and report by HostSources.
+  string source_ref = 2;
+}
+message HostSources {
+  // Existing host whose reviewed source bindings may be considered.
+  omloom.v1.AssetRef host = 1;
+  // Bounded native package, used only for compatibility and permitted matches.
+  // This read never retains the package or changes freshness.
+  HostReport report = 2;
+}
+message HostSource {
+  // Server-owned opaque reference, independent of the displayed label.
+  string reference = 1;
+  // Existing configuration label for operator selection, not an identity key.
+  string label = 2;
+  // Only permitted existing matches from this package, with exact incarnations.
+  repeated HostSelection matches = 3;
+}
+message HostSourceOptions {
+  // Compatible permitted source bindings. Empty means no available binding,
+  // not that the host has no other sources or that new adoption is authorized.
+  repeated HostSource sources = 1;
 }
 enum HostNetworkPart {
   HOST_NETWORK_PART_UNSPECIFIED = 0;
@@ -1332,6 +1361,9 @@ message ImportRow {
   // Authorized source-local address differences derived for this bounded review.
   // Absent for non-interface rows or when current-address reading is not allowed.
   AddressDelta addresses = 4;
+  // Read-authorized current claims from the selected refresh source, projected
+  // for comparison only. Absence is unknown, never an implicit clear or default.
+  repeated omloom.v1.Field previous_fields = 5;
 }
 message Preview {
   // Server-generated bounded-lived preview identity, absent for invalid previews.
@@ -2521,6 +2553,8 @@ message Request {
     SegmentMemberships segment_memberships = 38;
     // Read bounded interface candidates under the same VM boundary as admission.
     SegmentInterfaces segment_interfaces = 39;
+    // Read compatible existing host sources without retaining input or touching state.
+    HostSources host_sources = 40;
   }
 }
 message Reply {
@@ -2578,5 +2612,7 @@ message Reply {
     SegmentReview segment_review = 25;
     // Bounded network projection over the same relation identities as cards.
     SegmentMembershipPage segment_membership_page = 26;
+    // Existing source choices for one explicit host and package.
+    HostSourceOptions host_source_options = 27;
   }
 }

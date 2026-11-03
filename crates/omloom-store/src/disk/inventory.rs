@@ -223,7 +223,7 @@ pub(super) fn asset_projection(
     }
     Ok(output)
 }
-fn validate_evidence(
+pub(super) fn validate_evidence(
     asset: &wire::Asset,
     children: &[Properties],
     by_key: &BTreeMap<&str, &Properties>,
@@ -288,6 +288,73 @@ fn validate_evidence(
         }
     }
     Ok(())
+}
+
+impl Tx<'_> {
+    pub(super) fn put_observations(
+        &mut self,
+        key: &str,
+        kind: i32,
+        observations: &[wire::Observation],
+        layer: &str,
+        kind_changed: bool,
+        by_key: &BTreeMap<&str, &Properties>,
+    ) -> Result<bool> {
+        let mut changed_any = false;
+        for observation in observations {
+            let evidence = observation.evidence.as_ref().ok_or(Error::Invalid)?;
+            for field in &evidence.fields {
+                let child = format!("{key}/{layer}/{}/{}", evidence.source_id, field.name);
+                let previous = by_key.get(child.as_str()).copied();
+                let changed = !previous.is_some_and(|p| field_matches(field, p));
+                self.validate_equipment_change(kind, field, kind_changed || changed)?;
+                if changed {
+                    let mut value = field_props(field)?;
+                    value.extend(props([
+                        ("layer", text(layer)),
+                        ("source", text(&evidence.source_id)),
+                    ]));
+                    changed_any |=
+                        self.put_against(&child, key, Class::Evidence, value, previous)?;
+                }
+                // Reattestation changes only this field's small evidence window.
+                let fresh_key = format!("{child}/freshness");
+                let prior = by_key.get(fresh_key.as_str()).copied();
+                if prior.is_some_and(|p| {
+                    p.get("source_revision").and_then(Value::as_str)
+                        == evidence.source_revision.as_deref()
+                        && p.get("scan").and_then(Value::as_str) == observation.scan_id.as_deref()
+                        && p.get("observed").and_then(Value::as_int)
+                            == i64::try_from(evidence.observed_at_ms).ok()
+                        && p.get("valid").and_then(Value::as_int)
+                            == i64::try_from(evidence.valid_until_ms).ok()
+                }) {
+                    continue;
+                }
+                changed_any |= self.put_against(
+                    &fresh_key,
+                    key,
+                    Class::Evidence,
+                    props([
+                        ("layer", text("freshness")),
+                        ("claim", text(&child)),
+                        (
+                            "source_revision",
+                            evidence.source_revision.as_ref().map_or(Value::Null, text),
+                        ),
+                        (
+                            "scan",
+                            observation.scan_id.as_ref().map_or(Value::Null, text),
+                        ),
+                        ("observed", int(evidence.observed_at_ms)?),
+                        ("valid", int(evidence.valid_until_ms)?),
+                    ]),
+                    prior,
+                )?;
+            }
+        }
+        Ok(changed_any)
+    }
 }
 
 impl Store {
@@ -515,63 +582,23 @@ impl Store {
                 intent_changed = true;
             }
         }
-        let mut evidence_changed = false;
-        for (layer, observations) in [("imported", &asset.imported), ("observed", &asset.observed)]
-        {
-            for observation in observations {
-                let evidence = observation.evidence.as_ref().ok_or(Error::Invalid)?;
-                for field in &evidence.fields {
-                    let child = format!("{key}/{layer}/{}/{}", evidence.source_id, field.name);
-                    let previous = by_key.get(child.as_str()).copied();
-                    let changed = !previous.is_some_and(|p| field_matches(field, p));
-                    tx.validate_equipment_change(asset.kind, field, kind_changed || changed)?;
-                    if changed {
-                        let mut value = field_props(field)?;
-                        value.extend(props([
-                            ("layer", text(layer)),
-                            ("source", text(&evidence.source_id)),
-                        ]));
-                        evidence_changed |=
-                            tx.put_against(&child, &key, Class::Evidence, value, previous)?;
-                    }
-                    // A freshness-only refresh never rewrites the value row.
-                    let fresh_key = format!("{child}/freshness");
-                    let prior_fresh = by_key.get(fresh_key.as_str()).copied();
-                    if prior_fresh.is_some_and(|p| {
-                        p.get("source_revision").and_then(Value::as_str)
-                            == evidence.source_revision.as_deref()
-                            && p.get("scan").and_then(Value::as_str)
-                                == observation.scan_id.as_deref()
-                            && p.get("observed").and_then(Value::as_int)
-                                == i64::try_from(evidence.observed_at_ms).ok()
-                            && p.get("valid").and_then(Value::as_int)
-                                == i64::try_from(evidence.valid_until_ms).ok()
-                    }) {
-                        continue;
-                    }
-                    evidence_changed |= tx.put_against(
-                        &fresh_key,
-                        &key,
-                        Class::Evidence,
-                        props([
-                            ("layer", text("freshness")),
-                            ("claim", text(&child)),
-                            (
-                                "source_revision",
-                                evidence.source_revision.as_ref().map_or(Value::Null, text),
-                            ),
-                            (
-                                "scan",
-                                observation.scan_id.as_ref().map_or(Value::Null, text),
-                            ),
-                            ("observed", int(evidence.observed_at_ms)?),
-                            ("valid", int(evidence.valid_until_ms)?),
-                        ]),
-                        prior_fresh,
-                    )?;
-                }
-            }
-        }
+        let imported_changed = tx.put_observations(
+            &key,
+            asset.kind,
+            &asset.imported,
+            "imported",
+            kind_changed,
+            &by_key,
+        )?;
+        let observed_changed = tx.put_observations(
+            &key,
+            asset.kind,
+            &asset.observed,
+            "observed",
+            kind_changed,
+            &by_key,
+        )?;
+        let evidence_changed = imported_changed || observed_changed;
         if old.is_some() && evidence_changed && projection.is_none() {
             return Err(Error::Conflict);
         }

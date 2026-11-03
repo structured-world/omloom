@@ -31,5 +31,8 @@ fn runtime_candidate_is_an_installation_before_mutation() {
         ],
         ..Default::default()
     };
-    assert!(matches!(validate(&report), Err(Error::Invalid)));
+    assert!(matches!(
+        validate_parts(&report, false),
+        Err(Error::Invalid)
+    ));
 }

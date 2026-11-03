@@ -742,6 +742,25 @@ Names, matching addresses, process names and Compose labels do not establish
 continuity, ownership or permission. Review the proposed changes before acceptance.
 The same flow works on a phone, including selecting a report from its file picker.
 
+For a host already imported, open its device or VM card and choose **Load
+observation package**. Select an existing compatible source and confirm that the
+package describes this host and the selected installation. Source references are
+server-owned; no source-name retyping or renaming is required. Only permitted,
+already mapped resources can be selected. New findings require separate adoption.
+A selected child's existing parents are checked without refreshing their fields.
+The preview shows this source's observations and address differences; acceptance
+preserves intended fields, independent sources and omitted partial evidence.
+Equal values in a genuinely newer observation update only their freshness.
+A file proves its collection instant, not a future health or connectivity lease.
+
+Back retains the draft and selected observations. Acceptance retains the same
+bounded mutation outcome as other reviewed imports. If a reply is lost, retry
+the same acceptance; do not prepare a different change while its outcome is
+unknown. A committed result can be recovered after restart without another
+mutation. Expired previews cannot be applied as new work, and replay still
+requires current read access to the result. Raw reports are not saved in browser
+storage or retained as inventory history.
+
 The source name selects an import configuration within your actor's namespace.
 Reuse it exactly for repeat imports. A changed name selects an independent
 source, rather than renaming a display label, and can propose new identities.

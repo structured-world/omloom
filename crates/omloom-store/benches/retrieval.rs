@@ -147,5 +147,143 @@ fn equipment_claim(c: &mut Criterion) {
     }
     group.finish();
 }
-criterion_group!(benches, retrieval, equipment_claim);
+fn host_source_options(c: &mut Criterion) {
+    use omloom_contracts::workspace as api;
+    use omloom_store::workspace::*;
+    let mut group = c.benchmark_group("host_source_options");
+    group
+        .sample_size(10)
+        .warm_up_time(Duration::from_millis(100))
+        .measurement_time(Duration::from_millis(250));
+    for count in [1, 32, 126] {
+        let directory = tempfile::tempdir().expect("benchmark directory");
+        let store = Store::open(
+            directory.path(),
+            Policy {
+                classes: [Budget {
+                    rows: 20_000,
+                    bytes: 32 * 1_048_576,
+                }; CLASSES],
+                total_bytes: 128 * 1_048_576,
+                detail_age_ms: 1000,
+                physical_reservation_max_ms: 1000,
+                review_age_ms: 500,
+                review_per_source: Budget {
+                    rows: 512,
+                    bytes: 2 * 1_048_576,
+                },
+                batch_rows: 128,
+            },
+        )
+        .expect("benchmark store");
+        let actor = Context {
+            actor: "benchmark".into(),
+            fixture: "benchmark".into(),
+            grants: vec![Grant {
+                scope: Scope::All,
+                read: Fields::All,
+                write: Fields::All,
+                writable: true,
+            }],
+            teams: Vec::new(),
+            recipients: Vec::new(),
+            schema_admin: false,
+            authority_revision: 1,
+        };
+        let field = |name: &str| wire::Field {
+            name: "name".into(),
+            value: Some(field::Value::Text(name.into())),
+        };
+        let mut report = api::HostReport {
+            version: 1,
+            platform: "linux".into(),
+            source_basis: "a".repeat(64),
+            boot_basis: "b".repeat(64),
+            observed_at: 100,
+            findings: vec![
+                api::HostFinding {
+                    key: "hardware".into(),
+                    kind: wire::AssetKind::Device as i32,
+                    fields: vec![field("Benchmark host")],
+                    ..Default::default()
+                },
+                api::HostFinding {
+                    key: "installation".into(),
+                    kind: wire::AssetKind::SoftwareInstallation as i32,
+                    parent: Some("hardware".into()),
+                    fields: vec![field("Benchmark OS")],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        for index in 0..count {
+            report.findings.push(api::HostFinding {
+                key: format!("interface/{index}"),
+                kind: wire::AssetKind::Interface as i32,
+                parent: Some("installation".into()),
+                fields: vec![field(&format!("eth{index}"))],
+                ..Default::default()
+            });
+        }
+        let execute = |command| {
+            store
+                .workspace(
+                    &actor,
+                    api::Request {
+                        command: Some(command),
+                        working: Some(api::WorkingContext::default()),
+                    },
+                    100,
+                )
+                .expect("benchmark request")
+                .result
+                .expect("benchmark reply")
+        };
+        let api::reply::Result::Preview(review) =
+            execute(api::request::Command::HostImport(api::HostImport {
+                source: "Benchmark source".into(),
+                selection: report
+                    .findings
+                    .iter()
+                    .map(|node| api::HostSelection {
+                        key: node.key.clone(),
+                        ..Default::default()
+                    })
+                    .collect(),
+                report: Some(Box::new(report.clone())),
+                ..Default::default()
+            }))
+        else {
+            panic!("preview required");
+        };
+        let api::reply::Result::Mutation(accepted) =
+            execute(api::request::Command::HostImport(api::HostImport {
+                preview: review.id,
+                ..Default::default()
+            }))
+        else {
+            panic!("acceptance required");
+        };
+        let request = api::HostSources {
+            host: Some(accepted.targets[0].clone()),
+            report: Some(Box::new(report)),
+        };
+        let before = store.usage().expect("usage");
+        group.bench_with_input(
+            BenchmarkId::new("interfaces", count),
+            &request,
+            |b, request| {
+                b.iter(|| black_box(execute(api::request::Command::HostSources(request.clone()))));
+            },
+        );
+        assert_eq!(
+            before,
+            store.usage().expect("usage"),
+            "source options must not write"
+        );
+    }
+    group.finish();
+}
+criterion_group!(benches, retrieval, equipment_claim, host_source_options);
 criterion_main!(benches);
