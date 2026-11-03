@@ -52,6 +52,37 @@ fn create_segment(store: &Store, subjects: &[wire::AssetRef]) -> Result<wire::As
     result.targets.last().cloned().ok_or(Error::Corrupt)
 }
 
+// Import mappings must require the same field authority as new-segment admission.
+#[test]
+fn participant_mapping_requires_network_and_relation_write() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let before = store.usage()?;
+    for (fields, permitted) in [
+        (vec!["name", "relations"], false),
+        (vec!["name", "network"], false),
+        (vec!["name", "relations", "network"], true),
+    ] {
+        let mut actor = operator();
+        actor.grants[0].write = Fields::Selected(fields.into_iter().map(str::to_owned).collect());
+        let R::Actions(actions) = call(&store, &actor, C::Prepare(api::Prepare::default()))? else {
+            panic!("actions");
+        };
+        let creation = actions
+            .creations
+            .iter()
+            .find(|creation| creation.kind == K::L2Domain as i32)
+            .ok_or("ordinary segment creation remains available")?;
+        assert_eq!(
+            creation.fields.iter().any(|field| field == "participants"),
+            permitted
+        );
+        assert!(creation.fields.iter().any(|field| field == "name"));
+    }
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // Cards and the selected network projection expose the actual relation without hidden peers or read writes.
 #[test]
 fn projection_keeps_attributed_identity_and_filters_hidden_segments() -> TestResult {
