@@ -1361,6 +1361,11 @@ impl Store {
     ) -> Result<api::Detail> {
         let basis = self.usage()?.revision;
         let target = parse_target(read.target.as_ref())?;
+        if read.accepted_field.is_some()
+            && (read.network_cursor.is_some() || read.relations_cursor.is_some())
+        {
+            return Err(Error::Invalid);
+        }
         let tx = self.begin()?;
         let selection = tx.selection(context, working, false)?;
         selection.contains(target, &tx)?;
@@ -1386,6 +1391,41 @@ impl Store {
         }
         let row = tx.visible_asset(context, target)?;
         let kind = number(&row, "kind")? as i32;
+        if let Some(name) = read.accepted_field.as_deref() {
+            if name.is_empty() || name.len() > 64 || kind != wire::AssetKind::Device as i32 {
+                return Err(Error::Invalid);
+            }
+            if !context.field(target, kind, name, false) {
+                return Err(Error::Denied);
+            }
+            let mut fields = Vec::with_capacity(2);
+            if let Some(value) = tx.get(&format!("{}/intent/{name}", asset_key(target)))? {
+                fields.push(inventory::read_field(&value)?);
+            }
+            if name != "name"
+                && context.field(target, kind, "name", false)
+                && let Some(value) = row.get("name").and_then(Value::as_str)
+            {
+                fields.push(wire::Field {
+                    name: "name".into(),
+                    value: Some(field::Value::Text(value.into())),
+                });
+            }
+            let detail = api::Detail {
+                item: Some(api::Item {
+                    target: Some(target_wire(target)),
+                    kind,
+                    revision: number(&row, "revision")?,
+                    fields,
+                }),
+                ..Default::default()
+            };
+            tx.commit()?;
+            if self.usage()?.revision != basis {
+                return Err(Error::Expired);
+            }
+            return Ok(detail);
+        }
         let asset =
             inventory::asset_projection(target, &row, &tx.children(&asset_key(target))?, |name| {
                 context.field(target, kind, name, false)

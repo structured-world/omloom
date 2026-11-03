@@ -613,6 +613,7 @@ fn dense_container_opens_without_enumerating_its_children() -> TestResult {
                         target: Some(host.clone()),
                         relations_cursor: Some(cursor),
                         network_cursor: None,
+                        accepted_field: None,
                     })),
                 },
                 100,

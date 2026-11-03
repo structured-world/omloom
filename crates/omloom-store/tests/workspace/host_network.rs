@@ -102,7 +102,8 @@ fn large_network_evidence_remains_readable_within_reply_budget() -> TestResult {
             Command::Read(api::Read {
                 target: Some(os.clone()),
                 relations_cursor: Some("unused".into()),
-                network_cursor: Some(first_cursor.clone())
+                network_cursor: Some(first_cursor.clone()),
+                accepted_field: None,
             })
         ),
         Err(Error::Invalid)

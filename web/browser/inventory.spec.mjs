@@ -5,6 +5,7 @@ import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
+import { workspaceClient } from './workspace-client.mjs';
 
 test('CSV keeps the selected prefix among multiple import contexts on desktop and phone', async ({ browser }) => {
   // Choosing a network context creates membership, never ownership or an unscoped address.
@@ -800,22 +801,6 @@ async function openedTarget(page) {
   const target = { assetId: params.get('asset'), incarnation: params.get('incarnation') };
   expect(target.assetId).not.toBeNull(); expect(target.incarnation).not.toBeNull();
   return target;
-}
-
-async function workspaceClient(url) {
-  const { buildSync } = await import('esbuild');
-  const { GrpcWebFetchTransport } = await import('@protobuf-ts/grpcweb-transport');
-  const built = buildSync({ stdin: { contents: 'export * from "./web/src/generated/omloom/v1/workspace"; export {AssetKind, RelationKind, EffectOutcome, OperationState} from "./web/src/generated/omloom/v1/contracts";', resolveDir: process.cwd() }, bundle: true, write: false, format: 'esm', platform: 'node' });
-  const m = await import('data:text/javascript;base64,' + Buffer.from(built.outputFiles[0].contents).toString('base64'));
-  const transport = new GrpcWebFetchTransport({ baseUrl: url, format: 'binary' });
-  async function revision() {
-    const q = await transport.unary(m.Workspace.methods[0], m.Request.create({ command: { oneofKind: 'query', query: m.Query.create({ limit: 1 }) } }), transport.mergeOptions());
-    return q.response.result.page.revision;
-  }
-  async function rpc(command, focus) {
-    return (await transport.unary(m.Workspace.methods[0], m.Request.create({ command, working: { expected: await revision(), focus } }), transport.mergeOptions())).response.result;
-  }
-  return { m, rpc, revision };
 }
 
 test('saved physical plans return to their first page on desktop and phone',async({browser})=>{
