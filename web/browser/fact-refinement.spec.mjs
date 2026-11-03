@@ -455,14 +455,25 @@ test('a resource refresh invalidates the answer without changing the accepted re
   await withFieldHost(async url => {
     const { m, rpc, target, panel } = await setup(page, url);
     const before = (await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail.item.revision;
-    const reread = page.waitForResponse(response => response.url().endsWith('/omloom.workspace.v1.Workspace/Call') && request(m, { request: () => response.request() }).command.oneofKind === 'read');
-    await page.getByRole('button', { name: '↻ Refresh', exact: true }).click();
-    await (await reread).finished();
-    await expect(panel.getByRole('region', { name: 'Requirement result' })).toHaveCount(0);
-    await expect(panel.getByRole('textbox', { name: 'Required value (count)', exact: true })).toHaveValue('10');
-    await panel.getByRole('button', { name: 'Retry check', exact: true }).click();
-    await expect(panel.getByRole('heading', { name: 'Requirement not established', exact: true })).toBeVisible();
-    expect((await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail.item.revision).toBe(before);
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    let reads = 0;
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      if (request(m, route).command.oneofKind === 'read') { reads++; const response = await route.fetch(); await gate; return route.fulfill({ response }); }
+      return route.continue();
+    });
+    try {
+      await page.getByRole('button', { name: '↻ Refresh', exact: true }).click();
+      await expect(panel.getByRole('region', { name: 'Requirement result' })).toHaveCount(0);
+      await expect(panel.getByRole('button', { name: 'Retry check', exact: true })).toBeDisabled();
+      release();
+      await expect(panel.getByRole('button', { name: 'Retry check', exact: true })).toBeEnabled();
+      expect(reads).toBe(1);
+      await expect(panel.getByRole('textbox', { name: 'Required value (count)', exact: true })).toHaveValue('10');
+      await panel.getByRole('button', { name: 'Retry check', exact: true }).click();
+      await expect(panel.getByRole('heading', { name: 'Requirement not established', exact: true })).toBeVisible();
+      expect((await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail.item.revision).toBe(before);
+    } finally { release(); await page.unrouteAll({ behavior: 'wait' }); }
   });
 });
 
@@ -508,6 +519,53 @@ test('a ready resource can recheck while its enclosing list is still loading', a
       await panel.getByRole('button', { name: 'Retry check', exact: true }).click();
       await expect(panel.getByRole('heading', { name: 'Requirement not established', exact: true })).toBeVisible();
     } finally { release(); }
+  });
+});
+
+for (const paginated of [false, true]) test(`saving rechecks after detail refresh without waiting for the list (cursor: ${paginated})`, async ({ page }) => {
+  // Cursor removal and an unchanged URL must both await detail, never the unrelated list.
+  await withFieldHost(async url => {
+    const { m, rpc, target, panel } = await setup(page, url, paginated ? 390 : 1440);
+    if (paginated) {
+      for (let i = 0; i < 26; i++) await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.PORT, parent: target, changes: [{ name: 'name', value: { oneofKind: 'text', text: `port-${String(i).padStart(2, '0')}` } }] }) }, target);
+      await page.goto(`${url}/#/?asset=${target.assetId}&incarnation=${target.incarnation}&view=${m.View.HARDWARE}`);
+      await page.getByRole('button', { name: 'Next local resources', exact: true }).click();
+      await expect(page).toHaveURL(/localCursor=/);
+      await expect(page.getByRole('button', { name: 'port-25', exact: true })).toBeVisible();
+      await panel.getByRole('combobox', { name: 'Required fact', exact: true }).selectOption('drive_bays');
+      await panel.getByRole('combobox', { name: 'Required comparison', exact: true }).selectOption(String(m.RequirementComparison.MINIMUM));
+      await panel.getByRole('textbox', { name: 'Required value (count)', exact: true }).fill('10');
+      await panel.getByRole('button', { name: 'Check requirement', exact: true }).click();
+    }
+    await panel.getByRole('button', { name: 'Clarify this fact', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Clarify recorded fact', exact: true });
+    await fillExact(dialog, '8');
+    let releaseDetail, releaseList, detailReady, listReady;
+    const detailGate = new Promise(resolve => { releaseDetail = resolve; });
+    const listGate = new Promise(resolve => { releaseList = resolve; });
+    const detailHeld = new Promise(resolve => { detailReady = resolve; });
+    const listHeld = new Promise(resolve => { listReady = resolve; });
+    let writes = 0; let evaluations = 0;
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      const command = request(m, route).command;
+      if (command.oneofKind === 'write') writes++;
+      if (command.oneofKind === 'evaluateRequirements') evaluations++;
+      if (command.oneofKind === 'read' && !command.read.acceptedField) { const response = await route.fetch(); detailReady(); await detailGate; return route.fulfill({ response }); }
+      if (command.oneofKind === 'query') { const response = await route.fetch(); listReady(); await listGate; return route.fulfill({ response }); }
+      return route.continue();
+    });
+    try {
+      await dialog.getByRole('button', { name: 'Save and recheck', exact: true }).click();
+      await Promise.all([detailHeld, listHeld]);
+      expect(evaluations).toBe(0);
+      releaseDetail();
+      await expect(panel.getByRole('heading', { name: 'Requirement not satisfied', exact: true })).toBeVisible();
+      expect(evaluations).toBe(1); expect(writes).toBe(1);
+      await expect(panel.getByRole('textbox', { name: 'Required value (count)', exact: true })).toHaveValue('10');
+      await expect(page).not.toHaveURL(/localCursor=/);
+      // The workspace toolbar is hidden while the phone displays the resource card.
+      await expect(page.getByRole('button', { name: '↻ Refresh', exact: true, includeHidden: true })).toBeDisabled();
+    } finally { releaseDetail(); releaseList(); await page.unrouteAll({ behavior: 'wait' }); }
   });
 });
 

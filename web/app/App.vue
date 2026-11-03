@@ -176,6 +176,7 @@ function resourceName(item: model.Item | undefined) { return resourceTitle(item,
 function identityName(item: model.Item | undefined) { return identityTitle(item, rowContexts.value.get(key(item?.target))?.prefixCidr); }
 let generation = 0;
 let loadedQuery = '';
+let detailRefresh: Promise<void> = Promise.resolve();
 async function load() {
   identityCandidates.value=undefined;resolvedAlias.value=undefined;
   const turn = ++generation; loading.value = true; error.value = '';
@@ -195,6 +196,7 @@ async function load() {
     if (!detailStale.value) detail.value = undefined;
     error.value = String(e);
   }) : Promise.resolve();
+  detailRefresh = detailLoad;
   try {
     const result = await call({ oneofKind: 'query', query: model.Query.create(query.value) });
     if (turn !== generation) return;
@@ -323,8 +325,12 @@ async function saved(target?: AssetRef) {
     else {
       const changed = router.resolve({ path: '/', query: next }).fullPath !== route.fullPath;
       await router.replace({ path: '/', query: next });
-      if (!changed) await load();
+      if (!changed) void load();
     }
+    // Route-driven and explicit reloads share the detail completion, not the list's lifetime.
+    await nextTick();
+    await detailRefresh;
+    await nextTick();
   } catch (e) { error.value = String(e); loading.value = false; }
 }
 async function reloadSelection() {
