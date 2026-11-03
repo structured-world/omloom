@@ -7,6 +7,34 @@ import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { workspaceClient } from './workspace-client.mjs';
 
+test('segment panels preserve reading without offering writes to viewers on desktop and phone', async ({ page }) => {
+  // Both fixtures read the same disk state; only the operator receives editing controls.
+  const dir = await mkdtemp(join(tmpdir(), 'omloom-segment-viewer-'));
+  let server = await host(dir);
+  try {
+    const { m, rpc } = await workspaceClient(server.url);
+    const vm = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.VIRTUAL_MACHINE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Viewer VM' } }] }) })).mutation.targets[0];
+    const segment = (await rpc({ oneofKind: 'segment', segment: m.Segment.create({ name: 'Viewer segment', participants: [{ subject: vm }] }) })).mutation.targets.at(-1);
+    for (const fixture of ['operator', 'viewer']) {
+      if (fixture === 'viewer') { await server.stop(); server = await host(dir, fixture); }
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        for (const target of [vm, segment]) {
+          await page.goto(`${server.url}/#/?asset=${target.assetId}&incarnation=${target.incarnation}`);
+          const panel = page.getByRole('region', { name: 'L2 participation', exact: true });
+          await expect(panel).toBeVisible();
+          await expect(panel.getByRole('button', { name: 'Record shared segment', exact: true })).toHaveCount(fixture === 'operator' && target === vm ? 1 : 0);
+          await panel.getByRole('button', { name: 'Show memberships', exact: true }).click();
+          await expect(panel.getByRole('list', { name: 'Selected network projection', exact: true })).toContainText('Viewer segment');
+          await expect(panel.getByRole('list', { name: 'Selected network projection', exact: true })).toContainText('interface unknown');
+          await expect(panel.getByRole('button', { name: 'Refine participation', exact: true })).toHaveCount(fixture === 'operator' ? 1 : 0);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        }
+      }
+    }
+  } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('CSV keeps the selected prefix among multiple import contexts on desktop and phone', async ({ browser }) => {
   // Choosing a network context creates membership, never ownership or an unscoped address.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-import-prefix-choice-')); const server = await host(dir);
