@@ -85,6 +85,67 @@ fn focused_fact_read_is_selective_authorized_and_read_only() -> TestResult {
 }
 
 #[test]
+fn focused_fact_read_returns_only_the_populated_permitted_field() -> TestResult {
+    // A focused correction must decode its actual value without returning unrelated facts.
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let target = create(&store, &actor, K::Device, "Populated fact")?;
+    let original = store.asset(AssetRef::try_from(&target)?)?;
+    let bays = wire::Field {
+        name: "drive_bays".into(),
+        value: Some(wire::field::Value::Integer(8)),
+    };
+    call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            target: Some(target.clone()),
+            expected: Some(original.revision),
+            kind: K::Device as i32,
+            changes: vec![bays.clone(), text_field("description", "Unrelated fact")],
+            ..Default::default()
+        }),
+    )?;
+    let before = store.usage()?;
+    let read = api::Read {
+        target: Some(target.clone()),
+        accepted_field: Some("drive_bays".into()),
+        ..Default::default()
+    };
+    let Reply::Detail(detail) = call(&store, &actor, Command::Read(read.clone()))? else {
+        return Err("detail".into());
+    };
+    let item = detail.item.as_ref().ok_or("item")?;
+    assert_eq!(item.target.as_ref(), Some(&target));
+    assert_eq!(item.revision, original.revision + 1);
+    assert_eq!(
+        item.fields,
+        vec![bays.clone(), text_field("name", "Populated fact")]
+    );
+    assert_eq!(
+        detail.as_ref(),
+        &api::Detail {
+            item: Some(item.clone()),
+            ..Default::default()
+        }
+    );
+    let mut limited = actor.clone();
+    limited.grants[0].read = Fields::Selected(vec!["drive_bays".into()]);
+    let Reply::Detail(detail) = call(&store, &limited, Command::Read(read.clone()))? else {
+        return Err("detail".into());
+    };
+    assert_eq!(detail.item.ok_or("item")?.fields, vec![bays]);
+    limited.grants[0].read = Fields::Selected(vec!["name".into()]);
+    assert!(matches!(
+        call(&store, &limited, Command::Read(read)),
+        Err(Error::Denied)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+#[test]
 fn focused_fact_delta_rechecks_the_same_question_and_fences_old_edits() -> TestResult {
     // Recording eight bays answers a ten-bay question without rewriting its threshold or other facts.
     let dir = tempfile::tempdir()?;

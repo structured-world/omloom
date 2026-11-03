@@ -113,6 +113,13 @@ clear have different meanings. A known shortage offers **Correct recorded fact**
 as a secondary action: correcting an inaccurate record is not a remedy for an
 actual shortage.
 
+Refreshing the resource invalidates its old answer, including dated observations
+whose update does not change the accepted revision. The question remains ready
+to check again once resource details are available, independently of list loading.
+An explicit service-unavailable or deadline error during clarification keeps the
+dated result available for a fresh read; authority, target or revision failures
+invalidate it.
+
 The focused `Read.accepted_field` query returns only the selected accepted device
 field, edit revision and permitted name. It checks current scope, incarnation
 and field visibility before decoding the value. It loads no relations, source

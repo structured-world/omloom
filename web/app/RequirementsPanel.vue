@@ -4,7 +4,7 @@ import {call,model,enumLabel,key,AssetKind,type AssetRef} from './api';
 import AssetEditor from './AssetEditor.vue';
 import {equipmentFields} from './equipment-fields';
 import type {Field} from '../src/generated/omloom/v1/contracts';
-const props=defineProps<{target:AssetRef;kind:AssetKind;working:model.WorkingContext;plan?:boolean;revision?:bigint;view?:model.View;refresh?:()=>Promise<void>}>();
+const props=defineProps<{target:AssetRef;kind:AssetKind;working:model.WorkingContext;plan?:boolean;revision?:bigint;refreshing?:boolean;view?:model.View;refresh?:()=>Promise<void>}>();
 const emit=defineEmits<{configure:[query:model.EvaluateRequirements]}>();
 const field=ref('');const value=ref('');const comparison=ref(model.RequirementComparison.EQUAL);
 const layer=ref(model.RequirementLayer.ACCEPTED);const busy=ref(false);const error=ref('');
@@ -18,6 +18,8 @@ onBeforeUnmount(()=>{disposed=true;generation++;});
 const contextKey=computed(()=>model.WorkingContext.toJsonString(model.WorkingContext.create({...props.working,expected:undefined})));
 function invalidate(){generation++;result.value=undefined;error.value='';busy.value=false;}
 watch(()=>props.revision,invalidate);
+// Observation values and freshness can change without an accepted-state revision.
+watch(()=>props.refreshing,refreshing=>{if(refreshing)invalidate();});
 watch(contextKey,()=>{invalidate();question.value=undefined;refinement.value=undefined;});
 const units:Record<string,string>={drive_bays:'count',height:'mm',width:'mm',depth:'mm',weight:'g',power_rating:'W'};
 const numeric=computed(()=>field.value in units);
@@ -25,6 +27,7 @@ const fields=computed(()=>props.kind===AssetKind.PROVIDER_ACCOUNT?['delegation']
 const stateTitle=computed(()=>result.value?.state===model.RequirementState.SATISFIED?'Recorded evidence matches':result.value?.state===model.RequirementState.FAILED?'Requirement not satisfied':'Requirement not established');
 const questionLabel=computed(()=>`${field.value.replaceAll('_',' ')} ${comparison.value===model.RequirementComparison.MINIMUM?'at least':comparison.value===model.RequirementComparison.MAXIMUM?'at most':'equals'} ${value.value}${numeric.value?' '+units[field.value]:''} (${layer.value===model.RequirementLayer.ACCEPTED?'accepted configuration':'dated observations'})`);
 async function evaluate(query:model.EvaluateRequirements,restoreFocus=false){
+  if(props.refreshing)return;
   const turn=++generation;busy.value=true;error.value='';result.value=undefined;
   try{
     const response=await call({oneofKind:'evaluateRequirements',evaluateRequirements:query},model.WorkingContext.create({...props.working,expected:undefined}));
@@ -37,7 +40,7 @@ async function evaluate(query:model.EvaluateRequirements,restoreFocus=false){
 }
 async function clarify(entry:model.RequirementResult){
   const query=question.value;
-  if(!query||!entry.field||key(entry.target)!==key(props.target)||props.kind!==AssetKind.DEVICE||!entry.resolutions.includes(model.RequirementResolution.RECORD_FACT))return;
+  if(props.refreshing||!query||!entry.field||key(entry.target)!==key(props.target)||props.kind!==AssetKind.DEVICE||!entry.resolutions.includes(model.RequirementResolution.RECORD_FACT))return;
   returnFocus=document.activeElement instanceof HTMLElement?document.activeElement:undefined;
   const turn=++generation;busy.value=true;error.value='';saveNotice.value='';
   try{
@@ -45,7 +48,12 @@ async function clarify(entry:model.RequirementResult){
     if(disposed||turn!==generation||question.value!==query)return;
     if(reply.oneofKind!=='detail'||!reply.detail.item||key(reply.detail.item.target)!==key(props.target))throw Error('This fact is unavailable.');
     refinement.value={item:reply.detail.item,field:entry.field,question:questionLabel.value};
-  }catch(e){if(!disposed&&turn===generation){error.value=String(e);result.value=undefined;}}
+  }catch(e){if(!disposed&&turn===generation){
+    error.value=String(e);
+    const code=e instanceof Error&&'code' in e?e.code:undefined;
+    // Only explicit availability/deadline failures retain the dated answer, never ambiguous internal errors.
+    if(code!=='UNAVAILABLE'&&code!=='DEADLINE_EXCEEDED')result.value=undefined;
+  }}
   finally{if(!disposed&&turn===generation)busy.value=false;}
 }
 async function closeRefinement(){refinement.value=undefined;await nextTick();(returnFocus?.isConnected?returnFocus:checkButton.value)?.focus();}
@@ -66,6 +74,7 @@ function changed(){
   else if(field.value!=='drive_bays'&&comparison.value===model.RequirementComparison.EQUAL)comparison.value=model.RequirementComparison.UNSPECIFIED;
 }
 async function check(){
+  if(props.refreshing)return;
   error.value='';result.value=undefined;
   try{
     let expected:Field['value'];
@@ -93,7 +102,7 @@ async function check(){
 <summary>{{plan?'Configure a postcondition':'Check recorded requirements'}}</summary>
 <p>{{plan?'Select the condition evaluated after reported work. Dated samples need qualified post-effect evidence; an old successful sample cannot verify this step.':'Inspect current evidence for this resource. Matching conditions do not authorize an operation, verify a live path or certify physical fit.'}}</p>
 <form @submit.prevent="check" @input="changed" @change="changed">
-<fieldset :disabled="busy">
+<fieldset :disabled="busy||refreshing">
 <label>Required fact<select v-model="field" required><option disabled value="">Choose a fact</option><option v-for="name in fields" :key="name" :value="name">{{name.replaceAll('_',' ')}}</option></select></label>
 <label>Evidence layer<select v-model="layer"><option :value="model.RequirementLayer.ACCEPTED">Accepted configuration</option><option :value="model.RequirementLayer.OBSERVED">Dated observations</option></select></label>
 <label>Required comparison<select v-model="comparison"><option disabled :value="model.RequirementComparison.UNSPECIFIED">Choose a comparison</option><option v-if="!numeric||field==='drive_bays'" :value="model.RequirementComparison.EQUAL">Equals</option><option v-if="numeric" :value="model.RequirementComparison.MINIMUM">At least</option><option v-if="numeric" :value="model.RequirementComparison.MAXIMUM">At most</option></select></label>
@@ -103,14 +112,14 @@ async function check(){
 </form>
 <p v-if="error" role="alert">{{error}}</p>
 <p v-if="saveNotice" role="status">{{saveNotice}}</p>
-<button v-if="question&&!result&&!busy" type="button" @click="recheck()">Retry check</button>
+<button v-if="question&&!result&&!busy" type="button" :disabled="refreshing" @click="recheck()">Retry check</button>
 <section v-if="result" aria-live="polite" aria-label="Requirement result">
 <h3 ref="resultHeading" tabindex="-1">{{stateTitle}}</h3>
 <p>{{questionLabel}}</p>
 <p>{{enumLabel(model.RequirementReason,result.reason).replaceAll('_',' ')}}</p>
 <p>Inventory revision {{result.revision.toString()}}. Evaluated {{new Date(Number(result.evaluatedAtMs)).toLocaleString()}}. This result is not saved.</p>
 <template v-for="entry in result.results" :key="entry.semanticKey">
-<button v-if="kind===AssetKind.DEVICE&&entry.resolutions.includes(model.RequirementResolution.RECORD_FACT)" type="button" :disabled="busy" @click="clarify(entry)">{{entry.reason===model.RequirementReason.MISMATCH?'Correct recorded fact':'Clarify this fact'}}</button>
+<button v-if="kind===AssetKind.DEVICE&&entry.resolutions.includes(model.RequirementResolution.RECORD_FACT)" type="button" :disabled="busy||refreshing" @click="clarify(entry)">{{entry.reason===model.RequirementReason.MISMATCH?'Correct recorded fact':'Clarify this fact'}}</button>
 <p v-if="kind!==AssetKind.DEVICE&&entry.resolutions.includes(model.RequirementResolution.RECORD_FACT)">An authorized inventory edit can supply or correct this fact. Recheck after saving.</p>
 <p v-if="entry.reason===model.RequirementReason.MISMATCH&&entry.resolutions.includes(model.RequirementResolution.RECORD_FACT)">A correctly recorded shortage is not fixed by changing the record. Correct it only if the fact is wrong.</p>
 <p v-if="entry.resolutions.includes(model.RequirementResolution.OWNER_ACTION)">Use Request owner action on this account's card when it is shown. It requires a visible managed resource. This check has not submitted a request or granted account access.</p>

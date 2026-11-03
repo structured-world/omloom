@@ -33,6 +33,7 @@ const router = useRouter(); const route = useRoute();
 const identity = ref<model.Identity>(); const definitions = ref<model.Definition[]>([]); const views = ref<model.SavedView[]>([]);
 const page = ref(model.Page.create()); const detail = ref<model.Detail>(); const loading = ref(false); const error = ref(''); const notice = ref('');
 const detailStale = ref(false);
+const detailLoading = ref(false);
 const networkCursor = ref<string>(); const networkLoading = ref(false);
 const preparedActions = ref(model.Actions.create());
 const participantRemoval = ref<model.Participant>();
@@ -182,10 +183,12 @@ async function load() {
   const signature = JSON.stringify(model.Query.toJson(query.value));
   if (signature !== loadedQuery) { selected.value = []; search.value = query.value.search; loadedQuery = signature; }
   const target = route.query.asset && route.query.incarnation ? { assetId: String(route.query.asset), incarnation: String(route.query.incarnation) } : undefined;
+  detailLoading.value = !!target;
   const detailLoad = target ? read(target).then(next => {
-    if (turn === generation) { detail.value = next; detailStale.value = false; networkCursor.value = undefined; }
+    if (turn === generation) { detail.value = next; detailLoading.value = false; detailStale.value = false; networkCursor.value = undefined; }
   }).catch(e => {
     if (turn !== generation) return;
+    detailLoading.value = false;
     const code = (e as { code?: string }).code;
     const unavailable = code === 'PERMISSION_DENIED' || code === 'NOT_FOUND' || code === 'ABORTED';
     detailStale.value = !unavailable && key(detail.value?.item?.target) === key(target);
@@ -395,7 +398,7 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <button v-if="detail.item.kind === K.VIRTUAL_MACHINE && identity?.writable && detail.item.target" @click="placementVm=detail.item.target">Change hypervisor after migration</button>
 <HostIdentityEvidence :observations="detail.identity" />
 <p v-if="detailStale" role="status">Showing the previous resource read. Refresh before relying on these details.</p>
-<RequirementsPanel v-if="detail.item.target&&[K.DEVICE,K.PROVIDER_ACCOUNT].includes(detail.item.kind)" :key="key(detail.item.target)" :target="detail.item.target" :kind="detail.item.kind" :revision="detail.item.revision" :working="working" :view="query.view" :refresh="saved" />
+<RequirementsPanel v-if="detail.item.target&&[K.DEVICE,K.PROVIDER_ACCOUNT].includes(detail.item.kind)" :key="key(detail.item.target)" :target="detail.item.target" :kind="detail.item.kind" :revision="detail.item.revision" :refreshing="detailLoading" :working="working" :view="query.view" :refresh="saved" />
 <PhysicalFacts v-if="detail.item.target&&!loading&&[K.SITE,K.RACK,K.DEVICE,K.PORT,K.CABLE,K.LOCATION,K.PHYSICAL_COMPONENT,K.PHYSICAL_POSITION,K.POWER_FEED].includes(detail.item.kind)" :key="key(detail.item.target)+'/'+detail.item.revision" :target="detail.item.target" :kind="detail.item.kind" :working="working" @equipment="edit" @saved="notice='Physical facts saved.'; load()" />
 <PowerPathsPanel v-if="detail.item.target&&!loading&&[K.RACK,K.DEVICE,K.POWER_FEED].includes(detail.item.kind)" :key="'power/'+key(detail.item.target)+'/'+detail.item.revision" :target="detail.item.target" :working="working"/>
 <!-- Keep drafts mounted across scope navigation; replacement counts are invalidated inside the planner. -->

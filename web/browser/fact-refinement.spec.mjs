@@ -449,3 +449,112 @@ test('changing a question removes the old result before it can open a correction
     await expect(panel).toContainText('drive bays at least 20 count');
   });
 });
+
+test('a resource refresh invalidates the answer without changing the accepted revision or question', async ({ page }) => {
+  // Observation/freshness reads can change independently of the accepted asset revision.
+  await withFieldHost(async url => {
+    const { m, rpc, target, panel } = await setup(page, url);
+    const before = (await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail.item.revision;
+    const reread = page.waitForResponse(response => response.url().endsWith('/omloom.workspace.v1.Workspace/Call') && request(m, { request: () => response.request() }).command.oneofKind === 'read');
+    await page.getByRole('button', { name: '↻ Refresh', exact: true }).click();
+    await (await reread).finished();
+    await expect(panel.getByRole('region', { name: 'Requirement result' })).toHaveCount(0);
+    await expect(panel.getByRole('textbox', { name: 'Required value (count)', exact: true })).toHaveValue('10');
+    await panel.getByRole('button', { name: 'Retry check', exact: true }).click();
+    await expect(panel.getByRole('heading', { name: 'Requirement not established', exact: true })).toBeVisible();
+    expect((await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail.item.revision).toBe(before);
+  });
+});
+
+test('a loading resource cannot check the previous target', async ({ page }) => {
+  // Keep the old card mounted, but never send its anchor with the new working focus.
+  await withFieldHost(async url => {
+    const { m, rpc, target, panel } = await setup(page, url);
+    const next = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Next device' } }] }) })).mutation.targets[0];
+    let release, ready; let evaluations = 0;
+    const gate = new Promise(resolve => { release = resolve; }); const held = new Promise(resolve => { ready = resolve; });
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      const command = request(m, route).command;
+      if (command.oneofKind === 'evaluateRequirements') evaluations++;
+      if (command.oneofKind === 'read' && command.read.target?.assetId === next.assetId) { const response = await route.fetch(); ready(); await gate; return route.fulfill({ response }); }
+      return route.continue();
+    });
+    try {
+      await page.goto(`${url}/#/?asset=${next.assetId}&incarnation=${next.incarnation}`); await held;
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByText(target.assetId, { exact: true })).toBeVisible();
+      await expect(panel.getByRole('button', { name: 'Check requirement', exact: true })).toBeDisabled();
+      await panel.locator('form').evaluate(form => form.requestSubmit());
+      expect(evaluations).toBe(0);
+      release();
+      await expect(page.getByRole('region', { name: 'Resource details' }).getByText(next.assetId, { exact: true })).toBeVisible();
+    } finally { release(); }
+  });
+});
+
+test('a ready resource can recheck while its enclosing list is still loading', async ({ page }) => {
+  // Detail admission owns this check; an unrelated slow list must not keep it disabled.
+  await withFieldHost(async url => {
+    const { m, panel } = await setup(page, url);
+    let release, ready; let intercepted = false;
+    const gate = new Promise(resolve => { release = resolve; }); const held = new Promise(resolve => { ready = resolve; });
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      if (!intercepted && request(m, route).command.oneofKind === 'query') { intercepted = true; const response = await route.fetch(); ready(); await gate; return route.fulfill({ response }); }
+      return route.continue();
+    });
+    try {
+      await page.getByRole('button', { name: '↻ Refresh', exact: true }).click(); await held;
+      await expect(panel.getByRole('region', { name: 'Requirement result' })).toHaveCount(0);
+      await expect(panel.getByRole('button', { name: 'Retry check', exact: true })).toBeEnabled();
+      await panel.getByRole('button', { name: 'Retry check', exact: true }).click();
+      await expect(panel.getByRole('heading', { name: 'Requirement not established', exact: true })).toBeVisible();
+    } finally { release(); }
+  });
+});
+
+for (const status of [503, 504]) test(`an unavailable clarify read can retry without repeating evaluation (${status})`, async ({ page }) => {
+  // A temporary service outage preserves the dated answer; retry still performs a fresh authorized read.
+  await withFieldHost(async url => {
+    const { m, panel } = await setup(page, url);
+    let fail = true; let evaluations = 0; let writes = 0;
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      const command = request(m, route).command;
+      if (command.oneofKind === 'evaluateRequirements') evaluations++;
+      if (command.oneofKind === 'write') writes++;
+      if (fail && command.oneofKind === 'read' && command.read.acceptedField) return route.fulfill({ status, body: 'Service unavailable' });
+      return route.continue();
+    });
+    await panel.getByRole('button', { name: 'Clarify this fact', exact: true }).click();
+    await expect(panel.getByRole('alert')).toBeVisible();
+    await expect(panel.getByRole('heading', { name: 'Requirement not established', exact: true })).toBeVisible();
+    fail = false; await panel.getByRole('button', { name: 'Clarify this fact', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Clarify recorded fact', exact: true })).toBeVisible();
+    expect(evaluations).toBe(0); expect(writes).toBe(0);
+  });
+});
+
+for (const failure of ['scope', 'revision', 'incarnation', 'ambiguous']) test(`a ${failure} clarify failure invalidates the old answer`, async ({ page }) => {
+  // Server scope/incarnation checks and injected expiry/internal failures must invalidate the dated answer.
+  await withFieldHost(async url => {
+    const { m, rpc, panel } = await setup(page, url);
+    const other = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Other device' } }] }) })).mutation.targets[0];
+    let writes = 0;
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      const value = request(m, route); const command = value.command;
+      if (command.oneofKind === 'write') writes++;
+      if (command.oneofKind !== 'read' || !command.read.acceptedField) return route.continue();
+      if (failure === 'ambiguous') return route.fulfill({ status: 500, body: 'Unknown server failure' });
+      if (failure === 'revision') return route.fulfill({ status: 412, body: 'Read basis expired' });
+      if (failure === 'scope') value.working.focus = other;
+      if (failure === 'incarnation') command.read.target.incarnation = other.incarnation;
+      const bytes = m.Request.toBinary(value); const frame = Buffer.alloc(bytes.length + 5); frame.writeUInt32BE(bytes.length, 1); frame.set(bytes, 5);
+      return route.continue({ postData: frame });
+    });
+    await panel.getByRole('button', { name: 'Clarify this fact', exact: true }).click();
+    await expect(panel.getByRole('alert')).toBeVisible();
+    await expect(panel.getByRole('region', { name: 'Requirement result' })).toHaveCount(0);
+    await expect(panel.getByRole('button', { name: 'Clarify this fact', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(panel.getByRole('textbox', { name: 'Required value (count)', exact: true })).toHaveValue('10');
+    expect(writes).toBe(0);
+  });
+});
