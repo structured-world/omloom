@@ -517,6 +517,62 @@ Resources with retained IPAM state or attached relations cannot be archived
 through the generic asset writer. Release relations explicitly before archival;
 IPAM removal owns reference checks and allocation release.
 
+## Shared L2 segments
+
+Select the VMs you know share a segment and choose **Record shared segment**.
+Choose an existing permitted L2 domain or create a distinct unnamed one. A name,
+interface, IP, prefix, VLAN or routing context is not required to record this
+knowledge. Matching names, CIDRs and VLAN IDs never merge domains automatically.
+Each VM keeps its identity, placement and other network memberships.
+
+The final summary records one attributed `On` relation for each participation.
+With an unknown interface the source is the VM. Refining an explicitly selected
+assertion changes its source to a known interface of that VM, preserving its
+relation ID and checking current ownership, authority and revision. Interfaces of
+a nested VM are not interfaces of its enclosing VM. No interface or physical
+connection is invented; membership is not evidence of forwarding or reachability.
+Repeating a coarser claim preserves its unique known interface without another
+write. Multiple existing participations require an explicit interface or assertion
+choice; omission cannot silently collapse them or append a redundant unknown one.
+
+VM and L2-domain cards expose **Show memberships**, a bounded selected relationship
+projection over these same relation identities. It pages authorized assertions,
+not an estate-wide topology. VM reads follow only their owned network-bearing
+layers, with a 1,024-node work ceiling, never another VM or a lateral gateway.
+Continuations expire when inventory or authority changes. Read-only projections
+write nothing. Mutation retries retain the reviewed command and use the common
+finite outcome custody; unchanged accepted input creates no inventory history.
+For segment saves, a canonical gRPC error may carry the
+`omloom-mutation-outcome: not-committed` metadata only when that invocation
+stopped before commit, outside saved-outcome disclosure. It does not settle an
+earlier attempt. A rejected first save keeps the editable draft; after a lost
+reply, retain and retry the exact reviewed command even if a retry is rejected.
+Commit failures and failures while disclosing saved outcomes do not carry this
+confirmation. Failed membership loads discard the previous page and continuation;
+Refresh reloads the first current authorized page.
+Record/refinement controls use current relation grants for the exact VM,
+interface and segment, not the workspace-wide write indicator. Page context and
+prepared actions include subject-side eligibility; each membership carries its
+refinement eligibility, including manual source authority. These transient hints
+do not grant access and are rechecked during preview and save.
+
+Two explicitly selected L2 domains can use **Compare identity** and the existing
+reviewed correction workflow. Participation transfers require explicit review;
+unresolved operations, reservations, privileged bindings, conflicting sources or
+canonical IPAM references must be resolved before merging. Grants, secrets and
+provider authority never transfer. The ordinary bounded correction receipt and
+undo rules apply, without a separate segment history.
+
+CSV L2-domain rows can map `participants` in addition to optional `name`.
+Use semicolon-separated qualified VM references `asset-id/incarnation`, optionally
+followed by `@interface-asset-id/interface-incarnation` for a known interface and
+`#relation-id` to refine one selected assertion. For example, a row's cell may
+contain `VM_ASSET/VM_INCARNATION;SECOND_VM_ASSET/SECOND_VM_INCARNATION`, replacing
+each placeholder with its actual UUID. At most 127 unique VMs and 32 KiB of input
+are accepted per cell. The transport-only cell is decoded into the same command,
+not retained as an inventory field. Preview and acceptance use the same atomic
+validation; reimport preserves the source's domain and relation identities.
+
 ## CSV and storage bounds
 
 An import names a personal source and explicitly maps selected columns. Each

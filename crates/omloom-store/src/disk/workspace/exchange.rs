@@ -202,7 +202,9 @@ impl Store {
             if !destinations.insert(&selected.field) {
                 return Err(Error::Invalid);
             }
-            if !["prefix", "prefix_name", "create_prefix"].contains(&selected.field.as_str()) {
+            if !["prefix", "prefix_name", "create_prefix", "participants"]
+                .contains(&selected.field.as_str())
+            {
                 super::assets::validate_column(&selected.field, &definitions)?;
             }
             let index = headers
@@ -260,7 +262,12 @@ impl Store {
                     diagnostic = "resource kind (use reviewed network allocation)".into();
                     return Err(Error::Invalid);
                 }
-                if target.is_none() && typed_kind != wire::AssetKind::Prefix {
+                if target.is_none()
+                    && !matches!(
+                        typed_kind,
+                        wire::AssetKind::Prefix | wire::AssetKind::L2Domain
+                    )
+                {
                     tx.creation_parent(context, working, request.parent.as_ref(), typed_kind)?;
                 }
                 let expected = existing
@@ -273,7 +280,10 @@ impl Store {
                     diagnostic = format!("column '{}'", headers.get(*index).ok_or(Error::Invalid)?);
                     let cell = line.get(*index).ok_or(Error::Invalid)?;
                     if cell.is_empty()
-                        && typed_kind == wire::AssetKind::Prefix
+                        && matches!(
+                            typed_kind,
+                            wire::AssetKind::Prefix | wire::AssetKind::L2Domain
+                        )
                         && matches!(*name, "name" | "address_space")
                     {
                         continue;
@@ -295,7 +305,12 @@ impl Store {
                     }
                     let field =
                         csv_value(name, cell, &definitions, &claim_budget, &mut claim_inputs)?;
-                    if typed_kind == wire::AssetKind::Prefix
+                    if typed_kind == wire::AssetKind::L2Domain && *name == "participants" {
+                        super::segments::csv_participants(cell)?;
+                        if !context.field(write_target, kind, "relations", true) {
+                            return Err(Error::Denied);
+                        }
+                    } else if typed_kind == wire::AssetKind::Prefix
                         && matches!(*name, "cidr" | "address_space")
                     {
                         tx.validate_field(kind, &field)?;
@@ -353,7 +368,9 @@ impl Store {
                 if let Some(change) = row.change.clone()
                     && matches!(
                         wire::AssetKind::try_from(change.kind),
-                        Ok(wire::AssetKind::Prefix | wire::AssetKind::AddressReference)
+                        Ok(wire::AssetKind::Prefix
+                            | wire::AssetKind::AddressReference
+                            | wire::AssetKind::L2Domain)
                     )
                     && let Err(error) =
                         simulation.context_import_write(context, change, working, now)

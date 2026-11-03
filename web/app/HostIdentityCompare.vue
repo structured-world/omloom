@@ -15,6 +15,7 @@ const drafts=ref<Draft[]>([]);
 const plan=ref<model.IdentityCorrectionView>();const receipt=ref<model.IdentityCorrectionApplied>();
 const layer=ref(K.SOFTWARE_INSTALLATION);const layerSearch=ref('');const layerPage=ref(model.Page.create());
 const layerLeft=ref<model.Item>();const layerRight=ref<model.Item>();
+const networkIdentity = computed(() => [K.PREFIX,K.L2_DOMAIN].includes(comparison.value?.left?.item?.kind ?? K.UNSPECIFIED));
 const physical=(r:model.IdentityImpact['before'])=>r && [R.HAS_PORT,R.CARRIES,R.INSTALLED_IN,R.CONNECTED_TO,R.ON].includes(r.kind);
 const duplicate=(draft:Draft)=>draft.keep==='left'?draft.pair.right:draft.pair.left;
 const retained=(draft:Draft)=>draft.keep==='left'?draft.pair.left:draft.pair.right;
@@ -111,29 +112,30 @@ onMounted(load);
 </script>
 <template><Dialog title="Compare identity" @close="!busy && emit('close')"><div class="identity-review">
 <template v-if="step==='compare'">
-<p v-if="comparison?.left?.item?.kind !== K.PREFIX">Compare hardware and installed operating systems separately. Different IPs do not prove different machines. Matching identifiers may be cloned, movable or reported by the same underlying source.</p>
+<p v-if="!networkIdentity">Compare hardware and installed operating systems separately. Different IPs do not prove different machines. Matching identifiers may be cloned, movable or reported by the same underlying source.</p>
+<p v-if="comparison?.left?.item?.kind === K.L2_DOMAIN">Equal names, VLAN IDs or CIDRs never establish the same L2 domain. Compare the permitted participants, boundaries and sources before explicitly merging.</p>
 <p v-if="busy" role="status">Loading the two selected resources…</p>
 <p v-if="error" role="alert">{{ error }}</p>
 <template v-if="comparison">
 <p>Current comparison at revision {{ comparison.revision.toString() }}. This read changes no inventory, grants or connections.</p>
 <p v-if="matches.length">Some identifiers match within the same layer and namespace. This supports review, not automatic merging or authenticated target verification.</p>
 <p v-else-if="comparison.left?.item?.kind === K.PREFIX">Compare the declared CIDR and namespace. Equal address text alone does not establish the same network.</p>
-<p v-else>No matching identity claims are available in this comparison. Missing evidence does not prove that these are different machines.</p>
+<p v-else>No matching identity claims are available in this comparison. Missing evidence does not establish identity.</p>
 <div class="identity-pair"><section v-for="(subject, index) in [comparison.left, comparison.right]" :key="index" :aria-label="index === 0 ? 'First identity' : 'Second identity'">
 <template v-if="subject?.item"><h3>{{ name(subject.item, subject.domainFields) }}</h3>
 <p>{{ label(subject.item.kind) }}</p><dl><template v-for="field in [...subject.item.fields.filter(v => v.name !== 'name'), ...subject.domainFields]" :key="field.name"><dt>{{ field.name.replaceAll('_', ' ') }}</dt><dd>{{ domainDisplay(subject, field) }}</dd></template></dl>
 <HostIdentityEvidence :observations="subject.identity" />
-<p v-if="!subject.identity.length && subject.item.kind !== K.PREFIX">No identity evidence is available to this view. Do not infer hardware or installation continuity from the name.</p>
+<p v-if="!subject.identity.length && !networkIdentity">No identity evidence is available to this view. Do not infer hardware or installation continuity from the name.</p>
 </template></section></div></template>
 <footer><button @click="emit('close')">Back</button><button v-if="error" :disabled="busy" @click="load">Retry comparison</button><button :disabled="busy||!comparison" @click="start">Plan identity correction</button></footer>
 </template>
 <template v-else-if="step==='decision'">
 <h3>What do these records represent?</h3><p>Identifiers support review; they cannot establish that these records describe the same resource.</p>
 <label><input v-model="decision" type="radio" :value="model.IdentityDecision.KEEP_SEPARATE">Different or not established: keep separate</label>
-<label v-if="comparison?.left?.item?.kind !== K.PREFIX"><input v-model="decision" type="radio" :value="model.IdentityDecision.DISTINCT_INSTALLATIONS">Same hardware, different OS installations</label>
-<label v-if="comparison?.left?.item?.kind !== K.PREFIX"><input v-model="decision" type="radio" :value="model.IdentityDecision.DUPLICATE_INSTALLATION">Duplicate records of the same hardware and installation</label>
-<label v-if="comparison?.left?.item?.kind === K.PREFIX"><input v-model="decision" type="radio" :value="model.IdentityDecision.DUPLICATE_RESOURCE">Duplicate records of the same prefix</label>
-<p v-if="comparison?.left?.item?.kind !== K.PREFIX">Separate OS installations retain their own services, interfaces and addresses. Duplicate installations require an explicit mapping at each layer.</p>
+<label v-if="!networkIdentity"><input v-model="decision" type="radio" :value="model.IdentityDecision.DISTINCT_INSTALLATIONS">Same hardware, different OS installations</label>
+<label v-if="!networkIdentity"><input v-model="decision" type="radio" :value="model.IdentityDecision.DUPLICATE_INSTALLATION">Duplicate records of the same hardware and installation</label>
+<label v-if="networkIdentity"><input v-model="decision" type="radio" :value="model.IdentityDecision.DUPLICATE_RESOURCE">Duplicate records of the same {{comparison?.left?.item?.kind === K.L2_DOMAIN ? 'L2 segment' : 'prefix'}}</label>
+<p v-if="!networkIdentity">Separate OS installations retain their own services, interfaces and addresses. Duplicate installations require an explicit mapping at each layer.</p>
 <footer><button :disabled="busy" @click="step='compare'">Back</button><button :disabled="decision===model.IdentityDecision.UNSPECIFIED||busy" @click="decision===model.IdentityDecision.KEEP_SEPARATE?emit('close'):step='mapping'">Continue</button></footer>
 </template>
 <template v-else-if="step==='mapping'">
@@ -146,7 +148,7 @@ onMounted(load);
 <label v-for="field in duplicate(draft)?.item?.fields" :key="field.name">{{ field.name }}: duplicate {{ display(field) }}<select v-model="draft.fields[field.name]" :aria-label="'Resolve '+field.name+' in mapping '+(index+1)"><option :value="undefined" disabled>Choose explicitly</option><option value="retained">Keep retained: {{ display(retained(draft)?.item?.fields.find(v=>v.name===field.name)) }}</option><option value="duplicate">Use duplicate: {{ display(field) }}</option></select></label>
 <label v-for="source in duplicate(draft)?.sources" :key="source">Source label: {{ source }}<input v-model="draft.sources[source]" maxlength="80" :aria-label="'Retained source name '+source"></label>
 <p v-if="duplicate(draft)?.sources.length">Native bindings remain independent even with identical labels. A label change applies to all bindings with that label on this subject. Manual or unresolved legacy sources with colliding names require an explicit rename. Import configurations retain their original identity.</p>
-<label v-for="relation in duplicate(draft)?.relations.filter(physical)" :key="relation.relationId"><input v-model="draft.attachments" type="checkbox" :value="relation.relationId">Confirm physical attachment {{ R[relation.kind]?.toLowerCase().replaceAll('_',' ') }}: {{ relation.from?.assetId }} → {{ relation.to?.assetId }}</label>
+<label v-for="relation in duplicate(draft)?.relations.filter(physical)" :key="relation.relationId"><input v-model="draft.attachments" type="checkbox" :value="relation.relationId">Confirm {{networkIdentity ? 'network participation' : 'physical attachment'}} {{ R[relation.kind]?.toLowerCase().replaceAll('_',' ') }}: {{ relation.from?.assetId }} → {{ relation.to?.assetId }}</label>
 </template><button v-if="index" @click="drafts.splice(index,1)">Remove layer mapping</button></section>
 <details v-if="decision===model.IdentityDecision.DUPLICATE_INSTALLATION"><summary>Add an installation or interface mapping</summary>
 <p>Start with the hardware pair, then add the OS mapping before choosing its interfaces. Each search reads only direct children of selected layers. Unmapped installations and interfaces remain distinct.</p>
@@ -167,7 +169,7 @@ onMounted(load);
 </section>
 <ul><li v-for="field in duplicate(draft)?.item?.fields" :key="field.name">{{ field.name }}: {{ draft.fields[field.name]==='duplicate'?'use duplicate value':'keep retained value' }}: {{ display(draft.fields[field.name]==='duplicate'?field:retained(draft)?.item?.fields.find(value=>value.name===field.name)) }}</li>
 <li v-for="(after,before) in draft.sources" :key="before">Source label {{ before }} becomes {{ after }}</li>
-<li>Confirmed physical attachments: {{ draft.attachments.length }}</li></ul></section>
+<li>Confirmed {{networkIdentity ? 'network participations' : 'physical attachments'}}: {{ draft.attachments.length }}</li></ul></section>
 <template v-if="plan.relations.length"><h4>Affected relationships</h4><ul><li v-for="impact in plan.relations" :key="impact.before?.relationId">{{ impact.before&&R[impact.before.kind]?.toLowerCase().replaceAll('_',' ') }}: {{ impact.before?.from?.assetId }} → {{ impact.before?.to?.assetId }}<template v-if="impact.after"> becomes {{ impact.after.from?.assetId }} → {{ impact.after.to?.assetId }}</template><template v-else> is removed as an internal attachment</template>.</li></ul></template>
 <p>No grants or external operations are merged. The selected change commits atomically at revision {{ plan.revision.toString() }}.</p><footer><button :disabled="busy" @click="step='mapping'">Back</button><button :disabled="busy" @click="commit()">Accept identity correction</button></footer></template>
 <template v-else-if="receipt"><h3>{{ receipt.undoUntil===0n?'Correction reversed':'Correction applied' }}</h3><p>Accepted revision {{ receipt.revision.toString() }}.</p><p v-if="receipt.undoUntil">Reversal is available until {{ new Date(Number(receipt.undoUntil)).toLocaleString() }} if no further mutations have been accepted and permissions remain current. Otherwise review a fresh correction.</p><footer><button :disabled="busy" @click="emit('close')">Close</button><button v-if="receipt.undoUntil" :disabled="busy" @click="commit(true)">Reverse this correction</button></footer></template>

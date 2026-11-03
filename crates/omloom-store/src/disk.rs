@@ -53,6 +53,9 @@ pub use scans::ScanState;
 
 #[derive(Debug)]
 pub enum Error {
+    /// This invocation stopped before commit, outside saved-outcome disclosure.
+    /// It does not settle any earlier attempt whose response was lost.
+    Rejected(Box<Error>),
     Io(std::io::Error),
     Export(Box<coordinode_embed::backup::export::ExportError>),
     Restore(Box<coordinode_embed::backup::restore::RestoreError>),

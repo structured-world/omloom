@@ -146,12 +146,17 @@ impl Tx<'_> {
                         | wire::AssetKind::VirtualMachine
                         | wire::AssetKind::SoftwareInstallation
                         | wire::AssetKind::Interface
-                        | wire::AssetKind::Prefix)
+                        | wire::AssetKind::Prefix
+                        | wire::AssetKind::L2Domain)
                 )
             {
                 return Err(Error::Invalid);
             }
-            if (kind == wire::AssetKind::Prefix as i32) != (decision == D::DuplicateResource) {
+            if matches!(
+                wire::AssetKind::try_from(kind),
+                Ok(wire::AssetKind::Prefix | wire::AssetKind::L2Domain)
+            ) != (decision == D::DuplicateResource)
+            {
                 return Err(Error::Invalid);
             }
             if decision == D::DistinctInstallations

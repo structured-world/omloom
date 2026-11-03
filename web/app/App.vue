@@ -5,6 +5,8 @@ import CategoryNav from './CategoryNav.vue';
 import CurrentAddresses from './CurrentAddresses.vue';
 import HostIdentityEvidence from './HostIdentityEvidence.vue';
 import HostIdentityCompare from './HostIdentityCompare.vue';
+import SegmentEditor from './SegmentEditor.vue';
+import SegmentPanel from './SegmentPanel.vue';
 import VmPlacement from './VmPlacement.vue';
 import ResponsibilityPanel from './ResponsibilityPanel.vue';
 import AccountPanel from './AccountPanel.vue';
@@ -56,6 +58,10 @@ const moreActions = ref(false);
 const selected = ref<string[]>([]); const search = ref('');
 const identityPair = ref<{left:AssetRef;right:AssetRef;working:model.WorkingContext}>();
 const placementVm = ref<AssetRef>();
+const segmentDraft = ref<{ subjects: model.Item[]; membership?: model.SegmentMembership }>();
+function recordSegment(subjects: model.Item[], membership?: model.SegmentMembership) {
+  segmentDraft.value = { subjects: subjects.map(i => model.Item.create(i)), membership };
+}
 async function placementSaved(vm: AssetRef, host: AssetRef) {
   placementVm.value = undefined;
   await router.push({path:'/',query:{view:String(model.View.VIRTUALIZATION),scope:[host.assetId],scopeInc:[host.incarnation],asset:vm.assetId,incarnation:vm.incarnation}});
@@ -64,7 +70,7 @@ const identityCandidates=ref<model.Item[]>();const findingCandidates=ref(false);
 const resolvedAlias=ref<model.ResolvedIdentity>();
 const comparable = computed(() => {
   const items = page.value.items.filter(item => selected.value.includes(key(item.target)));
-  return items.length === 2 && items.every(item => item.target && [K.DEVICE, K.VIRTUAL_MACHINE, K.SOFTWARE_INSTALLATION, K.INTERFACE, K.PREFIX].includes(item.kind)) && (items.every(item => item.kind === K.PREFIX) || items.every(item => item.kind !== K.PREFIX));
+  return items.length === 2 && items.every(item => item.target && [K.DEVICE, K.VIRTUAL_MACHINE, K.SOFTWARE_INSTALLATION, K.INTERFACE, K.PREFIX, K.L2_DOMAIN].includes(item.kind)) && (items.every(item => item.kind === K.PREFIX) || items.every(item => item.kind === K.L2_DOMAIN) || items.every(item => ![K.PREFIX,K.L2_DOMAIN].includes(item.kind)));
 });
 function compareIdentity() {
   const items = page.value.items.filter(item => selected.value.includes(key(item.target)));
@@ -124,6 +130,7 @@ const currentTitle = computed(() => presentations.find(v => v.id === query.value
 const initialEmpty = computed(()=>query.value.view===model.View.OVERVIEW && !query.value.focus && !query.value.roots.length && !query.value.search && !query.value.kinds.length && !query.value.predicates.length && !query.value.responsibility && !query.value.unplaced);
 const columnLabels = computed(() => query.value.columns.map(id => ({ id, name: definitions.value.find(d => d.id === id)?.name ?? id.replaceAll('_', ' ') })));
 const selectedItems = computed(() => page.value.items.filter(i => selected.value.includes(key(i.target))));
+const segmentable = computed(() => selectedItems.value.length > 0 && selectedItems.value.every(item => item.kind === K.VIRTUAL_MACHINE && rowContexts.value.get(key(item.target))?.recordSegment === true));
 const rowContexts = computed(() => new Map(page.value.contexts.map(c => [key(c.target), c])));
 const responsibilityGrouping = computed(() => query.value.kinds.length === 1 && query.value.kinds[0] === K.WORKLOAD);
 const grouping = computed(() => responsibilityGrouping.value || !query.value.focus);
@@ -257,14 +264,19 @@ async function filters(predicates: model.Predicate[],responsibility?:model.Respo
   if (!json || typeof json !== 'object' || Array.isArray(json)) throw Error('Invalid query definition');
   editor.value = ''; await change({ filter: predicates.length ? JSON.stringify(json.predicates) : undefined, responsibility:responsibility ? JSON.stringify(model.ResponsibilityFilter.toJson(responsibility)) : undefined });
 }
-async function open(target: AssetRef | undefined, selection: LocationQuery = route.query) {
+async function open(target: AssetRef | undefined, selection: LocationQuery = route.query, parent: LocationQuery = selection) {
   if (!target) return;
   if (key(detail.value?.item?.target) === key(target)) { detailHeading.value?.focus({ preventScroll: true }); return; }
   loading.value = true;
   if (!detail.value) { returnQuery = { ...selection }; listScroll = window.scrollY; listQuery = loadedQuery; listSelection = [...selected.value]; listFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined; }
   const trail = selection.trail === undefined ? [] : Array.isArray(selection.trail) ? selection.trail.map(String) : [String(selection.trail)];
-  if (detail.value?.item?.target && key(detail.value.item.target) !== key(target)) trail.push(JSON.stringify({ ...selection, trail: undefined }));
+  if (detail.value?.item?.target && key(detail.value.item.target) !== key(target)) trail.push(JSON.stringify({ ...parent, trail: undefined }));
   await router.push({ path: '/', query: { ...selection, origin: selection.asset ? selection.origin : JSON.stringify({...selection,origin:undefined}), localSearch: undefined, localKind: undefined, localFilter: undefined, localCursor: undefined, trail: trail.length ? trail : undefined, asset: target.assetId, incarnation: target.incarnation } });
+}
+async function openMembershipTarget(target: AssetRef) {
+  const selection: LocationQuery = { ...route.query, scope: [target.assetId], scopeInc: [target.incarnation] };
+  delete selection.search; delete selection.kind; delete selection.filter; delete selection.cursor;
+  await open(target, selection, route.query);
 }
 async function openResolvedIdentity() {
   const original = resolvedAlias.value?.original;
@@ -384,7 +396,7 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <div class="workspace-content" :class="{ split: !!detail?.item }"><section class="inventory" aria-label="Inventory"><div class="inventory-toolbar"><form class="search" @submit.prevent="change({ search: search || undefined })"><input v-model="search" aria-label="Search inventory" placeholder="Search inventory…" maxlength="256"><button>Search</button></form><div class="query-tools"><button aria-label="Resource kinds" @click="editor = 'kinds'">Resource kinds<span v-if="query.kinds.length"> ({{ query.kinds.length }})</span></button><button @click="editor = 'filter'">Add filter<span v-if="query.predicates.length"> ({{ query.predicates.length }})</span></button><label class="check"><input :checked="query.unplaced" type="checkbox" @change="change({ unplaced: ($event.target as HTMLInputElement).checked ? '1' : undefined })">Unplaced</label></div></div>
 <div class="table-meta"><span>{{ page.total.toString() }} resources<span v-if="loading"> · Loading…</span></span><div><button @click="editor = 'columns'">Columns</button><button @click="editor = 'view'">Save view</button><button v-if="activeView" @click="useView(activeView)">Reset adjustments</button><button v-if="identity?.writable && query.view === model.View.NETWORK && actions.allocations.length" @click="allocate">Allocate IP / prefix</button></div></div>
 <div v-if="query.predicates.length||query.responsibility" class="selection"><span v-for="(p, index) in query.predicates" :key="index" class="chip">{{ definitions.find(d => d.id === p.field)?.name ?? p.field }} = {{ display(p.value) }}<button :aria-label="`Remove filter ${index + 1}`" @click="filters(query.predicates.filter((_, i) => i !== index),query.responsibility)">×</button></span><span v-if="query.responsibility" class="chip">{{model.ResponsibilityFacet[query.responsibility.facet]?.toLowerCase().replaceAll('_',' ')}}: {{query.responsibility.issuer}} / {{query.responsibility.subject}}<button aria-label="Remove responsibility filter" @click="filters(query.predicates)">×</button></span></div>
-<div v-if="selected.length" class="selection">{{ selected.length }} selected on this page<button :disabled="loading" @click="selectedScope">Use selected as scope</button><button v-if="comparable" :disabled="loading" @click="compareIdentity">Compare identity</button><button v-if="identity?.writable" :disabled="loading" @click="editor = 'bulk'">Review bulk change</button><button @click="selected = []">Clear selection</button></div>
+<div v-if="selected.length" class="selection">{{ selected.length }} selected on this page<button :disabled="loading" @click="selectedScope">Use selected as scope</button><button v-if="comparable" :disabled="loading" @click="compareIdentity">Compare identity</button><button v-if="segmentable" :disabled="loading" @click="recordSegment(selectedItems)">Record shared segment</button><button v-if="identity?.writable" :disabled="loading" @click="editor = 'bulk'">Review bulk change</button><button @click="selected = []">Clear selection</button></div>
 <div v-if="page.items.length" class="phone-list-tools"><label class="check"><input type="checkbox" aria-label="Select phone page" :disabled="loading" :checked="selected.length === page.items.length" @change="selected = ($event.target as HTMLInputElement).checked ? page.items.map(i => key(i.target)) : []">Select page</label><label>Sort<select aria-label="Sort resources" :value="`${query.sort}:${query.descending ? 'desc' : 'asc'}`" @change="change({ sort: ($event.target as HTMLSelectElement).value.split(':')[0], desc: ($event.target as HTMLSelectElement).value.endsWith(':desc') ? '1' : undefined })"><option value="name:asc">Name A–Z</option><option value="name:desc">Name Z–A</option><option value="kind:asc">Resource kind</option></select></label></div>
 <div class="table-scroll"><table :class="{ 'has-name': query.columns.includes('name') }"><thead><tr><th class="select-col"><input aria-label="Select visible page" type="checkbox" :disabled="loading" :checked="!!page.items.length && selected.length === page.items.length" @change="selected = ($event.target as HTMLInputElement).checked ? page.items.map(i => key(i.target)) : []"></th><th><button @click="change({ sort: 'kind', desc: query.sort === 'kind' && !query.descending ? '1' : undefined })">Resource kind <span v-if="query.sort === 'kind'">{{ query.descending ? '↓' : '↑' }}</span></button></th><th v-for="c in columnLabels" :key="c.id"><button v-if="c.id === 'name'" @click="change({ sort: 'name', desc: query.sort === 'name' && !query.descending ? '1' : undefined })">{{ c.name }} <span v-if="query.sort === 'name'">{{ query.descending ? '↓' : '↑' }}</span></button><span v-else>{{ c.name }}</span></th><th>Identity</th></tr></thead><tbody><template v-for="(group, groupIndex) in rowGroups" :key="groupIndex"><tr v-if="grouping && group.title" class="context-group"><td :colspan="columnLabels.length + 3"><button v-if="group.owner" :aria-label="`Open owner ${group.title}`" @click="open(group.owner)">{{ group.title }}</button><strong v-else>{{ group.title }}</strong><small>Resources on this page</small></td></tr><tr v-for="i in group.items" :key="key(i.target)" :class="{ focused: key(i.target) === key(detail?.item?.target) }"><td><input v-model="selected" type="checkbox" :disabled="loading" :value="key(i.target)" :aria-label="`Select ${identityName(i)}`"></td><td><span class="kind-tag">{{ label(i.kind) }}</span></td><td v-for="c in columnLabels" :key="c.id" :data-label="c.name" :class="{ 'empty-field': c.id !== 'name' && !display(i.fields.find(f => f.name === c.id)) }">
 <div v-if="c.id === 'name' && rowAddresses(i)" class="resource-address">{{ rowAddresses(i) }}</div>
@@ -403,6 +415,7 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <section v-if="[K.DEVICE,K.VIRTUAL_MACHINE,K.SOFTWARE_INSTALLATION,K.INTERFACE].includes(detail.item.kind)" aria-label="Identity candidates"><button :disabled="findingCandidates" @click="findIdentityCandidates">Find possible duplicates in enclosing selection</button><p v-if="findingCandidates" role="status">Checking indexed source claims…</p><template v-if="identityCandidates"><p v-if="!identityCandidates.length">No comparable candidates are available in this selection. Missing evidence does not prove that there are no duplicates.</p><ul><li v-for="candidate in identityCandidates" :key="key(candidate.target)">{{ label(candidate.kind) }} · {{ display(candidate.fields.find(v=>v.name==='name')) }} <button @click="compareCandidate(candidate)">Compare with candidate</button></li></ul></template></section>
 <button v-if="detail.item.kind === K.VIRTUAL_MACHINE && identity?.writable && detail.item.target" @click="placementVm=detail.item.target">Change hypervisor after migration</button>
 <HostIdentityEvidence :observations="detail.identity" />
+<SegmentPanel v-if="detail.item.target && !loading && [K.VIRTUAL_MACHINE,K.L2_DOMAIN].includes(detail.item.kind)" :key="'segments/'+key(detail.item.target)+'/'+detail.item.revision" :item="detail.item" :working="working" :recordable="actions.recordSegment" @open="openMembershipTarget" @edit="recordSegment" />
 <p v-if="detailStale" role="status">Showing the previous resource read. Refresh before relying on these details.</p>
 <RequirementsPanel v-if="detail.item.target&&[K.DEVICE,K.PROVIDER_ACCOUNT].includes(detail.item.kind)" :key="key(detail.item.target)" :target="detail.item.target" :kind="detail.item.kind" :revision="detail.item.revision" :refreshing="detailLoading" :working="working" :view="query.view" :refresh="saved" />
 <PhysicalFacts v-if="detail.item.target&&!loading&&[K.SITE,K.RACK,K.DEVICE,K.PORT,K.CABLE,K.LOCATION,K.PHYSICAL_COMPONENT,K.PHYSICAL_POSITION,K.POWER_FEED].includes(detail.item.kind)" :key="key(detail.item.target)+'/'+detail.item.revision" :target="detail.item.target" :kind="detail.item.kind" :working="working" @equipment="edit" @saved="notice='Physical facts saved.'; load()" />
@@ -426,6 +439,7 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <ImportEditor v-if="editor === 'import'" :definitions="definitions" :working="working" @close="editor = ''" @saved="saved" />
 <HostImportEditor v-if="editor === 'host-import'" :working="working" @close="editor = ''" @saved="saved" />
 <HostIdentityCompare v-if="identityPair" :left="identityPair.left" :right="identityPair.right" :working="identityPair.working" @close="identityPair=undefined" @changed="load()" />
+<SegmentEditor v-if="segmentDraft" :subjects="segmentDraft.subjects" :membership="segmentDraft.membership" @close="segmentDraft = undefined" @saved="segmentDraft = undefined; saved()" />
 <VmPlacement v-if="placementVm" :target="placementVm" :working="enclosing" @close="placementVm=undefined" @saved="placementSaved" />
 <ViewEditor v-if="editor === 'view' && identity" :query="query" :identity="identity" :existing="activeView" @close="editor = ''" @saved="saved" />
 <NetworkEditor v-if="editor === 'network'" :item="editing" :group="editing ? detail?.group : undefined" :definitions="definitions" :working="editing ? enclosing : working" :allocations="actions.allocations" :view="query.view" @close="editor = ''" @saved="saved" @refresh="load" />

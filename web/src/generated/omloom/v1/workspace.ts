@@ -938,6 +938,15 @@ export interface Actions {
      * @generated from protobuf field: repeated omloom.workspace.v1.Creation allocations = 5
      */
     allocations: Creation[];
+    /**
+     * Server-derived permission to record participation for every explicitly
+     * selected VM (roots or focus). Requires each subject's relation read/write
+     * authority. False for an empty or mixed-kind selection. The chosen segment
+     * and interfaces still require their own admission checks at preview/save.
+     *
+     * @generated from protobuf field: bool record_segment = 6
+     */
+    recordSegment: boolean;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Item
@@ -1078,6 +1087,15 @@ export interface ItemContext {
      * @generated from protobuf field: optional string prefix_cidr = 8
      */
     prefixCidr?: string;
+    /**
+     * Server-derived subject-side permission to record segment participation for
+     * this visible VM. Requires relation read/write authority on this exact row;
+     * false for other kinds. The chosen segment/interface still needs admission.
+     * This page-local hint is neither stored nor accepted as a client grant.
+     *
+     * @generated from protobuf field: bool record_segment = 9
+     */
+    recordSegment: boolean;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Read
@@ -3276,6 +3294,211 @@ export interface Network {
      * @generated from protobuf field: bool clear_name = 18
      */
     clearName: boolean;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.SegmentParticipant
+ */
+export interface SegmentParticipant {
+    /**
+     * User-selected accepted VM incarnation. Selection never moves this resource.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef subject = 1
+     */
+    subject?: AssetRef;
+    /**
+     * Explicit known interface of this VM, never a nested VM's interface. Absent
+     * creates an unknown-interface assertion if none exists; a coarser claim
+     * preserves a unique existing participation. Multiple candidates need a choice.
+     * With relation_id supplied, absence explicitly refines that assertion to unknown.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef interface = 2
+     */
+    interface?: AssetRef;
+    /**
+     * Existing participation selected for refinement. Omit to add a membership;
+     * other memberships remain untouched. The server checks current endpoints.
+     *
+     * @generated from protobuf field: optional string relation_id = 3
+     */
+    relationId?: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.Segment
+ */
+export interface Segment {
+    /**
+     * User-selected existing L2 domain. Absent creates a new distinct domain;
+     * matching labels, VLAN identifiers and prefixes never select one implicitly.
+     *
+     * @generated from protobuf field: optional omloom.v1.AssetRef target = 1
+     */
+    target?: AssetRef;
+    /**
+     * Optional accepted label, at most 160 UTF-8 bytes. Omission preserves an
+     * existing label or creates an unnamed domain. Empty explicitly clears it.
+     *
+     * @generated from protobuf field: optional string name = 2
+     */
+    name?: string;
+    /**
+     * Explicit bounded VM selection and only the attachments to add or refine.
+     * Requires 1..127 unique subjects; each endpoint keeps independent authority.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.SegmentParticipant participants = 3
+     */
+    participants: SegmentParticipant[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.SegmentParticipantView
+ */
+export interface SegmentParticipantView {
+    /**
+     * Current permitted VM identity, edit revision and name for this selection.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.Item subject = 1
+     */
+    subject?: Item;
+    /**
+     * Current permitted interface context, absent when its identity is unknown.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.Item interface = 2
+     */
+    interface?: Item;
+    /**
+     * Existing selected assertion, with its independent relation identity/revision.
+     *
+     * @generated from protobuf field: optional omloom.v1.Relation relation = 3
+     */
+    relation?: Relation;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.SegmentReview
+ */
+export interface SegmentReview {
+    /**
+     * Exact current application revision used by this read-only assessment.
+     *
+     * @generated from protobuf field: uint64 revision = 1
+     */
+    revision: bigint;
+    /**
+     * Selected existing domain, absent for a proposed new distinct domain.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.Item segment = 2
+     */
+    segment?: Item;
+    /**
+     * Exact reviewed subjects and known interfaces, without sibling expansion.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.SegmentParticipantView participants = 3
+     */
+    participants: SegmentParticipantView[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.SegmentMemberships
+ */
+export interface SegmentMemberships {
+    /**
+     * User-selected VM or L2 domain incarnations, at most 127. VM reads include
+     * owned interfaces only, with a bounded ownership traversal, never peer VMs.
+     *
+     * @generated from protobuf field: repeated omloom.v1.AssetRef targets = 1
+     */
+    targets: AssetRef[];
+    /**
+     * Server-issued continuation bound to selection, permissions and revision.
+     *
+     * @generated from protobuf field: optional string cursor = 2
+     */
+    cursor?: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.SegmentInterfaces
+ */
+export interface SegmentInterfaces {
+    /**
+     * Explicit accepted VM whose own network-bearing layers may be inspected.
+     * Interfaces belonging to another, nested VM are never candidates.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef subject = 1
+     */
+    subject?: AssetRef;
+    /**
+     * Optional user-entered name search, at most 256 UTF-8 bytes. Only permitted
+     * current name fields contribute; no addresses or unknown names are invented.
+     *
+     * @generated from protobuf field: string search = 2
+     */
+    search: string;
+    /**
+     * Server-issued continuation bound to subject, search, working selection,
+     * current inventory and authority. Omit to start a new bounded selection.
+     *
+     * @generated from protobuf field: optional string cursor = 3
+     */
+    cursor?: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.SegmentMembership
+ */
+export interface SegmentMembership {
+    /**
+     * Actual permitted source of the assertion: a VM or a known interface.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.Item source = 1
+     */
+    source?: Item;
+    /**
+     * Current permitted L2 domain, which asserts membership, not reachability.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.Item segment = 2
+     */
+    segment?: Item;
+    /**
+     * The same attributed relation used by resource cards and refinement.
+     *
+     * @generated from protobuf field: omloom.v1.Relation relation = 3
+     */
+    relation?: Relation;
+    /**
+     * Current permitted VM owning the interface, absent when unknown, restricted
+     * or ambiguous. It never expands the domain read into another VM's contents.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.Item subject = 4
+     */
+    subject?: Item;
+    /**
+     * Server-derived permission to refine this assertion under current source,
+     * owning VM and segment relation grants and the assertion's manual authority.
+     * False when an owner is unknown/restricted or the source is independently
+     * managed. This is a UI hint, rechecked by the mutation, never a grant.
+     *
+     * @generated from protobuf field: bool refinable = 5
+     */
+    refinable: boolean;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.SegmentMembershipPage
+ */
+export interface SegmentMembershipPage {
+    /**
+     * Current authorized assertion page, at most 25 entries in relation-ID order.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.SegmentMembership entries = 1
+     */
+    entries: SegmentMembership[];
+    /**
+     * Exact application revision of this single read transaction.
+     *
+     * @generated from protobuf field: uint64 revision = 2
+     */
+    revision: bigint;
+    /**
+     * Opaque continuation, absent when this selection has no further entries.
+     *
+     * @generated from protobuf field: optional string next = 3
+     */
+    next?: string;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Member
@@ -5836,6 +6059,38 @@ export interface Request {
          */
         previewAddress: Address;
     } | {
+        oneofKind: "segment";
+        /**
+         * Atomically record/refine selected VM memberships, never a provider effect.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.Segment segment = 36
+         */
+        segment: Segment;
+    } | {
+        oneofKind: "previewSegment";
+        /**
+         * Validate the same proposal without persisting a draft or reservation.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.Segment preview_segment = 37
+         */
+        previewSegment: Segment;
+    } | {
+        oneofKind: "segmentMemberships";
+        /**
+         * Read only explicitly selected network memberships, with no durable writes.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.SegmentMemberships segment_memberships = 38
+         */
+        segmentMemberships: SegmentMemberships;
+    } | {
+        oneofKind: "segmentInterfaces";
+        /**
+         * Read bounded interface candidates under the same VM boundary as admission.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.SegmentInterfaces segment_interfaces = 39
+         */
+        segmentInterfaces: SegmentInterfaces;
+    } | {
         oneofKind: undefined;
     };
 }
@@ -6040,6 +6295,22 @@ export interface Reply {
          * @generated from protobuf field: omloom.workspace.v1.AddressReview address_review = 24
          */
         addressReview: AddressReview;
+    } | {
+        oneofKind: "segmentReview";
+        /**
+         * Current authorized subjects and proposed segment membership, not connectivity proof.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.SegmentReview segment_review = 25
+         */
+        segmentReview: SegmentReview;
+    } | {
+        oneofKind: "segmentMembershipPage";
+        /**
+         * Bounded network projection over the same relation identities as cards.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.SegmentMembershipPage segment_membership_page = 26
+         */
+        segmentMembershipPage: SegmentMembershipPage;
     } | {
         oneofKind: undefined;
     };
@@ -7444,7 +7715,8 @@ class Actions$Type extends MessageType<Actions> {
             { no: 2, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 3, name: "relationships", kind: "enum", repeat: 1 /*RepeatType.PACKED*/, T: () => ["omloom.v1.RelationKind", RelationKind, "RELATION_KIND_"] },
             { no: 4, name: "fields", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
-            { no: 5, name: "allocations", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Creation }
+            { no: 5, name: "allocations", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Creation },
+            { no: 6, name: "record_segment", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
         ]);
     }
 }
@@ -7507,7 +7779,8 @@ class ItemContext$Type extends MessageType<ItemContext> {
             { no: 5, name: "alternative_owners", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => OwnerContext },
             { no: 6, name: "endpoints", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => SocketBind },
             { no: 7, name: "responsibility", kind: "message", T: () => EffectiveResponsibility },
-            { no: 8, name: "prefix_cidr", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 8, name: "prefix_cidr", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 9, name: "record_segment", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
         ]);
     }
 }
@@ -8470,6 +8743,119 @@ class Network$Type extends MessageType<Network> {
  * @generated MessageType for protobuf message omloom.workspace.v1.Network
  */
 export const Network = new Network$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class SegmentParticipant$Type extends MessageType<SegmentParticipant> {
+    constructor() {
+        super("omloom.workspace.v1.SegmentParticipant", [
+            { no: 1, name: "subject", kind: "message", T: () => AssetRef },
+            { no: 2, name: "interface", kind: "message", T: () => AssetRef },
+            { no: 3, name: "relation_id", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.SegmentParticipant
+ */
+export const SegmentParticipant = new SegmentParticipant$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class Segment$Type extends MessageType<Segment> {
+    constructor() {
+        super("omloom.workspace.v1.Segment", [
+            { no: 1, name: "target", kind: "message", T: () => AssetRef },
+            { no: 2, name: "name", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "participants", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => SegmentParticipant }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.Segment
+ */
+export const Segment = new Segment$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class SegmentParticipantView$Type extends MessageType<SegmentParticipantView> {
+    constructor() {
+        super("omloom.workspace.v1.SegmentParticipantView", [
+            { no: 1, name: "subject", kind: "message", T: () => Item },
+            { no: 2, name: "interface", kind: "message", T: () => Item },
+            { no: 3, name: "relation", kind: "message", T: () => Relation }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.SegmentParticipantView
+ */
+export const SegmentParticipantView = new SegmentParticipantView$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class SegmentReview$Type extends MessageType<SegmentReview> {
+    constructor() {
+        super("omloom.workspace.v1.SegmentReview", [
+            { no: 1, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 2, name: "segment", kind: "message", T: () => Item },
+            { no: 3, name: "participants", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => SegmentParticipantView }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.SegmentReview
+ */
+export const SegmentReview = new SegmentReview$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class SegmentMemberships$Type extends MessageType<SegmentMemberships> {
+    constructor() {
+        super("omloom.workspace.v1.SegmentMemberships", [
+            { no: 1, name: "targets", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AssetRef },
+            { no: 2, name: "cursor", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.SegmentMemberships
+ */
+export const SegmentMemberships = new SegmentMemberships$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class SegmentInterfaces$Type extends MessageType<SegmentInterfaces> {
+    constructor() {
+        super("omloom.workspace.v1.SegmentInterfaces", [
+            { no: 1, name: "subject", kind: "message", T: () => AssetRef },
+            { no: 2, name: "search", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "cursor", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.SegmentInterfaces
+ */
+export const SegmentInterfaces = new SegmentInterfaces$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class SegmentMembership$Type extends MessageType<SegmentMembership> {
+    constructor() {
+        super("omloom.workspace.v1.SegmentMembership", [
+            { no: 1, name: "source", kind: "message", T: () => Item },
+            { no: 2, name: "segment", kind: "message", T: () => Item },
+            { no: 3, name: "relation", kind: "message", T: () => Relation },
+            { no: 4, name: "subject", kind: "message", T: () => Item },
+            { no: 5, name: "refinable", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.SegmentMembership
+ */
+export const SegmentMembership = new SegmentMembership$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class SegmentMembershipPage$Type extends MessageType<SegmentMembershipPage> {
+    constructor() {
+        super("omloom.workspace.v1.SegmentMembershipPage", [
+            { no: 1, name: "entries", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => SegmentMembership },
+            { no: 2, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 3, name: "next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.SegmentMembershipPage
+ */
+export const SegmentMembershipPage = new SegmentMembershipPage$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class Member$Type extends MessageType<Member> {
     constructor() {
@@ -9509,7 +9895,11 @@ class Request$Type extends MessageType<Request> {
             { no: 32, name: "prepare_vm_placement", kind: "message", oneof: "command", T: () => PrepareVmPlacement },
             { no: 33, name: "evaluate_requirements", kind: "message", oneof: "command", T: () => EvaluateRequirements },
             { no: 34, name: "physical", kind: "message", oneof: "command", T: () => Physical },
-            { no: 35, name: "preview_address", kind: "message", oneof: "command", T: () => Address }
+            { no: 35, name: "preview_address", kind: "message", oneof: "command", T: () => Address },
+            { no: 36, name: "segment", kind: "message", oneof: "command", T: () => Segment },
+            { no: 37, name: "preview_segment", kind: "message", oneof: "command", T: () => Segment },
+            { no: 38, name: "segment_memberships", kind: "message", oneof: "command", T: () => SegmentMemberships },
+            { no: 39, name: "segment_interfaces", kind: "message", oneof: "command", T: () => SegmentInterfaces }
         ]);
     }
 }
@@ -9544,7 +9934,9 @@ class Reply$Type extends MessageType<Reply> {
             { no: 21, name: "vm_placement_review", kind: "message", oneof: "result", T: () => VmPlacementReview },
             { no: 22, name: "requirement_evaluation", kind: "message", oneof: "result", T: () => RequirementEvaluation },
             { no: 23, name: "physical", kind: "message", oneof: "result", T: () => PhysicalView },
-            { no: 24, name: "address_review", kind: "message", oneof: "result", T: () => AddressReview }
+            { no: 24, name: "address_review", kind: "message", oneof: "result", T: () => AddressReview },
+            { no: 25, name: "segment_review", kind: "message", oneof: "result", T: () => SegmentReview },
+            { no: 26, name: "segment_membership_page", kind: "message", oneof: "result", T: () => SegmentMembershipPage }
         ]);
     }
 }

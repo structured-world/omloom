@@ -1,6 +1,42 @@
 use omloom_contracts::{Error, Limits, MemoryBudget, decode_workspace, workspace as api};
 use prost::Message;
 
+// Bound participant arrays before protobuf materialization on both command and read paths.
+#[test]
+fn segment_selections_are_bounded_before_decode() {
+    for count in [127, 128] {
+        for command in [
+            api::request::Command::Segment(api::Segment {
+                participants: vec![api::SegmentParticipant::default(); count],
+                ..Default::default()
+            }),
+            api::request::Command::PreviewSegment(api::Segment {
+                participants: vec![api::SegmentParticipant::default(); count],
+                ..Default::default()
+            }),
+            api::request::Command::SegmentMemberships(api::SegmentMemberships {
+                targets: vec![Default::default(); count],
+                cursor: None,
+            }),
+        ] {
+            let bytes = api::Request {
+                command: Some(command),
+                working: None,
+            }
+            .encode_to_vec();
+            let budget = MemoryBudget::new(16 * 1_048_576);
+            let result = decode_workspace(&bytes, Limits::default(), &budget);
+            if count == 127 {
+                assert!(result.is_ok());
+            } else {
+                assert!(matches!(result, Err(Error::Limit)));
+            }
+            drop(result);
+            assert_eq!(budget.used(), 0);
+        }
+    }
+}
+
 // The evaluator's eight-reference bound must reject oversized frames before decoded allocation.
 #[test]
 fn power_path_reference_counts_are_bounded_before_decode() {
