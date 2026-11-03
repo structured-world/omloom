@@ -533,6 +533,12 @@ message Read {
   // Server-issued network-evidence continuation, bound to this target, working
   // context, authority and current revision. Cannot accompany relations_cursor.
   optional string network_cursor = 3;
+  // User-selected accepted device field to read for a focused correction,
+  // max 64 UTF-8 bytes. The server rechecks field read permission and returns
+  // only Item with this current value and the permitted device name. Missing
+  // values remain unknown. No relations, imports or observations are loaded.
+  // Cannot accompany either continuation; omission retains ordinary detail.
+  optional string accepted_field = 4;
 }
 message Detail {
   // Current visible inventory fields and edit revision.

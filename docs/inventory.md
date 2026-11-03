@@ -103,6 +103,37 @@ not a failed device. Incomplete model alternatives and recognition confidence
 cannot certify compatibility. Independent measured bounds can answer their own
 specific condition without identifying a model.
 
+For an accepted device fact, **Clarify this fact** opens the ordinary editor at
+that field. The question, comparison and threshold stay separate from the value
+being recorded. Review the current value and proposed change, then choose
+**Save and recheck**. Exact quantities use one value input; **Only a range is
+known** preserves partial knowledge. Existing evidence bases and alternatives
+are retained unless explicitly changed. Zero, an unknown value and explicit
+clear have different meanings. A known shortage offers **Correct recorded fact**
+as a secondary action: correcting an inaccurate record is not a remedy for an
+actual shortage.
+
+Refreshing the resource invalidates its old answer, including dated observations
+whose update does not change the accepted revision. The question remains ready
+to check again once resource details are available, independently of list loading.
+An explicit service-unavailable or deadline error during clarification keeps the
+dated result available for a fresh read; authority, target or revision failures
+invalidate it.
+
+The focused `Read.accepted_field` query returns only the selected accepted device
+field, edit revision and permitted name. It checks current scope, incarnation
+and field visibility before decoding the value. It loads no relations, source
+claims or network evidence and cannot accompany a continuation. Ordinary reads
+retain their existing detail representation.
+
+Cancel and unchanged input do not write. A revision conflict keeps the draft
+until the current fact is read and reviewed again. A lost write response leaves
+the outcome unknown: a later read shows what is currently recorded, without
+claiming that this attempt saved it or automatically resending it. A confirmed
+save and the subsequent evaluation have separate outcomes. **Retry check** only
+evaluates; it never repeats the write. Questions and edits are transient while
+the workspace is open, with no durable question or receipt ledger.
+
 Account cards can inspect the recorded delegation capability. An owner-only
 account explains the need for owner intervention and, when permitted, points to
 the existing owner-action request. Checking does not submit that request, reveal

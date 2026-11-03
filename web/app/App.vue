@@ -32,6 +32,8 @@ import { call, model, label, display, resourceName as resourceTitle, identityNam
 const router = useRouter(); const route = useRoute();
 const identity = ref<model.Identity>(); const definitions = ref<model.Definition[]>([]); const views = ref<model.SavedView[]>([]);
 const page = ref(model.Page.create()); const detail = ref<model.Detail>(); const loading = ref(false); const error = ref(''); const notice = ref('');
+const detailStale = ref(false);
+const detailLoading = ref(false);
 const networkCursor = ref<string>(); const networkLoading = ref(false);
 const preparedActions = ref(model.Actions.create());
 const participantRemoval = ref<model.Participant>();
@@ -174,6 +176,7 @@ function resourceName(item: model.Item | undefined) { return resourceTitle(item,
 function identityName(item: model.Item | undefined) { return identityTitle(item, rowContexts.value.get(key(item?.target))?.prefixCidr); }
 let generation = 0;
 let loadedQuery = '';
+let detailRefresh: Promise<void> = Promise.resolve();
 async function load() {
   identityCandidates.value=undefined;resolvedAlias.value=undefined;
   const turn = ++generation; loading.value = true; error.value = '';
@@ -181,9 +184,19 @@ async function load() {
   const signature = JSON.stringify(model.Query.toJson(query.value));
   if (signature !== loadedQuery) { selected.value = []; search.value = query.value.search; loadedQuery = signature; }
   const target = route.query.asset && route.query.incarnation ? { assetId: String(route.query.asset), incarnation: String(route.query.incarnation) } : undefined;
+  detailLoading.value = !!target;
   const detailLoad = target ? read(target).then(next => {
-    if (turn === generation) { detail.value = next; networkCursor.value = undefined; }
-  }).catch(e => { if (turn === generation) { detail.value = undefined; error.value = String(e); } }) : Promise.resolve();
+    if (turn === generation) { detail.value = next; detailLoading.value = false; detailStale.value = false; networkCursor.value = undefined; }
+  }).catch(e => {
+    if (turn !== generation) return;
+    detailLoading.value = false;
+    const code = (e as { code?: string }).code;
+    const unavailable = code === 'PERMISSION_DENIED' || code === 'NOT_FOUND' || code === 'ABORTED';
+    detailStale.value = !unavailable && key(detail.value?.item?.target) === key(target);
+    if (!detailStale.value) detail.value = undefined;
+    error.value = String(e);
+  }) : Promise.resolve();
+  detailRefresh = detailLoad;
   try {
     const result = await call({ oneofKind: 'query', query: model.Query.create(query.value) });
     if (turn !== generation) return;
@@ -312,8 +325,12 @@ async function saved(target?: AssetRef) {
     else {
       const changed = router.resolve({ path: '/', query: next }).fullPath !== route.fullPath;
       await router.replace({ path: '/', query: next });
-      if (!changed) await load();
+      if (!changed) void load();
     }
+    // Route-driven and explicit reloads share the detail completion, not the list's lifetime.
+    await nextTick();
+    await detailRefresh;
+    await nextTick();
   } catch (e) { error.value = String(e); loading.value = false; }
 }
 async function reloadSelection() {
@@ -386,7 +403,8 @@ onMounted(async () => { try { await metadata(); await load(); } catch (e) { erro
 <section v-if="[K.DEVICE,K.VIRTUAL_MACHINE,K.SOFTWARE_INSTALLATION,K.INTERFACE].includes(detail.item.kind)" aria-label="Identity candidates"><button :disabled="findingCandidates" @click="findIdentityCandidates">Find possible duplicates in enclosing selection</button><p v-if="findingCandidates" role="status">Checking indexed source claims…</p><template v-if="identityCandidates"><p v-if="!identityCandidates.length">No comparable candidates are available in this selection. Missing evidence does not prove that there are no duplicates.</p><ul><li v-for="candidate in identityCandidates" :key="key(candidate.target)">{{ label(candidate.kind) }} · {{ display(candidate.fields.find(v=>v.name==='name')) }} <button @click="compareCandidate(candidate)">Compare with candidate</button></li></ul></template></section>
 <button v-if="detail.item.kind === K.VIRTUAL_MACHINE && identity?.writable && detail.item.target" @click="placementVm=detail.item.target">Change hypervisor after migration</button>
 <HostIdentityEvidence :observations="detail.identity" />
-<RequirementsPanel v-if="detail.item.target&&!loading&&[K.DEVICE,K.PROVIDER_ACCOUNT].includes(detail.item.kind)" :key="key(detail.item.target)+'/'+detail.item.revision" :target="detail.item.target" :kind="detail.item.kind" :working="working" />
+<p v-if="detailStale" role="status">Showing the previous resource read. Refresh before relying on these details.</p>
+<RequirementsPanel v-if="detail.item.target&&[K.DEVICE,K.PROVIDER_ACCOUNT].includes(detail.item.kind)" :key="key(detail.item.target)" :target="detail.item.target" :kind="detail.item.kind" :revision="detail.item.revision" :refreshing="detailLoading" :working="working" :view="query.view" :refresh="saved" />
 <PhysicalFacts v-if="detail.item.target&&!loading&&[K.SITE,K.RACK,K.DEVICE,K.PORT,K.CABLE,K.LOCATION,K.PHYSICAL_COMPONENT,K.PHYSICAL_POSITION,K.POWER_FEED].includes(detail.item.kind)" :key="key(detail.item.target)+'/'+detail.item.revision" :target="detail.item.target" :kind="detail.item.kind" :working="working" @equipment="edit" @saved="notice='Physical facts saved.'; load()" />
 <PowerPathsPanel v-if="detail.item.target&&!loading&&[K.RACK,K.DEVICE,K.POWER_FEED].includes(detail.item.kind)" :key="'power/'+key(detail.item.target)+'/'+detail.item.revision" :target="detail.item.target" :working="working"/>
 <!-- Keep drafts mounted across scope navigation; replacement counts are invalidated inside the planner. -->

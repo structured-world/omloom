@@ -1,19 +1,20 @@
 <script setup lang="ts">
 import { ref,onMounted } from 'vue';
-import { EquipmentClaim, EquipmentReference, EquipmentAlternatives, QuantityRange, type Field } from '../src/generated/omloom/v1/contracts';
-const props=defineProps<{ name:string; value?:Field; claimsOnly?:boolean }>();
+import { EquipmentClaim, EquipmentReference, EquipmentAlternatives, QuantityRange, NullValue, type Field } from '../src/generated/omloom/v1/contracts';
+const props=defineProps<{ name:string; value?:Field; claimsOnly?:boolean; focused?:boolean }>();
 const title=props.name.replaceAll('_',' ');
 const emit=defineEmits<{change:[value:Field|undefined];valid:[value:boolean]}>();
 const current=props.value?.value;
 const claim=current?.oneofKind==='equipment' ? current.equipment : undefined;
 const a=claim?.assertion;
-const mode=ref(a?.oneofKind ?? (current?.oneofKind==='clear'?'clear':current?.oneofKind==='text'||current?.oneofKind==='integer' ? 'known':'unknown'));
+const unit=({drive_bays:'count',height:'mm',width:'mm',depth:'mm',weight:'g',power_rating:'W'} as Record<string,string>)[props.name];
+const mode=ref(a?.oneofKind ?? (current?.oneofKind==='clear'&&!props.focused?'clear':current?.oneofKind==='text'||current?.oneofKind==='integer' ? 'known':props.focused ? unit ? 'quantity' : 'known' : 'unknown'));
 const known=ref(current?.oneofKind==='text' ? current.text : current?.oneofKind==='integer' ? String(current.integer):'');
 const basis=ref(claim?.basis ?? '');
 const q=a?.oneofKind==='quantity'?a.quantity:undefined;
 function decimal(n:bigint|undefined,scale:number){if(n===undefined)return '';const s=n.toString().padStart(scale+1,'0');return scale?s.slice(0,-scale)+'.'+s.slice(-scale):s;}
 const lower=ref(decimal(q?.lower,q?.scale ?? 0));const upper=ref(decimal(q?.upper,q?.scale ?? 0));
-const unit=({drive_bays:'count',height:'mm',width:'mm',depth:'mm',weight:'g',power_rating:'W'} as Record<string,string>)[props.name];
+const range=ref(!props.focused || (q !== undefined && q.lower !== q.upper));
 const r=ref(EquipmentReference.create(a?.oneofKind==='model'?a.model:{}));
 const alternatives=ref(EquipmentAlternatives.create(a?.oneofKind==='alternatives'?a.alternatives:{}));
 const confidence=ref(alternatives.value.candidates.some(c=>c.probabilityPpm!==undefined)?'probability':alternatives.value.candidates.some(c=>c.scorePpm!==undefined)?'score':'none');
@@ -24,15 +25,22 @@ function addExclusion(){if(alternatives.value.excluded.length<16)alternatives.va
 function integer(value:string):bigint|undefined {
   if(value==='')return undefined;
   if(!/^\d+$/.test(value))throw Error('Enter nonnegative whole units; use decimal places for scaled measurements.');
-  return BigInt(value);
+  return boundedInteger(value);
+}
+function boundedInteger(value:string):bigint {
+  const normalized=value.replace(/^0+(?=\d)/,'');
+  if(normalized.length>19)throw Error('The measurement exceeds the supported integer range.');
+  const result=BigInt(normalized);
+  if(result>9223372036854775807n)throw Error('The measurement exceeds the supported integer range.');
+  return result;
 }
 function quantity(){
-  const values=[lower.value,upper.value];
+  const values=[lower.value,range.value ? upper.value : lower.value];
   if(values.every(v=>v==='')||values.some(v=>v!==''&&!/^\d+(\.\d{1,6})?$/.test(v)))throw Error('Enter at least one known bound, with at most six decimal places.');
   const scale=Math.max(...values.map(v=>v.includes('.')?v.length-v.indexOf('.')-1:0));
   if(unit==='count'&&scale)throw Error('Bays are counted in whole units.');
-  const fixed=(s:string)=>s===''?undefined:BigInt((s.includes('.')?s:s+'.').replace('.','').padEnd((s.split('.')[0]?.length ?? 0)+scale,'0'));
-  return QuantityRange.create({lower:fixed(lower.value),upper:fixed(upper.value),unit,scale});
+  const fixed=(s:string)=>s===''?undefined:boundedInteger((s.includes('.')?s:s+'.').replace('.','').padEnd((s.split('.')[0]?.length ?? 0)+scale,'0'));
+  return QuantityRange.create({lower:fixed(values[0]!),upper:fixed(values[1]!),unit,scale});
 }
 function numeric(event:Event,set:(value:number|undefined)=>void,places:number){
   const value=(event.target as HTMLInputElement).value;
@@ -51,7 +59,7 @@ function changed(){
   emit('valid',true);
   try {
     if(mode.value==='unknown'){emit('change',undefined);return;}
-    if(mode.value==='clear'){emit('change',{name:props.name,value:{oneofKind:'clear',clear:0}});return;}
+    if(mode.value==='clear'){emit('change',{name:props.name,value:{oneofKind:'clear',clear:NullValue.NULL_VALUE}});return;}
     if(mode.value==='known'){
       if(known.value.trim()==='')throw Error('Enter a known value or leave it unknown.');
       if(props.name==='drive_bays'){
@@ -80,12 +88,13 @@ function changed(){
 <label>Knowledge for {{ title }}<select v-model="mode" :aria-label="`Knowledge for ${title}`">
 <option value="unknown">{{claimsOnly?'Not specified in this requirement':'Preserve / leave unknown'}}</option><option v-if="!claimsOnly&&(!unit||name==='drive_bays')" value="known">Known value</option><option v-if="unit" value="quantity">Quantity or range</option><option v-if="!unit" value="alternatives">Possible / excluded values</option><option v-if="name==='model'||name==='variant'" value="model">Reviewed model reference</option><option v-if="value&&!claimsOnly" value="clear">Clear explicitly</option>
 </select></label>
-<label v-if="mode==='known'">Known {{ title }}<input v-model="known" :maxlength="name==='model'?512:160" :required="mode==='known'" /></label>
+<label v-if="mode==='known'">Known {{ title }}<input v-model="known" data-fact-value :maxlength="name==='model'?512:160" :required="mode==='known'" /></label>
 <template v-if="!['known','unknown','clear'].includes(mode)">
-<label>Evidence basis for {{ title }}<input v-model="basis" maxlength="512" required /></label>
 <template v-if="mode==='quantity'"><p>{{ unit }}; an empty bound is unknown. This records a quantity, never installed components.</p>
-<label>Minimum {{ title }}<input v-model="lower" inputmode="decimal" /></label><label>Maximum {{ title }}<input v-model="upper" inputmode="decimal" /></label>
+<label v-if="focused"><input v-model="range" type="checkbox" /> Only a range is known</label>
+<label>{{range?'Minimum':'Exact'}} {{ title }}<input v-model="lower" data-fact-value inputmode="decimal" /></label><label v-if="range">Maximum {{ title }}<input v-model="upper" inputmode="decimal" /></label>
 </template>
+<label>Evidence basis for {{ title }}<input v-model="basis" maxlength="512" required /></label>
 <template v-if="mode==='model'">
 <label>Model issuer<input v-model="r.issuer" required maxlength="160" /></label><label>Model key<input v-model="r.key" required maxlength="160" /></label><label>Model basis<input v-model="r.basis" required maxlength="160" /></label>
 <p>A reviewed reference preserves this device. It does not install components, acquire catalog data or grant access.</p>

@@ -1102,6 +1102,16 @@ export interface Read {
      * @generated from protobuf field: optional string network_cursor = 3
      */
     networkCursor?: string;
+    /**
+     * User-selected accepted device field to read for a focused correction,
+     * max 64 UTF-8 bytes. The server rechecks field read permission and returns
+     * only Item with this current value and the permitted device name. Missing
+     * values remain unknown. No relations, imports or observations are loaded.
+     * Cannot accompany either continuation; omission retains ordinary detail.
+     *
+     * @generated from protobuf field: optional string accepted_field = 4
+     */
+    acceptedField?: string;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Detail
@@ -7511,7 +7521,8 @@ class Read$Type extends MessageType<Read> {
         super("omloom.workspace.v1.Read", [
             { no: 1, name: "target", kind: "message", T: () => AssetRef },
             { no: 2, name: "relations_cursor", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
-            { no: 3, name: "network_cursor", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 3, name: "network_cursor", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "accepted_field", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
         ]);
     }
 }

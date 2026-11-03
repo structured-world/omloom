@@ -1,6 +1,240 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
 
+#[test]
+fn focused_fact_read_is_selective_authorized_and_read_only() -> TestResult {
+    // One correction must not expand sources/relations or confuse a denied field with unknown.
+    let dir = tempfile::tempdir()?;
+    let mut store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let target = create(&store, &actor, K::Device, "Fact owner")?;
+    store.set_diagnostic_query_check(|db, statement| {
+        let plan = db
+            .explain_plan(statement, None)
+            .expect("focused read plan")
+            .explain();
+        assert!(plan.contains("IndexScan("), "point lookup: {plan}");
+        assert!(
+            !plan.contains("NodeScan(") && !plan.contains("Traverse("),
+            "no expansion: {plan}"
+        );
+    });
+    let before = store.usage()?;
+    let request = api::Read {
+        target: Some(target.clone()),
+        accepted_field: Some("drive_bays".into()),
+        ..Default::default()
+    };
+    let Reply::Detail(detail) = call(&store, &actor, Command::Read(request.clone()))? else {
+        return Err("detail".into());
+    };
+    let item = detail.item.as_ref().ok_or("item")?;
+    assert_eq!(item.fields, vec![text_field("name", "Fact owner")]);
+    assert_eq!(
+        detail.as_ref(),
+        &api::Detail {
+            item: Some(item.clone()),
+            ..Default::default()
+        }
+    );
+    assert_eq!(store.usage()?, before);
+    let start = std::time::Instant::now();
+    for _ in 0..50 {
+        let Reply::Detail(next) = call(&store, &actor, Command::Read(request.clone()))? else {
+            return Err("detail".into());
+        };
+        assert_eq!(next, detail);
+    }
+    eprintln!("50 indexed focused reads: {:?}", start.elapsed());
+    let mut limited = actor.clone();
+    limited.grants[0].read = Fields::Selected(vec!["name".into()]);
+    assert!(matches!(
+        call(&store, &limited, Command::Read(request.clone())),
+        Err(Error::Denied)
+    ));
+    limited.grants[0].read = Fields::Selected(vec!["drive_bays".into()]);
+    let Reply::Detail(detail) = call(&store, &limited, Command::Read(request.clone()))? else {
+        return Err("detail".into());
+    };
+    assert!(detail.item.ok_or("item")?.fields.is_empty());
+    for invalid in [
+        api::Read {
+            relations_cursor: Some("untrusted".into()),
+            ..request.clone()
+        },
+        api::Read {
+            network_cursor: Some("untrusted".into()),
+            ..request.clone()
+        },
+        api::Read {
+            accepted_field: Some(String::new()),
+            ..request.clone()
+        },
+        api::Read {
+            accepted_field: Some("a".repeat(65)),
+            ..request
+        },
+    ] {
+        assert!(matches!(
+            call(&store, &actor, Command::Read(invalid)),
+            Err(Error::Invalid)
+        ));
+    }
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+#[test]
+fn focused_fact_read_returns_only_the_populated_permitted_field() -> TestResult {
+    // A focused correction must decode its actual value without returning unrelated facts.
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let target = create(&store, &actor, K::Device, "Populated fact")?;
+    let original = store.asset(AssetRef::try_from(&target)?)?;
+    let bays = wire::Field {
+        name: "drive_bays".into(),
+        value: Some(wire::field::Value::Integer(8)),
+    };
+    call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            target: Some(target.clone()),
+            expected: Some(original.revision),
+            kind: K::Device as i32,
+            changes: vec![bays.clone(), text_field("description", "Unrelated fact")],
+            ..Default::default()
+        }),
+    )?;
+    let before = store.usage()?;
+    let read = api::Read {
+        target: Some(target.clone()),
+        accepted_field: Some("drive_bays".into()),
+        ..Default::default()
+    };
+    let Reply::Detail(detail) = call(&store, &actor, Command::Read(read.clone()))? else {
+        return Err("detail".into());
+    };
+    let item = detail.item.as_ref().ok_or("item")?;
+    assert_eq!(item.target.as_ref(), Some(&target));
+    assert_eq!(item.revision, original.revision + 1);
+    assert_eq!(
+        item.fields,
+        vec![bays.clone(), text_field("name", "Populated fact")]
+    );
+    assert_eq!(
+        detail.as_ref(),
+        &api::Detail {
+            item: Some(item.clone()),
+            ..Default::default()
+        }
+    );
+    let mut limited = actor.clone();
+    limited.grants[0].read = Fields::Selected(vec!["drive_bays".into()]);
+    let Reply::Detail(detail) = call(&store, &limited, Command::Read(read.clone()))? else {
+        return Err("detail".into());
+    };
+    assert_eq!(detail.item.ok_or("item")?.fields, vec![bays]);
+    limited.grants[0].read = Fields::Selected(vec!["name".into()]);
+    assert!(matches!(
+        call(&store, &limited, Command::Read(read)),
+        Err(Error::Denied)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+#[test]
+fn focused_fact_delta_rechecks_the_same_question_and_fences_old_edits() -> TestResult {
+    // Recording eight bays answers a ten-bay question without rewriting its threshold or other facts.
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let target = create(&store, &actor, K::Device, "Question target")?;
+    let mut predicate = condition(&target, "drive_bays", wire::field::Value::Integer(10));
+    let Some(api::requirement_node::Expression::Field(field)) = &mut predicate.expression else {
+        return Err("field".into());
+    };
+    field.comparison = api::RequirementComparison::Minimum as i32;
+    let unknown = evaluate(&store, &actor, &target, vec![predicate.clone()], 0)?;
+    assert_eq!(unknown.reason, api::RequirementReason::Missing as i32);
+    let original = store.asset(AssetRef::try_from(&target)?)?;
+    let write = api::Write {
+        target: Some(target.clone()),
+        expected: Some(original.revision),
+        kind: K::Device as i32,
+        changes: vec![wire::Field {
+            name: "drive_bays".into(),
+            value: Some(wire::field::Value::Integer(8)),
+        }],
+        ..Default::default()
+    };
+    let mut denied = actor.clone();
+    denied.grants[0].write = Fields::Selected(vec!["description".into()]);
+    let before = store.usage()?;
+    assert!(matches!(
+        call(&store, &denied, Command::Write(write.clone())),
+        Err(Error::Denied)
+    ));
+    assert_eq!(store.usage()?, before);
+    call(&store, &actor, Command::Write(write.clone()))?;
+    let before = store.usage()?;
+    let failed = evaluate(&store, &actor, &target, vec![predicate.clone()], 0)?;
+    assert_eq!(failed.state, api::RequirementState::Failed as i32);
+    assert_eq!(
+        failed.results[0].semantic_key,
+        unknown.results[0].semantic_key
+    );
+    assert!(matches!(
+        call(&store, &actor, Command::Write(write)),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.usage()?, before);
+    let current = store.asset(AssetRef::try_from(&target)?)?;
+    call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            target: Some(target.clone()),
+            expected: Some(current.revision),
+            kind: K::Device as i32,
+            changes: vec![wire::Field {
+                name: "drive_bays".into(),
+                value: Some(wire::field::Value::Equipment(wire::EquipmentClaim {
+                    basis: "Reviewed incomplete count".into(),
+                    assertion: Some(wire::equipment_claim::Assertion::Quantity(
+                        wire::QuantityRange {
+                            lower: Some(8),
+                            upper: Some(12),
+                            unit: "count".into(),
+                            scale: 0,
+                        },
+                    )),
+                })),
+            }],
+            ..Default::default()
+        }),
+    )?;
+    let before = store.usage()?;
+    let partial = evaluate(&store, &actor, &target, vec![predicate], 0)?;
+    assert_eq!(partial.state, api::RequirementState::Unknown as i32);
+    assert_eq!(
+        partial.results[0].semantic_key,
+        unknown.results[0].semantic_key
+    );
+    let current = store.asset(AssetRef::try_from(&target)?)?;
+    assert_eq!(
+        current
+            .intended
+            .iter()
+            .find_map(|v| v.field.as_ref().filter(|f| f.name == "name")),
+        Some(&text_field("name", "Question target"))
+    );
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 fn condition(
     target: &wire::AssetRef,
     field: &str,

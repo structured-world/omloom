@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, onBeforeUnmount, nextTick, reactive, ref, watch } from 'vue';
+import { Field as WireField } from '../src/generated/omloom/v1/contracts';
 import Dialog from './Dialog.vue';
 import PlacementPicker from './PlacementSearch.vue';
 import InitialAddresses from './InitialAddresses.vue';
@@ -10,8 +11,17 @@ import { equipmentFields as equipmentNames } from './equipment-fields';
 import { softwareFields, softwareChoiceLabel } from './software-fields';
 import { call, typedField, input, display, label, key, model, AssetKind, type AssetRef } from './api';
 
-const props = defineProps<{ item?: model.Item; definitions: model.Definition[]; initialKind?: AssetKind; initialHypervisor?: boolean; working: model.WorkingContext; view: model.View }>();
-const emit = defineEmits<{ close: []; saved: [target?: AssetRef] }>();
+const props = defineProps<{ item?: model.Item; definitions: model.Definition[]; initialKind?: AssetKind; initialHypervisor?: boolean; working: model.WorkingContext; view: model.View; fieldMask?: readonly string[]; question?: string }>();
+const emit = defineEmits<{ close: []; saved: [target?: AssetRef]; recheck: [] }>();
+const focused = computed(() => props.fieldMask !== undefined);
+const form = ref<HTMLFormElement>();
+const reviewedItem = ref(props.item);
+const outcome = ref<'' | 'conflict' | 'uncertain' | 'reviewed' | 'denied'>('');
+const uncertain = ref(false);
+let mounted = true;
+onBeforeUnmount(() => { mounted = false; });
+const editWorking = model.WorkingContext.create(props.working);
+const included = (name: string) => props.fieldMask === undefined || props.fieldMask.includes(name);
 const kind = ref<number | undefined>(props.item?.kind ?? props.initialKind);
 const actions = ref<model.Actions>();
 const selectedParent = ref('');
@@ -40,9 +50,9 @@ const derivedBroadcast = computed(() => {
 const values = reactive<Record<string, string>>({});
 const equipmentChanges = reactive<Record<string, import('./api').Field | undefined>>({});
 const equipmentValidity = reactive<Record<string,boolean>>({});
-const selectedEquipment = ref(props.item?.fields.filter(f=>equipmentNames.includes(f.name)).map(f=>f.name) ?? []);
+const selectedEquipment = ref(props.fieldMask?.filter(f=>equipmentNames.includes(f)) ?? props.item?.fields.filter(f=>equipmentNames.includes(f.name)).map(f=>f.name) ?? []);
 const equipmentToAdd = ref('');
-const equipmentFields = computed(()=>(kind.value===AssetKind.DEVICE||kind.value===AssetKind.PHYSICAL_COMPONENT) ? (props.item ? actions.value?.fields : choice.value?.fields)?.filter(f=>equipmentNames.includes(f)) ?? [] : []);
+const equipmentFields = computed(()=>(kind.value===AssetKind.DEVICE||kind.value===AssetKind.PHYSICAL_COMPONENT) ? (props.item ? actions.value?.fields : choice.value?.fields)?.filter(f=>equipmentNames.includes(f)&&included(f)) ?? [] : []);
 function addEquipment(){if(equipmentFields.value.includes(equipmentToAdd.value)&&!selectedEquipment.value.includes(equipmentToAdd.value))selectedEquipment.value.push(equipmentToAdd.value);equipmentToAdd.value='';}
 const modes = reactive<Record<string, string>>({});
 const submittedMask = computed(() => modes.prefix_length !== 'clear' && values.prefix_length !== undefined && values.prefix_length !== '' ? Number(values.prefix_length) : undefined);
@@ -98,7 +108,7 @@ const fields = computed<EditorField[]>(() => {
   ];
   const custom = props.definitions.filter(d => !d.retired && kind.value !== undefined && d.kinds.includes(kind.value))
     .map(d => ({ id: d.id, name: d.name, type: d.type, choices: d.choices, advanced: false }));
-  return [...builtins, ...softwareFields(allowed), ...custom].filter(f => allowed.includes(f.id) && !equipmentFields.value.includes(f.id));
+  return [...builtins, ...softwareFields(allowed), ...custom].filter(f => allowed.includes(f.id) && included(f.id) && !equipmentFields.value.includes(f.id));
 });
 watch(fields, available => {
   for (const f of available) {
@@ -144,14 +154,49 @@ function useObservation(value: { name?: string; addresses: model.InitialAddress[
 }
 onMounted(async () => {
   try {
+    if (focused.value && (props.fieldMask?.length !== 1 || props.item?.kind !== AssetKind.DEVICE)) throw Error('Choose one accepted device fact.');
     const working = model.WorkingContext.create({ ...props.working, focus: props.item?.target ?? props.working.focus, expected: undefined });
     const reply = await call({ oneofKind: 'prepare', prepare: model.Prepare.create({ view: props.view }) }, working);
     if (reply.oneofKind !== 'actions') throw Error('Creation context is unavailable');
+    if (!mounted) return;
     actions.value = reply.actions;
+    if (focused.value && !props.fieldMask!.every(name => reply.actions.fields.includes(name))) {
+      outcome.value = 'denied'; reviewedItem.value = undefined; actions.value = undefined;
+      throw Error('This fact is no longer available for editing.');
+    }
     if (!props.item && parents.value.length === 1) selectedParent.value = key(parents.value[0]!.target);
-  } catch (e) { error.value = String(e); } finally { preparing.value = false; }
+  } catch (e) { error.value = String(e); } finally {
+    preparing.value = false;
+    if (focused.value && mounted) { await nextTick(); (form.value?.querySelector<HTMLElement>('[data-fact-value]') ?? form.value?.querySelector<HTMLElement>('textarea,input'))?.focus(); }
+  }
 });
+function reviewedChanges() {
+  const selected = fields.value.filter(f => modes[f.id] !== 'preserve').map(f => typedField(f.id, f.type, values[f.id] ?? '', modes[f.id] === 'clear'));
+  for (const name of equipmentFields.value) { const value = equipmentChanges[name]; if (value) selected.push(value); }
+  return focused.value ? selected.filter(value => !WireField.equals(value, reviewedItem.value?.fields.find(f => f.name === value.name))) : selected;
+}
+const delta = computed(() => { try { return reviewedChanges(); } catch { return []; } });
+async function reviewCurrent() {
+  if (!props.item?.target || !props.fieldMask?.[0]) return;
+  preparing.value = true; error.value = '';
+  try {
+    const working = model.WorkingContext.create({ ...editWorking, expected: undefined });
+    const current = await call({ oneofKind: 'read', read: model.Read.create({ target: props.item.target, acceptedField: props.fieldMask[0] }) }, working);
+    const prepared = await call({ oneofKind: 'prepare', prepare: model.Prepare.create({ view: props.view }) }, working);
+    if (!mounted) return;
+    if (current.oneofKind !== 'detail' || !current.detail.item || prepared.oneofKind !== 'actions') throw Error('The current fact could not be read.');
+    if (!prepared.actions.fields.includes(props.fieldMask[0])) { outcome.value = 'denied'; throw Error('This fact is no longer available for editing.'); }
+    reviewedItem.value = current.detail.item; actions.value = prepared.actions; outcome.value = 'reviewed';
+  } catch (e) {
+    const code = e instanceof Error && 'code' in e ? e.code : undefined;
+    reviewedItem.value = undefined;
+    if (outcome.value === 'denied' || code === 'PERMISSION_DENIED' || code === 'NOT_FOUND' || code === 'ABORTED') { outcome.value = 'denied'; actions.value = undefined; }
+    error.value = String(e);
+  }
+  finally { preparing.value = false; }
+}
 async function save() {
+  let dispatched = false;
   busy.value = true; error.value = '';
   try {
     if (known.value && reviewedAddress.value && reviewedWorking.value) {
@@ -161,11 +206,11 @@ async function save() {
     }
     if (kind.value === undefined || !actions.value || (!props.item && !choice.value)) throw Error('Choose a resource and its actual parent');
     if(equipmentFields.value.some(name=>equipmentValidity[name]===false))throw Error('Correct the equipment input before saving.');
-    const changes = fields.value.filter(f => modes[f.id] !== 'preserve').map(f => typedField(f.id, f.type, values[f.id] ?? '', modes[f.id] === 'clear'));
-    for(const name of equipmentFields.value){const change=equipmentChanges[name];if(change)changes.push(change);}
+    if (focused.value && ['conflict', 'uncertain', 'denied'].includes(outcome.value)) throw Error('Read and review the current fact before another save.');
+    const changes = reviewedChanges();
     if (placementKind.value && !placementReady.value) throw Error('Choose a listed placement or clear the search to leave it unknown');
-    if (props.item && !changes.length && !known.value) { emit('saved'); return; }
-    const working = model.WorkingContext.create({ ...props.working, focus: props.working.focus && placement.value?.target ? placement.value.target : props.working.focus, expected: placementActions.value?.revision ?? actions.value.revision });
+    if (props.item && !changes.length && !known.value) { if (focused.value) emit('recheck'); else emit('saved'); return; }
+    const working = model.WorkingContext.create({ ...(focused.value ? editWorking : props.working), focus: props.working.focus && placement.value?.target ? placement.value.target : props.working.focus, expected: placementActions.value?.revision ?? actions.value.revision });
     const parent: AssetRef | undefined = props.item ? undefined : choice.value?.parent?.target;
     const addresses: model.InitialAddress[] = [];
     if (!props.item && [AssetKind.DEVICE, AssetKind.VIRTUAL_MACHINE, AssetKind.SOFTWARE_INSTALLATION].includes(kind.value)) {
@@ -202,27 +247,41 @@ async function save() {
       addressReview.value = preview.addressReview; reviewedAddress.value = address;
       reviewedWorking.value = model.WorkingContext.create({ ...working, expected: preview.addressReview.revision });
       return;
-    } else command = addresses.length ? { oneofKind: 'create', create: model.Create.create({ kind: kind.value, changes, parent, addresses }) } : { oneofKind: 'write', write: model.Write.create({ target: props.item?.target, expected: props.item?.revision, kind: kind.value, changes, parent }) };
+    } else command = addresses.length ? { oneofKind: 'create', create: model.Create.create({ kind: kind.value, changes, parent, addresses }) } : { oneofKind: 'write', write: model.Write.create({ target: props.item?.target, expected: reviewedItem.value?.revision, kind: kind.value, changes, parent }) };
+    dispatched = true;
     const reply = await call(command, working);
+    if (!mounted) return;
     if (reply.oneofKind !== 'mutation') throw Error('Unexpected resource response');
     emit('saved', props.item ? undefined : reply.mutation.targets[0]);
-  } catch (e) { error.value = String(e); } finally { busy.value = false; }
+  } catch (e) {
+    error.value = String(e);
+    if (focused.value && dispatched) {
+      const code = e instanceof Error && 'code' in e ? e.code : undefined;
+      if (code === 'ABORTED' || code === 'FAILED_PRECONDITION') outcome.value = 'conflict';
+      else if (code === 'PERMISSION_DENIED' || code === 'NOT_FOUND') { outcome.value = 'denied'; reviewedItem.value = undefined; actions.value = undefined; }
+      else if (!['INVALID_ARGUMENT', 'RESOURCE_EXHAUSTED'].includes(String(code))) { outcome.value = 'uncertain'; uncertain.value = true; }
+    }
+  } finally { busy.value = false; }
 }
 </script>
-<template><Dialog :title="item ? 'Edit resource' : known ? 'Record known address' : 'Create resource'" @close="emit('close')"><form @submit.prevent="save">
+<template><Dialog :title="focused ? 'Clarify recorded fact' : item ? 'Edit resource' : known ? 'Record known address' : 'Create resource'" :dismissible="!busy" @close="emit('close')"><form ref="form" @submit.prevent="save">
+<p v-if="question">{{ question }}. This is the question, not the value to record.</p>
+<section v-if="focused && reviewedItem" aria-label="Review fact change"><p>{{ input(reviewedItem.fields.find(f=>f.name==='name')) || 'Device' }}</p><p v-for="name in fieldMask" :key="name">Currently recorded {{ name.replaceAll('_',' ') }}: {{ display(reviewedItem.fields.find(f=>f.name===name)) || 'Unknown' }}<template v-if="delta.find(f=>f.name===name)"> → {{ display(delta.find(f=>f.name===name)) }}</template></p></section>
+<p v-if="uncertain" role="status">The write outcome is unknown. Reading the current fact does not establish whether this attempt saved it. No write is retried automatically.</p>
+<button v-if="focused && ['conflict','uncertain'].includes(outcome)" type="button" :disabled="preparing" @click="reviewCurrent">Read and review current fact</button>
 <p v-if="preparing" role="status">Checking available actions…</p>
-<template v-else-if="!addressReview">
+<template v-if="(!preparing || focused) && !addressReview">
 <p v-if="known" class="hint">Record what you know. Network, VRF and mask may remain unknown. This does not reserve an address.</p>
-<p v-else class="hint">This action changes accepted inventory in the selected context.</p>
+<p v-else-if="!focused" class="hint">This action changes accepted inventory in the selected context.</p>
 <p v-if="kind === AssetKind.CONTAINER" class="hint">Container IDs belong to an actual runtime. Link that runtime in a broader scope; a replacement gets a new container identity.</p>
 <p v-if="kind === AssetKind.WORKLOAD" class="hint">Keep selected launch references if known. Compose labels identify grouping, not a verified owner or the original launch command.</p>
-<p v-if="item" class="context-chip">Editing {{ input(item.fields.find(f => f.name === 'name')) || item.target?.assetId.slice(-8) }}</p>
-<p v-else-if="parents.length === 1" class="context-chip">{{ kind === AssetKind.VIRTUAL_MACHINE && parents[0]!.kind === AssetKind.SOFTWARE_INSTALLATION ? 'Hypervisor: ' : hypervisor && parents[0]!.kind === AssetKind.DEVICE ? 'Server: ' : 'Inside ' }}{{ parentLabel(parents[0]!) }}</p>
-<label v-else-if="parents.length" for="creation-parent">Create inside</label>
+<p v-if="item && !focused" class="context-chip">Editing {{ input(item.fields.find(f => f.name === 'name')) || item.target?.assetId.slice(-8) }}</p>
+<p v-else-if="!item && parents.length === 1" class="context-chip">{{ kind === AssetKind.VIRTUAL_MACHINE && parents[0]!.kind === AssetKind.SOFTWARE_INSTALLATION ? 'Hypervisor: ' : hypervisor && parents[0]!.kind === AssetKind.DEVICE ? 'Server: ' : 'Inside ' }}{{ parentLabel(parents[0]!) }}</p>
+<label v-else-if="!item && parents.length" for="creation-parent">Create inside</label>
 <select v-if="!item && parents.length > 1" id="creation-parent" v-model="selectedParent" required><option value="" disabled>Choose the actual parent</option><option v-for="p in parents" :key="key(p.target)" :value="key(p.target)">{{ parentLabel(p) }} · {{ label(p.kind) }}</option></select>
 <p v-if="!item && choice?.parent" class="hint">Review ownership in the new resource's responsibility card. Owned-component links can supply inheritance; catalog and runtime placement do not assign a workload's owner.</p>
-<label for="resource-kind">Resource kind</label>
-<select id="resource-kind" v-model="resourceType" :disabled="!!item || busy" required>
+<label v-if="!focused" for="resource-kind">Resource kind</label>
+<select v-show="!focused" id="resource-kind" v-model="resourceType" :disabled="!!item || busy" required>
 <option v-if="item" :value="item.kind">{{ label(item.kind) }}</option>
 <option v-else-if="!choices.length" disabled value="">No available action in this context</option>
 <template v-for="c in item ? [] : choices" :key="c.kind">
@@ -235,18 +294,18 @@ async function save() {
 <ObserveHypervisor v-if="!item && kind === AssetKind.SOFTWARE_INSTALLATION" :current-name="values.name" @use="useObservation" />
 <InitialAddresses v-if="!item && kind !== undefined && [AssetKind.DEVICE,AssetKind.VIRTUAL_MACHINE,AssetKind.SOFTWARE_INSTALLATION].includes(kind)" v-model="initialAddresses" />
 <button v-if="!item && kind === AssetKind.SOFTWARE_INSTALLATION && fields.some(f => f.id === 'virtualization_role')" type="button" @click="useProxmox">Use Proxmox VE defaults</button>
-<details v-if="equipmentFields.length"><summary>Equipment knowledge</summary><p>Record only what is known. Manufacturer, generation and model are separate facts. Refinement keeps this device's identity.</p>
-<EquipmentField v-for="name in selectedEquipment.filter(f=>equipmentFields.includes(f))" :key="name" :name="name" :value="equipmentChanges[name] ?? item?.fields.find(f=>f.name===name)" @change="equipmentChanges[name]=$event" @valid="equipmentValidity[name]=$event" />
-<label>Add equipment fact<select v-model="equipmentToAdd" aria-label="Add equipment fact"><option value="">Choose a fact to record</option><option v-for="name in equipmentFields.filter(f=>!selectedEquipment.includes(f))" :key="name" :value="name">{{ name.replaceAll('_',' ') }}</option></select></label><button type="button" :disabled="!equipmentToAdd" @click="addEquipment">Add selected fact</button>
+<details v-if="equipmentFields.length" :open="focused"><summary>Equipment knowledge</summary><p v-if="!focused">Record only what is known. Manufacturer, generation and model are separate facts. Refinement keeps this device's identity.</p>
+<EquipmentField v-for="name in selectedEquipment.filter(f=>equipmentFields.includes(f))" :key="name" :name="name" :focused="focused" :disabled="busy" :value="equipmentChanges[name] ?? item?.fields.find(f=>f.name===name)" @change="equipmentChanges[name]=$event" @valid="equipmentValidity[name]=$event" />
+<template v-if="!focused"><label>Add equipment fact<select v-model="equipmentToAdd" aria-label="Add equipment fact"><option value="">Choose a fact to record</option><option v-for="name in equipmentFields.filter(f=>!selectedEquipment.includes(f))" :key="name" :value="name">{{ name.replaceAll('_',' ') }}</option></select></label><button type="button" :disabled="!equipmentToAdd" @click="addEquipment">Add selected fact</button></template>
 </details>
 <button v-if="known" type="button" :aria-expanded="more" @click="more = !more">{{ more ? 'Hide additional facts' : 'More known details' }}</button>
 <template v-for="f in fields" :key="f.id"><div v-if="!f.advanced || more" class="field-edit">
 <label :for="'value-'+f.id">{{ f.name }}</label>
-<select v-if="f.id !== 'virtualization_role' && (item || !['name','address','description'].includes(f.id))" v-model="modes[f.id]" :aria-label="f.name+' change'"><option value="preserve">{{ item ? 'Preserve' : 'Leave unknown' }}</option><option value="set">Set</option><option v-if="!['name','address','meaning'].includes(f.id) || (f.id === 'name' && kind === AssetKind.PREFIX)" value="clear">Clear explicitly</option></select>
+<select v-if="f.id !== 'virtualization_role' && (item || !['name','address','description'].includes(f.id))" :value="focused && modes[f.id] === 'preserve' ? 'set' : modes[f.id]" :disabled="busy" :aria-label="f.name+' change'" @change="modes[f.id]=($event.target as HTMLSelectElement).value"><option v-if="!focused" value="preserve">{{ item ? 'Preserve' : 'Leave unknown' }}</option><option value="set">Set</option><option v-if="!['name','address','meaning'].includes(f.id) || (f.id === 'name' && kind === AssetKind.PREFIX)" value="clear">Clear explicitly</option></select>
 <select v-if="f.id === 'virtualization_role'" :id="'value-'+f.id" v-model="roleInput" class="role-selector"><option v-if="item" value="preserve">Keep current value</option><option value="unknown">{{ kind === AssetKind.DEVICE ? 'Clear retired device role' : 'Unknown' }}</option><template v-if="kind === AssetKind.SOFTWARE_INSTALLATION"><option v-for="c in virtualizationChoices" :key="c.value" :value="c.value">{{ c.label }}</option></template></select>
 <select v-else-if="f.type === model.FieldType.BOOLEAN" :id="'value-'+f.id" v-model="values[f.id]" :disabled="modes[f.id] !== 'set'" :required="modes[f.id] === 'set'"><option disabled value="">Choose true or false</option><option value="true">True</option><option value="false">False</option></select>
 <select v-else-if="f.choices.length" :id="'value-'+f.id" v-model="values[f.id]" :disabled="modes[f.id] !== 'set'" :required="modes[f.id] === 'set'"><option disabled value="">Choose a value</option><option v-for="value in f.choices" :key="value" :value="value">{{ f.id === 'meaning' ? value.replace('ADDRESS_MEANING_', '').toLowerCase() : f.id === 'virtualization_role' ? virtualizationChoices.find(c => c.value === value)?.label : softwareChoiceLabel(f.id, value) }}</option></select>
-<textarea v-else-if="f.id === 'description' || f.id === 'compose_files'" :id="'value-'+f.id" v-model="values[f.id]" rows="2" maxlength="2048" :disabled="modes[f.id] === 'clear'" @input="modes[f.id] = !item && values[f.id] === '' ? 'preserve' : 'set'"></textarea>
+<textarea v-else-if="f.id === 'description' || f.id === 'compose_files'" :id="'value-'+f.id" v-model="values[f.id]" rows="2" maxlength="2048" :disabled="busy || modes[f.id] === 'clear'" @input="modes[f.id] = !item && values[f.id] === '' ? 'preserve' : 'set'"></textarea>
 <!-- Integer text goes directly to BigInt; number inputs round valid int64 values. -->
 <input v-else :id="'value-'+f.id" v-model="values[f.id]" :type="f.type === model.FieldType.DATE ? 'date' : 'text'" :inputmode="f.type === model.FieldType.INTEGER ? 'numeric' : undefined" :disabled="modes[f.id] !== 'set'" :required="modes[f.id] === 'set' && ['name','address'].includes(f.id)" :maxlength="f.id === 'name' ? 160 : f.id === 'address' ? 192 : 2048" @input="modes[f.id] = 'set'">
 <p v-if="f.id === 'virtualization_role'" class="hint">{{ kind === AssetKind.DEVICE ? 'This retired field can only be cleared. Set virtualization roles on OS installations.' : 'Requires installed and enabled Hyper-V (Windows) or virtualization components (Linux). Leave unknown when unverified.' }}</p>
@@ -271,7 +330,7 @@ async function save() {
 <p v-if="addressReview && derivedBroadcast" class="hint">Calculated subnet broadcast: {{ derivedBroadcast }}. This is a display calculation, not a recorded endpoint setting.</p>
 <p v-else-if="addressReview?.address?.includes(':')" class="hint">IPv6 has no broadcast address.</p>
 <p v-else-if="addressReview?.prefixLength === 31 || addressReview?.prefixLength === 32" class="hint">This mask has no directed broadcast. A /31 may describe a point-to-point link.</p>
-<p v-if="error" role="alert">{{ error }}</p><footer><button type="button" @click="emit('close')">Cancel</button><button class="primary" :disabled="busy || preparing || placementBusy || (!!placementKind && !placementReady) || (!item && !choice)">{{ busy ? known && !addressReview ? 'Preparing review…' : 'Saving…' : known ? addressReview ? 'Save known address' : 'Review known address' : 'Save resource' }}</button></footer>
+<p v-if="error" role="alert">{{ error }}</p><footer><button type="button" :disabled="busy" @click="emit('close')">Cancel</button><button v-if="focused" type="button" :disabled="busy || preparing" @click="emit('recheck')">Recheck without saving</button><button class="primary" :disabled="busy || preparing || placementBusy || (!!placementKind && !placementReady) || (!item && !choice) || (focused && ['conflict','uncertain','denied'].includes(outcome))">{{ busy ? known && !addressReview ? 'Preparing review…' : 'Saving…' : focused ? 'Save and recheck' : known ? addressReview ? 'Save known address' : 'Review known address' : 'Save resource' }}</button></footer>
 </form></Dialog></template>
 <style scoped>
 .field-edit > .hint, .field-edit > .role-selector, .field-edit > textarea { grid-column:1/-1; }
