@@ -3609,9 +3609,9 @@ dependencies = [
 
 [[package]]
 name = "structured-public-domains"
-version = "0.0.44"
+version = "0.0.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c99dffabd80db54de9cbf761bd1a4d39e980f8d5f1d10003511c62436ce2662"
+checksum = "4363f74f72d01eedb93b29bcab4d9dfb5c12fc73fa3320cc2543238d7a5cae86"
 
 [[package]]
 name = "structured-stemmers"
