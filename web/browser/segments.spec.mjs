@@ -2,6 +2,35 @@ import { test, expect } from '@playwright/test';
 import { withFieldHost } from './field-host.mjs';
 import { workspaceClient } from './workspace-client.mjs';
 
+for (const width of [1440, 390]) test(`membership load failure removes the previous page at ${width}px`, async ({ page }) => {
+  // A failed continuation must not present old assertions or resurrect them during recovery.
+  await withFieldHost(async url => {
+    const { m, rpc } = await workspaceClient(url);
+    const vm = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.VIRTUAL_MACHINE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Paged VM' } }] }) })).mutation.targets[0];
+    for (let i = 0; i < 26; i++) await rpc({ oneofKind: 'segment', segment: m.Segment.create({ name: `Paged segment ${i}`, participants: [{ subject: vm }] }) });
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`${url}/#/?asset=${vm.assetId}&incarnation=${vm.incarnation}`);
+    const panel = page.getByRole('region', { name: 'L2 participation', exact: true });
+    await panel.getByRole('button', { name: 'Show memberships', exact: true }).click();
+    await expect(panel.getByRole('list', { name: 'Selected network projection', exact: true }).getByRole('listitem')).toHaveCount(25);
+    const failed = async route => {
+      const request = m.Request.fromBinary(route.request().postDataBuffer().subarray(5));
+      if (request.command.oneofKind === 'segmentMemberships') await route.abort('failed');
+      else await route.continue();
+    };
+    await page.route('**/omloom.workspace.v1.Workspace/Call', failed);
+    await panel.getByRole('button', { name: 'Next membership page', exact: true }).click();
+    await expect(panel.getByRole('alert')).toBeVisible();
+    await expect(panel.getByRole('list', { name: 'Selected network projection', exact: true })).toHaveCount(0);
+    await expect(panel.getByRole('button', { name: 'Next membership page', exact: true })).toHaveCount(0);
+    await page.unroute('**/omloom.workspace.v1.Workspace/Call', failed);
+    await panel.getByRole('button', { name: 'Refresh memberships', exact: true }).click();
+    await expect(panel.getByRole('list', { name: 'Selected network projection', exact: true }).getByRole('listitem')).toHaveCount(25);
+    await expect(panel.getByRole('button', { name: 'Next membership page', exact: true })).toBeVisible();
+    await expect(panel.getByRole('alert')).toHaveCount(0);
+  });
+});
+
 for (const width of [1440, 390]) test(`segment names validate UTF-8 bytes before preview at ${width}px`, async ({ page }) => {
   // Unicode labels at the byte limit remain valid; longer drafts must not reach the server.
   await withFieldHost(async url => {
