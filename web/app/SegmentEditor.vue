@@ -91,7 +91,15 @@ async function save() {
     const reply = await call({ oneofKind: 'segment', segment: reviewed.value.request }, reviewed.value.working);
     if (reply.oneofKind !== 'mutation') throw Error('No mutation receipt was returned.');
     emit('saved');
-  } catch(e) { error.value = `${String(e)} The reviewed command is retained. Retry it before preparing a different change.`; }
+  } catch(e) {
+    // ABORTED reports a rejected revision; transport failures leave the outcome unknown.
+    if (e instanceof Error && 'code' in e && e.code === 'ABORTED') {
+      pending.value = false; reviewed.value = undefined;
+      error.value = 'State changed. Your draft is retained. Review participation again before saving.';
+    } else {
+      error.value = `${String(e)} The reviewed command is retained. Retry it before preparing a different change.`;
+    }
+  }
   finally { busy.value = false; }
 }
 onMounted(() => loadMemberships());

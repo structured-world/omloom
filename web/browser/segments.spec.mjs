@@ -2,6 +2,42 @@ import { test, expect } from '@playwright/test';
 import { withFieldHost } from './field-host.mjs';
 import { workspaceClient } from './workspace-client.mjs';
 
+for (const width of [1440, 390]) test(`segment revision conflict preserves an editable draft at ${width}px`, async ({ page }) => {
+  // A confirmed rejection permits a fresh review without losing the selected VM or interface.
+  await withFieldHost(async url => {
+    const { m, rpc } = await workspaceClient(url);
+    const create = async (kind, name, parent) => (await rpc({ oneofKind: 'write', write: m.Write.create({ kind, parent, changes: [{ name: 'name', value: { oneofKind: 'text', text: name } }] }) }, parent)).mutation.targets[0];
+    const vm = await create(m.AssetKind.VIRTUAL_MACHINE, 'Conflict VM');
+    const nic = await create(m.AssetKind.INTERFACE, 'eth-conflict', vm);
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`${url}/#/?asset=${vm.assetId}&incarnation=${vm.incarnation}`);
+    await page.getByRole('button', { name: 'Record shared segment', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Shared L2 segment', exact: true });
+    await dialog.getByLabel('Name (optional)', { exact: true }).fill('Conflict draft');
+    await dialog.getByRole('button', { name: 'Find interfaces of this VM', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Use interface', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Review participation', exact: true }).click();
+    await expect(dialog.getByRole('region', { name: 'Membership summary' })).toContainText('eth-conflict');
+    await create(m.AssetKind.DEVICE, 'Independent change after review');
+    await dialog.getByRole('button', { name: 'Save reviewed participation', exact: true }).click();
+    await expect(dialog.getByRole('button', { name: 'Review participation', exact: true })).toBeVisible();
+    await expect(dialog.getByRole('alert')).toContainText('State changed');
+    await expect(dialog.getByLabel('Name (optional)', { exact: true })).toHaveValue('Conflict draft');
+    await expect(dialog.getByRole('group', { name: 'Conflict VM', exact: true })).toContainText('Interface: eth-conflict');
+    await expect(dialog.getByRole('button', { name: 'Retry reviewed command', exact: true })).toHaveCount(0);
+    expect((await rpc({ oneofKind: 'query', query: m.Query.create({ kinds: [m.AssetKind.L2_DOMAIN], limit: 1 }) })).page.total).toBe(0n);
+    await dialog.getByLabel('Name (optional)', { exact: true }).fill('Reviewed again');
+    await dialog.getByRole('button', { name: 'Review participation', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Save reviewed participation', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    const result = (await rpc({ oneofKind: 'segmentMemberships', segmentMemberships: m.SegmentMemberships.create({ targets: [vm] }) })).segmentMembershipPage;
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].source.target).toEqual(nic);
+    expect(result.entries[0].segment.fields).toEqual([{ name: 'name', value: { oneofKind: 'text', text: 'Reviewed again' } }]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+});
+
 for (const width of [1440, 390]) test(`selected VMs share and refine a segment at ${width}px`, async ({ page }) => {
   // Real disk-backed commands and browser actions preserve unknown interfaces,
   // relation identity and other participation after a lost mutation response.
