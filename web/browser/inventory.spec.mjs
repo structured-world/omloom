@@ -64,16 +64,18 @@ for (const width of [1440, 390]) test(`segment rejection preserves the draft and
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
 });
 
-test('segment panels preserve reading without offering writes to viewers on desktop and phone', async ({ page }) => {
-  // Both fixtures read the same disk state; only the operator receives editing controls.
+test('segment panels use relation permissions on desktop and phone', async ({ page }) => {
+  // Writable metadata alone cannot authorize relationship edits on the same disk inventory.
   const dir = await mkdtemp(join(tmpdir(), 'omloom-segment-viewer-'));
   let server = await host(dir);
   try {
     const { m, rpc } = await workspaceClient(server.url);
     const vm = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.VIRTUAL_MACHINE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Viewer VM' } }] }) })).mutation.targets[0];
     const segment = (await rpc({ oneofKind: 'segment', segment: m.Segment.create({ name: 'Viewer segment', participants: [{ subject: vm }] }) })).mutation.targets.at(-1);
-    for (const fixture of ['operator', 'viewer']) {
-      if (fixture === 'viewer') { await server.stop(); server = await host(dir, fixture); }
+    const nameOnly = join(dir, 'name-only.json');
+    await writeFile(nameOnly, JSON.stringify([{ selection: { scope: 'all' }, read: { mode: 'all' }, write: { mode: 'selected', fields: ['name'] }, writable: true }]));
+    for (const fixture of ['operator', 'viewer', 'name-only']) {
+      if (fixture !== 'operator') { await server.stop(); server = await host(dir, fixture === 'viewer' ? 'viewer' : 'operator', fixture === 'name-only' ? nameOnly : undefined); }
       for (const width of [1440, 390]) {
         await page.setViewportSize({ width, height: 900 });
         for (const target of [vm, segment]) {

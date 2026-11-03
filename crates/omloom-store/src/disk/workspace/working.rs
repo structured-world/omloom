@@ -629,10 +629,14 @@ impl Store {
         };
         let mut creations = Vec::new();
         let mut allocations = Vec::new();
+        let mut record_segment = !parents.is_empty();
         for parent in parents {
             let parent_item = if let Some(parent) = parent {
                 let row = tx.visible_asset(context, parent)?;
                 let kind = number(&row, "kind")? as i32;
+                if kind != K::VirtualMachine as i32 || !context.can_edit_relations(parent, kind) {
+                    record_segment = false;
+                }
                 if !context.field(parent, kind, "relations", true) {
                     continue;
                 }
@@ -668,6 +672,7 @@ impl Store {
                     fields,
                 })
             } else {
+                record_segment = false;
                 None
             };
             use wire::AssetKind as K;
@@ -906,6 +911,7 @@ impl Store {
             relationships,
             fields,
             allocations,
+            record_segment,
         })))
     }
 }

@@ -159,6 +159,9 @@ impl Context {
                 }
         })
     }
+    fn can_edit_relations(&self, target: AssetRef, kind: i32) -> bool {
+        self.field(target, kind, "relations", false) && self.field(target, kind, "relations", true)
+    }
     fn admin(&self) -> Result<()> {
         if self.schema_admin {
             Ok(())

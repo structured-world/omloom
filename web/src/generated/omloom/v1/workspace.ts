@@ -938,6 +938,15 @@ export interface Actions {
      * @generated from protobuf field: repeated omloom.workspace.v1.Creation allocations = 5
      */
     allocations: Creation[];
+    /**
+     * Server-derived permission to record participation for every explicitly
+     * selected VM (roots or focus). Requires each subject's relation read/write
+     * authority. False for an empty or mixed-kind selection. The chosen segment
+     * and interfaces still require their own admission checks at preview/save.
+     *
+     * @generated from protobuf field: bool record_segment = 6
+     */
+    recordSegment: boolean;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Item
@@ -1078,6 +1087,15 @@ export interface ItemContext {
      * @generated from protobuf field: optional string prefix_cidr = 8
      */
     prefixCidr?: string;
+    /**
+     * Server-derived subject-side permission to record segment participation for
+     * this visible VM. Requires relation read/write authority on this exact row;
+     * false for other kinds. The chosen segment/interface still needs admission.
+     * This page-local hint is neither stored nor accepted as a client grant.
+     *
+     * @generated from protobuf field: bool record_segment = 9
+     */
+    recordSegment: boolean;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Read
@@ -3449,6 +3467,15 @@ export interface SegmentMembership {
      * @generated from protobuf field: optional omloom.workspace.v1.Item subject = 4
      */
     subject?: Item;
+    /**
+     * Server-derived permission to refine this assertion under current source,
+     * owning VM and segment relation grants and the assertion's manual authority.
+     * False when an owner is unknown/restricted or the source is independently
+     * managed. This is a UI hint, rechecked by the mutation, never a grant.
+     *
+     * @generated from protobuf field: bool refinable = 5
+     */
+    refinable: boolean;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.SegmentMembershipPage
@@ -7688,7 +7715,8 @@ class Actions$Type extends MessageType<Actions> {
             { no: 2, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 3, name: "relationships", kind: "enum", repeat: 1 /*RepeatType.PACKED*/, T: () => ["omloom.v1.RelationKind", RelationKind, "RELATION_KIND_"] },
             { no: 4, name: "fields", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
-            { no: 5, name: "allocations", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Creation }
+            { no: 5, name: "allocations", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Creation },
+            { no: 6, name: "record_segment", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
         ]);
     }
 }
@@ -7751,7 +7779,8 @@ class ItemContext$Type extends MessageType<ItemContext> {
             { no: 5, name: "alternative_owners", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => OwnerContext },
             { no: 6, name: "endpoints", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => SocketBind },
             { no: 7, name: "responsibility", kind: "message", T: () => EffectiveResponsibility },
-            { no: 8, name: "prefix_cidr", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 8, name: "prefix_cidr", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 9, name: "record_segment", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
         ]);
     }
 }
@@ -8804,7 +8833,8 @@ class SegmentMembership$Type extends MessageType<SegmentMembership> {
             { no: 1, name: "source", kind: "message", T: () => Item },
             { no: 2, name: "segment", kind: "message", T: () => Item },
             { no: 3, name: "relation", kind: "message", T: () => Relation },
-            { no: 4, name: "subject", kind: "message", T: () => Item }
+            { no: 4, name: "subject", kind: "message", T: () => Item },
+            { no: 5, name: "refinable", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
         ]);
     }
 }

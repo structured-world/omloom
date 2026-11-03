@@ -83,6 +83,160 @@ fn participant_mapping_requires_network_and_relation_write() -> TestResult {
     Ok(())
 }
 
+// Action hints use exact endpoint grants and manual authority, without persisting permission copies.
+#[test]
+fn relation_action_hints_follow_subject_interface_and_segment_grants() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let first = create(&store, &actor, K::VirtualMachine, "first")?;
+    let second = create(&store, &actor, K::VirtualMachine, "second")?;
+    let segment = create_segment(&store, &[first.clone(), second.clone()])?;
+    let read = |context: &Context| -> Result<api::SegmentMembershipPage, Error> {
+        let R::SegmentMembershipPage(page) = call(
+            &store,
+            context,
+            C::SegmentMemberships(api::SegmentMemberships {
+                targets: vec![segment.clone()],
+                cursor: None,
+            }),
+        )?
+        else {
+            return Err(Error::Corrupt);
+        };
+        Ok(page)
+    };
+    let prepare = |context: &Context, roots, focus| -> Result<bool, Error> {
+        let R::Actions(actions) = run(
+            &store,
+            context,
+            C::Prepare(api::Prepare::default()),
+            api::WorkingContext {
+                roots,
+                focus,
+                ..Default::default()
+            },
+        )?
+        else {
+            return Err(Error::Corrupt);
+        };
+        Ok(actions.record_segment)
+    };
+    let grant = |targets: &[wire::AssetRef]| -> Result<Grant, Error> {
+        Ok(Grant {
+            scope: Scope::Targets(
+                targets
+                    .iter()
+                    .map(|target| AssetRef::try_from(target).map_err(|_| Error::Invalid))
+                    .collect::<Result<_, _>>()?,
+            ),
+            read: Fields::All,
+            write: Fields::Selected(vec!["relations".into()]),
+            writable: true,
+        })
+    };
+    let mut limited = actor.clone();
+    limited.grants[0].write = Fields::Selected(vec!["name".into()]);
+    let before = store.usage()?;
+    assert!(!prepare(&limited, Vec::new(), Some(first.clone()))?);
+    assert!(read(&limited)?.entries.iter().all(|entry| !entry.refinable));
+    limited.grants.push(grant(std::slice::from_ref(&first))?);
+    assert!(prepare(&limited, Vec::new(), Some(first.clone()))?);
+    assert!(!prepare(&limited, Vec::new(), Some(second.clone()))?);
+    assert!(!prepare(
+        &limited,
+        vec![first.clone(), second.clone()],
+        None
+    )?);
+    assert!(!prepare(&limited, Vec::new(), None)?);
+    assert!(read(&limited)?.entries.iter().all(|entry| !entry.refinable));
+    limited.grants.push(grant(std::slice::from_ref(&segment))?);
+    for entry in read(&limited)?.entries {
+        assert_eq!(
+            entry.refinable,
+            entry.subject.as_ref().and_then(|item| item.target.as_ref()) == Some(&first)
+        );
+    }
+    let R::Page(page) = call(
+        &store,
+        &limited,
+        C::Query(api::Query {
+            kinds: vec![K::VirtualMachine as i32],
+            include_context: true,
+            ..query()
+        }),
+    )?
+    else {
+        panic!("page");
+    };
+    assert_eq!(page.contexts.len(), 2);
+    for hint in page.contexts {
+        assert_eq!(hint.record_segment, hint.target.as_ref() == Some(&first));
+    }
+    assert_eq!(store.usage()?, before);
+    let R::Mutation(created) = call(
+        &store,
+        &actor,
+        C::Write(api::Write {
+            kind: K::Interface as i32,
+            parent: Some(first.clone()),
+            changes: vec![text_field("name", "eth0")],
+            ..Default::default()
+        }),
+    )?
+    else {
+        panic!("mutation");
+    };
+    let interface = created.targets.first().ok_or("interface")?.clone();
+    let relation = read(&actor)?
+        .entries
+        .into_iter()
+        .find(|entry| entry.subject.as_ref().and_then(|item| item.target.as_ref()) == Some(&first))
+        .and_then(|entry| entry.relation)
+        .ok_or("membership")?;
+    run(
+        &store,
+        &actor,
+        C::Segment(api::Segment {
+            target: Some(segment.clone()),
+            participants: vec![api::SegmentParticipant {
+                subject: Some(first),
+                interface: Some(interface.clone()),
+                relation_id: Some(relation.relation_id.clone()),
+            }],
+            name: None,
+        }),
+        selection(&store, &[])?,
+    )?;
+    assert!(read(&limited)?.entries.iter().all(|entry| !entry.refinable));
+    limited
+        .grants
+        .push(grant(std::slice::from_ref(&interface))?);
+    let before = store.usage()?;
+    assert_eq!(
+        read(&limited)?
+            .entries
+            .iter()
+            .filter(|entry| entry.refinable)
+            .count(),
+        1
+    );
+    assert_eq!(store.usage()?, before);
+    let mut foreign = store.relation(relation.relation_id.parse()?)?;
+    let expected = foreign.revision;
+    foreign.authority_id = omloom_contracts::ids::AuthorityId::generate().to_string();
+    store.save_relation(
+        &admit(wire::record::Body::Relation(foreign)),
+        Some(expected),
+        &actor.actor,
+        100,
+    )?;
+    let before = store.usage()?;
+    assert!(read(&limited)?.entries.iter().all(|entry| !entry.refinable));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // Cards and the selected network projection expose the actual relation without hidden peers or read writes.
 #[test]
 fn projection_keeps_attributed_identity_and_filters_hidden_segments() -> TestResult {

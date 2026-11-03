@@ -500,6 +500,8 @@ impl Tx<'_> {
                     endpoints: endpoints.remove(&t).unwrap_or_default(),
                     responsibility: None,
                     prefix_cidr: None,
+                    record_segment: number(row, "kind")? == wire::AssetKind::VirtualMachine as u64
+                        && context.can_edit_relations(t, wire::AssetKind::VirtualMachine as i32),
                 })
             })
             .collect()

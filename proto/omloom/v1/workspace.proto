@@ -472,6 +472,11 @@ message Actions {
   // Explicit allocation choices within the selected namespace/prefix or L2
   // domain. Separate from recording locally known address facts.
   repeated Creation allocations = 5;
+  // Server-derived permission to record participation for every explicitly
+  // selected VM (roots or focus). Requires each subject's relation read/write
+  // authority. False for an empty or mixed-kind selection. The chosen segment
+  // and interfaces still require their own admission checks at preview/save.
+  bool record_segment = 6;
 }
 message Item {
   // Server-owned stable local asset identity and lifetime.
@@ -524,6 +529,11 @@ message ItemContext {
   // without cidr in overview/network page context. From the same snapshot;
   // not an accepted name, an allocation proof or another stored value.
   optional string prefix_cidr = 8;
+  // Server-derived subject-side permission to record segment participation for
+  // this visible VM. Requires relation read/write authority on this exact row;
+  // false for other kinds. The chosen segment/interface still needs admission.
+  // This page-local hint is neither stored nor accepted as a client grant.
+  bool record_segment = 9;
 }
 message Read {
   // User-selected local target; the server rechecks current scope/incarnation.
@@ -1447,6 +1457,11 @@ message SegmentMembership {
   // Current permitted VM owning the interface, absent when unknown, restricted
   // or ambiguous. It never expands the domain read into another VM's contents.
   optional Item subject = 4;
+  // Server-derived permission to refine this assertion under current source,
+  // owning VM and segment relation grants and the assertion's manual authority.
+  // False when an owner is unknown/restricted or the source is independently
+  // managed. This is a UI hint, rechecked by the mutation, never a grant.
+  bool refinable = 5;
 }
 message SegmentMembershipPage {
   // Current authorized assertion page, at most 25 entries in relation-ID order.

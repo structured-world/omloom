@@ -550,6 +550,11 @@ reply, retain and retry the exact reviewed command even if a retry is rejected.
 Commit failures and failures while disclosing saved outcomes do not carry this
 confirmation. Failed membership loads discard the previous page and continuation;
 Refresh reloads the first current authorized page.
+Record/refinement controls use current relation grants for the exact VM,
+interface and segment, not the workspace-wide write indicator. Page context and
+prepared actions include subject-side eligibility; each membership carries its
+refinement eligibility, including manual source authority. These transient hints
+do not grant access and are rechecked during preview and save.
 
 Two explicitly selected L2 domains can use **Compare identity** and the existing
 reviewed correction workflow. Participation transfers require explicit review;

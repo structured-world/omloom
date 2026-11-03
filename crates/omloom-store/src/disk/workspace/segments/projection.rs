@@ -345,19 +345,40 @@ impl Store {
             }
         }
         let subjects = tx.segment_subjects(context, &unknown_sources)?;
+        let authority = if rows.is_empty() {
+            None
+        } else {
+            tx.get("workspace/authority")?
+                .as_ref()
+                .map(|row| string(row, "authority"))
+                .transpose()?
+        };
         let mut entries = Vec::with_capacity(rows.len().min(25));
         let mut last = None;
         for (key, (a, b, r)) in rows.into_iter().take(25) {
             let source = target(&a)?;
+            let subject = sources
+                .get(&source)
+                .and_then(|item| sources.get(&item.1))
+                .map(|item| item.0.clone())
+                .or_else(|| subjects.get(&source).cloned());
+            let relation = inventory::relation_projection(&r)?;
+            let refinable = if let Some(subject) = &subject {
+                context.can_edit_relations(
+                    parse_target(subject.target.as_ref())?,
+                    wire::AssetKind::VirtualMachine as i32,
+                ) && context.can_edit_relations(source, number(&a, "kind")? as i32)
+                    && context.can_edit_relations(target(&b)?, wire::AssetKind::L2Domain as i32)
+                    && authority.as_deref() == Some(relation.authority_id.as_str())
+            } else {
+                false
+            };
             entries.push(api::SegmentMembership {
                 source: Some(summary(context, source, &a)?),
                 segment: Some(summary(context, target(&b)?, &b)?),
-                relation: Some(inventory::relation_projection(&r)?),
-                subject: sources
-                    .get(&source)
-                    .and_then(|item| sources.get(&item.1))
-                    .map(|item| item.0.clone())
-                    .or_else(|| subjects.get(&source).cloned()),
+                relation: Some(relation),
+                subject,
+                refinable,
             });
             last = Some(key);
         }

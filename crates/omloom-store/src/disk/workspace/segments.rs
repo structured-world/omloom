@@ -202,10 +202,8 @@ impl Tx<'_> {
             if number(row, "kind")? != kind as u64 {
                 return Err(Error::Invalid);
             }
-            for write in [false, true] {
-                if !context.field(target, kind as i32, "relations", write) {
-                    return Err(Error::Denied);
-                }
+            if !context.can_edit_relations(target, kind as i32) {
+                return Err(Error::Denied);
             }
             Ok(row)
         };
