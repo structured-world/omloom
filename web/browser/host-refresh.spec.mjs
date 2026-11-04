@@ -16,6 +16,8 @@ for (const width of [1440, 390]) test(`existing host package refresh and uncerta
     const prepared = await rpc({ oneofKind: 'hostImport', hostImport: m.HostImport.create({ source: 'Known source', report, selection: report.findings.map(v => ({ key: v.key })) }) });
     const accepted = await rpc({ oneofKind: 'hostImport', hostImport: m.HostImport.create({ preview: prepared.preview.id }) });
     const [host, os, iface] = accepted.mutation.targets;
+    const hostObservedBefore = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: host }) })).detail.observed;
+    const other = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: [field('Other host')] }) })).mutation.targets[0];
     report.observedAt = 200n;
     report.findings[2].addresses = [m.CurrentAddress.create({ address: '192.0.2.20', prefixLength: 24 })];
     report.findings[2].fields = [field('Observed eth0')];
@@ -44,6 +46,11 @@ for (const width of [1440, 390]) test(`existing host package refresh and uncerta
     await expect(dialog.getByRole('alert')).toContainText('Your selections are retained');
     await expect(dialog.getByRole('checkbox', { name: 'interface: Observed eth0', exact: true })).toBeChecked();
     await dialog.getByRole('button', { name: 'Prepare host preview', exact: true }).click();
+    await expect(dialog.getByText('Review 1 selected resources', { exact: true })).toBeVisible();
+    // Navigation underneath a modal must not retarget its reviewed subject.
+    await page.evaluate(target => { window.location.hash = `#/?asset=${target.assetId}&incarnation=${target.incarnation}`; }, other);
+    await expect(page.locator('.detail h2')).toHaveText('Other host');
+    await expect(dialog.getByText(/^Update existing observations for Refresh host /)).toBeVisible();
     let lost = false;
     await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
       const request = m.Request.fromBinary(route.request().postDataBuffer().subarray(5));
@@ -52,6 +59,10 @@ for (const width of [1440, 390]) test(`existing host package refresh and uncerta
       } else await route.continue();
     });
     await dialog.getByRole('button', { name: 'Accept selected observations', exact: true }).click();
+    await expect(dialog.getByRole('alert')).toContainText('Outcome unknown');
+    // Even leaving all resource cards must preserve the uncertain acceptance.
+    await page.evaluate(() => { window.location.hash = '#/?view=2'; });
+    await expect(page.locator('.detail')).toHaveCount(0);
     await expect(dialog.getByRole('alert')).toContainText('Outcome unknown');
     await expect(dialog.getByRole('button', { name: 'Back', exact: true })).toBeDisabled();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -62,6 +73,7 @@ for (const width of [1440, 390]) test(`existing host package refresh and uncerta
     expect(detail.observed[0].evidence.fields).toEqual([field('Observed eth0')]);
     expect(detail.currentAddresses[0].observations.map(v => v.value.address)).toEqual(['192.0.2.20']);
     expect((await rpc({ oneofKind: 'read', read: m.Read.create({ target: os }) })).detail.observed).toEqual([]);
+    expect((await rpc({ oneofKind: 'read', read: m.Read.create({ target: host }) })).detail.observed).toEqual(hostObservedBefore);
     expect((await rpc({ oneofKind: 'query', query: m.Query.create({ search: 'New finding', limit: 25 }) })).page.total).toBe(0n);
     await page.unrouteAll();
   });
