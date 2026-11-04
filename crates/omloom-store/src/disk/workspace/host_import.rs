@@ -82,13 +82,6 @@ fn validate_parts(report: &api::HostReport, refresh: bool) -> Result<()> {
                 return Err(Error::Invalid);
             }
         }
-        if let Some(runtime) = &node.runtime
-            && keys
-                .get(runtime)
-                .is_some_and(|kind| *kind != wire::AssetKind::SoftwareInstallation as i32)
-        {
-            return Err(Error::Invalid);
-        }
         if keys.insert(node.key.clone(), node.kind).is_some() {
             return Err(Error::Invalid);
         }
@@ -97,6 +90,17 @@ fn validate_parts(report: &api::HostReport, refresh: bool) -> Result<()> {
         }
         for value in &node.addresses {
             interface_facts::validate_address(value)?;
+        }
+    }
+    // Refresh permits omitted or later context. Validate any declared runtime
+    // against the complete report before unselected findings are discarded.
+    for node in &report.findings {
+        if let Some(runtime) = &node.runtime
+            && keys
+                .get(runtime)
+                .is_some_and(|kind| *kind != wire::AssetKind::SoftwareInstallation as i32)
+        {
+            return Err(Error::Invalid);
         }
     }
     for item in &report.coverage {

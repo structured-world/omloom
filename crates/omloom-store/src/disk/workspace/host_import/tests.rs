@@ -8,7 +8,7 @@ fn runtime_candidate_is_an_installation_before_mutation() {
         name: "name".into(),
         value: Some(wire::field::Value::Text("Synthetic candidate".into())),
     };
-    let report = api::HostReport {
+    let mut report = api::HostReport {
         version: 1,
         platform: "linux".into(),
         source_basis: "a".repeat(64),
@@ -35,4 +35,9 @@ fn runtime_candidate_is_an_installation_before_mutation() {
         validate_parts(&report, false),
         Err(Error::Invalid)
     ));
+    assert!(matches!(validate_parts(&report, true), Err(Error::Invalid)));
+    // A partial refresh may omit runtime context or list it later. A declared
+    // incompatible runtime must still be rejected before selecting findings.
+    report.findings.reverse();
+    assert!(matches!(validate_parts(&report, true), Err(Error::Invalid)));
 }
