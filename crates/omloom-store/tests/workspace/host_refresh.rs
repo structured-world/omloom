@@ -626,3 +626,84 @@ fn source_options_require_identity_write_for_reported_claims() -> TestResult {
     ));
     Ok(())
 }
+
+// Separate small reports can establish more previous values than one reply
+// permits. Refusing their combined preview must not persist inaccessible custody.
+#[test]
+fn refresh_preview_bounds_previous_values_before_custody() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut fields = Vec::new();
+    for index in 0..30 {
+        let Reply::Definitions(value) = call(
+            &store,
+            &operator(),
+            Command::Definition(api::Definition {
+                name: format!("Observation {index}"),
+                kinds: vec![
+                    K::Device as i32,
+                    K::SoftwareInstallation as i32,
+                    K::Interface as i32,
+                ],
+                ..Default::default()
+            }),
+        )?
+        else {
+            return Err(Error::Corrupt.into());
+        };
+        fields.push(value.items[0].id.clone());
+    }
+    let mut input = host_import::draft();
+    let interface = input.report.as_ref().unwrap().findings[2].clone();
+    for index in 0..6 {
+        let key = format!("interface/additional-{index}");
+        input
+            .report
+            .as_mut()
+            .unwrap()
+            .findings
+            .push(api::HostFinding {
+                key: key.clone(),
+                addresses: Vec::new(),
+                addresses_complete: false,
+                ..interface.clone()
+            });
+        input.selection.push(api::HostSelection {
+            key,
+            ..Default::default()
+        });
+    }
+    let accepted = host_import::accept(&store, &host_import::preview(&store, input.clone())?)?;
+    let source = refresh(&store, &accepted.targets[0])?.refresh;
+    input.source.clear();
+    input.refresh = source;
+    for (batch, names) in fields.chunks(10).enumerate() {
+        let report = input.report.as_mut().unwrap();
+        report.observed_at = 200 + batch as u64;
+        for node in &mut report.findings {
+            node.fields = names
+                .iter()
+                .map(|name| text_field(name, &"x".repeat(2048)))
+                .collect();
+        }
+        host_import::accept(&store, &host_import::preview(&store, input.clone())?)?;
+    }
+    let report = input.report.as_mut().unwrap();
+    report.observed_at = 300;
+    for node in &mut report.findings {
+        node.fields = fields
+            .iter()
+            .map(|name| text_field(name, "Small new claim"))
+            .collect();
+    }
+    let before = store.usage()?;
+    assert!(
+        matches!(
+            call(&store, &operator(), Command::HostImport(input)),
+            Err(Error::Limit)
+        ),
+        "oversized previous values must not enter review custody"
+    );
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}

@@ -5,6 +5,14 @@ mod refresh;
 #[cfg(test)]
 mod tests;
 
+fn preview_reply(preview: api::Preview) -> Result<api::Reply> {
+    let response = reply(api::reply::Result::Preview(preview));
+    if response.encoded_len() > MAX_REPLY_BYTES {
+        return Err(Error::Limit);
+    }
+    Ok(response)
+}
+
 fn mapping(actor: &str, source: &str, basis: &str, key: &str) -> String {
     // Source names select independent import configurations, not cosmetic
     // labels. Equal unauthenticated source evidence cannot merge configurations.
@@ -764,7 +772,7 @@ impl Store {
                     revision: base,
                     rows,
                 };
-                return Ok(reply(api::reply::Result::Preview(preview)));
+                return preview_reply(preview);
             }
             let key = string(&row, "key")?;
             for child in tx.children(&key)? {
@@ -779,6 +787,9 @@ impl Store {
             revision,
             rows,
         };
+        // Previous source claims can exceed the incoming package's size. Admit
+        // the complete response before storing custody the operator cannot read.
+        let response = preview_reply(preview)?;
         tx.put(
             &format!("preview/{id}"),
             "workspace-previews",
@@ -798,6 +809,6 @@ impl Store {
             ]),
         )?;
         tx.commit()?;
-        Ok(reply(api::reply::Result::Preview(preview)))
+        Ok(response)
     }
 }
