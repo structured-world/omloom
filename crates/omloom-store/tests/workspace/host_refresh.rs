@@ -549,3 +549,32 @@ fn source_options_allow_each_sources_full_package() -> TestResult {
     assert_eq!(before, store.usage()?);
     Ok(())
 }
+
+// A known source with no writable matches is not a usable refresh choice.
+// Discovery remains read-only and must let the UI show its unavailable state.
+#[test]
+fn source_options_exclude_sources_without_permitted_matches() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let accepted = adopt(&store)?;
+    let mut actor = operator();
+    actor.grants[0].write = Fields::Selected(Vec::new());
+    let before = store.usage()?;
+    let Reply::HostSourceOptions(options) = call(
+        &store,
+        &actor,
+        Command::HostSources(api::HostSources {
+            host: Some(accepted.targets[0].clone()),
+            report: host_import::draft().report,
+        }),
+    )?
+    else {
+        return Err(Error::Corrupt.into());
+    };
+    assert!(
+        options.sources.is_empty(),
+        "no source may offer an empty selection"
+    );
+    assert_eq!(before, store.usage()?);
+    Ok(())
+}

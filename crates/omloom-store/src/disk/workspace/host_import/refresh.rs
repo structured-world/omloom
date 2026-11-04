@@ -267,6 +267,9 @@ impl Store {
                     kind: None,
                 });
             }
+            if matches.is_empty() {
+                continue;
+            }
             let source = api::HostSource {
                 reference,
                 label: row
