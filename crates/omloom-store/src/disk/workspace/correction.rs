@@ -52,7 +52,8 @@ impl Tx<'_> {
         now: u64,
     ) -> Result<()> {
         let (from, to) = pair(mapping)?;
-        let rows = self.fact_rows(&asset_key(from), MAX_FIELDS + 5)?;
+        let rows = self.children(&asset_key(from))?;
+        self.move_correction_observations(context, from, to, kind, &rows)?;
         let choices: BTreeMap<_, _> = mapping
             .fields
             .iter()
@@ -78,6 +79,13 @@ impl Tx<'_> {
                 if *take {
                     changes.push(inventory::read_field(&row)?);
                 }
+            } else if matches!(
+                row.get("layer").and_then(Value::as_str),
+                Some("observed" | "imported" | "freshness")
+            ) {
+                // Current claims and their windows move together under their
+                // original source IDs, independently of intended-field choices.
+                continue;
             } else if row.contains_key("facet") {
                 // Declarations are not transferred. An inherited binding is
                 // recomputed through its changed relation; explicit conflicts

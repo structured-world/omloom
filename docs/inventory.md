@@ -865,6 +865,10 @@ addresses. Each physical attachment needs individual confirmation, followed by
 ordinary containment, exclusivity and cycle validation.
 
 Native sources keep independent bindings even when their display labels match.
+Current field claims move with their original source IDs and individual freshness
+windows, separately from intended-field choices. Moving or reversing them requires
+read and write access to each affected field on both identities. Conflicting claims
+at the same source/field key are refused rather than silently overwritten.
 Manual or unresolved legacy namespace collisions require a reviewed rename.
 Neither source relocation nor an address change rewrites literal service binds,
 routes, firewall policy or VLAN/VRF membership. No grants, secrets, account control
