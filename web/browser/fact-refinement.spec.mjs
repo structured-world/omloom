@@ -224,11 +224,16 @@ test('an obsolete answer cannot finish or replace a newer question', async ({ pa
     const newGate = new Promise(resolve => { releaseNew = resolve; });
     const oldPending = new Promise(resolve => { oldReady = resolve; });
     const newPending = new Promise(resolve => { newReady = resolve; });
+    const network = [];
+    page.on('requestfailed', value => network.push(['failed', value.url(), value.failure()]));
+    page.on('requestfinished', value => network.push(['finished', value.url()]));
     await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
       if (request(m, route).command.oneofKind !== 'evaluateRequirements') return route.continue();
       const index = ++evaluations; const response = await route.fetch();
+      network.push(['fetched', index, response.status(), response.headers()]);
       if (index === 1) { oldReady(); await oldGate; } else { newReady(); await newGate; }
       await route.fulfill({ response });
+      network.push(['fulfilled', index]);
     });
     try {
       await panel.getByRole('button', { name: 'Check requirement', exact: true }).click(); await oldPending;
@@ -248,7 +253,7 @@ test('an obsolete answer cannot finish or replace a newer question', async ({ pa
       releaseNew();
       await expect(panel.getByRole('heading', { name: 'Recorded evidence matches', exact: true })).toBeVisible();
       await expect(panel.getByRole('textbox', { name: 'Required value (count)', exact: true })).toHaveValue('12');
-    } finally { releaseOld(); releaseNew(); }
+    } finally { console.log(JSON.stringify(network)); releaseOld(); releaseNew(); }
   });
 });
 
