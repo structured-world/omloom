@@ -182,7 +182,9 @@ impl Store {
             ..Default::default()
         };
         let mut sources = Vec::new();
-        let mut total_matches = 0usize;
+        // HostSourceOptions is Reply field 27, with a two-byte tag. Reserve the
+        // largest length prefix before admitting independently bounded sources.
+        let mut reply_bytes = 2 + prost::length_delimiter_len(MAX_REPLY_BYTES);
         for row in tx.fact_rows(&format!("{}/host-mappings", asset_key(host)), MAX_IMPORT)? {
             let reference = string(&row, "key")?;
             let name = string(&row, "source")?;
@@ -259,17 +261,13 @@ impl Store {
                 }) {
                     continue;
                 }
-                if total_matches == MAX_IMPORT {
-                    return Err(Error::Limit);
-                }
-                total_matches += 1;
                 matches.push(api::HostSelection {
                     key: node.key.clone(),
                     target: Some(target_wire(target)),
                     kind: None,
                 });
             }
-            sources.push(api::HostSource {
+            let source = api::HostSource {
                 reference,
                 label: row
                     .get("namespace")
@@ -277,7 +275,13 @@ impl Store {
                     .unwrap_or(&name)
                     .into(),
                 matches,
-            });
+            };
+            let size = source.encoded_len();
+            reply_bytes += 1 + prost::length_delimiter_len(size) + size;
+            if reply_bytes > MAX_REPLY_BYTES {
+                return Err(Error::Limit);
+            }
+            sources.push(source);
         }
         Ok(reply(api::reply::Result::HostSourceOptions(
             api::HostSourceOptions { sources },

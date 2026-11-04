@@ -747,6 +747,9 @@ observation package**. Select an existing compatible source and confirm that the
 package describes this host and the selected installation. Source references are
 server-owned; no source-name retyping or renaming is required. Only permitted,
 already mapped resources can be selected. New findings require separate adoption.
+Source discovery considers at most 128 host bindings, each matching at most the
+package's 128 findings, within the shared 512 KiB encoded reply ceiling. Exceeding
+an aggregate reply bound returns a limit error rather than silently omitting sources.
 A selected child's existing parents are checked without refreshing their fields.
 The preview shows this source's observations and address differences; acceptance
 preserves intended fields, independent sources and omitted partial evidence.

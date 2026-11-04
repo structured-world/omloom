@@ -494,3 +494,58 @@ fn source_options_require_interface_address_write_access() -> TestResult {
     ));
     Ok(())
 }
+
+// Independent sources each match the same bounded package. Their combined
+// match count must not consume a single source's selection allowance.
+#[test]
+fn source_options_allow_each_sources_full_package() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut first = host_import::draft();
+    let interface = first.report.as_ref().unwrap().findings[2].clone();
+    for index in 1..63 {
+        let key = format!("interface/extra-{index}");
+        first
+            .report
+            .as_mut()
+            .unwrap()
+            .findings
+            .push(api::HostFinding {
+                key: key.clone(),
+                addresses: Vec::new(),
+                addresses_complete: false,
+                ..interface.clone()
+            });
+        first.selection.push(api::HostSelection {
+            key,
+            ..Default::default()
+        });
+    }
+    let preview = host_import::preview(&store, first.clone()).expect("first source preview");
+    let accepted = host_import::accept(&store, &preview).expect("first source acceptance");
+    let mut second = first.clone();
+    second.source = "Another permitted source".into();
+    for (selection, target) in second.selection.iter_mut().zip(&accepted.targets) {
+        selection.target = Some(target.clone());
+    }
+    let preview = host_import::preview(&store, second).expect("second source preview");
+    host_import::accept(&store, &preview).expect("second source acceptance");
+    let before = store.usage()?;
+    let Reply::HostSourceOptions(options) = call(
+        &store,
+        &operator(),
+        Command::HostSources(api::HostSources {
+            host: Some(accepted.targets[0].clone()),
+            report: first.report,
+        }),
+    )?
+    else {
+        return Err(Error::Corrupt.into());
+    };
+    assert_eq!(options.sources.len(), 2);
+    for source in &options.sources {
+        assert_eq!(source.matches.len(), 65);
+    }
+    assert_eq!(before, store.usage()?);
+    Ok(())
+}
