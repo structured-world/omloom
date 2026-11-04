@@ -250,6 +250,11 @@ impl Store {
                     continue;
                 }
                 let actual = number(asset, "kind")? as i32;
+                if !node.identity.is_empty()
+                    && !context.field(target, actual, "identity_evidence", true)
+                {
+                    continue;
+                }
                 if actual == wire::AssetKind::Interface as i32
                     && !context.field(target, actual, "current_addresses", true)
                 {

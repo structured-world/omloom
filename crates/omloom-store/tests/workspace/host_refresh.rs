@@ -578,3 +578,51 @@ fn source_options_exclude_sources_without_permitted_matches() -> TestResult {
     assert_eq!(before, store.usage()?);
     Ok(())
 }
+
+// Reported identity claims require their own write grant. Discovery must not
+// preselect a finding whose identity would make an otherwise valid preview fail.
+#[test]
+fn source_options_require_identity_write_for_reported_claims() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let accepted = adopt(&store)?;
+    let mut request = refresh(&store, &accepted.targets[0])?;
+    request.report.as_mut().unwrap().findings[1]
+        .identity
+        .push(api::HostIdentityClaim {
+            kind: api::HostIdentityKind::InstallationId as i32,
+            namespace: "macos/apfs-volume".into(),
+            digest: "c".repeat(64),
+            quality: api::HostIdentityQuality::Reported as i32,
+        });
+    let mut actor = operator();
+    actor.grants[0].write = Fields::Selected(vec!["name".into(), "current_addresses".into()]);
+    let before = store.usage()?;
+    let Reply::HostSourceOptions(options) = call(
+        &store,
+        &actor,
+        Command::HostSources(api::HostSources {
+            host: Some(accepted.targets[0].clone()),
+            report: request.report.clone(),
+        }),
+    )?
+    else {
+        return Err(Error::Corrupt.into());
+    };
+    assert_eq!(options.sources.len(), 1);
+    assert_eq!(
+        options.sources[0]
+            .matches
+            .iter()
+            .map(|m| m.key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["hardware", "interface/en0"]
+    );
+    assert_eq!(before, store.usage()?);
+    request.selection = options.sources[0].matches.clone();
+    assert!(matches!(
+        call(&store, &actor, Command::HostImport(request))?,
+        Reply::Preview(_)
+    ));
+    Ok(())
+}
