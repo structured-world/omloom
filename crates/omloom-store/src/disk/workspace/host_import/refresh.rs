@@ -248,6 +248,11 @@ impl Store {
                     continue;
                 }
                 let actual = number(asset, "kind")? as i32;
+                if actual == wire::AssetKind::Interface as i32
+                    && !context.field(target, actual, "current_addresses", true)
+                {
+                    continue;
+                }
                 if node.fields.iter().any(|field| {
                     !context.field(target, actual, &field.name, false)
                         || !context.field(target, actual, &field.name, true)

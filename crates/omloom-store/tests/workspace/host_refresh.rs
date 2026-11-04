@@ -451,3 +451,46 @@ fn source_options_and_refresh_do_not_cross_hidden_ownership_edges() -> TestResul
     assert_eq!(before, store.usage()?);
     Ok(())
 }
+
+// Discovery must not preselect an interface that acceptance cannot write,
+// including a package with no addresses but an explicit current-address update.
+#[test]
+fn source_options_require_interface_address_write_access() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let accepted = adopt(&store)?;
+    let mut request = refresh(&store, &accepted.targets[0])?;
+    request.report.as_mut().unwrap().findings[2]
+        .addresses
+        .clear();
+    let mut actor = operator();
+    actor.grants[0].write = Fields::Selected(vec!["name".into()]);
+    let before = store.usage()?;
+    let Reply::HostSourceOptions(options) = call(
+        &store,
+        &actor,
+        Command::HostSources(api::HostSources {
+            host: Some(accepted.targets[0].clone()),
+            report: request.report.clone(),
+        }),
+    )?
+    else {
+        return Err(Error::Corrupt.into());
+    };
+    assert_eq!(options.sources.len(), 1);
+    assert_eq!(
+        options.sources[0]
+            .matches
+            .iter()
+            .map(|m| m.key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["hardware", "installation"]
+    );
+    assert_eq!(before, store.usage()?);
+    request.selection = options.sources[0].matches.clone();
+    assert!(matches!(
+        call(&store, &actor, Command::HostImport(request))?,
+        Reply::Preview(_)
+    ));
+    Ok(())
+}
