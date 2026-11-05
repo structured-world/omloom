@@ -4503,6 +4503,13 @@ test('inventory choices apply together, cancel cleanly and keep the list compact
   try {
     await page.setViewportSize({ width: 1024, height: 768 });
     await page.goto(server.url);
+    // Medium-width layouts keep secondary actions reachable without pushing
+    // the first resource below the working area.
+    await expect(page.getByRole('button', { name: 'Import CSV', exact: true })).toBeHidden();
+    await page.getByRole('button', { name: 'More', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Import CSV', exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('button', { name: 'More', exact: true })).toHaveAttribute('aria-expanded', 'false');
     await create(page, 'Rack host');
     await create(page, 'Build guest', 'VIRTUAL_MACHINE');
     await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
