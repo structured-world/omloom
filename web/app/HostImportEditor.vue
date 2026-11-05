@@ -27,6 +27,7 @@ function chooseSource(){
 function back(){if(pending.value||busy.value)return;if(preview.value){preview.value=undefined;return;}emit('close');}
 const fieldLabels=new Map(softwareFields().map(v=>[v.id,v.name]));
 const unclassified=(item:model.HostFinding)=>item.kind===AssetKind.UNSPECIFIED&&item.key==='hardware';
+const comparable=(item:model.HostFinding)=>unclassified(item)||[AssetKind.DEVICE,AssetKind.VIRTUAL_MACHINE,AssetKind.SOFTWARE_INSTALLATION,AssetKind.INTERFACE].includes(item.kind);
 const preview=ref<model.Preview>();const revision=ref<bigint>();const busy=ref(false);
 const matching=ref('');const search=ref('');const choices=ref<model.Item[]>([]);const next=ref<string>();
 const explanations=ref<model.IdentityCandidateExplanation[]>([]);const explained=ref(false);const compared=ref<model.Item[]>([]);
@@ -113,7 +114,6 @@ async function identityMatches(item:model.HostFinding,more=false){
   const generation=++matchGeneration;matching.value=item.key;choices.value=[];next.value=undefined;error.value='';
   try {
     const kind=unclassified(item)?hostKind.value:item.kind;
-    if(!kind)throw Error('Choose the hardware subject type before comparing its claims.');
     const response=await call({oneofKind:'findIdentityCandidates',findIdentityCandidates:model.FindIdentityCandidates.create({finding:item,kind:unclassified(item)?kind:undefined,cursor:more?candidateCursor:undefined})},props.working);
     if(generation!==matchGeneration)return;
     if(response.oneofKind!=='identityCandidates')throw Error('Identity candidates are unavailable.');choices.value=response.identityCandidates.items;explanations.value=response.identityCandidates.explanations;next.value=response.identityCandidates.next;explained.value=true;compared.value=[];
@@ -145,7 +145,7 @@ async function identityMatches(item:model.HostFinding,more=false){
 <ul v-if="report.binds.some(v=>v.owner===item.key)"><li v-for="(bind,index) in report.binds.filter(v=>v.owner===item.key)" :key="index">{{ bind.value?.protocol }} {{ bind.value?.family }} {{ bind.value?.bind }}:{{ bind.value?.port }}</li></ul>
 <p v-if="matches.has(item.key)">Existing match: {{ matches.get(item.key)?.name }}</p><p v-else-if="!host">New adoption or previously reviewed source mapping</p>
 <template v-if="!host||anonymous"><button type="button" @click="search=''; find(item.key)">Match existing resource</button>
-<button type="button" @click="identityMatches(item)">Compare possible matches</button>
+<button v-if="comparable(item)" type="button" @click="identityMatches(item)">Compare possible matches</button>
 <p v-if="matching===item.key">Candidates share this subject layer. Cloned or movable identifiers and similar configurations are not proof. Choose a match only after review.</p>
 <button v-if="unclassified(item)&&(working.focus||working.roots.length===1)" type="button" @click="matchScope(item.key)">Use current device or VM scope</button>
 <button v-if="matches.has(item.key)" type="button" @click="matches.delete(item.key); preview=undefined">Clear match</button>

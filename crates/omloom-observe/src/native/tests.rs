@@ -110,6 +110,10 @@ async fn readable_windows_tables_have_verified_coverage() -> Result<()> {
     };
     const INPUTS: &[(&str, &str)] = &[
         (
+            "Win32_ComputerSystem",
+            r#"{"cpus":8,"memory":17179869184,"model":"Fixture CPU"}"#,
+        ),
+        (
             "Get-NetIPAddress",
             r#"[{"InterfaceIndex":5,"InterfaceAlias":"Ethernet","IPAddress":"192.0.2.5","PrefixLength":24,"State":"Preferred"}]"#,
         ),
@@ -129,8 +133,14 @@ async fn readable_windows_tables_have_verified_coverage() -> Result<()> {
     let bytes = INPUTS.iter().map(|(_, output)| output.len()).sum::<usize>();
     let budget = 16 * 1024 * 1024;
     let mut runner = Runner::scripted(INPUTS, budget);
+    report.findings.push(finding(
+        "installation",
+        wire::AssetKind::SoftwareInstallation,
+        None,
+        "Windows fixture",
+    ));
     collect(&mut runner, &mut report).await?;
-    assert_eq!(runner.budget(), (4, budget - bytes));
+    assert_eq!(runner.budget(), (5, budget - bytes));
     let network = report.network.as_ref().expect("network");
     assert!(network.routes_complete);
     assert_eq!(network.routes.len(), 1);

@@ -132,6 +132,19 @@ fn descriptive_candidates_are_explained_paged_scoped_and_read_only() -> TestResu
     };
     let before = store.usage()?;
     let started = std::time::Instant::now();
+    #[cfg(feature = "diagnostics")]
+    for query in [
+        "MATCH (a:OmRow {parent:'assets'}) RETURN {asset:a.asset,incarnation:a.incarnation,revision:a.revision} AS p LIMIT 1",
+        "MATCH (a:OmRow {parent:'assets'}) WITH a,min(2) AS priority RETURN {asset:a.asset,incarnation:a.incarnation,revision:a.revision,priority:priority} AS p LIMIT 1",
+        "MATCH (a:OmRow {parent:'assets'}) WITH a.asset AS asset,a.incarnation AS incarnation,a.revision AS revision,min(2) AS priority RETURN {asset:asset,incarnation:incarnation,revision:revision,priority:priority} AS p LIMIT 1",
+    ] {
+        eprintln!(
+            "candidate projection diagnostic: {query}\n{:?}",
+            store
+                .diagnostic_database()
+                .execute_cypher_shared(query, None)?
+        );
+    }
     let first = candidates(&store, &operator(), finding.clone(), None)?;
     assert_eq!(first.items.len(), 25);
     assert_eq!(first.explanations.len(), 25);

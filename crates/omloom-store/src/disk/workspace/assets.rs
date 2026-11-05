@@ -2416,13 +2416,17 @@ pub(super) fn validate_predicate(
                 if predicate.field == "vrid"
                     || predicate.field == "vlan_id"
                     || predicate.field == "vlan_tag"
-                    || predicate.field == "prefix_length" => {}
+                    || predicate.field == "prefix_length"
+                    || predicate.field == "logical_cpus"
+                    || predicate.field == "visible_memory_bytes" => {}
             Some(field::Value::Text(s))
                 if s.len() <= 2048
                     && predicate.field != "vrid"
                     && predicate.field != "vlan_id"
                     && predicate.field != "vlan_tag"
-                    && predicate.field != "prefix_length" => {}
+                    && predicate.field != "prefix_length"
+                    && predicate.field != "logical_cpus"
+                    && predicate.field != "visible_memory_bytes" => {}
             Some(field::Value::Clear(EXPLICIT_CLEAR)) if !network_column(&predicate.field) => {}
             _ => return Err(Error::Invalid),
         }

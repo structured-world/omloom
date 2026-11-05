@@ -729,8 +729,10 @@ External commands have a ten-second deadline within the ninety-second collection
 budget. A timed-out child is terminated and reaped; diagnostics identify the
 executable and, for Windows PowerShell sources, the module and native cmdlets,
 without dumping scripts or their output. Timeouts leave coverage unavailable.
-Optional source failures remain in the report's coverage. If required identity
-or interface evidence cannot be collected, the command reports collection
+Optional source failures remain in the report's coverage. Permanent hardware and
+installation identifiers are optional; their absence produces partial identity
+coverage, not an invented fingerprint. The collector still checks boot consistency
+before publishing. If required boot or interface evidence cannot be collected, the command reports collection
 unavailable and exits successfully without writing a report or replacing an
 existing file. This is not a verified inventory or an empty scan. Invalid
 arguments, malformed report frames and file publication errors remain errors.
@@ -741,6 +743,35 @@ Match an existing resource only after checking its identity and incarnation.
 Names, matching addresses, process names and Compose labels do not establish
 continuity, ownership or permission. Review the proposed changes before acceptance.
 The same flow works on a phone, including selecting a report from its file picker.
+
+### Reports without permanent identifiers
+
+An empty `HostReport.source_basis` means continuity is unavailable. Each selected
+finding must be explicitly matched or separately adopted. A later package starts
+unresolved even if its filename, boot, name, addresses or configuration are equal.
+An unselected finding creates no permanent unknown resource. Current manually
+confirmed source custody is keyed by the selected resource incarnation, rather
+than creating a new binding for every package. Retry an uncertain acceptance with
+the same preview receipt, as described below.
+
+**Compare possible matches** queries the current authorized working context.
+Results show same-layer supporting evidence, differences and unknowns, with a
+revision-bound continuation for further candidates. Select up to two candidates
+to compare against the report before confirming an exact resource. Similar fleet
+configurations remain ambiguous. A shared installation UUID can be cloned; a
+factory MAC concerns an interface, not the chassis. There is no probability score,
+automatic first-result choice, permission transfer or implied remote access.
+Use manual search or leave the finding unresolved when the available evidence
+cannot distinguish machines. Duplicate accepted records still use the separate
+identity-correction workflow.
+
+The native profile can additionally report OS-visible logical CPU count,
+visible memory in bytes and a reported CPU model. These describe the installation's
+execution context, not a unique host ID, physical installed RAM certification or
+capacity reservation. Missing values remain absent. Selected current fields are
+probed independently through the existing index; there is no combined fingerprint,
+similarity table, candidate history or writes caused by opening a comparison.
+Current field projections are rebuilt resumably on upgrade.
 
 For a host already imported, open its device or VM card and choose **Load
 observation package**. Select an existing compatible source and confirm that the
