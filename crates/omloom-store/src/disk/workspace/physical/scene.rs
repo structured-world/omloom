@@ -309,15 +309,16 @@ impl Tx<'_> {
             }
         }
         for (parent, cable) in allowed {
+            let cable = target_wire(cable);
             if end_counts.get(&parent) == Some(&2)
                 && view
                     .scene_connections
                     .iter()
-                    .filter(|end| end.cable.as_ref() == Some(&target_wire(cable)))
+                    .filter(|end| end.cable.as_ref() == Some(&cable))
                     .count()
                     == 2
             {
-                view.two_end_cables.push(target_wire(cable));
+                view.two_end_cables.push(cable);
             }
         }
         Ok(())
