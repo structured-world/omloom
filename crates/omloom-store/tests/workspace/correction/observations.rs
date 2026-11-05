@@ -229,8 +229,19 @@ fn refreshed_duplicate_correction_preserves_evidence_and_undo() -> TestResult {
         source_ref: options.sources[0].reference.clone(),
     });
     super::super::host_import::accept(&store, &super::super::host_import::preview(&store, input)?)?;
-    for target in &retained {
-        let values = read(&store, target)?.observed;
+    for (index, target) in retained.iter().enumerate() {
+        let duplicate_source = &before_duplicate[index].0[0]
+            .evidence
+            .as_ref()
+            .unwrap()
+            .source_id;
+        let retained_source = &before_retained[index].0[0]
+            .evidence
+            .as_ref()
+            .unwrap()
+            .source_id;
+        assert_ne!(duplicate_source, retained_source);
+        let mut values = read(&store, target)?.observed;
         let ids = values
             .iter()
             .map(|o| &o.evidence.as_ref().unwrap().source_id)
@@ -240,11 +251,14 @@ fn refreshed_duplicate_correction_preserves_evidence_and_undo() -> TestResult {
             2,
             "correction and refresh must not fork evidence sources"
         );
-        assert!(
-            values
-                .iter()
-                .any(|value| value.evidence.as_ref().unwrap().observed_at_ms == 400)
-        );
+        // Refresh must use this target's relocated source, not another source
+        // on the host or the retained identity's independent observations.
+        assert!(values.iter().any(|value| {
+            let evidence = value.evidence.as_ref().unwrap();
+            evidence.observed_at_ms == 400 && &evidence.source_id == duplicate_source
+        }));
+        values.retain(|value| &value.evidence.as_ref().unwrap().source_id == retained_source);
+        assert_eq!(ordered(values), ordered(before_retained[index].0.clone()));
     }
     Ok(())
 }
