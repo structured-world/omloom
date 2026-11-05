@@ -39,7 +39,7 @@ fn refreshed(store: &Store, basis: char) -> Result<Vec<wire::AssetRef>, Error> {
     super::super::host_import::accept(store, &super::super::host_import::preview(store, input)?)?;
     let source = omloom_contracts::ids::SourceId::generate().to_string();
     for target in &accepted.targets {
-        let mut asset = store.asset(AssetRef::try_from(target)?)?;
+        let mut asset = store.asset(AssetRef::try_from(target).map_err(|_| Error::Corrupt)?)?;
         let revision = asset.revision;
         asset.imported.push(observation(
             &source,
