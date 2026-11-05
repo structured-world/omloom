@@ -33,7 +33,7 @@ async function expand(target:AssetRef,more=false){
     const next=new Map(subjects.value.map(v=>[key(v),v]));for(const item of reply.page.items)if(item.target&&eligible(item))next.set(key(item.target),item.target);
     if(next.size>128)throw Error('The scene supports 128 selected resources. Open a smaller enclosure or return to the table.');
     subjects.value=[...next.values()];if(reply.page.next)continuations.value.set(key(target),reply.page.next);else continuations.value.delete(key(target));
-  }catch(e){error.value=String(e);return;}finally{if(token===generation)busy.value=false;}
+  }catch(e){if(token===generation&&!disposed)error.value=String(e);return;}finally{if(token===generation)busy.value=false;}
   await refresh();
 }
 async function setRoot(value:AssetRef|undefined){generation++;busy.value=false;root.value=value;selected.value=value;subjects.value=value?[value]:[];continuations.value=new Map();view.value=model.PhysicalView.create();renderer?.update([],[]);if(value)await expand(value);}

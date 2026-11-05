@@ -180,3 +180,30 @@ test('name-only physical children cannot poison component expansion',async({page
     await expect(scene).not.toContainText('Name-only port');
   },{command:['target/debug/omloom-dev','--grants',grants]});}finally{await rm(dir,{recursive:true,force:true});}
 });
+
+test('an obsolete expansion failure cannot replace a newer scope status',async({page})=>{
+  // An earlier transport failure belongs to its old scope, even when its
+  // rejection is delivered after the next enclosure has loaded successfully.
+  await withFieldHost(async url=>{
+    const f=await fixture(url);await page.goto(`${url}/#/?view=2&scope=${f.rack.assetId}&scopeInc=${f.rack.incarnation}`);
+    await page.getByRole('button',{name:'3D scene',exact:true}).click();
+    const scene=page.getByRole('region',{name:'Physical 3D workspace',exact:true});
+    await scene.getByRole('button',{name:'Installed server',exact:true}).click();
+    let release,started,held;
+    const gate=new Promise(resolve=>{release=resolve;}),requested=new Promise(resolve=>{started=resolve;});
+    await page.route('**/omloom.workspace.v1.Workspace/Call',async route=>{
+      const command=f.m.Request.fromBinary(route.request().postDataBuffer().subarray(5)).command;
+      if(command.oneofKind==='query'&&command.query.focus?.assetId===f.host.assetId&&!held){held=route.request();started();await gate;return route.abort('connectionreset');}
+      return route.continue();
+    });
+    try{
+      await scene.getByRole('button',{name:'Show components',exact:true}).click();await requested;
+      await page.goto(`${url}/#/?view=2&scope=${f.unknown.assetId}&scopeInc=${f.unknown.incarnation}`);
+      await expect(scene.getByRole('button',{name:'Spare server',exact:true})).toBeVisible();
+      const failed=page.waitForEvent('requestfailed',{predicate:r=>r===held});release();await failed;
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      await expect(scene.getByRole('alert')).toHaveCount(0);
+      await expect(scene.getByRole('button',{name:'Spare server',exact:true})).toBeVisible();
+    }finally{release();}
+  });
+});
