@@ -5069,6 +5069,20 @@ test('phone inventory opens a dedicated detail and returns to the same search', 
     for (const name of ['Field node A', 'Field node B', 'Field node C', 'Field node D']) await create(page, name);
     await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
     await page.setViewportSize({ width: 390, height: 844 });
+    // Navigation and actions use one control template, even across the two
+    // layout containers. A page-specific override must not change their shape.
+    const controls = [
+      page.getByRole('navigation', { name: 'Views' }).getByRole('button', { name: 'Overview', exact: true }),
+      page.getByRole('button', { name: '+ Create resource', exact: true }),
+      page.getByRole('button', { name: 'More', exact: true }),
+    ];
+    const styles = await Promise.all(controls.map(control => control.evaluate(element => {
+      const style = getComputedStyle(element);
+      return { radius: style.borderRadius, size: style.fontSize, weight: style.fontWeight, height: element.getBoundingClientRect().height };
+    })));
+    expect(styles[0]).toEqual(styles[1]);
+    expect(styles[1]).toEqual(styles[2]);
+    expect(styles[0].height).toBeGreaterThanOrEqual(44);
     await expect(page.getByRole('button', { name: 'Import CSV', exact: true })).toBeHidden();
     await page.getByRole('button', { name: 'More', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Import CSV', exact: true })).toBeVisible();

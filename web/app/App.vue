@@ -2,6 +2,7 @@
 import HostNetwork from './HostNetwork.vue';
 import HostImportEditor from './HostImportEditor.vue';
 import CategoryNav from './CategoryNav.vue';
+import WorkspaceIcon from './WorkspaceIcon.vue';
 import CurrentAddresses from './CurrentAddresses.vue';
 import HostIdentityEvidence from './HostIdentityEvidence.vue';
 import HostIdentityCompare from './HostIdentityCompare.vue';
@@ -90,7 +91,7 @@ async function resolveIdentityReference(){
 }
 const viewSearch = ref('');
 const matchingViews = computed(() => views.value.filter(v => v.name.toLocaleLowerCase().includes(viewSearch.value.toLocaleLowerCase())));
-const presentations = [{ id: model.View.OVERVIEW, name: 'Overview', symbol: '▦' }, { id: model.View.NETWORK, name: 'Network', symbol: '⇄' }, { id: model.View.HARDWARE, name: 'Hardware', symbol: '▤' }, { id: model.View.VIRTUALIZATION, name: 'Virtualization', symbol: '◫' }, { id: model.View.SERVICES, name: 'Software & services', symbol: '◇' }];
+const presentations = [{ id: model.View.OVERVIEW, name: 'Overview' }, { id: model.View.NETWORK, name: 'Network' }, { id: model.View.HARDWARE, name: 'Hardware' }, { id: model.View.VIRTUALIZATION, name: 'Virtualization' }, { id: model.View.SERVICES, name: 'Software & services' }];
 function parameters(name: string): string[] {
   const value = route.query[name];
   if (value === undefined) return [];
@@ -391,7 +392,7 @@ function allocate() { editing.value = undefined; editor.value = 'network'; }
 watch(() => route.fullPath, load);
 onMounted(async () => { try { await metadata(); await load(); } catch (e) { error.value = String(e); } });
 </script>
-<template><div class="shell" :class="{ 'has-detail': !!detail?.item }"><aside class="sidebar"><a class="brand" href="#/">omloom<span>Infrastructure workspace</span></a><p class="nav-caption">WORKSPACE</p><nav aria-label="Views"><button v-for="v in presentations" :key="v.id" :class="{ active: query.view === v.id }" @click="change({ view: String(v.id), kind: undefined })"><span aria-hidden="true">{{ v.symbol }}</span>{{ v.name }}</button></nav>
+<template><div class="shell" :class="{ 'has-detail': !!detail?.item }"><aside class="sidebar"><a class="brand" href="#/">omloom<span>Infrastructure workspace</span></a><p class="nav-caption">Workspace</p><nav aria-label="Views"><button v-for="v in presentations" :key="v.id" :class="{ active: query.view === v.id }" :aria-pressed="query.view === v.id" @click="change({ view: String(v.id), kind: undefined })"><WorkspaceIcon :view="v.id" />{{ v.name }}</button></nav>
 <div class="saved-heading"><p class="nav-caption">SAVED VIEWS</p><button aria-label="Save current view" @click="editor = 'view'">+</button></div><input v-if="views.length" v-model="viewSearch" aria-label="Find saved views" placeholder="Find a saved view" maxlength="100"><button v-for="v in matchingViews" :key="v.id" class="saved-link" @click="useView(v)">{{ v.audiences.length ? '♧' : '◦' }} {{ v.name }}</button><p v-if="!views.length" class="sidebar-hint">Keep useful selections here.</p><p v-else-if="!matchingViews.length" class="sidebar-hint">No visible definitions match.</p>
 <div class="fixture"><span class="status-dot" />Local development<strong>{{ identity?.name ?? 'Connecting…' }}</strong><small>Fixture scope: {{ identity?.fixture }}</small></div></aside>
 <main><header class="topbar"><div class="breadcrumb">Workspace <span>/</span> {{ currentTitle }}</div><button @click="load" :disabled="loading">↻ Refresh</button></header>

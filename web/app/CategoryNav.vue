@@ -33,10 +33,3 @@ const items=computed(()=>categories[props.view]);
 function selected(kinds:number[]) { return kinds.length===props.kinds.length && kinds.every(k=>props.kinds.includes(k)); }
 </script>
 <template><nav v-if="items.length" class="category-nav" aria-label="Resource categories"><button :aria-pressed="!kinds.length" @click="emit('select',[])">All</button><button v-for="category in items" :key="category.name" :aria-pressed="selected(category.kinds)" @click="emit('select',category.kinds)">{{ category.name }}</button></nav></template>
-<style scoped>
-.category-nav { display:flex;flex-wrap:wrap;gap:8px;margin:16px 0 22px; }
-.category-nav button { min-height:40px;padding:8px 16px;background:var(--surface);color:var(--ink-soft);border:1px solid var(--line);border-radius:24px; }
-.category-nav button:hover { background:var(--surface-tint);color:var(--ink); }
-.category-nav button[aria-pressed="true"] { color:var(--accent-ink);background:var(--accent-wash);border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent); }
-@media(max-width:700px) { .category-nav { flex-wrap:nowrap;overflow-x:auto;max-width:100%;padding-bottom:6px; } .category-nav button { flex-shrink:0; } }
-</style>
