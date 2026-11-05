@@ -64,4 +64,3 @@ test('two visible breakout legs without complete topology remain unpaired',()=>{
   v.twoEndCables=[];
   assert.equal(sceneData(v,rack).lines.length,0);
 });
-
