@@ -273,11 +273,18 @@ impl Tx<'_> {
                 }
             }
         }
-        let rows=self.query("UNWIND $parents AS parent MATCH (e:OmRow {parent:parent}) WHERE e.state=1 RETURN properties(e) AS p LIMIT 257",params([("parents",Value::Array(parents))]))?;
+        let rows=self.query("UNWIND $parents AS parent MATCH (e:OmRow {parent:parent}) RETURN properties(e) AS p LIMIT 257",params([("parents",Value::Array(parents))]))?;
         if rows.len() > 256 {
             return Err(Error::Limit);
         }
+        let mut end_counts = BTreeMap::new();
+        for row in &rows {
+            *end_counts.entry(string(row, "parent")?).or_insert(0usize) += 1;
+        }
         for row in rows {
+            if row.get("state") != Some(&Value::Int(1)) {
+                continue;
+            }
             let Some(id) = row.get("binding").and_then(Value::as_str) else {
                 continue;
             };
@@ -299,6 +306,18 @@ impl Tx<'_> {
                     port: Some(target_wire(port)),
                     end_key: key.rsplit('/').next().ok_or(Error::Corrupt)?.into(),
                 });
+            }
+        }
+        for (parent, cable) in allowed {
+            if end_counts.get(&parent) == Some(&2)
+                && view
+                    .scene_connections
+                    .iter()
+                    .filter(|end| end.cable.as_ref() == Some(&target_wire(cable)))
+                    .count()
+                    == 2
+            {
+                view.two_end_cables.push(target_wire(cable));
             }
         }
         Ok(())

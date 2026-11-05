@@ -246,5 +246,31 @@ fn scene_cables_do_not_reveal_remote_or_hidden_endpoints() -> TestResult {
     assert!(hidden.scene_connections.is_empty());
     assert_eq!(hidden.items.len(), 1);
     assert_eq!(store.usage()?, before);
+    let both = || {
+        api::physical::Action::Scene(api::PhysicalSceneQuery {
+            subjects: vec![a.clone(), b.clone()],
+        })
+    };
+    assert_eq!(
+        physical(&store, &actor, both())?.two_end_cables,
+        vec![cable.clone()]
+    );
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::CableEnd(api::PhysicalCableEndEdit {
+            cable: Some(cable.clone()),
+            end: Some(api::PhysicalCableEnd {
+                key: "unselected-leg".into(),
+                name: "Additional end".into(),
+                basis: "Inspected third end".into(),
+                ..Default::default()
+            }),
+            expected: None,
+        }),
+    )?;
+    let partial = physical(&store, &actor, both())?;
+    assert_eq!(partial.scene_connections.len(), 2);
+    assert!(partial.two_end_cables.is_empty());
     Ok(())
 }

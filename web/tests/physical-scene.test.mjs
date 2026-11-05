@@ -6,7 +6,7 @@ const {sceneData,AssetKind:K}=await import('data:text/javascript;base64,'+Buffer
 const target=id=>({assetId:id,incarnation:id});
 const rack=target('rack'),server=target('server'),a=target('a'),b=target('b'),cable=target('cable');
 const box=(start,length=1n)=>({x:{startUm:start,lengthUm:length},y:{startUm:start,lengthUm:length},z:{startUm:start,lengthUm:length}});
-function view(){return{items:[{target:rack,kind:K.RACK,fields:[]},{target:server,kind:K.DEVICE,fields:[]}],definitions:[{target:rack,volume:box(90071992547409999n,1000n)}],occupancy:[],sceneConnections:[]};}
+function view(){return{items:[{target:rack,kind:K.RACK,fields:[]},{target:server,kind:K.DEVICE,fields:[]}],definitions:[{target:rack,volume:box(90071992547409999n,1000n)}],occupancy:[],sceneConnections:[],twoEndCables:[]};}
 test('scene origin cancellation precedes float conversion and preserves half micrometres',()=>{
   // Large surveyed site offsets must not lose small geometry or round odd lengths down.
   const v=view();v.occupancy=[{placement:{item:server,enclosure:rack,volume:box(90071992547410001n)}}];
@@ -25,7 +25,18 @@ test('cables require exactly two visible located ends and never guess breakout p
   const v=view();v.items.push({target:a,kind:K.PORT,fields:[]},{target:b,kind:K.PORT,fields:[]});
   v.occupancy=[a,b].map((item,i)=>({placement:{item,enclosure:rack,volume:box(90071992547410000n+BigInt(i))}}));
   v.sceneConnections=[{cable,port:a,endKey:'a'},{cable,port:b,endKey:'b'}];
+  v.twoEndCables=[cable];
   assert.equal(sceneData(v,rack).lines.length,1);
   v.sceneConnections.push({cable,port:a,endKey:'c'});assert.equal(sceneData(v,rack).lines.length,0);
   v.sceneConnections.pop();v.occupancy.pop();assert.equal(sceneData(v,rack).lines.length,0);
+});
+
+test('two visible breakout legs without complete topology remain unpaired',()=>{
+  // The third accepted end may be outside this scope. Visible cardinality is
+  // insufficient to establish a two-end assembly.
+  const v=view();v.items.push({target:a,kind:K.PORT,fields:[]},{target:b,kind:K.PORT,fields:[]});
+  v.occupancy=[a,b].map((item,i)=>({placement:{item,enclosure:rack,volume:box(90071992547410000n+BigInt(i))}}));
+  v.sceneConnections=[{cable,port:a,endKey:'leg-a'},{cable,port:b,endKey:'leg-b'}];
+  v.twoEndCables=[];
+  assert.equal(sceneData(v,rack).lines.length,0);
 });

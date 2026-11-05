@@ -5906,6 +5906,14 @@ export interface PhysicalOffers {
  */
 export interface PhysicalView {
     /**
+     * Server-qualified assemblies with exactly two accepted named ends, both
+     * currently attached to visible scene ports. Omission conveys no hidden end
+     * count or disconnection. Clients cannot derive this from filtered attachments.
+     *
+     * @generated from protobuf field: repeated omloom.v1.AssetRef two_end_cables = 17
+     */
+    twoEndCables: AssetRef[];
+    /**
      * Only actual named-end attachments inside the explicit scene selection;
      * omitted endpoints remain unknown or outside this projection, not loose.
      *
@@ -10200,6 +10208,7 @@ export const PhysicalOffers = new PhysicalOffers$Type();
 class PhysicalView$Type extends MessageType<PhysicalView> {
     constructor() {
         super("omloom.workspace.v1.PhysicalView", [
+            { no: 17, name: "two_end_cables", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AssetRef },
             { no: 16, name: "scene_connections", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalSceneConnection },
             { no: 14, name: "replacement_hypothesis", kind: "message", T: () => PhysicalReplacementHypothesis },
             { no: 15, name: "replacement_quality", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalReplacementQuality },

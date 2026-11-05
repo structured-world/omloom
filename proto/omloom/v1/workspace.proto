@@ -2493,6 +2493,10 @@ message PhysicalOffers {
   optional string after = 2;
 }
 message PhysicalView {
+  // Server-qualified assemblies with exactly two accepted named ends, both
+  // currently attached to visible scene ports. Omission conveys no hidden end
+  // count or disconnection. Clients cannot derive this from filtered attachments.
+  repeated omloom.v1.AssetRef two_end_cables = 17;
   // Only actual named-end attachments inside the explicit scene selection;
   // omitted endpoints remain unknown or outside this projection, not loose.
   repeated PhysicalSceneConnection scene_connections = 16;

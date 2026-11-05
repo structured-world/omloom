@@ -36,7 +36,9 @@ export function sceneData(view:model.PhysicalView,root:AssetRef){
   const cables=new Map<string,model.PhysicalSceneConnection[]>();
   for(const end of view.sceneConnections){const id=key(end.cable);cables.set(id,[...(cables.get(id)??[]),end]);}
   for(const [id,ends]of cables){
-    if(ends.length!==2||!ends[0]?.cable)continue;
+    // A filtered pair can be two unrelated breakout legs. Only the server can
+    // qualify the complete assembly without disclosing off-scope endpoints.
+    if(ends.length!==2||!ends[0]?.cable||!view.twoEndCables.some(c=>key(c)===id))continue;
     const from=byTarget.get(key(ends[0].port)),to=byTarget.get(key(ends[1]?.port));
     if(from&&to)lines.push({target:ends[0].cable,name:identityName(items.get(id)),from:from.center,to:to.center});
   }
