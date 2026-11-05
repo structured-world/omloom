@@ -61,6 +61,16 @@ for(const width of [1440,390])test(`real scoped physical scene and component exp
     await expect(scene).toContainText('5 recorded envelopes');
     await expect(scene).toContainText('1 two-end cable diagrams');
     await page.screenshot({path:`test-results/physical-rack-${width}.png`,fullPage:true});
+    const rackCanvas=scene.getByRole('img',{name:'Physical infrastructure 3D scene'});
+    const rackRect=await rackCanvas.boundingBox();expect(rackRect).not.toBeNull();
+    // Expanding the server opens its enclosure. Its flush front-panel port
+    // must be visible and selectable while the rack remains the scene root.
+    const rackRadius=Math.hypot(.6,2.2,1)*.65,rackAspect=rackRect.width/rackRect.height;
+    const rackCamera=new OrthographicCamera(-rackRadius*rackAspect,rackRadius*rackAspect,rackRadius,-rackRadius,rackRadius/10000,rackRadius*10);
+    const rackCenter=new Vector3(.3,-1.1,-.5);rackCamera.position.copy(rackCenter).add(new Vector3(rackRadius*1.4,rackRadius,rackRadius*1.6));rackCamera.lookAt(rackCenter);rackCamera.updateMatrixWorld();
+    const rackPort=new Vector3(.11,-.375,-.06).project(rackCamera);
+    await rackCanvas.click({position:{x:(rackPort.x+1)*rackRect.width/2,y:(1-rackPort.y)*rackRect.height/2}});
+    await expect(scene.getByRole('region',{name:'Selected 3D resource'})).toContainText('eth-a');
     await scene.getByLabel('3D enclosure',{exact:true}).selectOption(`${f.host.assetId}/${f.host.incarnation}`);
     await expect(scene.getByRole('img',{name:'Physical infrastructure 3D scene'})).toBeVisible();
     await expect(scene).toContainText('1 two-end cable diagrams');
@@ -205,5 +215,25 @@ test('an obsolete expansion failure cannot replace a newer scope status',async({
       await expect(scene.getByRole('alert')).toHaveCount(0);
       await expect(scene.getByRole('button',{name:'Spare server',exact:true})).toBeVisible();
     }finally{release();}
+  });
+});
+
+test('a focused service or VM is not submitted as a physical enclosure',async({page})=>{
+  // Logical resources remain inspectable without an invalid physical request
+  // or an automatic jump into a broader infrastructure scope.
+  await withFieldHost(async url=>{
+    const {m,rpc}=await workspaceClient(url);
+    for(const kind of [m.AssetKind.SERVICE,m.AssetKind.VIRTUAL_MACHINE]){
+      const target=(await rpc({oneofKind:'write',write:m.Write.create({kind,changes:[{name:'name',value:{oneofKind:'text',text:'Logical resource'}}]})})).mutation.targets[0];
+      await page.goto(`${url}/#/?view=0&asset=${target.assetId}&incarnation=${target.incarnation}`);
+      await expect(page.getByRole('region',{name:'Resource details',exact:true})).toBeVisible();
+      const toggle=page.getByRole('button',{name:'3D scene',exact:true});
+      if(await toggle.getAttribute('aria-pressed')!=='true')await toggle.click();
+      const scene=page.getByRole('region',{name:'Physical 3D workspace',exact:true});
+      await expect(scene.getByRole('status')).toHaveCount(0);
+      await expect(scene.getByRole('alert')).toHaveCount(0);
+      await expect(scene.getByLabel('3D enclosure',{exact:true})).toHaveValue('');
+      await expect(scene).toContainText('Choose an enclosure to inspect its recorded contents.');
+    }
   });
 });

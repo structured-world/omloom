@@ -950,8 +950,10 @@ GPU or webview.
 
 Only recorded geometry is drawn. Unknown or ambiguous positions stay in the list;
 the renderer does not assign plausible dimensions or invent empty space. The
-selected enclosure uses a translucent cutaway so its permitted contents remain
-visible. This is an occlusion treatment, not a confidence score.
+selected enclosure and bodies whose measured children have been expanded use
+a labeled translucent cutaway. Their surfaces do not intercept child selection;
+the enclosing resources remain selectable in the list. Closed bodies remain
+opaque. This is an occlusion treatment, not a confidence score.
 
 `Physical.scene` reprojects explicit current incarnations in one read snapshot.
 Current named cable ends may add up to 64 independently authorized cable labels,

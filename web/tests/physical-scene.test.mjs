@@ -31,6 +31,19 @@ test('an inset usable volume does not translate measured child anchors',()=>{
   v.definitions[1].volume=box(15n,490n);
   assert.deepEqual(sceneData(v,rack).boxes.find(b=>b.target===a).center,anchor.center);
 });
+test('only enclosures of displayed measured children open as cutaways',()=>{
+  // Expanding a measured port opens its owning chassis, without opening a
+  // closed sibling or manufacturing a location for an unknown component.
+  const v=view();v.items.push({target:a,kind:K.PORT,fields:[]},{target:b,kind:K.DEVICE,fields:[]});
+  const offset=90071992547409999n;
+  v.occupancy=[{placement:{item:server,enclosure:rack,volume:box(offset+100n,600n)}},{placement:{item:b,enclosure:rack,volume:box(offset+800n,100n)}}];
+  assert.equal(sceneData(v,rack).boxes.find(box=>box.target===server).cutaway,false);
+  v.occupancy.push({placement:{item:a,enclosure:server,volume:box(20n,10n)}});
+  const result=sceneData(v,rack);
+  assert.equal(result.boxes.find(box=>box.target===server).cutaway,true);
+  assert.equal(result.boxes.find(box=>box.target===b).cutaway,false);
+  assert.equal(result.boxes.find(box=>box.target===a).cutaway,false);
+});
 test('cables require exactly two visible located ends and never guess breakout pairs',()=>{
   // A third named end or an unknown anchor cannot become an apparently surveyed route.
   const v=view();v.items.push({target:a,kind:K.PORT,fields:[]},{target:b,kind:K.PORT,fields:[]});

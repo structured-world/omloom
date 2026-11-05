@@ -50,9 +50,9 @@ export class PhysicalSceneRenderer {
     for(const b of boxes){
       const geometry=new T.BoxGeometry(...b.size);
       const color=b.kind===K.PORT?'#347d8a':b.kind===K.RACK?'#53766b':'#a9c9c1';
-      const mesh=new T.Mesh(geometry,new T.MeshBasicMaterial({color,transparent:b.root,opacity:b.root?.08:1,depthWrite:!b.root}));mesh.position.set(...b.center);mesh.userData.target=b.target;
-      this.scene.add(mesh);this.meshes.push(mesh);if(!b.root)this.selectable.push(mesh);
-      const edge=new T.LineSegments(new T.EdgesGeometry(geometry),new T.LineBasicMaterial({color:b.root?'#769c90':color}));edge.position.copy(mesh.position);edge.userData.target=b.target;this.scene.add(edge);this.meshes.push(edge);
+      const mesh=new T.Mesh(geometry,new T.MeshBasicMaterial({color,transparent:b.cutaway,opacity:b.cutaway?.08:1,depthWrite:!b.cutaway}));mesh.position.set(...b.center);mesh.userData.target=b.target;
+      this.scene.add(mesh);this.meshes.push(mesh);if(!b.cutaway)this.selectable.push(mesh);
+      const edge=new T.LineSegments(new T.EdgesGeometry(geometry),new T.LineBasicMaterial({color:b.cutaway?'#769c90':color}));edge.position.copy(mesh.position);edge.userData.target=b.target;this.scene.add(edge);this.meshes.push(edge);
       bounds.expandByObject(mesh);
     }
     for(const l of lines){const g=new T.BufferGeometry().setFromPoints([new T.Vector3(...l.from),new T.Vector3(...l.to)]);const line=new T.Line(g,new T.LineDashedMaterial({color:'#ad792e',dashSize:.03,gapSize:.015}));line.computeLineDistances();line.userData.target=l.target;this.scene.add(line);this.meshes.push(line);this.selectable.push(line);}

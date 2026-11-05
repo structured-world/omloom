@@ -1,5 +1,5 @@
 import {model,key,identityName,AssetKind as K,type AssetRef} from './api';
-export type SceneBox={target:AssetRef;kind:number;name:string;center:[number,number,number];size:[number,number,number];root:boolean};
+export type SceneBox={target:AssetRef;kind:number;name:string;center:[number,number,number];size:[number,number,number];root:boolean;cutaway:boolean};
 export type SceneLine={target:AssetRef;name:string;from:[number,number,number];to:[number,number,number]};
 const axes=['x','y','z'] as const;
 const max=BigInt(Number.MAX_SAFE_INTEGER);
@@ -32,9 +32,12 @@ export function sceneData(view:model.PhysicalView,root:AssetRef){
     // Keep all origin arithmetic integral, including very large site offsets.
     const center=axes.map((a,i)=>{const doubled=2n*(base[i]!+(isRoot?pose[a]!.startUm:0n))+pose[a]!.lengthUm;return doubled < -max||doubled>max?undefined:Number(doubled)/2_000_000;});
     if(size.some(v=>v===undefined||v<=0)||center.some(v=>v===undefined)){missing.push(item);continue;}
-    boxes.push({target:item.target,kind:item.kind,name:identityName(item),root:isRoot,size:[size[0]!,size[1]!,size[2]!],center:[center[0]!, -center[1]!, -center[2]!]});
+    boxes.push({target:item.target,kind:item.kind,name:identityName(item),root:isRoot,cutaway:isRoot,size:[size[0]!,size[1]!,size[2]!],center:[center[0]!, -center[1]!, -center[2]!]});
   }
   const byTarget=new Map(boxes.map(b=>[key(b.target),b]));
+  // Explicit component expansion opens only the displayed enclosing bodies.
+  // Their surfaces must neither hide nor intercept picks of measured children.
+  for(const b of boxes){if(b.root)continue;const parent=byTarget.get(key(bindings.get(key(b.target))![0]!.enclosure));if(parent)parent.cutaway=true;}
   const cables=new Map<string,model.PhysicalSceneConnection[]>();
   for(const end of view.sceneConnections){const id=key(end.cable);cables.set(id,[...(cables.get(id)??[]),end]);}
   for(const [id,ends]of cables){
