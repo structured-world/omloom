@@ -20,6 +20,17 @@ test('unknown or ambiguous placements never acquire a fabricated position',()=>{
   v.occupancy=[{placement:{item:server,enclosure:rack,volume:box(1n)}},{placement:{item:server,enclosure:rack,volume:box(2n)}}];
   assert.equal(sceneData(v,rack).missing.length,1);
 });
+test('an inset usable volume does not translate measured child anchors',()=>{
+  // Correcting the usable interior cannot move a port measured from the chassis.
+  const v=view(),offset=90071992547409999n;
+  v.items.push({target:a,kind:K.PORT,fields:[]});
+  v.definitions.push({target:server,volume:box(10n,500n)});
+  v.occupancy=[{placement:{item:server,enclosure:rack,volume:box(offset+100n,600n)}},{placement:{item:a,enclosure:server,volume:box(20n,10n)}}];
+  const anchor=sceneData(v,rack).boxes.find(b=>b.target===a);
+  assert.deepEqual(anchor.center,[.000125,-.000125,-.000125]);
+  v.definitions[1].volume=box(15n,490n);
+  assert.deepEqual(sceneData(v,rack).boxes.find(b=>b.target===a).center,anchor.center);
+});
 test('cables require exactly two visible located ends and never guess breakout pairs',()=>{
   // A third named end or an unknown anchor cannot become an apparently surveyed route.
   const v=view();v.items.push({target:a,kind:K.PORT,fields:[]},{target:b,kind:K.PORT,fields:[]});
@@ -40,3 +51,4 @@ test('two visible breakout legs without complete topology remain unpaired',()=>{
   v.twoEndCables=[];
   assert.equal(sceneData(v,rack).lines.length,0);
 });
+

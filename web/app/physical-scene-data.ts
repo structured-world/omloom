@@ -19,6 +19,8 @@ export function sceneData(view:model.PhysicalView,root:AssetRef){
     const candidates=bindings.get(id);if(candidates?.length!==1)return undefined;
     const p=candidates[0]!,volume=p.volume;if(!volume?.x||!volume.y||!volume.z)return undefined;
     const parent=origin(key(p.enclosure),seen);if(!parent)return undefined;
+    // A nested usable volume can be inset from its chassis. Its minimum is a
+    // fit boundary, not a translation of measured child coordinates.
     const result:[bigint,bigint,bigint]=[parent[0]+volume.x.startUm,parent[1]+volume.y.startUm,parent[2]+volume.z.startUm];origins.set(id,result);return result;
   }
   for(const [id,item]of items){
