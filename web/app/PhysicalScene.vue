@@ -29,7 +29,7 @@ async function refresh(){
 }
 async function expand(target:AssetRef,more=false){
   if(busy.value)return;const token=++generation;busy.value=true;error.value='';
-  try{const reply=await call({oneofKind:'query',query:model.Query.create({view:model.View.HARDWARE,roots:root.value?[root.value]:[],focus:target,levelOnly:true,limit:25,columns:['name'],cursor:more?continuations.value.get(key(target)):undefined})});if(token!==generation||disposed)return;if(reply.oneofKind!=='page')throw Error('Components are unavailable.');
+  try{const reply=await call({oneofKind:'query',query:model.Query.create({view:model.View.HARDWARE,roots:root.value?[root.value]:[],focus:target,levelOnly:true,requirePhysicalRead:true,limit:25,columns:['name'],cursor:more?continuations.value.get(key(target)):undefined})});if(token!==generation||disposed)return;if(reply.oneofKind!=='page')throw Error('Components are unavailable.');
     const next=new Map(subjects.value.map(v=>[key(v),v]));for(const item of reply.page.items)if(item.target&&eligible(item))next.set(key(item.target),item.target);
     if(next.size>128)throw Error('The scene supports 128 selected resources. Open a smaller enclosure or return to the table.');
     subjects.value=[...next.values()];if(reply.page.next)continuations.value.set(key(target),reply.page.next);else continuations.value.delete(key(target));

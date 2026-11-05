@@ -2,6 +2,23 @@ import {test,expect} from '@playwright/test';
 import {withFieldHost} from './field-host.mjs';
 import {workspaceClient} from './workspace-client.mjs';
 import {OrthographicCamera,Vector3} from 'three';
+import {mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+
+async function interiorRaster(page,png){
+  // Fractional CSS scrolling changes the screenshot's one-pixel clip boundary.
+  // Compare every interior pixel exactly, including image dimensions, not PNG encoding.
+  return page.evaluate(async base64=>{
+    const image=await createImageBitmap(new Blob([Uint8Array.from(atob(base64),c=>c.charCodeAt(0))],{type:'image/png'}));
+    const width=image.width,height=image.height;
+    const canvas=new OffscreenCanvas(width-2,height-2),context=canvas.getContext('2d');
+    context.drawImage(image,-1,-1);image.close();
+    const pixels=context.getImageData(0,0,width-2,height-2).data;
+    const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',pixels)));
+    return {width,height,digest};
+  },png.toString('base64'));
+}
 
 async function fixture(url){
   const {m,rpc}=await workspaceClient(url);
@@ -110,4 +127,56 @@ test('changing scope during renderer loading creates one current canvas',async({
       await expect(scene.getByRole('img',{name:'Physical infrastructure 3D scene'})).toHaveCount(1);
     }finally{release();}
   });
+});
+
+test('Reset camera restores the original orthographic zoom',async({page})=>{
+  // Reset must restore scale as well as position; otherwise a new enclosure
+  // inherits the previous wheel/touch magnification.
+  await withFieldHost(async url=>{
+    const f=await fixture(url);await page.goto(`${url}/#/?view=2&scope=${f.rack.assetId}&scopeInc=${f.rack.incarnation}`);
+    await page.getByRole('button',{name:'3D scene',exact:true}).click();
+    const scene=page.getByRole('region',{name:'Physical 3D workspace',exact:true});
+    const canvas=scene.getByRole('img',{name:'Physical infrastructure 3D scene'});
+    await expect(canvas).toBeVisible();
+    const before=await canvas.screenshot({path:test.info().outputPath('reset-before.png')});
+    await canvas.hover();await page.mouse.wheel(0,-400);
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    const baseline=await interiorRaster(page,before);
+    expect(await interiorRaster(page,await canvas.screenshot())).not.toEqual(baseline);
+    await scene.getByRole('button',{name:'Reset camera',exact:true}).click();
+    const after=await canvas.screenshot({path:test.info().outputPath('reset-after.png')});
+    await test.info().attach('reset-before',{body:before,contentType:'image/png'});
+    await test.info().attach('reset-after',{body:after,contentType:'image/png'});
+    expect(await interiorRaster(page,after)).toEqual(baseline);
+  });
+});
+
+test('name-only physical children cannot poison component expansion',async({page})=>{
+  // Real store grants allow the port label and relation but deny its physical
+  // field. Expanding the server must retain the authorized enclosure scene.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-scene-grants-')),grants=join(dir,'grants.json');
+  await writeFile(grants,JSON.stringify([
+    {selection:{scope:'all'},read:{mode:'selected',fields:['name','relations']},write:{mode:'all'},writable:true},
+    {selection:{scope:'kinds',kinds:['ASSET_KIND_RACK','ASSET_KIND_DEVICE']},read:{mode:'all'},write:{mode:'all'},writable:true},
+  ]));
+  try{await withFieldHost(async url=>{
+    const {m,rpc}=await workspaceClient(url);
+    const create=async(kind,name)=>(await rpc({oneofKind:'write',write:m.Write.create({kind,changes:[{name:'name',value:{oneofKind:'text',text:name}}]})})).mutation.targets[0];
+    const rack=await create(m.AssetKind.RACK,'Permitted rack'),host=await create(m.AssetKind.DEVICE,'Permitted server'),port=await create(m.AssetKind.PORT,'Name-only port');
+    await rpc({oneofKind:'relation',relation:m.Relationship.create({relation:{from:host,to:port,kind:m.RelationKind.HAS_PORT}})});
+    const axis={startUm:0n,lengthUm:1000000n},volume={x:axis,y:axis,z:axis};
+    const physical=async action=>(await rpc({oneofKind:'physical',physical:m.Physical.create({action})})).physical;
+    await physical({oneofKind:'define',define:{definition:{target:rack,basis:'Measured rack',volume}}});
+    const {plan}=await physical({oneofKind:'save',save:{plan:{name:'Actual position',steps:[{action:{oneofKind:'placement',placement:{item:host,enclosure:rack,volume}}}]}}});
+    await physical({oneofKind:'complete',complete:{plan:{id:plan.id,revision:plan.revision},actualState:true,discrepancy:'Inspected installation',completedSteps:[0]}});
+    await page.goto(`${url}/#/?view=2&scope=${rack.assetId}&scopeInc=${rack.incarnation}`);
+    await page.getByRole('button',{name:'3D scene',exact:true}).click();
+    const scene=page.getByRole('region',{name:'Physical 3D workspace',exact:true});
+    await scene.getByRole('button',{name:'Permitted server',exact:true}).click();
+    await scene.getByRole('button',{name:'Show components',exact:true}).click();
+    await expect(scene.getByRole('status')).toHaveCount(0);
+    await expect(scene.getByRole('alert')).toHaveCount(0);
+    await expect(scene.getByRole('button',{name:'Permitted rack',exact:true})).toBeVisible();
+    await expect(scene).not.toContainText('Name-only port');
+  },{command:['target/debug/omloom-dev','--grants',grants]});}finally{await rm(dir,{recursive:true,force:true});}
 });

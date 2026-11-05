@@ -937,6 +937,10 @@ physical definitions, placement envelopes and port ownership. **Show components*
 reads one page of that resource's local children; **More components** explicitly
 continues it. The scene admits at most 128 selected resources and 256 selected
 bindings. It never loads an entire site just to draw one rack.
+Automatic expansion requests `Query.require_physical_read`, applying current
+physical-field permission before count and pagination. Ordinary inventory can
+still show a permitted label without geometry; an explicit unauthorized scene
+subject remains an error rather than being silently redacted.
 
 Rotate, zoom and pan the view, select an object or use the equivalent resource
 list, then **Open resource** for its ordinary card. **Return to table** preserves

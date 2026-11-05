@@ -542,6 +542,9 @@ impl Store {
             "a.parent='assets'".to_owned(),
             visible_clause(context, None, &mut values),
         ];
+        if query.require_physical_read {
+            clauses.push(visible_clause(context, Some("physical"), &mut values));
+        }
         clauses.push(format!(
             "a.adoption={}",
             parameter(

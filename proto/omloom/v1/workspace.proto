@@ -49,6 +49,10 @@ message Predicate {
   optional uint64 definition_generation = 3;
 }
 message Query {
+  // Explicitly restrict this result to objects with current physical-field
+  // read permission, before count and pagination. Used for automatic scene
+  // expansion; grants are still derived by the server, never supplied here.
+  bool require_physical_read = 17;
   // User-selected presentation; it never grants access or changes adoption.
   View view = 1;
   // Selected root identities; an empty set means all currently permitted inventory.

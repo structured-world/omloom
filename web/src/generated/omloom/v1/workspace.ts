@@ -41,6 +41,14 @@ export interface Predicate {
  */
 export interface Query {
     /**
+     * Explicitly restrict this result to objects with current physical-field
+     * read permission, before count and pagination. Used for automatic scene
+     * expansion; grants are still derived by the server, never supplied here.
+     *
+     * @generated from protobuf field: bool require_physical_read = 17
+     */
+    requirePhysicalRead: boolean;
+    /**
      * User-selected presentation; it never grants access or changes adoption.
      *
      * @generated from protobuf field: omloom.workspace.v1.View view = 1
@@ -7649,6 +7657,7 @@ export const Predicate = new Predicate$Type();
 class Query$Type extends MessageType<Query> {
     constructor() {
         super("omloom.workspace.v1.Query", [
+            { no: 17, name: "require_physical_read", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
             { no: 1, name: "view", kind: "enum", T: () => ["omloom.workspace.v1.View", View, "VIEW_"] },
             { no: 2, name: "roots", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AssetRef },
             { no: 3, name: "kinds", kind: "enum", repeat: 1 /*RepeatType.PACKED*/, T: () => ["omloom.v1.AssetKind", AssetKind, "ASSET_KIND_"] },

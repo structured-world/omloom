@@ -274,3 +274,80 @@ fn scene_cables_do_not_reveal_remote_or_hidden_endpoints() -> TestResult {
     assert!(partial.two_end_cables.is_empty());
     Ok(())
 }
+
+// Automatic scene expansion filters physical permission before count/limit;
+// ordinary inventory still permits labels of physically undisclosable ports.
+#[test]
+fn physical_child_selection_filters_permissions_before_pagination() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let owner = create(&store, &actor, K::Device, "Physical parent")?;
+    let mut visible = None;
+    for index in 0..27 {
+        let port = create(&store, &actor, K::Port, &format!("Port {index:02}"))?;
+        call(
+            &store,
+            &actor,
+            Command::Relation(api::Relationship {
+                relation: Some(wire::Relation {
+                    from: Some(owner.clone()),
+                    to: Some(port.clone()),
+                    kind: wire::RelationKind::HasPort as i32,
+                    ..Default::default()
+                }),
+                remove: false,
+            }),
+        )?;
+        visible = Some(port);
+    }
+    let visible = visible.ok_or("visible port")?;
+    let mut limited = actor.clone();
+    limited.grants = vec![
+        Grant {
+            scope: Scope::All,
+            read: Fields::Selected(vec!["name".into(), "relations".into()]),
+            write: Fields::Selected(Vec::new()),
+            writable: false,
+        },
+        Grant {
+            scope: Scope::Targets(vec![
+                AssetRef::try_from(&owner)?,
+                AssetRef::try_from(&visible)?,
+            ]),
+            read: Fields::All,
+            write: Fields::Selected(Vec::new()),
+            writable: false,
+        },
+    ];
+    let before = store.usage()?;
+    let query = api::Query {
+        view: api::View::Hardware as i32,
+        focus: Some(owner),
+        level_only: true,
+        limit: 1,
+        require_physical_read: true,
+        ..Default::default()
+    };
+    let Reply::Page(page) = call(&store, &limited, Command::Query(query.clone()))? else {
+        return Err("page".into());
+    };
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].target, Some(visible));
+    assert!(page.next.is_none());
+    let Reply::Page(ordinary) = call(
+        &store,
+        &limited,
+        Command::Query(api::Query {
+            require_physical_read: false,
+            ..query
+        }),
+    )?
+    else {
+        return Err("ordinary page".into());
+    };
+    assert_eq!(ordinary.total, 27);
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
