@@ -39,6 +39,7 @@ fn refreshed(store: &Store, basis: char) -> Result<Vec<wire::AssetRef>, Error> {
     super::super::host_import::accept(store, &super::super::host_import::preview(store, input)?)?;
     let source = omloom_contracts::ids::SourceId::generate().to_string();
     for target in &accepted.targets {
+        let projection = store.usage()?.revision;
         let mut asset = store.asset(AssetRef::try_from(target).map_err(|_| Error::Corrupt)?)?;
         let revision = asset.revision;
         asset.imported.push(observation(
@@ -46,9 +47,10 @@ fn refreshed(store: &Store, basis: char) -> Result<Vec<wire::AssetRef>, Error> {
             250,
             vec![text_field("description", &format!("Imported {basis}"))],
         ));
-        store.save_asset(
+        store.refresh_asset(
             &admit(wire::record::Body::Asset(asset)),
-            Some(revision),
+            revision,
+            projection,
             "fixture-operator",
             300,
         )?;
