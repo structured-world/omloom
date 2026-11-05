@@ -224,16 +224,17 @@ test('an obsolete answer cannot finish or replace a newer question', async ({ pa
     const newGate = new Promise(resolve => { releaseNew = resolve; });
     const oldPending = new Promise(resolve => { oldReady = resolve; });
     const newPending = new Promise(resolve => { newReady = resolve; });
-    const network = [];
-    page.on('requestfailed', value => network.push(['failed', value.url(), value.failure()]));
-    page.on('requestfinished', value => network.push(['finished', value.url()]));
+    let oldRequest, oldBody, onFinished, onFailed;
     await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
       if (request(m, route).command.oneofKind !== 'evaluateRequirements') return route.continue();
       const index = ++evaluations; const response = await route.fetch();
-      network.push(['fetched', index, response.status(), response.headers()]);
-      if (index === 1) { oldReady(); await oldGate; } else { newReady(); await newGate; }
-      await route.fulfill({ response });
-      network.push(['fulfilled', index]);
+      const body = await response.body(); const headers = response.headers();
+      // The fetched body is already dechunked. Replay its bytes with a measured
+      // length instead of advertising the upstream streaming framing.
+      delete headers['transfer-encoding']; delete headers['content-length'];
+      if (index === 1) { oldRequest = route.request(); oldBody = body; oldReady(); await oldGate; }
+      else { newReady(); await newGate; }
+      await route.fulfill({ response, body, headers });
     });
     try {
       await panel.getByRole('button', { name: 'Check requirement', exact: true }).click(); await oldPending;
@@ -242,18 +243,28 @@ test('an obsolete answer cannot finish or replace a newer question', async ({ pa
       await panel.getByRole('combobox', { name: 'Required comparison', exact: true }).selectOption(String(m.RequirementComparison.MAXIMUM));
       await panel.getByRole('textbox', { name: 'Required value (count)', exact: true }).fill('12');
       await panel.getByRole('button', { name: 'Check requirement', exact: true }).click(); await newPending;
-      const delivered = page.waitForResponse(response => {
-        if (!response.url().endsWith('/omloom.workspace.v1.Workspace/Call')) return false;
-        const command = m.Request.fromBinary(response.request().postDataBuffer().subarray(5)).command;
-        return command.oneofKind === 'evaluateRequirements' && command.evaluateRequirements.nodes[0].expression.field.comparison === m.RequirementComparison.MINIMUM;
+      const delivered = page.waitForResponse(response => response.request() === oldRequest);
+      // Response.finished() does not reject on requestfailed in this Playwright
+      // version. A failed delivery must fail the test, not wait for its timeout.
+      const completed = new Promise((resolve, reject) => {
+        onFinished = value => { if (value === oldRequest) resolve(); };
+        onFailed = value => { if (value === oldRequest) reject(Error(`Old answer delivery failed: ${value.failure()?.errorText}`)); };
+        page.on('requestfinished', onFinished); page.on('requestfailed', onFailed);
       });
-      releaseOld(); await (await delivered).finished();
+      releaseOld();
+      const [response] = await Promise.all([delivered, completed]);
+      expect(await response.body()).toEqual(oldBody);
+      expect(await response.headerValue('content-length')).toBe(String(oldBody.length));
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       await expect(panel.getByRole('button', { name: 'Checking…', exact: true })).toBeDisabled();
       releaseNew();
       await expect(panel.getByRole('heading', { name: 'Recorded evidence matches', exact: true })).toBeVisible();
       await expect(panel.getByRole('textbox', { name: 'Required value (count)', exact: true })).toHaveValue('12');
-    } finally { console.log(JSON.stringify(network)); releaseOld(); releaseNew(); }
+    } finally {
+      if (onFinished) page.off('requestfinished', onFinished);
+      if (onFailed) page.off('requestfailed', onFailed);
+      releaseOld(); releaseNew();
+    }
   });
 });
 
