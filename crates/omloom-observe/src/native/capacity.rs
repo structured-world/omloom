@@ -1,5 +1,7 @@
 //! Selected execution-context descriptors, never permanent host identifiers.
 use super::*;
+#[cfg(test)]
+mod tests;
 
 fn positive(name: &str, value: &str) -> Result<wire::Field> {
     let value = value
@@ -60,6 +62,8 @@ pub(super) async fn collect(runner: &mut Runner, report: &mut api::HostReport) -
                     if words.next() != Some("kB") || kib <= 0 {
                         return Err("Unsupported memory unit".into());
                     }
+                    // Linux fs/proc/meminfo.c::show_val_kb shifts page counts
+                    // by PAGE_SHIFT-10: its kB values represent 1024 bytes.
                     let bytes = kib.checked_mul(1024).ok_or("Memory capacity overflow")?;
                     fields.push(positive("visible_memory_bytes", &bytes.to_string())?);
                 }
