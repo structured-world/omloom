@@ -159,3 +159,36 @@ async fn cpu_model_controls_are_unavailable_on_all_profiles() -> Result<()> {
     }
     Ok(())
 }
+
+// An omitted MemTotal is unknown, not a reason to discard already read CPUs or
+// stop collecting the following model descriptor.
+#[tokio::test]
+async fn missing_memtotal_retains_other_capacity_fields() -> Result<()> {
+    const INPUTS: &[(&str, &str)] = &[
+        ("getconf", "8"),
+        ("cat", "MemFree: 16 kB\n"),
+        ("cat", "model name: Fixture CPU\n"),
+    ];
+    let mut value = report("linux");
+    collect(&mut Runner::scripted(INPUTS, 16 * 1024 * 1024), &mut value).await?;
+    assert!(
+        value.findings[0]
+            .fields
+            .iter()
+            .any(|f| f.name == "logical_cpus")
+    );
+    assert!(
+        value.findings[0]
+            .fields
+            .iter()
+            .any(|f| f.name == "cpu_model")
+    );
+    assert!(
+        !value.findings[0]
+            .fields
+            .iter()
+            .any(|f| f.name == "visible_memory_bytes")
+    );
+    assert_eq!(value.coverage[0].status, "partial");
+    Ok(())
+}

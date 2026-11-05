@@ -52,24 +52,23 @@ pub(super) async fn collect(runner: &mut Runner, report: &mut api::HostReport) -
             }
             match runner.run("cat", &["/proc/meminfo"]).await {
                 Ok(v) => {
-                    let raw = v
-                        .text
-                        .lines()
-                        .find_map(|v| v.strip_prefix("MemTotal:"))
-                        .ok_or("Memory capacity unavailable")?;
-                    let mut words = raw.split_whitespace();
-                    let kib = words
-                        .next()
-                        .ok_or("Memory capacity unavailable")?
-                        .parse::<i64>()
-                        .map_err(|_| "Invalid memory capacity")?;
-                    if words.next() != Some("kB") || kib <= 0 {
-                        return Err("Unsupported memory unit".into());
+                    if let Some(raw) = v.text.lines().find_map(|v| v.strip_prefix("MemTotal:")) {
+                        let mut words = raw.split_whitespace();
+                        let kib = words
+                            .next()
+                            .ok_or("Memory capacity unavailable")?
+                            .parse::<i64>()
+                            .map_err(|_| "Invalid memory capacity")?;
+                        if words.next() != Some("kB") || kib <= 0 {
+                            return Err("Unsupported memory unit".into());
+                        }
+                        // Linux fs/proc/meminfo.c::show_val_kb shifts page counts
+                        // by PAGE_SHIFT-10: its kB values represent 1024 bytes.
+                        let bytes = kib.checked_mul(1024).ok_or("Memory capacity overflow")?;
+                        fields.push(positive("visible_memory_bytes", &bytes.to_string())?);
+                    } else {
+                        unavailable += 1;
                     }
-                    // Linux fs/proc/meminfo.c::show_val_kb shifts page counts
-                    // by PAGE_SHIFT-10: its kB values represent 1024 bytes.
-                    let bytes = kib.checked_mul(1024).ok_or("Memory capacity overflow")?;
-                    fields.push(positive("visible_memory_bytes", &bytes.to_string())?);
                 }
                 Err(_) => unavailable += 1,
             }
