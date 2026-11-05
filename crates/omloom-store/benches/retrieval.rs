@@ -268,6 +268,7 @@ fn host_source_options(c: &mut Criterion) {
         let request = api::HostSources {
             host: Some(accepted.targets[0].clone()),
             report: Some(Box::new(report)),
+            ..Default::default()
         };
         let before = store.usage().expect("usage");
         group.bench_with_input(

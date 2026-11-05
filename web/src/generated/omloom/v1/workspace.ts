@@ -2976,6 +2976,31 @@ export interface HostSources {
      * @generated from protobuf field: omloom.workspace.v1.HostReport report = 2
      */
     report?: HostReport;
+    /**
+     * Optional bounded candidate check for one selected anonymous source. Omit
+     * report in this mode; the server derives current custody and scope itself.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.HostSourceProbe probe = 3
+     */
+    probe?: HostSourceProbe;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.HostSourceProbe
+ */
+export interface HostSourceProbe {
+    /**
+     * Server-issued selected source reference, never a caller identity or grant.
+     *
+     * @generated from protobuf field: string source_ref = 1
+     */
+    sourceRef: string;
+    /**
+     * Current candidate incarnations already shown by search, at most 25. This
+     * selects work only; source custody and host membership are checked server-side.
+     *
+     * @generated from protobuf field: repeated omloom.v1.AssetRef targets = 2
+     */
+    targets: AssetRef[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.HostSource
@@ -2999,6 +3024,13 @@ export interface HostSource {
      * @generated from protobuf field: repeated omloom.workspace.v1.HostSelection matches = 3
      */
     matches: HostSelection[];
+    /**
+     * Permitted probe targets with existing custody in this selected source and
+     * host. These are eligible choices, not confirmed matches or new adoption.
+     *
+     * @generated from protobuf field: repeated omloom.v1.AssetRef matchable_targets = 4
+     */
+    matchableTargets: AssetRef[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.HostSourceOptions
@@ -8902,7 +8934,8 @@ class HostSources$Type extends MessageType<HostSources> {
     constructor() {
         super("omloom.workspace.v1.HostSources", [
             { no: 1, name: "host", kind: "message", T: () => AssetRef },
-            { no: 2, name: "report", kind: "message", T: () => HostReport }
+            { no: 2, name: "report", kind: "message", T: () => HostReport },
+            { no: 3, name: "probe", kind: "message", T: () => HostSourceProbe }
         ]);
     }
 }
@@ -8911,12 +8944,26 @@ class HostSources$Type extends MessageType<HostSources> {
  */
 export const HostSources = new HostSources$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class HostSourceProbe$Type extends MessageType<HostSourceProbe> {
+    constructor() {
+        super("omloom.workspace.v1.HostSourceProbe", [
+            { no: 1, name: "source_ref", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "targets", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AssetRef }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostSourceProbe
+ */
+export const HostSourceProbe = new HostSourceProbe$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class HostSource$Type extends MessageType<HostSource> {
     constructor() {
         super("omloom.workspace.v1.HostSource", [
             { no: 1, name: "reference", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 2, name: "label", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 3, name: "matches", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostSelection }
+            { no: 3, name: "matches", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostSelection },
+            { no: 4, name: "matchable_targets", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AssetRef }
         ]);
     }
 }

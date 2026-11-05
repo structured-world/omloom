@@ -2,6 +2,33 @@ import { test, expect } from '@playwright/test';
 import { withFieldHost } from './field-host.mjs';
 import { workspaceClient } from './workspace-client.mjs';
 
+test('anonymous refresh offers only targets with existing source custody',async({page})=>{
+  // Explicit matching is required again, but refresh must not offer an existing
+  // installation whose facts have never belonged to the chosen source.
+  await withFieldHost(async url=>{
+    const {m,rpc}=await workspaceClient(url);
+    const field=value=>({name:'name',value:{oneofKind:'text',text:value}});
+    const report=m.HostReport.create({version:1,platform:'linux',bootBasis:'b'.repeat(64),observedAt:100n,findings:[
+      {key:'hardware',kind:m.AssetKind.DEVICE,fields:[field('Matched host')]},
+      {key:'installation',kind:m.AssetKind.SOFTWARE_INSTALLATION,parent:'hardware',fields:[field('Known installation')]},
+    ]});
+    const prepared=await rpc({oneofKind:'hostImport',hostImport:m.HostImport.create({source:'Manual source',report,selection:report.findings.map(v=>({key:v.key}))})});
+    const accepted=await rpc({oneofKind:'hostImport',hostImport:m.HostImport.create({preview:prepared.preview.id})});
+    const host=accepted.mutation.targets[0];
+    await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.SOFTWARE_INSTALLATION,parent:host,changes:[field('Unmapped installation')]})});
+    report.observedAt=200n;
+    await page.goto(`${url}/#/?asset=${host.assetId}&incarnation=${host.incarnation}`);
+    await page.getByRole('button',{name:'Load observation package',exact:true}).click();
+    await page.getByLabel('Host report file').setInputFiles({name:'anonymous.omloom',mimeType:'application/octet-stream',buffer:Buffer.from(m.Request.toBinary(m.Request.create({command:{oneofKind:'hostImport',hostImport:m.HostImport.create({report})}})))});
+    const dialog=page.getByRole('dialog',{name:'Refresh host observations',exact:true});
+    const installation=dialog.locator('.preview').filter({has:page.getByText('software installation: Known installation',{exact:true})});
+    await installation.getByRole('button',{name:'Match existing resource',exact:true}).click();
+    await expect(installation.locator('.identity-candidate')).toHaveCount(1);
+    await expect(installation.locator('.identity-candidate')).toContainText('Known installation');
+    await expect(installation).not.toContainText('Unmapped installation');
+  });
+});
+
 for (const width of [1440, 390]) test(`anonymous host comparison and explicit association at ${width}px`, async ({ page }) => {
   // A real same-model fleet must remain ambiguous. Only an explicit comparison
   // decision associates the report, and the next anonymous file starts unresolved.

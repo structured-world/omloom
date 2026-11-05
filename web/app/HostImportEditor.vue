@@ -23,6 +23,7 @@ const sources=ref<model.HostSource[]>([]);const sourceRef=ref('');const confirme
 const pending=ref(false);const applyWorking=ref<model.WorkingContext>();
 const available=computed(()=>new Set(sources.value.find(v=>v.reference===sourceRef.value)?.matches.map(v=>v.key)??[]));
 function chooseSource(){
+  matchGeneration++;matching.value='';choices.value=[];next.value=undefined;compared.value=[];candidateRevision.value=undefined;
   const choice=sources.value.find(v=>v.reference===sourceRef.value);
   selected.value=choice?.matches.map(v=>v.key)??[];
   matches.value=new Map(choice?.matches.flatMap(v=>v.target?[[v.key,{target:v.target,name:`Existing ${v.target.assetId.slice(-8)}`}]]:[])??[]);
@@ -101,8 +102,17 @@ async function find(candidate:string,more=false){
     const item=report.value?.findings.find(v=>v.key===candidate);if(!item)return;
     const response=await call({oneofKind:'query',query:model.Query.create({kinds:unclassified(item)?[AssetKind.DEVICE,AssetKind.VIRTUAL_MACHINE]:[item.kind],search:search.value,roots:working.roots,focus:working.focus,columns:['name'],limit:25,cursor:more?next.value:undefined})});
     if(generation!==matchGeneration)return;
-    if(response.oneofKind!=='page')throw Error('Matching resources are unavailable.');choices.value=response.page.items;next.value=response.page.next;candidateRevision.value=response.page.revision;
+    if(response.oneofKind!=='page')throw Error('Matching resources are unavailable.');
+    const permitted=await refreshChoices(response.page.items);if(generation!==matchGeneration)return;
+    choices.value=permitted;next.value=response.page.next;candidateRevision.value=response.page.revision;
   }catch(e){if(generation===matchGeneration)error.value=String(e);}
+}
+async function refreshChoices(items:model.Item[]){
+  if(!refreshing.value||!anonymous.value||!items.length)return items;
+  const response=await call({oneofKind:'hostSources',hostSources:model.HostSources.create({host:props.host?.target,probe:{sourceRef:sourceRef.value,targets:items.flatMap(i=>i.target?[i.target]:[])}})},working);
+  if(response.oneofKind!=='hostSourceOptions')throw Error('Existing source custody is unavailable.');
+  const permitted=new Set(response.hostSourceOptions.sources.flatMap(s=>s.matchableTargets.map(key)));
+  return items.filter(i=>permitted.has(key(i.target)));
 }
 function match(candidate:string,choice:model.Item){if(!choice.target)return;matchGeneration++;matches.value.set(candidate,{target:choice.target,name:display(choice.fields.find(v=>v.name==='name')),basis:candidateRevision.value});adopting.value.delete(candidate);matching.value='';preview.value=undefined;}
 function unresolved(candidate:string){matchGeneration++;matches.value.delete(candidate);adopting.value.delete(candidate);selected.value=selected.value.filter(v=>v!==candidate);matching.value='';preview.value=undefined;}
@@ -130,7 +140,9 @@ async function identityMatches(item:model.HostFinding,more=false){
     const kind=unclassified(item)?hostKind.value:item.kind;
     const response=await call({oneofKind:'findIdentityCandidates',findIdentityCandidates:model.FindIdentityCandidates.create({finding:item,kind:unclassified(item)?kind:undefined,cursor:more?candidateCursor:undefined})},working);
     if(generation!==matchGeneration)return;
-    if(response.oneofKind!=='identityCandidates')throw Error('Identity candidates are unavailable.');choices.value=response.identityCandidates.items;explanations.value=response.identityCandidates.explanations;next.value=response.identityCandidates.next;candidateRevision.value=response.identityCandidates.revision;explained.value=true;compared.value=[];
+    if(response.oneofKind!=='identityCandidates')throw Error('Identity candidates are unavailable.');
+    const permitted=await refreshChoices(response.identityCandidates.items);if(generation!==matchGeneration)return;
+    choices.value=permitted;explanations.value=permitted.map(i=>response.identityCandidates.explanations[response.identityCandidates.items.findIndex(v=>key(v.target)===key(i.target))]!);next.value=response.identityCandidates.next;candidateRevision.value=response.identityCandidates.revision;explained.value=true;compared.value=[];
     if(!choices.value.length)error.value='No comparable candidates in this selection. Missing evidence does not establish a new identity.';
   }catch(e){if(generation===matchGeneration)error.value=String(e);}
 }

@@ -1255,6 +1255,16 @@ message HostSources {
   // Bounded native package, used only for compatibility and permitted matches.
   // This read never retains the package or changes freshness.
   HostReport report = 2;
+  // Optional bounded candidate check for one selected anonymous source. Omit
+  // report in this mode; the server derives current custody and scope itself.
+  optional HostSourceProbe probe = 3;
+}
+message HostSourceProbe {
+  // Server-issued selected source reference, never a caller identity or grant.
+  string source_ref = 1;
+  // Current candidate incarnations already shown by search, at most 25. This
+  // selects work only; source custody and host membership are checked server-side.
+  repeated omloom.v1.AssetRef targets = 2;
 }
 message HostSource {
   // Server-owned opaque reference, independent of the displayed label.
@@ -1263,6 +1273,9 @@ message HostSource {
   string label = 2;
   // Only permitted existing matches from this package, with exact incarnations.
   repeated HostSelection matches = 3;
+  // Permitted probe targets with existing custody in this selected source and
+  // host. These are eligible choices, not confirmed matches or new adoption.
+  repeated omloom.v1.AssetRef matchable_targets = 4;
 }
 message HostSourceOptions {
   // Compatible permitted source bindings. Empty means no available binding,

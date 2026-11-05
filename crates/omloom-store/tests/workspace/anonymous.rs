@@ -93,12 +93,81 @@ fn anonymous_refresh_without_hardware_omits_host_source_option() -> TestResult {
         Command::HostSources(api::HostSources {
             host: accepted.targets.first().cloned(),
             report: Some(report),
+            ..Default::default()
         }),
     )?
     else {
         return Err("source options".into());
     };
     assert!(options.sources.is_empty());
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// Eligibility probes reuse existing manual custody, reveal only permitted
+// targets inside this host, and never retain another candidate/source registry.
+#[test]
+fn anonymous_refresh_probes_current_scoped_custody_without_writes() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut input = host_import::draft();
+    input.report.as_mut().ok_or("report")?.source_basis.clear();
+    let accepted = host_import::accept(&store, &host_import::preview(&store, input.clone())?)?;
+    let Reply::HostSourceOptions(options) = call(
+        &store,
+        &operator(),
+        Command::HostSources(api::HostSources {
+            host: Some(accepted.targets[0].clone()),
+            report: input.report,
+            ..Default::default()
+        }),
+    )?
+    else {
+        return Err("sources".into());
+    };
+    let source = options.sources[0].reference.clone();
+    let other = create(&store, &operator(), K::Device, "Unmapped candidate")?;
+    let before = store.usage()?;
+    let action = || {
+        Command::HostSources(api::HostSources {
+            host: Some(accepted.targets[0].clone()),
+            probe: Some(api::HostSourceProbe {
+                source_ref: source.clone(),
+                targets: vec![
+                    accepted.targets[1].clone(),
+                    accepted.targets[2].clone(),
+                    other.clone(),
+                ],
+            }),
+            ..Default::default()
+        })
+    };
+    let Reply::HostSourceOptions(value) = call(&store, &operator(), action())? else {
+        return Err("probe".into());
+    };
+    assert_eq!(
+        value.sources[0]
+            .matchable_targets
+            .iter()
+            .map(|v| (&v.asset_id, &v.incarnation))
+            .collect::<BTreeSet<_>>(),
+        accepted.targets[1..]
+            .iter()
+            .map(|v| (&v.asset_id, &v.incarnation))
+            .collect()
+    );
+    let mut limited = operator();
+    limited.grants[0].scope = Scope::Targets(vec![
+        AssetRef::try_from(&accepted.targets[0])?,
+        AssetRef::try_from(&accepted.targets[1])?,
+    ]);
+    let Reply::HostSourceOptions(value) = call(&store, &limited, action())? else {
+        return Err("restricted probe".into());
+    };
+    assert_eq!(
+        value.sources[0].matchable_targets,
+        vec![accepted.targets[1].clone()]
+    );
     assert_eq!(store.usage()?, before);
     Ok(())
 }

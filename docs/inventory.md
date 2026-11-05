@@ -789,6 +789,10 @@ If no compatible source can establish continuity, choose **Match this package
 manually**. Confirm the existing host and each selected finding explicitly through
 the same import workflow. This records current observations without renaming or
 replacing an existing qualified source, and without adopting another chassis.
+During anonymous refresh, candidate pages are checked against the chosen source's
+existing custody and this host before choices are offered. This bounded read sends
+only the selected source reference and candidate identities, not the report again.
+Eligibility never confirms the match automatically or permits new adoption.
 Source discovery considers at most 128 host bindings, each matching at most the
 package's 128 findings, within the shared 512 KiB encoded reply ceiling. Exceeding
 an aggregate reply bound returns a limit error rather than silently omitting sources.

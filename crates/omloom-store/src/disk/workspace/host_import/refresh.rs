@@ -171,8 +171,6 @@ impl Store {
         request: api::HostSources,
         working: &api::WorkingContext,
     ) -> Result<api::Reply> {
-        let report = request.report.as_deref().ok_or(Error::Invalid)?;
-        validate_parts(report, true)?;
         let host = parse_target(request.host.as_ref())?;
         let tx = self.begin()?;
         let host_row = tx.visible_asset(context, host)?;
@@ -187,6 +185,96 @@ impl Store {
             return Err(Error::Denied);
         }
         tx.selection(context, working, false)?.contains(host, &tx)?;
+        if let Some(probe) = request.probe {
+            let source_digest = probe
+                .source_ref
+                .strip_prefix("host-mapping/")
+                .ok_or(Error::Invalid)?;
+            if source_digest.len() != 64 || !source_digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err(Error::Invalid);
+            }
+            if request.report.is_some()
+                || probe.targets.is_empty()
+                || probe.targets.len() > 25
+                || probe.source_ref.len() > 256
+            {
+                return Err(Error::Invalid);
+            }
+            let root = tx.get(&probe.source_ref)?.ok_or(Error::Missing)?;
+            let name = string(&root, "source")?;
+            let importer = root
+                .get("caller")
+                .and_then(Value::as_str)
+                .unwrap_or(&context.actor);
+            if target(&root)? != host
+                || string(&root, "parent")? != format!("{}/host-mappings", asset_key(host))
+                || probe.source_ref != manual_mapping(importer, &name, host)
+            {
+                return Err(Error::Denied);
+            }
+            let targets = probe
+                .targets
+                .iter()
+                .map(|v| parse_target(Some(v)))
+                .collect::<Result<BTreeSet<_>>>()?;
+            let mut keys = Vec::with_capacity(targets.len() * 2);
+            for target in &targets {
+                keys.push(text(asset_key(*target)));
+                keys.push(text(manual_mapping(importer, &name, *target)));
+            }
+            let rows = tx.query(
+                "UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN properties(n) AS p LIMIT 50",
+                params([("keys", Value::Array(keys))]),
+            )?;
+            let rows = rows
+                .into_iter()
+                .map(|row| Ok((string(&row, "key")?, row)))
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            let within = tx.owned_focuses(
+                context,
+                &[target_wire(host)],
+                &targets.iter().copied().collect::<Vec<_>>(),
+            )?;
+            let mut matchable = Vec::new();
+            for candidate in targets {
+                let Some(asset) = rows.get(&asset_key(candidate)) else {
+                    continue;
+                };
+                match tx.require_visible_asset(context, candidate, asset) {
+                    Ok(()) => {}
+                    Err(Error::Denied | Error::Missing) => continue,
+                    Err(e) => return Err(e),
+                }
+                if !within.contains(&candidate) {
+                    continue;
+                }
+                if !context.field(
+                    candidate,
+                    number(asset, "kind")? as i32,
+                    "identity_evidence",
+                    false,
+                ) {
+                    continue;
+                }
+                if let Some(row) = rows.get(&manual_mapping(importer, &name, candidate))
+                    && target(row)? == candidate
+                {
+                    matchable.push(target_wire(candidate));
+                }
+            }
+            return Ok(reply(api::reply::Result::HostSourceOptions(
+                api::HostSourceOptions {
+                    sources: vec![api::HostSource {
+                        reference: probe.source_ref,
+                        label: name,
+                        matchable_targets: matchable,
+                        ..Default::default()
+                    }],
+                },
+            )));
+        }
+        let report = request.report.as_deref().ok_or(Error::Invalid)?;
+        validate_parts(report, true)?;
         let scope = api::WorkingContext {
             roots: vec![target_wire(host)],
             ..Default::default()
@@ -228,6 +316,7 @@ impl Store {
                         target: Some(target_wire(host)),
                         kind: None,
                     }],
+                    ..Default::default()
                 });
                 continue;
             }
@@ -319,6 +408,7 @@ impl Store {
                     .unwrap_or(&name)
                     .into(),
                 matches,
+                ..Default::default()
             };
             let size = source.encoded_len();
             reply_bytes += 1 + prost::length_delimiter_len(size) + size;
