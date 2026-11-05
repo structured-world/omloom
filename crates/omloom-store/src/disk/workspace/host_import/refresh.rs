@@ -37,7 +37,12 @@ impl Tx<'_> {
             .to_owned();
         if super::super::super::target(&source)? != host
             || string(&source, "parent")? != format!("{}/host-mappings", asset_key(host))
-            || refresh.source_ref != mapping(&importer, &name, &report.source_basis, "hardware")
+            || refresh.source_ref
+                != if report.source_basis.is_empty() {
+                    manual_mapping(&importer, &name, host)
+                } else {
+                    mapping(&importer, &name, &report.source_basis, "hardware")
+                }
             || (!request.source.is_empty() && request.source != name)
         {
             return Err(Error::Conflict);
@@ -60,6 +65,11 @@ impl Tx<'_> {
             return Err(Error::Invalid);
         }
         let report = request.report.as_deref().ok_or(Error::Invalid)?;
+        if report.source_basis.is_empty() {
+            // Omitted anonymous parents cannot inherit a previous package's
+            // association merely from a local candidate key.
+            return Err(Error::Invalid);
+        }
         let row = self
             .get(&mapping(
                 importer,
@@ -192,7 +202,26 @@ impl Store {
                 .get("caller")
                 .and_then(Value::as_str)
                 .unwrap_or(&context.actor);
-            if reference != mapping(importer, &name, &report.source_basis, "hardware") {
+            let expected = if report.source_basis.is_empty() {
+                manual_mapping(importer, &name, host)
+            } else {
+                mapping(importer, &name, &report.source_basis, "hardware")
+            };
+            if reference != expected {
+                continue;
+            }
+            if report.source_basis.is_empty() {
+                sources.push(api::HostSource {
+                    reference,
+                    label: name,
+                    // The card supplies the explicitly selected host only.
+                    // Installation/component continuity still needs confirmation.
+                    matches: vec![api::HostSelection {
+                        key: "hardware".into(),
+                        target: Some(target_wire(host)),
+                        kind: None,
+                    }],
+                });
                 continue;
             }
             let mut matches = Vec::new();

@@ -965,6 +965,8 @@ message HostReport {
   // Actual native platform: macos, linux or windows.
   string platform = 2;
   // Source installation evidence, not authenticated machine identity or a grant.
+  // Empty when unavailable: each finding requires new explicit matching or
+  // separate adoption. Names, configuration and boot sessions are no substitute.
   string source_basis = 3;
   // Actual boot/session evidence, checked again before committing the output file.
   string boot_basis = 4;
@@ -1087,10 +1089,30 @@ message FindIdentityCandidates {
   repeated HostIdentityClaim claims = 2;
   // User-reviewed subject layer for claims-only lookup; absent when target is set.
   omloom.v1.AssetKind kind = 3;
+  // Explicit pre-adoption comparison of this bounded finding. Mutually exclusive
+  // with target and claims. Kind above supplies a reviewed physical/VM type
+  // only for an unclassified execution host. Similarity never establishes identity.
+  HostFinding finding = 4;
+  // Server-issued continuation bound to this input, working context, authority
+  // and current revision. Omit for the first page; stale continuations fail.
+  optional string cursor = 5;
 }
 message IdentityCandidates {
   // Bounded visible same-layer subjects; a match is evidence, never a merge.
   repeated Item items = 1;
+  // Explanations in the same order as items for descriptive lookup. Existing
+  // exact-claim lookup omits these. Values obey current field disclosure rights.
+  repeated IdentityCandidateExplanation explanations = 2;
+  // Server-issued continuation when more permitted candidates remain.
+  optional string next = 3;
+}
+message IdentityCandidateExplanation {
+  // Permitted same-layer evidence supporting comparison, not authentication.
+  repeated string matches = 1;
+  // Material incompatible claims, never outweighed by generic similarities.
+  repeated string conflicts = 2;
+  // Missing or unavailable comparison evidence. Absence is not disagreement.
+  repeated string unknowns = 3;
 }
 message ResolveIdentity {
   // Original retired local reference. Resolution is read-only, never an effect target.

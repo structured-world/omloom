@@ -2272,6 +2272,8 @@ export interface HostReport {
     platform: string;
     /**
      * Source installation evidence, not authenticated machine identity or a grant.
+     * Empty when unavailable: each finding requires new explicit matching or
+     * separate adoption. Names, configuration and boot sessions are no substitute.
      *
      * @generated from protobuf field: string source_basis = 3
      */
@@ -2549,6 +2551,21 @@ export interface FindIdentityCandidates {
      * @generated from protobuf field: omloom.v1.AssetKind kind = 3
      */
     kind: AssetKind;
+    /**
+     * Explicit pre-adoption comparison of this bounded finding. Mutually exclusive
+     * with target and claims. Kind above supplies a reviewed physical/VM type
+     * only for an unclassified execution host. Similarity never establishes identity.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.HostFinding finding = 4
+     */
+    finding?: HostFinding;
+    /**
+     * Server-issued continuation bound to this input, working context, authority
+     * and current revision. Omit for the first page; stale continuations fail.
+     *
+     * @generated from protobuf field: optional string cursor = 5
+     */
+    cursor?: string;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.IdentityCandidates
@@ -2560,6 +2577,42 @@ export interface IdentityCandidates {
      * @generated from protobuf field: repeated omloom.workspace.v1.Item items = 1
      */
     items: Item[];
+    /**
+     * Explanations in the same order as items for descriptive lookup. Existing
+     * exact-claim lookup omits these. Values obey current field disclosure rights.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.IdentityCandidateExplanation explanations = 2
+     */
+    explanations: IdentityCandidateExplanation[];
+    /**
+     * Server-issued continuation when more permitted candidates remain.
+     *
+     * @generated from protobuf field: optional string next = 3
+     */
+    next?: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.IdentityCandidateExplanation
+ */
+export interface IdentityCandidateExplanation {
+    /**
+     * Permitted same-layer evidence supporting comparison, not authentication.
+     *
+     * @generated from protobuf field: repeated string matches = 1
+     */
+    matches: string[];
+    /**
+     * Material incompatible claims, never outweighed by generic similarities.
+     *
+     * @generated from protobuf field: repeated string conflicts = 2
+     */
+    conflicts: string[];
+    /**
+     * Missing or unavailable comparison evidence. Absence is not disagreement.
+     *
+     * @generated from protobuf field: repeated string unknowns = 3
+     */
+    unknowns: string[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.ResolveIdentity
@@ -8504,7 +8557,9 @@ class FindIdentityCandidates$Type extends MessageType<FindIdentityCandidates> {
         super("omloom.workspace.v1.FindIdentityCandidates", [
             { no: 1, name: "target", kind: "message", T: () => AssetRef },
             { no: 2, name: "claims", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostIdentityClaim },
-            { no: 3, name: "kind", kind: "enum", T: () => ["omloom.v1.AssetKind", AssetKind, "ASSET_KIND_"] }
+            { no: 3, name: "kind", kind: "enum", T: () => ["omloom.v1.AssetKind", AssetKind, "ASSET_KIND_"] },
+            { no: 4, name: "finding", kind: "message", T: () => HostFinding },
+            { no: 5, name: "cursor", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
         ]);
     }
 }
@@ -8516,7 +8571,9 @@ export const FindIdentityCandidates = new FindIdentityCandidates$Type();
 class IdentityCandidates$Type extends MessageType<IdentityCandidates> {
     constructor() {
         super("omloom.workspace.v1.IdentityCandidates", [
-            { no: 1, name: "items", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Item }
+            { no: 1, name: "items", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Item },
+            { no: 2, name: "explanations", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => IdentityCandidateExplanation },
+            { no: 3, name: "next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
         ]);
     }
 }
@@ -8524,6 +8581,20 @@ class IdentityCandidates$Type extends MessageType<IdentityCandidates> {
  * @generated MessageType for protobuf message omloom.workspace.v1.IdentityCandidates
  */
 export const IdentityCandidates = new IdentityCandidates$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class IdentityCandidateExplanation$Type extends MessageType<IdentityCandidateExplanation> {
+    constructor() {
+        super("omloom.workspace.v1.IdentityCandidateExplanation", [
+            { no: 1, name: "matches", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "conflicts", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "unknowns", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.IdentityCandidateExplanation
+ */
+export const IdentityCandidateExplanation = new IdentityCandidateExplanation$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class ResolveIdentity$Type extends MessageType<ResolveIdentity> {
     constructor() {

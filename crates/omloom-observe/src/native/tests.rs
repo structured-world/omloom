@@ -17,13 +17,14 @@ fn valid_windows_identity_preserves_its_typed_claims() -> Result<()> {
         hardware.digest,
         crate::digest("12345678-1234-1234-1234-123456789abc")
     );
+    let installation = identity.installation.ok_or("installation claim")?;
     assert_eq!(
-        identity.installation.kind,
+        installation.kind,
         api::HostIdentityKind::InstallationId as i32
     );
-    assert_eq!(identity.installation.namespace, "windows/machine-guid");
+    assert_eq!(installation.namespace, "windows/machine-guid");
     assert_eq!(
-        identity.installation.digest,
+        installation.digest,
         crate::digest("abcdef12-3456-7890-abcd-ef1234567890")
     );
     Ok(())
@@ -212,19 +213,40 @@ async fn native_identity_observation_keeps_layers_separate() -> Result<()> {
             return Ok(());
         }
     };
-    assert!(!value.source.is_empty());
     assert!(!value.boot.is_empty());
-    assert_eq!(value.installation.namespace, namespace);
-    assert_eq!(
-        value.installation.kind,
-        api::HostIdentityKind::InstallationId as i32
-    );
-    assert_eq!(value.installation.digest.len(), 64);
+    if let Some(installation) = value.installation {
+        assert!(!value.source.is_empty());
+        assert_eq!(installation.namespace, namespace);
+        assert_eq!(
+            installation.kind,
+            api::HostIdentityKind::InstallationId as i32
+        );
+        assert_eq!(installation.digest.len(), 64);
+    } else {
+        assert!(value.source.is_empty());
+    }
     if let Some(hardware) = value.hardware {
         assert_eq!(hardware.kind, api::HostIdentityKind::HardwareUuid as i32);
         assert_eq!(hardware.quality, api::HostIdentityQuality::Reported as i32);
         assert_eq!(hardware.digest.len(), 64);
-        assert_ne!(hardware.namespace, value.installation.namespace);
+        assert_ne!(hardware.namespace, namespace);
+    }
+    Ok(())
+}
+
+// Unset, denied or placeholder permanent IDs leave a useful anonymous subject,
+// not a hostname/shape-derived replacement ID. A boot fence remains required.
+#[test]
+fn absent_windows_ids_do_not_reject_useful_observations() -> Result<()> {
+    for source in ["null", "\"\"", "\"00000000-0000-0000-0000-000000000000\""] {
+        let identity = windows_identity(&format!(
+            "{{\"source\":{source},\"boot\":\"boot-session\",\"name\":\"Same fleet model\",\"hardware\":null}}"
+        ))?;
+        assert!(identity.source.is_empty());
+        assert!(identity.installation.is_none());
+        assert!(identity.hardware.is_none());
+        assert_eq!(identity.name, "Same fleet model");
+        assert_eq!(identity.boot, "boot-session");
     }
     Ok(())
 }

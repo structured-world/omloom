@@ -51,11 +51,15 @@ pub(super) fn field_props(field: &wire::Field) -> Result<Properties> {
             Value::Binary(omloom_contracts::equipment::encode(v).map_err(|_| Error::Invalid)?),
         ),
     };
-    Ok(props([
+    let mut properties = props([
         ("field", text(&field.name)),
         ("vtype", Value::Int(kind)),
         (name, value),
-    ]))
+    ]);
+    if let Some(probe) = workspace::host_identity::matching::descriptor(field) {
+        properties.insert("claim".into(), text(probe));
+    }
+    Ok(properties)
 }
 pub(super) fn read_field(p: &Properties) -> Result<wire::Field> {
     let value = match number(p, "vtype")? {

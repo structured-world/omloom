@@ -1,0 +1,281 @@
+//! Descriptive probes index existing current fields, never a machine fingerprint.
+//! Comparison has no writes or automatic identity/adoption decision.
+use super::*;
+
+pub(in crate::disk) const DESCRIPTORS: &[&str] = &[
+    "name",
+    "model",
+    "manufacturer",
+    "serial",
+    "cpu_model",
+    "logical_cpus",
+    "visible_memory_bytes",
+    "installation_kind",
+    "interface_kind",
+];
+
+pub(in crate::disk) fn descriptor(field: &wire::Field) -> Option<String> {
+    if !DESCRIPTORS.contains(&field.name.as_str()) {
+        return None;
+    }
+    let value = match &field.value {
+        Some(field::Value::Text(value)) if !value.trim().is_empty() => {
+            format!("text/{}", value.trim().to_lowercase())
+        }
+        Some(field::Value::Integer(value)) if *value > 0 => format!("integer/{value}"),
+        _ => return None,
+    };
+    Some(format!(
+        "descriptor/{}/{:x}",
+        field.name,
+        Sha256::digest(value.as_bytes())
+    ))
+}
+
+pub(in crate::disk) fn upgrade(store: &Store) -> Result<()> {
+    let mut after = String::new();
+    loop {
+        let mut tx = store.begin()?;
+        let rows = tx.query(
+            "MATCH (n:OmRow) WHERE n.key>$after AND n.layer IN ['intent','observed','imported'] AND n.field IN $fields RETURN properties(n) AS p ORDER BY n.key LIMIT 128",
+            params([("after", text(&after)), ("fields", Value::Array(DESCRIPTORS.iter().map(|v| text(v)).collect()))]),
+        )?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        for old in rows {
+            let key = string(&old, "key")?;
+            if let Some(probe) = descriptor(&inventory::read_field(&old)?) {
+                let mut data = old.clone();
+                operations::strip_envelope(&mut data);
+                data.insert("claim".into(), text(probe));
+                let class = match number(&old, "class")? {
+                    0 => Class::Inventory,
+                    1 => Class::Evidence,
+                    _ => return Err(Error::Corrupt),
+                };
+                tx.put_projection(&key, &string(&old, "parent")?, class, data, Some(&old))?;
+            }
+            after = key;
+        }
+        tx.commit()?;
+    }
+}
+
+impl Store {
+    pub(super) fn workspace_descriptive_candidates(
+        &self,
+        context: &Context,
+        mut request: api::FindIdentityCandidates,
+        working: &api::WorkingContext,
+    ) -> Result<api::Reply> {
+        if request.target.is_some() || !request.claims.is_empty() {
+            return Err(Error::Invalid);
+        }
+        let finding = request.finding.as_ref().ok_or(Error::Invalid)?;
+        validate(finding)?;
+        if finding.fields.len() > MAX_FIELDS || finding.addresses.len() > 64 {
+            return Err(Error::Limit);
+        }
+        let kind =
+            if finding.kind == wire::AssetKind::Unspecified as i32 && finding.key == "hardware" {
+                request.kind
+            } else {
+                if request.kind != 0 {
+                    return Err(Error::Invalid);
+                }
+                finding.kind
+            };
+        if !matches!(
+            wire::AssetKind::try_from(kind),
+            Ok(wire::AssetKind::Device
+                | wire::AssetKind::VirtualMachine
+                | wire::AssetKind::SoftwareInstallation
+                | wire::AssetKind::Interface)
+        ) {
+            return Err(Error::Invalid);
+        }
+        let tx = self.begin()?;
+        let selection = tx.selection(context, working, false)?;
+        let mut fields = BTreeSet::new();
+        for field in &finding.fields {
+            if !fields.insert(field.name.as_str()) {
+                return Err(Error::Invalid);
+            }
+            tx.validate_field(kind, field)?;
+        }
+        let cursor = request.cursor.take();
+        let mut hash = Sha256::new();
+        hash.update(request.encode_to_vec());
+        hash.update(assets::query_fingerprint(
+            &api::Query {
+                roots: working.roots.clone(),
+                focus: working.focus.clone(),
+                ..Default::default()
+            },
+            context,
+        ));
+        let fingerprint = format!("{:x}", hash.finalize());
+        let revision = number(&tx.root, "revision")?;
+        let after = match &cursor {
+            Some(cursor) => {
+                assets::page_position(cursor, revision, &fingerprint, context.authority_revision)?
+            }
+            None => "",
+        };
+        let (priority, key) = if after.is_empty() {
+            (0, "")
+        } else {
+            let (priority, key) = after.split_once(',').ok_or(Error::Invalid)?;
+            (priority.parse::<u64>().map_err(|_| Error::Invalid)?, key)
+        };
+        let mut probes = Vec::with_capacity(MAX_FIELDS + MAX_CLAIMS);
+        for claim in &finding.identity {
+            if claim.quality != api::HostIdentityQuality::Unreliable as i32 {
+                probes.push(Value::Map(BTreeMap::from([
+                    ("key".into(), text(lookup(claim))),
+                    ("rank".into(), Value::Int(1)),
+                ])));
+            }
+        }
+        for field in &finding.fields {
+            if let Some(probe) = descriptor(field) {
+                probes.push(Value::Map(BTreeMap::from([
+                    ("key".into(), text(probe)),
+                    (
+                        "rank".into(),
+                        Value::Int(if field.name == "name" { 3 } else { 2 }),
+                    ),
+                ])));
+            }
+        }
+        if probes.is_empty() {
+            return Ok(reply(api::reply::Result::IdentityCandidates(
+                api::IdentityCandidates::default(),
+            )));
+        }
+        let mut values = HashMap::from([
+            ("probes".into(), Value::Array(probes)),
+            ("kind".into(), Value::Int(kind.into())),
+            ("priority".into(), int(priority)?),
+            ("after".into(), text(key)),
+        ]);
+        let readable = assets::visible_clause_for(context, None, &mut values, "a");
+        let identity = assets::visible_clause_for(context, Some(FIELD), &mut values, "a");
+        let mut permitted = Vec::with_capacity(DESCRIPTORS.len());
+        for name in DESCRIPTORS {
+            let field = assets::visible_clause_for(context, Some(name), &mut values, "a");
+            permitted.push(format!("(n.field='{name}' AND {field})"));
+        }
+        let members = if let Some(focus) = selection.focus {
+            let mut members = BTreeSet::from([focus]);
+            members.extend(tx.local_children(context, focus)?);
+            Some(members)
+        } else if !working.roots.is_empty() {
+            Some(tx.working_scope(context, &working.roots)?)
+        } else {
+            None
+        };
+        let scope = if let Some(members) = members {
+            values.insert(
+                "members".into(),
+                Value::Array(members.into_iter().map(|v| text(asset_key(v))).collect()),
+            );
+            "a.key IN $members"
+        } else {
+            "true"
+        };
+        // The same current-field probe index serves all selected descriptors.
+        // Rights and scope precede grouping, ordering and page selection.
+        let rows = tx.query(&format!(
+            "UNWIND $probes AS probe MATCH (n:OmRow {{claim:probe.key}}) MATCH (a:OmRow {{key:CASE WHEN probe.rank=1 THEN 'asset/'+n.asset ELSE n.parent END}}) WHERE a.parent='assets' AND a.kind=$kind AND a.adoption={} AND {readable} AND {scope} AND ((probe.rank=1 AND n.incarnation=a.incarnation AND n.parent=a.key+'/'+a.incarnation+'/identity-evidence' AND {identity}) OR (probe.rank>1 AND n.layer IN ['intent','observed','imported'] AND ({}))) WITH a,min(probe.rank) AS priority WHERE priority>$priority OR (priority=$priority AND a.key>$after) RETURN {{key:a.key, asset:a.asset, incarnation:a.incarnation, kind:a.kind, revision:a.revision, priority:priority}} AS p ORDER BY priority,a.key LIMIT 26",
+            wire::Adoption::Adopted as i32, permitted.join(" OR ")
+        ), Some(values))?;
+        let more = rows.len() > 25;
+        let mut items = Vec::with_capacity(rows.len().min(25));
+        let mut explanations = Vec::with_capacity(rows.len().min(25));
+        let mut position = String::new();
+        for row in rows.iter().take(25) {
+            let target = super::super::super::target(row)?;
+            selection.contains(target, &tx)?;
+            let subject = tx.identity_subject(context, target)?;
+            let item = subject.item.ok_or(Error::Corrupt)?;
+            let mut explanation = api::IdentityCandidateExplanation::default();
+            for claim in &finding.identity {
+                let same_namespace = subject
+                    .identity
+                    .iter()
+                    .filter_map(|v| v.claim.as_ref())
+                    .filter(|v| v.kind == claim.kind && v.namespace == claim.namespace)
+                    .collect::<Vec<_>>();
+                if same_namespace.is_empty() {
+                    explanation.unknowns.push(format!(
+                        "{}: no permitted same-layer identifier",
+                        claim.namespace
+                    ));
+                } else {
+                    if same_namespace.iter().any(|v| v.digest == claim.digest) {
+                        explanation.matches.push(format!(
+                            "{}: equal reported identifier; cloning or movement remains possible",
+                            claim.namespace
+                        ));
+                    }
+                    if same_namespace.iter().any(|v| v.digest != claim.digest) {
+                        explanation.conflicts.push(format!(
+                            "{}: different reported identifier",
+                            claim.namespace
+                        ));
+                    }
+                }
+            }
+            if finding.identity.is_empty() {
+                explanation
+                    .unknowns
+                    .push("No permanent subject identifier in this finding".into());
+            }
+            for proposed in &finding.fields {
+                if !DESCRIPTORS.contains(&proposed.name.as_str()) {
+                    continue;
+                }
+                if !context.field(target, kind, &proposed.name, false) {
+                    continue;
+                }
+                if let Some(accepted) = item.fields.iter().find(|v| v.name == proposed.name) {
+                    if descriptor(proposed).is_some()
+                        && descriptor(proposed) == descriptor(accepted)
+                    {
+                        explanation.matches.push(format!(
+                            "{}: same current declared value, not identity proof",
+                            proposed.name
+                        ));
+                    } else {
+                        explanation.conflicts.push(format!("{}: different declared value; replacement, upgrade or reinstall may explain it", proposed.name));
+                    }
+                } else {
+                    explanation
+                        .unknowns
+                        .push(format!("{}: no current declared value", proposed.name));
+                }
+            }
+            position = format!("{},{}", number(row, "priority")?, string(row, "key")?);
+            items.push(item);
+            explanations.push(explanation);
+        }
+        let response = reply(api::reply::Result::IdentityCandidates(
+            api::IdentityCandidates {
+                items,
+                explanations,
+                next: more.then(|| {
+                    format!(
+                        "{revision}:{fingerprint}:{}:{position}",
+                        context.authority_revision
+                    )
+                }),
+            },
+        ));
+        if response.encoded_len() > MAX_REPLY_BYTES {
+            return Err(Error::Limit);
+        }
+        Ok(response)
+    }
+}
