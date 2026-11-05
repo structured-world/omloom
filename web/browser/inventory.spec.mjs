@@ -735,6 +735,7 @@ for (const width of [1440, 390]) test(`known prefix refinement, contextual creat
     expect(retained.target).toEqual(prefix);
     await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) });
     await page.goto(`${server.url}/#/?view=1`);
+    if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
     await page.getByRole('checkbox', { name: 'Select Workshop subnet', exact: true }).check();
     await page.getByRole('checkbox', { name: /^Select 192\.0\.2\.0\/24 \([0-9a-f]{8}\)$/ }).check();
     await page.getByRole('button', { name: 'Compare identity', exact: true }).click();
