@@ -142,7 +142,7 @@ fn descriptive_candidates_are_explained_paged_scoped_and_read_only() -> TestResu
             "candidate projection diagnostic: {query}\n{:?}",
             store
                 .diagnostic_database()
-                .execute_cypher_shared(query, None)?
+                .execute_cypher_shared(query, None, None, None, None)?
         );
     }
     let first = candidates(&store, &operator(), finding.clone(), None)?;
