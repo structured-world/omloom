@@ -363,7 +363,8 @@ fn refreshing_child_requires_no_parent_write_grant() -> TestResult {
 }
 
 // Concurrent delivery may race at the database CAS boundary. Every retry must
-// settle to the one retained outcome, without duplicate field claims or assets.
+// settle to the one retained outcome, including after restart, without duplicate
+// field claims or assets.
 #[test]
 fn concurrent_acceptance_settles_to_one_refresh_outcome() -> TestResult {
     let dir = tempfile::tempdir()?;
@@ -392,6 +393,12 @@ fn concurrent_acceptance_settles_to_one_refresh_outcome() -> TestResult {
     let before = store.usage()?;
     let final_result = host_import::accept(&store, &review)?;
     assert_eq!(final_result.targets, accepted.targets);
+    assert_eq!(before, store.usage()?);
+    assert_eq!(read(&store, &accepted.targets[2])?.observed.len(), 1);
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    let replay = host_import::accept(&store, &review)?;
+    assert_eq!(replay, final_result);
     assert_eq!(before, store.usage()?);
     assert_eq!(read(&store, &accepted.targets[2])?.observed.len(), 1);
     Ok(())

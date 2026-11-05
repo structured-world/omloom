@@ -37,6 +37,22 @@ fn refreshed(store: &Store, basis: char) -> Result<Vec<wire::AssetRef>, Error> {
         vec![text_field("name", &format!("Observed {basis}"))];
     input.selection.retain(|m| m.key == "interface/en0");
     super::super::host_import::accept(store, &super::super::host_import::preview(store, input)?)?;
+    let source = omloom_contracts::ids::SourceId::generate().to_string();
+    for target in &accepted.targets {
+        let mut asset = store.asset(AssetRef::try_from(target)?)?;
+        let revision = asset.revision;
+        asset.imported.push(observation(
+            &source,
+            250,
+            vec![text_field("description", &format!("Imported {basis}"))],
+        ));
+        store.save_asset(
+            &admit(wire::record::Body::Asset(asset)),
+            Some(revision),
+            "fixture-operator",
+            300,
+        )?;
+    }
     Ok(accepted.targets)
 }
 
@@ -58,7 +74,8 @@ fn ordered(mut values: Vec<wire::Observation>) -> Vec<wire::Observation> {
 }
 
 // Correcting refreshed duplicates must preserve both source identities and
-// partial freshness windows. Reversal rechecks every observed field's rights.
+// partial freshness windows in both evidence layers. Reversal rechecks every
+// observed field's rights.
 #[test]
 fn refreshed_duplicate_correction_preserves_evidence_and_undo() -> TestResult {
     let dir = tempfile::tempdir()?;
@@ -67,11 +84,11 @@ fn refreshed_duplicate_correction_preserves_evidence_and_undo() -> TestResult {
     let duplicate = refreshed(&store, 'd')?;
     let before_retained = retained
         .iter()
-        .map(|t| read(&store, t).map(|d| d.observed))
+        .map(|t| read(&store, t).map(|d| (d.observed, d.imported)))
         .collect::<Result<Vec<_>, _>>()?;
     let before_duplicate = duplicate
         .iter()
-        .map(|t| read(&store, t).map(|d| d.observed))
+        .map(|t| read(&store, t).map(|d| (d.observed, d.imported)))
         .collect::<Result<Vec<_>, _>>()?;
     let mappings = duplicate
         .iter()
@@ -87,12 +104,13 @@ fn refreshed_duplicate_correction_preserves_evidence_and_undo() -> TestResult {
     let applied = apply(&store, &preview.id)?;
     assert_eq!(store.usage()?.rows[Class::Evidence as usize], evidence_rows);
     for index in 0..3 {
-        let mut expected = before_retained[index].clone();
-        expected.extend(before_duplicate[index].clone());
-        assert_eq!(
-            ordered(read(&store, &retained[index])?.observed),
-            ordered(expected)
-        );
+        let detail = read(&store, &retained[index])?;
+        let mut expected = before_retained[index].0.clone();
+        expected.extend(before_duplicate[index].0.clone());
+        assert_eq!(ordered(detail.observed), ordered(expected));
+        let mut expected = before_retained[index].1.clone();
+        expected.extend(before_duplicate[index].1.clone());
+        assert_eq!(ordered(detail.imported), ordered(expected));
         assert!(matches!(
             read(&store, &duplicate[index]),
             Err(Error::Missing)
@@ -100,6 +118,14 @@ fn refreshed_duplicate_correction_preserves_evidence_and_undo() -> TestResult {
     }
     drop(store);
     let store = Store::open(dir.path(), policy())?;
+    for index in 0..3 {
+        let mut expected = before_retained[index].1.clone();
+        expected.extend(before_duplicate[index].1.clone());
+        assert_eq!(
+            ordered(read(&store, &retained[index])?.imported),
+            ordered(expected)
+        );
+    }
     let mut restricted = operator();
     restricted.grants[0].write = Fields::Selected(
         vec![
@@ -129,6 +155,22 @@ fn refreshed_duplicate_correction_preserves_evidence_and_undo() -> TestResult {
         Err(Error::Denied)
     ));
     assert_eq!(store.usage()?, before);
+    // Read and write revocation are independent: write authority cannot reveal
+    // the old description held by the correction's inverse.
+    let mut unreadable = operator();
+    unreadable.grants[0].read = restricted.grants[0].write.clone();
+    assert!(matches!(
+        call(
+            &store,
+            &unreadable,
+            Command::CorrectIdentity(api::IdentityCorrection {
+                undo: Some(applied.id.clone()),
+                ..Default::default()
+            })
+        ),
+        Err(Error::Denied)
+    ));
+    assert_eq!(store.usage()?, before);
     call(
         &store,
         &operator(),
@@ -138,13 +180,23 @@ fn refreshed_duplicate_correction_preserves_evidence_and_undo() -> TestResult {
         }),
     )?;
     for index in 0..3 {
+        let retained_detail = read(&store, &retained[index])?;
+        let duplicate_detail = read(&store, &duplicate[index])?;
         assert_eq!(
-            ordered(read(&store, &retained[index])?.observed),
-            ordered(before_retained[index].clone())
+            ordered(retained_detail.observed),
+            ordered(before_retained[index].0.clone())
         );
         assert_eq!(
-            ordered(read(&store, &duplicate[index])?.observed),
-            ordered(before_duplicate[index].clone())
+            ordered(duplicate_detail.observed),
+            ordered(before_duplicate[index].0.clone())
+        );
+        assert_eq!(
+            ordered(retained_detail.imported),
+            ordered(before_retained[index].1.clone())
+        );
+        assert_eq!(
+            ordered(duplicate_detail.imported),
+            ordered(before_duplicate[index].1.clone())
         );
     }
     let preview = prepare(
@@ -185,6 +237,11 @@ fn refreshed_duplicate_correction_preserves_evidence_and_undo() -> TestResult {
             ids.len(),
             2,
             "correction and refresh must not fork evidence sources"
+        );
+        assert!(
+            values
+                .iter()
+                .any(|value| value.evidence.as_ref().unwrap().observed_at_ms == 400)
         );
     }
     Ok(())
