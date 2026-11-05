@@ -4,7 +4,10 @@ import { InstallationKind, WorkloadKind, AssetLifecycle } from '../src/generated
 function choices(values: Record<number, string>, prefix: string): string[] {
   return Object.entries(values).filter(([n]) => Number(n) > 0).map(([, name]) => `${prefix}${name}`);
 }
-const definitions: Record<string, { name: string; choices?: string[]; date?: boolean }> = {
+const definitions: Record<string, { name: string; choices?: string[]; date?: boolean; integer?:boolean }> = {
+  cpu_model: { name: 'Reported CPU model (not a unique identifier)' },
+  logical_cpus: { name: 'OS-visible logical CPUs', integer:true },
+  visible_memory_bytes: { name: 'OS-visible memory (bytes)', integer:true },
   publisher: { name: 'Publisher' }, raw_name: { name: 'Original product label' },
   normalization_basis: { name: 'Reviewed normalization source' },
   version: { name: 'Version' }, raw_version: { name: 'Original version label' },
@@ -28,7 +31,7 @@ const definitions: Record<string, { name: string; choices?: string[]; date?: boo
 export function softwareFields(allowed: string[] = Object.keys(definitions)) {
   return allowed.flatMap(id => {
     const field = definitions[id];
-    return field ? [{ id, name: field.name, type: field.choices ? FieldType.CHOICE : field.date ? FieldType.DATE : FieldType.TEXT, choices: field.choices ?? [], advanced: false }] : [];
+    return field ? [{ id, name: field.name, type: field.choices ? FieldType.CHOICE : field.date ? FieldType.DATE : field.integer ? FieldType.INTEGER : FieldType.TEXT, choices: field.choices ?? [], advanced: false }] : [];
   });
 }
 export function softwareChoiceLabel(id: string, value: string): string {

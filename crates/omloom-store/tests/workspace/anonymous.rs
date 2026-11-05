@@ -1,5 +1,6 @@
 use super::*;
 use api::{reply::Result as Reply, request::Command};
+use std::collections::BTreeSet;
 
 // Anonymous packages reuse only explicitly confirmed target custody. New boots
 // cannot silently inherit a prior package's host/OS/interface associations.

@@ -51,12 +51,18 @@ pub(super) fn field_props(field: &wire::Field) -> Result<Properties> {
             Value::Binary(omloom_contracts::equipment::encode(v).map_err(|_| Error::Invalid)?),
         ),
     };
-    let mut properties = props([
+    Ok(props([
         ("field", text(&field.name)),
         ("vtype", Value::Int(kind)),
         (name, value),
-    ]);
-    if let Some(probe) = workspace::host_identity::matching::descriptor(field) {
+    ]))
+}
+
+pub(super) fn subject_field_props(kind: i32, field: &wire::Field) -> Result<Properties> {
+    let mut properties = field_props(field)?;
+    if workspace::host_identity::matching::subject_kind(kind)
+        && let Some(probe) = workspace::host_identity::matching::descriptor(field)
+    {
         properties.insert("claim".into(), text(probe));
     }
     Ok(properties)
@@ -313,7 +319,7 @@ impl Tx<'_> {
                 let changed = !previous.is_some_and(|p| field_matches(field, p));
                 self.validate_equipment_change(kind, field, kind_changed || changed)?;
                 if changed {
-                    let mut value = field_props(field)?;
+                    let mut value = subject_field_props(kind, field)?;
                     value.extend(props([
                         ("layer", text(layer)),
                         ("source", text(&evidence.source_id)),
@@ -524,7 +530,7 @@ impl Store {
             if same_claim {
                 continue;
             }
-            let mut p = field_props(field)?;
+            let mut p = subject_field_props(asset.kind, field)?;
             if asset.kind == wire::AssetKind::Container as i32
                 && matches!(
                     field.name.as_str(),

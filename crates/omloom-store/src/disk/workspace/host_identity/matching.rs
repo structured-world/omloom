@@ -14,6 +14,16 @@ pub(in crate::disk) const DESCRIPTORS: &[&str] = &[
     "interface_kind",
 ];
 
+pub(in crate::disk) fn subject_kind(kind: i32) -> bool {
+    matches!(
+        wire::AssetKind::try_from(kind),
+        Ok(wire::AssetKind::Device
+            | wire::AssetKind::VirtualMachine
+            | wire::AssetKind::SoftwareInstallation
+            | wire::AssetKind::Interface)
+    )
+}
+
 pub(in crate::disk) fn descriptor(field: &wire::Field) -> Option<String> {
     if !DESCRIPTORS.contains(&field.name.as_str()) {
         return None;
@@ -37,8 +47,8 @@ pub(in crate::disk) fn upgrade(store: &Store) -> Result<()> {
     loop {
         let mut tx = store.begin()?;
         let rows = tx.query(
-            "MATCH (n:OmRow) WHERE n.key>$after AND n.layer IN ['intent','observed','imported'] AND n.field IN $fields RETURN properties(n) AS p ORDER BY n.key LIMIT 128",
-            params([("after", text(&after)), ("fields", Value::Array(DESCRIPTORS.iter().map(|v| text(*v)).collect()))]),
+            "MATCH (n:OmRow) WHERE n.key>$after AND n.layer IN ['intent','observed','imported'] AND n.field IN $fields MATCH (a:OmRow {key:n.parent}) WHERE a.parent='assets' AND a.kind IN $kinds RETURN properties(n) AS p ORDER BY n.key LIMIT 128",
+            params([("after", text(&after)), ("fields", Value::Array(DESCRIPTORS.iter().map(|v| text(*v)).collect())), ("kinds", Value::Array([wire::AssetKind::Device, wire::AssetKind::VirtualMachine, wire::AssetKind::SoftwareInstallation, wire::AssetKind::Interface].into_iter().map(|v| Value::Int(v as i32 as i64)).collect()))]),
         )?;
         if rows.is_empty() {
             return Ok(());

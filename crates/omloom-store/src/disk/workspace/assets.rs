@@ -2155,7 +2155,7 @@ impl Tx<'_> {
             {
                 continue;
             }
-            let mut data = super::super::inventory::field_props(field)?;
+            let mut data = super::super::inventory::subject_field_props(write.kind, field)?;
             data.extend(props([
                 ("layer", text("intent")),
                 ("authority", text(&authority)),

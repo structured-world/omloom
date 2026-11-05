@@ -67,15 +67,23 @@ pub(super) async fn collect(runner: &mut Runner, report: &mut api::HostReport) -
             }
             match runner.run("cat", &["/proc/cpuinfo"]).await {
                 Ok(v) => {
-                    let models = v
-                        .text
-                        .lines()
-                        .filter_map(|v| v.split_once(':'))
-                        .filter(|(name, _)| matches!(name.trim(), "model name" | "Hardware"))
-                        .map(|(_, model)| model.trim())
-                        .collect::<std::collections::BTreeSet<_>>();
-                    let bytes = models.iter().map(|v| v.len() + 2).sum::<usize>();
-                    if bytes == 0 || bytes > 512 {
+                    let mut models = std::collections::BTreeSet::new();
+                    let mut bytes = 0;
+                    for (name, model) in v.text.lines().filter_map(|v| v.split_once(':')) {
+                        if !matches!(name.trim(), "model name" | "Hardware") {
+                            continue;
+                        }
+                        let model = model.trim();
+                        if models.contains(model) {
+                            continue;
+                        }
+                        if model.is_empty() || model.len() + 2 > 512 - bytes || models.len() == 16 {
+                            return Err("CPU model description limit exceeded".into());
+                        }
+                        bytes += model.len() + 2;
+                        models.insert(model);
+                    }
+                    if bytes == 0 {
                         unavailable += 1;
                     } else {
                         fields.push(super::super::text(
