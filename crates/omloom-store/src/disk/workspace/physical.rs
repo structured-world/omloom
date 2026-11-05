@@ -18,6 +18,7 @@ mod rack_grid;
 mod replacements;
 mod reservations;
 mod reviews;
+mod scene;
 mod wiring;
 
 #[derive(Clone, Copy)]
@@ -487,6 +488,10 @@ impl Store {
             ..Default::default()
         };
         match request.action.ok_or(Error::Invalid)? {
+            Action::Scene(value) => tx.physical_scene(context, value, working()?, &mut view)?,
+            Action::PortAnchor(value) => {
+                tx.save_port_anchor(context, value, working()?, now)?;
+            }
             Action::ReviewReplacement(value) => {
                 let (plan, hypothesis) = tx.review_replacement(context, value, working()?, now)?;
                 view.plan = Some(plan);

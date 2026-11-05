@@ -2213,6 +2213,30 @@ message PhysicalRead {
   // At most 256 UTF-8 bytes; requires occupants=true and grants no additional access.
   optional string after = 3;
 }
+message PhysicalSceneQuery {
+  // User-visible exact incarnations to reproject, at most 128 distinct subjects.
+  // The first subject selects the local coordinate frame, not a site placement.
+  // These select work, not authority; current object, field and scope rights apply.
+  repeated omloom.v1.AssetRef subjects = 1;
+}
+message PhysicalPortAnchorEdit {
+  // UUID of an existing HasPort relation chosen by the caller. The server
+  // derives both endpoints and their current incarnations and authority.
+  string binding_id = 1;
+  // Measured port envelope in the owning equipment's micrometre coordinate
+  // frame. This records geometry only, never creates ownership or connectivity.
+  PhysicalVolume volume = 2;
+  // Positive binding revision reviewed by the caller; checked before mutation.
+  uint64 expected_binding_revision = 3;
+}
+message PhysicalSceneConnection {
+  // Current permitted cable identity; no hidden endpoint or route is implied.
+  omloom.v1.AssetRef cable = 1;
+  // Current permitted port in the explicitly selected scene population.
+  omloom.v1.AssetRef port = 2;
+  // Source-qualified named cable end whose actual binding is still current.
+  string end_key = 3;
+}
 message PhysicalPlanKey {
   // Exact saved plan identity returned by its save command, not a capability.
   string id = 1;
@@ -2261,13 +2285,15 @@ message PhysicalCompletion {
 }
 message PhysicalOccupancy {
   // Current installed placement, independent of the reservation's expiry.
+  // In a scene projection, also carries measured HasPort geometry with the
+  // port as item and its owning equipment as enclosure, not another installation.
   PhysicalPlacement placement = 1;
   // Attribution of the manual installation, not proof of live service or wiring.
   optional string reported_by = 2;
   // Server-returned accepted physical binding revision, used to invalidate old
   // evidence. Zero when binding is withheld by either endpoint's relationship grant.
   uint64 revision = 3;
-  // Exact current installed binding, disclosed only with relationship access on
+  // Exact current placement/HasPort binding, disclosed only with relationship access on
   // both endpoints. Absence supplies no permission to guess its identity/revision.
   optional omloom.v1.Relation binding = 4;
   // Geometry report revision, absent when this binding has no reported placement envelope.
@@ -2318,6 +2344,13 @@ message Physical {
     // Bounded quality buckets for the exact current complete disclosure scope.
     // No topology is traversed and no narrower/global aggregate is inferred.
     PhysicalReplacementQualityQuery replacement_quality = 19;
+    // Read bounded current geometry and actual connections for explicit visible
+    // subjects in one snapshot. No recursive expansion, layout or inventory
+    // writes occur. Adjacent actual cables are independently authorized.
+    PhysicalSceneQuery scene = 20;
+    // Refine a measured port anchor on an existing ownership binding using
+    // the ordinary current-pose store. No placement or cable effect occurs.
+    PhysicalPortAnchorEdit port_anchor = 21;
   }
 }
 message PhysicalCableEnd {
@@ -2460,6 +2493,9 @@ message PhysicalOffers {
   optional string after = 2;
 }
 message PhysicalView {
+  // Only actual named-end attachments inside the explicit scene selection;
+  // omitted endpoints remain unknown or outside this projection, not loose.
+  repeated PhysicalSceneConnection scene_connections = 16;
   // Explicitly requested current replacement hypothesis, without durable writes.
   optional PhysicalReplacementHypothesis replacement_hypothesis = 14;
   // At most 25 bounded quality buckets under the exact contributing scope.

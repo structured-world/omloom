@@ -925,6 +925,43 @@ fresh correction. Old references resolve read-only to the canonical incarnation
 only when both original and canonical rights permit it. They never become write
 or execution aliases.
 
+## Inspect current infrastructure in 3D
+
+Choose **3D scene** in Hardware or Overview (inside **More** on a phone), then
+choose an enclosure from the current selection. The scene uses current accepted
+physical definitions, placement envelopes and port ownership. **Show components**
+reads one page of that resource's local children; **More components** explicitly
+continues it. The scene admits at most 128 selected resources and 256 selected
+bindings. It never loads an entire site just to draw one rack.
+
+Rotate, zoom and pan the view, select an object or use the equivalent resource
+list, then **Open resource** for its ordinary card. **Return to table** preserves
+the inventory journey. If graphics are unavailable or the context is lost, the
+resource list remains available. A viewport test does not qualify a native phone
+GPU or webview.
+
+Only recorded geometry is drawn. Unknown or ambiguous positions stay in the list;
+the renderer does not assign plausible dimensions or invent empty space. The
+selected enclosure uses a translucent cutaway so its permitted contents remain
+visible. This is an occlusion treatment, not a confidence score.
+
+`Physical.scene` reprojects explicit current incarnations in one read snapshot.
+Current named cable ends may add up to 64 independently authorized cable labels,
+but no remote unselected port. A dashed straight line requires exactly two visible,
+located actual ends. It is a connection diagram, not a surveyed route, fit proof
+or service-health claim. Breakout assemblies are not paired by guesswork.
+
+`Physical.port_anchor` records a measured port envelope against a reviewed
+`HasPort` binding in its owner's coordinate frame. It uses the same current-pose
+store as installed geometry, checks both objects' physical rights and the current
+binding, and leaves ownership and connectivity unchanged. Repeating unchanged
+geometry from the same reporter adds no record or audit entry. Removing or moving the binding removes
+its old pose. Missing coordinates remain unknown.
+
+On a phone, use **Select** to show row checkboxes, then **Cancel selection** to
+clear selection and reclaim the column. Tablet lists keep them visible. Desktop
+lists reveal them on row hover, keyboard focus or while a selection is active.
+
 ## Record a VM's new hypervisor
 
 After migrating a VM outside Omloom, open its details and choose **Change

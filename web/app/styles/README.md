@@ -17,3 +17,9 @@ controls stay legible. Do not encode unknown inventory knowledge by fading
 interactive controls. Shared appearance belongs here rather than in a page's
 scoped CSS. Responsive changes may rearrange actions without changing their
 meaning, and retain the accessible label and keyboard path.
+
+`scene` owns the physical canvas, inspector and responsive selection layout.
+Phone lists reserve no checkbox column until Select is enabled. Tablet lists
+show selection controls; fine-pointer desktop lists reveal them on hover,
+keyboard focus or an active selection. Hidden controls must not prevent keyboard
+access on desktop or leave an empty column on a phone.

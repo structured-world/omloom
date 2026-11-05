@@ -5128,6 +5128,67 @@ export interface PhysicalRead {
     after?: string;
 }
 /**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalSceneQuery
+ */
+export interface PhysicalSceneQuery {
+    /**
+     * User-visible exact incarnations to reproject, at most 128 distinct subjects.
+     * The first subject selects the local coordinate frame, not a site placement.
+     * These select work, not authority; current object, field and scope rights apply.
+     *
+     * @generated from protobuf field: repeated omloom.v1.AssetRef subjects = 1
+     */
+    subjects: AssetRef[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalPortAnchorEdit
+ */
+export interface PhysicalPortAnchorEdit {
+    /**
+     * UUID of an existing HasPort relation chosen by the caller. The server
+     * derives both endpoints and their current incarnations and authority.
+     *
+     * @generated from protobuf field: string binding_id = 1
+     */
+    bindingId: string;
+    /**
+     * Measured port envelope in the owning equipment's micrometre coordinate
+     * frame. This records geometry only, never creates ownership or connectivity.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalVolume volume = 2
+     */
+    volume?: PhysicalVolume;
+    /**
+     * Positive binding revision reviewed by the caller; checked before mutation.
+     *
+     * @generated from protobuf field: uint64 expected_binding_revision = 3
+     */
+    expectedBindingRevision: bigint;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalSceneConnection
+ */
+export interface PhysicalSceneConnection {
+    /**
+     * Current permitted cable identity; no hidden endpoint or route is implied.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef cable = 1
+     */
+    cable?: AssetRef;
+    /**
+     * Current permitted port in the explicitly selected scene population.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef port = 2
+     */
+    port?: AssetRef;
+    /**
+     * Source-qualified named cable end whose actual binding is still current.
+     *
+     * @generated from protobuf field: string end_key = 3
+     */
+    endKey: string;
+}
+/**
  * @generated from protobuf message omloom.workspace.v1.PhysicalPlanKey
  */
 export interface PhysicalPlanKey {
@@ -5254,6 +5315,8 @@ export interface PhysicalCompletion {
 export interface PhysicalOccupancy {
     /**
      * Current installed placement, independent of the reservation's expiry.
+     * In a scene projection, also carries measured HasPort geometry with the
+     * port as item and its owning equipment as enclosure, not another installation.
      *
      * @generated from protobuf field: omloom.workspace.v1.PhysicalPlacement placement = 1
      */
@@ -5272,7 +5335,7 @@ export interface PhysicalOccupancy {
      */
     revision: bigint;
     /**
-     * Exact current installed binding, disclosed only with relationship access on
+     * Exact current placement/HasPort binding, disclosed only with relationship access on
      * both endpoints. Absence supplies no permission to guess its identity/revision.
      *
      * @generated from protobuf field: optional omloom.v1.Relation binding = 4
@@ -5454,6 +5517,25 @@ export interface Physical {
          * @generated from protobuf field: omloom.workspace.v1.PhysicalReplacementQualityQuery replacement_quality = 19
          */
         replacementQuality: PhysicalReplacementQualityQuery;
+    } | {
+        oneofKind: "scene";
+        /**
+         * Read bounded current geometry and actual connections for explicit visible
+         * subjects in one snapshot. No recursive expansion, layout or inventory
+         * writes occur. Adjacent actual cables are independently authorized.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PhysicalSceneQuery scene = 20
+         */
+        scene: PhysicalSceneQuery;
+    } | {
+        oneofKind: "portAnchor";
+        /**
+         * Refine a measured port anchor on an existing ownership binding using
+         * the ordinary current-pose store. No placement or cable effect occurs.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PhysicalPortAnchorEdit port_anchor = 21
+         */
+        portAnchor: PhysicalPortAnchorEdit;
     } | {
         oneofKind: undefined;
     };
@@ -5823,6 +5905,13 @@ export interface PhysicalOffers {
  * @generated from protobuf message omloom.workspace.v1.PhysicalView
  */
 export interface PhysicalView {
+    /**
+     * Only actual named-end attachments inside the explicit scene selection;
+     * omitted endpoints remain unknown or outside this projection, not loose.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.PhysicalSceneConnection scene_connections = 16
+     */
+    sceneConnections: PhysicalSceneConnection[];
     /**
      * Explicitly requested current replacement hypothesis, without durable writes.
      *
@@ -9807,6 +9896,46 @@ class PhysicalRead$Type extends MessageType<PhysicalRead> {
  */
 export const PhysicalRead = new PhysicalRead$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class PhysicalSceneQuery$Type extends MessageType<PhysicalSceneQuery> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalSceneQuery", [
+            { no: 1, name: "subjects", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AssetRef }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalSceneQuery
+ */
+export const PhysicalSceneQuery = new PhysicalSceneQuery$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalPortAnchorEdit$Type extends MessageType<PhysicalPortAnchorEdit> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalPortAnchorEdit", [
+            { no: 1, name: "binding_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "volume", kind: "message", T: () => PhysicalVolume },
+            { no: 3, name: "expected_binding_revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalPortAnchorEdit
+ */
+export const PhysicalPortAnchorEdit = new PhysicalPortAnchorEdit$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalSceneConnection$Type extends MessageType<PhysicalSceneConnection> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalSceneConnection", [
+            { no: 1, name: "cable", kind: "message", T: () => AssetRef },
+            { no: 2, name: "port", kind: "message", T: () => AssetRef },
+            { no: 3, name: "end_key", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalSceneConnection
+ */
+export const PhysicalSceneConnection = new PhysicalSceneConnection$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class PhysicalPlanKey$Type extends MessageType<PhysicalPlanKey> {
     constructor() {
         super("omloom.workspace.v1.PhysicalPlanKey", [
@@ -9915,7 +10044,9 @@ class Physical$Type extends MessageType<Physical> {
             { no: 16, name: "offers", kind: "message", oneof: "action", T: () => PhysicalOffers },
             { no: 17, name: "receive", kind: "message", oneof: "action", T: () => PhysicalMaterialReceipt },
             { no: 18, name: "review_replacement", kind: "message", oneof: "action", T: () => PhysicalReplacementReview },
-            { no: 19, name: "replacement_quality", kind: "message", oneof: "action", T: () => PhysicalReplacementQualityQuery }
+            { no: 19, name: "replacement_quality", kind: "message", oneof: "action", T: () => PhysicalReplacementQualityQuery },
+            { no: 20, name: "scene", kind: "message", oneof: "action", T: () => PhysicalSceneQuery },
+            { no: 21, name: "port_anchor", kind: "message", oneof: "action", T: () => PhysicalPortAnchorEdit }
         ]);
     }
 }
@@ -10069,6 +10200,7 @@ export const PhysicalOffers = new PhysicalOffers$Type();
 class PhysicalView$Type extends MessageType<PhysicalView> {
     constructor() {
         super("omloom.workspace.v1.PhysicalView", [
+            { no: 16, name: "scene_connections", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalSceneConnection },
             { no: 14, name: "replacement_hypothesis", kind: "message", T: () => PhysicalReplacementHypothesis },
             { no: 15, name: "replacement_quality", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalReplacementQuality },
             { no: 1, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
