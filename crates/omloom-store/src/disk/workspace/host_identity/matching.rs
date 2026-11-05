@@ -1,6 +1,24 @@
 //! Descriptive probes index existing current fields, never a machine fingerprint.
 //! Comparison has no writes or automatic identity/adoption decision.
 use super::*;
+use core::fmt;
+
+struct ObservedValue<'a>(Option<&'a field::Value>);
+
+impl fmt::Display for ObservedValue<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Some(field::Value::Text(value)) => f.write_str(value),
+            Some(field::Value::Integer(value)) => fmt::Display::fmt(value, f),
+            Some(field::Value::Flag(value)) => fmt::Display::fmt(value, f),
+            Some(field::Value::Clear(_)) => f.write_str("an explicitly unknown value"),
+            Some(field::Value::Equipment(_)) => {
+                f.write_str("structured equipment evidence (not an exact comparable value)")
+            }
+            None => f.write_str("an unavailable value"),
+        }
+    }
+}
 
 pub(in crate::disk) const DESCRIPTORS: &[&str] = &[
     "name",
@@ -378,8 +396,10 @@ impl Store {
                         continue;
                     }
                     let message = format!(
-                        "{}: source {} reports {:?}; inspect its collection window before assuming continuity",
-                        observed.name, source, observed.value
+                        "{}: source {} reports {}; inspect its collection window before assuming continuity",
+                        observed.name,
+                        source,
+                        ObservedValue(observed.value.as_ref())
                     );
                     if descriptor(proposed).is_none() || descriptor(observed).is_none() {
                         explanation.unknowns.push(message);

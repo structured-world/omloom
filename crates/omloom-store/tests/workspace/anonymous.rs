@@ -193,6 +193,54 @@ fn candidates(
     Ok(value)
 }
 
+// Observed comparisons are shown directly in the candidate review. Their
+// values must remain readable text/numbers rather than Rust enum diagnostics.
+#[test]
+fn observed_candidate_values_are_user_facing() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut input = host_import::draft();
+    let report = input.report.as_mut().ok_or("report")?;
+    report.source_basis.clear();
+    report.findings[0]
+        .fields
+        .push(text_field("model", "Same chassis"));
+    report.findings[1].fields.push(wire::Field {
+        name: "logical_cpus".into(),
+        value: Some(wire::field::Value::Integer(8)),
+    });
+    let findings = report.findings.clone();
+    let accepted = host_import::accept(&store, &host_import::preview(&store, input.clone())?)?;
+    input.report.as_mut().ok_or("report")?.observed_at = 200;
+    for (selection, target) in input.selection.iter_mut().zip(accepted.targets) {
+        selection.target = Some(target);
+    }
+    host_import::accept(&store, &host_import::preview(&store, input)?)?;
+    let before = store.usage()?;
+    for (finding, name, expected) in [
+        (&findings[0], "model", "Same chassis"),
+        (&findings[1], "logical_cpus", "8"),
+    ] {
+        let result = candidates(&store, &operator(), finding.clone(), None)?;
+        assert_eq!(result.explanations.len(), 1);
+        let messages: Vec<_> = result.explanations[0]
+            .matches
+            .iter()
+            .filter(|message| message.starts_with(&format!("{name}: source ")))
+            .collect();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0]
+                .split_once(" reports ")
+                .ok_or("observed explanation")?
+                .1,
+            format!("{expected}; inspect its collection window before assuming continuity")
+        );
+    }
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // Same-shape fleets remain tied and pageable. Contradictory serials do not
 // disappear behind a generic shape match, and hidden evidence never admits a hit.
 #[test]
