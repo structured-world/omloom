@@ -765,6 +765,13 @@ Use manual search or leave the finding unresolved when the available evidence
 cannot distinguish machines. Duplicate accepted records still use the separate
 identity-correction workflow.
 
+Comparison and manual search return their inventory revision. Preparing an
+import rechecks that basis; an intervening change preserves the draft but
+requires another comparison. Candidate retrieval is paginated, with bounded
+upward membership checks for selected roots and field authorization before
+comparison details are decoded. Exhausting a work bound is an explicit error,
+not evidence that no matching resource exists.
+
 The native profile can additionally report OS-visible logical CPU count,
 visible memory in bytes and a reported CPU model. These describe the installation's
 execution context, not a unique host ID, physical installed RAM certification or
@@ -778,6 +785,10 @@ observation package**. Select an existing compatible source and confirm that the
 package describes this host and the selected installation. Source references are
 server-owned; no source-name retyping or renaming is required. Only permitted,
 already mapped resources can be selected. New findings require separate adoption.
+If no compatible source can establish continuity, choose **Match this package
+manually**. Confirm the existing host and each selected finding explicitly through
+the same import workflow. This records current observations without renaming or
+replacing an existing qualified source, and without adopting another chassis.
 Source discovery considers at most 128 host bindings, each matching at most the
 package's 128 findings, within the shared 512 KiB encoded reply ceiling. Exceeding
 an aggregate reply bound returns a limit error rather than silently omitting sources.

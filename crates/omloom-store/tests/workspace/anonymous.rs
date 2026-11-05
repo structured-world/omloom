@@ -133,18 +133,16 @@ fn descriptive_candidates_are_explained_paged_scoped_and_read_only() -> TestResu
     let before = store.usage()?;
     let started = std::time::Instant::now();
     #[cfg(feature = "diagnostics")]
-    for query in [
-        "MATCH (a:OmRow {parent:'assets'}) RETURN {asset:a.asset,incarnation:a.incarnation,revision:a.revision} AS p LIMIT 1",
-        "MATCH (a:OmRow {parent:'assets'}) WITH a,min(2) AS priority RETURN {asset:a.asset,incarnation:a.incarnation,revision:a.revision,priority:priority} AS p LIMIT 1",
-        "MATCH (a:OmRow {parent:'assets'}) WITH a.asset AS asset,a.incarnation AS incarnation,a.revision AS revision,min(2) AS priority RETURN {asset:asset,incarnation:incarnation,revision:revision,priority:priority} AS p LIMIT 1",
-    ] {
-        eprintln!(
-            "candidate projection diagnostic: {query}\n{:?}",
-            store
-                .diagnostic_database()
-                .execute_cypher_shared(query, None, None, None, None)?
-        );
-    }
+    let mut store = store;
+    #[cfg(feature = "diagnostics")]
+    store.set_diagnostic_query_check(|database, query| {
+        if query.starts_with("UNWIND $probes") {
+            let plan = database.explain_cypher(query).expect("candidate plan");
+            assert!(plan.contains("omloom_claim"), "{plan}");
+            assert!(plan.contains("omloom_key"), "{plan}");
+            assert!(!plan.contains("Traverse"), "{plan}");
+        }
+    });
     let first = candidates(&store, &operator(), finding.clone(), None)?;
     assert_eq!(first.items.len(), 25);
     assert_eq!(first.explanations.len(), 25);
@@ -156,6 +154,7 @@ fn descriptive_candidates_are_explained_paged_scoped_and_read_only() -> TestResu
                 && v.conflicts.iter().any(|v| v.starts_with("serial:"))
                 && !v.unknowns.is_empty())
     );
+    let next = first.next.clone();
     let second = candidates(&store, &operator(), finding.clone(), first.next)?;
     assert_eq!(second.items.len(), 5);
     assert!(second.next.is_none());
@@ -178,7 +177,7 @@ fn descriptive_candidates_are_explained_paged_scoped_and_read_only() -> TestResu
     assert_eq!(visible.items[0].target.as_ref(), Some(&targets[0]));
     limited.grants[0].read = Fields::Selected(vec!["name".into()]);
     assert!(
-        candidates(&store, &limited, finding, None)?
+        candidates(&store, &limited, finding.clone(), None)?
             .items
             .is_empty()
     );
@@ -191,5 +190,108 @@ fn descriptive_candidates_are_explained_paged_scoped_and_read_only() -> TestResu
         before,
         "candidate inspection writes nothing"
     );
+    let mut changed_authority = operator();
+    changed_authority.authority_revision += 1;
+    assert!(matches!(
+        candidates(&store, &changed_authority, finding.clone(), next.clone()),
+        Err(Error::Expired)
+    ));
+    create(&store, &operator(), K::Device, "An unrelated edit")?;
+    assert!(matches!(
+        candidates(&store, &operator(), finding, next),
+        Err(Error::Expired)
+    ));
+    Ok(())
+}
+
+fn claim(kind: api::HostIdentityKind, digest: char) -> api::HostIdentityClaim {
+    api::HostIdentityClaim {
+        kind: kind as i32,
+        namespace: "fixture/identifiers".into(),
+        digest: digest.to_string().repeat(64),
+        quality: api::HostIdentityQuality::Movable as i32,
+    }
+}
+
+// Clones and moved components can repeat real identifiers. Layer-specific
+// evidence must return both candidates without choosing or merging either.
+#[test]
+fn clones_reinstall_and_moved_interfaces_remain_explained_candidates() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut targets = Vec::new();
+    let mut report = None;
+    for basis in ['c', 'd'] {
+        let mut input = host_import::draft();
+        let value = input.report.as_mut().ok_or("report")?;
+        value.source_basis = basis.to_string().repeat(64);
+        value.findings[0].identity = vec![claim(api::HostIdentityKind::HardwareUuid, '1')];
+        value.findings[1].identity = vec![claim(api::HostIdentityKind::InstallationId, '2')];
+        value.findings[2].identity = vec![claim(api::HostIdentityKind::FactoryMac, '3')];
+        report = Some(value.clone());
+        targets.push(host_import::accept(&store, &host_import::preview(&store, input)?)?.targets);
+    }
+    let report = report.ok_or("report")?;
+    let before = store.usage()?;
+    for (index, finding) in report.findings.iter().enumerate() {
+        let result = candidates(&store, &operator(), finding.clone(), None)?;
+        assert_eq!(result.items.len(), 2);
+        let actual = result
+            .items
+            .iter()
+            .filter_map(|v| v.target.clone())
+            .collect::<Vec<_>>();
+        assert!(actual.contains(&targets[0][index]));
+        assert!(actual.contains(&targets[1][index]));
+        assert!(
+            result
+                .explanations
+                .iter()
+                .all(|v| v.matches.iter().any(|v| v.contains("cloning or movement")))
+        );
+    }
+    let Some(Reply::IdentityCandidates(rooted)) = store
+        .workspace(
+            &operator(),
+            api::Request {
+                command: Some(Command::FindIdentityCandidates(
+                    api::FindIdentityCandidates {
+                        finding: Some(report.findings[1].clone()),
+                        ..Default::default()
+                    },
+                )),
+                working: Some(api::WorkingContext {
+                    roots: vec![targets[0][0].clone()],
+                    ..Default::default()
+                }),
+            },
+            100,
+        )?
+        .result
+    else {
+        return Err("rooted candidates".into());
+    };
+    assert_eq!(rooted.items.len(), 1);
+    assert_eq!(rooted.items[0].target.as_ref(), Some(&targets[0][1]));
+    let mut reinstall = report.findings[1].clone();
+    reinstall.identity[0].digest = "4".repeat(64);
+    let result = candidates(&store, &operator(), reinstall, None)?;
+    assert_eq!(
+        result.items.len(),
+        2,
+        "descriptive search still works when the installation ID changes"
+    );
+    assert!(result.explanations.iter().all(|v| {
+        v.conflicts
+            .iter()
+            .any(|v| v.contains("different reported identifier"))
+    }));
+    let mut forged_host = report.findings[2].clone();
+    forged_host.kind = K::Device as i32;
+    assert!(matches!(
+        candidates(&store, &operator(), forged_host, None),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
     Ok(())
 }

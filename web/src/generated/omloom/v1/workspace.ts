@@ -2590,6 +2590,13 @@ export interface IdentityCandidates {
      * @generated from protobuf field: optional string next = 3
      */
     next?: string;
+    /**
+     * Server snapshot revision used for this comparison. A subsequent import
+     * preview supplies it as WorkingContext.expected, never a client-derived stamp.
+     *
+     * @generated from protobuf field: uint64 revision = 4
+     */
+    revision: bigint;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.IdentityCandidateExplanation
@@ -8573,7 +8580,8 @@ class IdentityCandidates$Type extends MessageType<IdentityCandidates> {
         super("omloom.workspace.v1.IdentityCandidates", [
             { no: 1, name: "items", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Item },
             { no: 2, name: "explanations", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => IdentityCandidateExplanation },
-            { no: 3, name: "next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 3, name: "next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
         ]);
     }
 }

@@ -28,18 +28,19 @@ pub(in crate::disk) fn descriptor(field: &wire::Field) -> Option<String> {
     if !DESCRIPTORS.contains(&field.name.as_str()) {
         return None;
     }
-    let value = match &field.value {
+    let mut digest = Sha256::new();
+    match &field.value {
         Some(field::Value::Text(value)) if !value.trim().is_empty() => {
-            format!("text/{}", value.trim().to_lowercase())
+            digest.update([1]);
+            digest.update(value.as_bytes());
         }
-        Some(field::Value::Integer(value)) if *value > 0 => format!("integer/{value}"),
+        Some(field::Value::Integer(value)) if *value > 0 => {
+            digest.update([2]);
+            digest.update(value.to_be_bytes());
+        }
         _ => return None,
-    };
-    Some(format!(
-        "descriptor/{}/{:x}",
-        field.name,
-        Sha256::digest(value.as_bytes())
-    ))
+    }
+    Some(format!("descriptor/{}/{:x}", field.name, digest.finalize()))
 }
 
 pub(in crate::disk) fn upgrade(store: &Store) -> Result<()> {
@@ -47,7 +48,7 @@ pub(in crate::disk) fn upgrade(store: &Store) -> Result<()> {
     loop {
         let mut tx = store.begin()?;
         let rows = tx.query(
-            "MATCH (n:OmRow) WHERE n.key>$after AND n.layer IN ['intent','observed','imported'] AND n.field IN $fields MATCH (a:OmRow {key:n.parent}) WHERE a.parent='assets' AND a.kind IN $kinds RETURN properties(n) AS p ORDER BY n.key LIMIT 128",
+            "MATCH (n:OmRow) WHERE n.key>$after AND n.layer IN ['intent','observed','imported'] AND n.field IN $fields AND n.vtype IN [1,2] MATCH (a:OmRow {key:n.parent}) WHERE a.parent='assets' AND a.kind IN $kinds RETURN properties(n) AS p ORDER BY n.key LIMIT 128",
             params([("after", text(&after)), ("fields", Value::Array(DESCRIPTORS.iter().map(|v| text(*v)).collect())), ("kinds", Value::Array([wire::AssetKind::Device, wire::AssetKind::VirtualMachine, wire::AssetKind::SoftwareInstallation, wire::AssetKind::Interface].into_iter().map(|v| Value::Int(v as i32 as i64)).collect()))]),
         )?;
         if rows.is_empty() {
@@ -176,7 +177,10 @@ impl Store {
         }
         if probes.is_empty() {
             return Ok(reply(api::reply::Result::IdentityCandidates(
-                api::IdentityCandidates::default(),
+                api::IdentityCandidates {
+                    revision,
+                    ..Default::default()
+                },
             )));
         }
         let mut values = HashMap::from([
@@ -206,8 +210,6 @@ impl Store {
             let mut members = BTreeSet::from([focus]);
             members.extend(tx.local_children(context, focus)?);
             Some(members)
-        } else if !working.roots.is_empty() {
-            Some(tx.working_scope(context, &working.roots)?)
         } else {
             None
         };
@@ -220,22 +222,78 @@ impl Store {
         } else {
             "true"
         };
-        // The same current-field probe index serves all selected descriptors.
-        // Rights and scope precede grouping, ordering and page selection.
-        let rows = tx.query(&format!(
-            "UNWIND $probes AS probe MATCH (n:OmRow {{claim:probe.key}}) MATCH (a:OmRow {{key:CASE WHEN probe.rank=1 THEN 'asset/'+n.asset ELSE n.parent END}}) WHERE a.parent='assets' AND a.kind IN $kinds AND a.adoption={} AND {readable} AND {scope} AND ((probe.rank=1 AND n.incarnation=a.incarnation AND n.parent=a.key+'/'+a.incarnation+'/identity-evidence' AND {identity}) OR (probe.rank>1 AND n.layer IN ['intent','observed','imported'] AND ({}))) WITH a.key AS key,a.asset AS asset,a.incarnation AS incarnation,a.kind AS kind,a.revision AS revision,min(probe.rank) AS priority WHERE priority>$priority OR (priority=$priority AND key>$after) RETURN {{key:key, asset:asset, incarnation:incarnation, kind:kind, revision:revision, priority:priority}} AS p ORDER BY priority,key LIMIT 26",
-            wire::Adoption::Adopted as i32, permitted.join(" OR ")
-        ), Some(values))?;
+        let rooted = selection.focus.is_none() && !working.roots.is_empty();
+        values.insert(
+            "batch".into(),
+            int(if rooted { (MAX_BULK + 1) as u64 } else { 26 })?,
+        );
+        // Group only authorized evidence. Prove rooted membership from indexed
+        // candidates upward, not by expanding the entire selected estate.
+        let query = format!(
+            "UNWIND $probes AS probe MATCH (n:OmRow {{claim:probe.key}}) MATCH (a:OmRow {{key:CASE WHEN probe.rank=1 THEN 'asset/'+n.asset ELSE n.parent END}}) WHERE a.parent='assets' AND a.kind IN $kinds AND a.adoption={} AND {readable} AND {scope} AND ((probe.rank=1 AND n.incarnation=a.incarnation AND n.parent=a.key+'/'+a.incarnation+'/identity-evidence' AND {identity}) OR (probe.rank>1 AND n.layer IN ['intent','observed','imported'] AND ({}))) WITH a.key AS key,a.asset AS asset,a.incarnation AS incarnation,a.kind AS kind,a.revision AS revision,min(probe.rank) AS priority WHERE priority>$priority OR (priority=$priority AND key>$after) RETURN {{key:key, asset:asset, incarnation:incarnation, kind:kind, revision:revision, priority:priority}} AS p ORDER BY priority,key LIMIT $batch",
+            wire::Adoption::Adopted as i32,
+            permitted.join(" OR ")
+        );
+        let mut rows = Vec::with_capacity(26);
+        let mut examined = 0;
+        loop {
+            let batch = tx.query(&query, Some(values.clone()))?;
+            if !rooted {
+                rows = batch;
+                break;
+            }
+            let targets = batch
+                .iter()
+                .take(MAX_BULK)
+                .map(super::super::super::target)
+                .collect::<Result<Vec<_>>>()?;
+            let allowed = tx.owned_focuses(context, &working.roots, &targets)?;
+            examined += targets.len();
+            for (row, target) in batch.iter().take(MAX_BULK).zip(targets) {
+                if allowed.contains(&target) {
+                    rows.push(row.clone());
+                    if rows.len() == 26 {
+                        break;
+                    }
+                }
+            }
+            if rows.len() == 26 || batch.len() <= MAX_BULK {
+                break;
+            }
+            if examined == 1024 {
+                return Err(Error::Limit);
+            }
+            let last = &batch[MAX_BULK - 1];
+            values.insert("priority".into(), int(number(last, "priority")?)?);
+            values.insert("after".into(), text(string(last, "key")?));
+        }
         let more = rows.len() > 25;
         let mut parents = Vec::with_capacity(50);
         for row in rows.iter().take(25) {
             let target = super::super::super::target(row)?;
-            parents.push(text(asset_key(target)));
-            parents.push(text(parent(target)));
+            for parent in [asset_key(target), parent(target)] {
+                parents.push(Value::Map(BTreeMap::from([
+                    ("parent".into(), text(parent)),
+                    ("asset_key".into(), text(asset_key(target))),
+                ])));
+            }
+        }
+        let mut fact_values = HashMap::from([
+            ("parents".into(), Value::Array(parents)),
+            (
+                "fields".into(),
+                Value::Array(DESCRIPTORS.iter().map(|v| text(*v)).collect()),
+            ),
+        ]);
+        let identity = assets::visible_clause_for(context, Some(FIELD), &mut fact_values, "a");
+        let mut allowed_fields = Vec::with_capacity(DESCRIPTORS.len());
+        for field in DESCRIPTORS {
+            let allowed = assets::visible_clause_for(context, Some(field), &mut fact_values, "a");
+            allowed_fields.push(format!("(n.field='{field}' AND {allowed})"));
         }
         let facts = tx.query(
-            "UNWIND $parents AS parent MATCH (n:OmRow {parent:parent}) WHERE (n.layer IN ['intent','observed','imported'] AND n.field IN $fields) OR n.parent ENDS WITH '/identity-evidence' RETURN properties(n) AS p LIMIT 2049",
-            params([("parents", Value::Array(parents)), ("fields", Value::Array(DESCRIPTORS.iter().map(|v| text(*v)).collect()))]),
+            &format!("UNWIND $parents AS subject MATCH (n:OmRow {{parent:subject.parent}}) MATCH (a:OmRow {{key:subject.asset_key}}) WHERE (n.layer IN ['intent','observed','imported'] AND n.field IN $fields AND ({})) OR (n.parent ENDS WITH '/identity-evidence' AND {identity}) RETURN properties(n) AS p LIMIT 2049", allowed_fields.join(" OR ")),
+            Some(fact_values),
         )?;
         if facts.len() > MAX_CHILDREN {
             return Err(Error::Limit);
@@ -246,7 +304,6 @@ impl Store {
         for row in rows.iter().take(25) {
             let target = super::super::super::target(row)?;
             let kind = number(row, "kind")? as i32;
-            selection.contains(target, &tx)?;
             let asset = asset_key(target);
             let identity_parent = parent(target);
             let mut item = api::Item {
@@ -360,6 +417,7 @@ impl Store {
             api::IdentityCandidates {
                 items,
                 explanations,
+                revision,
                 next: more.then(|| {
                     format!(
                         "{revision}:{fingerprint}:{}:{position}",

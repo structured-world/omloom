@@ -346,6 +346,7 @@ impl Store {
             return Err(Error::Invalid);
         }
         let tx = self.begin()?;
+        let revision = number(&tx.root, "revision")?;
         let selection = tx.selection(context, working, false)?;
         let (target, kind, claims) = if let Some(reference) = &request.target {
             if !request.claims.is_empty() || request.kind != 0 {
@@ -387,6 +388,7 @@ impl Store {
             return Ok(reply(api::reply::Result::IdentityCandidates(
                 api::IdentityCandidates {
                     items: Vec::new(),
+                    revision,
                     ..Default::default()
                 },
             )));
@@ -451,6 +453,7 @@ impl Store {
         Ok(reply(api::reply::Result::IdentityCandidates(
             api::IdentityCandidates {
                 items,
+                revision,
                 ..Default::default()
             },
         )))

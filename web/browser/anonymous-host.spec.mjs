@@ -36,6 +36,13 @@ for (const width of [1440, 390]) test(`anonymous host comparison and explicit as
     const target = hosts.get(name);
     expect(target).toBeDefined();
     await comparison.getByRole('button', { name: 'Confirm this existing resource', exact: true }).first().click();
+    await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: [text('name', 'Concurrent unrelated device')] }) });
+    await dialog.getByRole('button', { name: 'Prepare host preview', exact: true }).click();
+    await expect(dialog.getByRole('alert')).toContainText('Review the package and selected matches again');
+    await expect(dialog.getByRole('checkbox', { name: 'device: Anonymous execution host', exact: true })).toBeChecked();
+    await dialog.getByRole('button', { name: 'Compare possible matches', exact: true }).click();
+    await dialog.locator('.identity-candidate').first().getByRole('button', { name: 'Compare candidate', exact: true }).click();
+    await comparison.getByRole('button', { name: 'Confirm this existing resource', exact: true }).click();
     await dialog.getByRole('button', { name: 'Prepare host preview', exact: true }).click();
     await expect(dialog.getByRole('heading', { name: 'Review 1 selected resources', exact: true })).toBeVisible();
     await dialog.getByRole('button', { name: 'Back', exact: true }).click();
@@ -55,5 +62,34 @@ for (const width of [1440, 390]) test(`anonymous host comparison and explicit as
     await expect(dialog.getByRole('checkbox', { name: 'device: Anonymous execution host', exact: true })).not.toBeChecked();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  });
+});
+
+for (const width of [1440, 390]) test(`unqualified host package enters manual matching at ${width}px`, async ({ page }) => {
+  // Missing continuity is not permission to adopt another chassis. The user
+  // explicitly confirms the already opened host through the same importer.
+  await withFieldHost(async url => {
+    const { m, rpc } = await workspaceClient(url);
+    const field = value => ({ name: 'name', value: { oneofKind: 'text', text: value } });
+    const target = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: [field('Known host')] }) })).mutation.targets[0];
+    const report = m.HostReport.create({ version: 1, platform: 'linux', bootBasis: 'b'.repeat(64), observedAt: 100n, findings: [{ key: 'hardware', kind: m.AssetKind.DEVICE, fields: [field('Anonymous observation')] }] });
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`${url}/#/?asset=${target.assetId}&incarnation=${target.incarnation}`);
+    await page.getByRole('button', { name: 'Load observation package', exact: true }).click();
+    await page.getByLabel('Host report file').setInputFiles({ name: 'anonymous.omloom', mimeType: 'application/octet-stream', buffer: Buffer.from(m.Request.toBinary(m.Request.create({ command: { oneofKind: 'hostImport', hostImport: m.HostImport.create({ report }) } }))) });
+    await page.getByRole('button', { name: 'Match this package manually', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Import host observations', exact: true });
+    await dialog.getByLabel('Source name', { exact: true }).fill('Manual observation');
+    await dialog.getByRole('button', { name: 'Use current device or VM scope', exact: true }).click();
+    await expect(dialog.getByText('Existing match: Known host', { exact: true })).toBeVisible();
+    await dialog.getByRole('checkbox', { name: 'device: Anonymous observation', exact: true }).check();
+    await dialog.getByRole('button', { name: 'Prepare host preview', exact: true }).click();
+    await expect(dialog.getByRole('heading', { name: 'Review 1 selected resources', exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Accept selected observations', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    const detail = (await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail;
+    expect(detail.item.fields).toEqual([field('Known host')]);
+    expect(detail.observed[0].evidence.fields).toEqual([field('Anonymous observation')]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   });
 });

@@ -1105,6 +1105,9 @@ message IdentityCandidates {
   repeated IdentityCandidateExplanation explanations = 2;
   // Server-issued continuation when more permitted candidates remain.
   optional string next = 3;
+  // Server snapshot revision used for this comparison. A subsequent import
+  // preview supplies it as WorkingContext.expected, never a client-derived stamp.
+  uint64 revision = 4;
 }
 message IdentityCandidateExplanation {
   // Permitted same-layer evidence supporting comparison, not authentication.

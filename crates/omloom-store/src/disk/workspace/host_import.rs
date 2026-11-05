@@ -531,6 +531,8 @@ impl Tx<'_> {
                 previous_fields,
                 diagnostic: if request.refresh.is_some() {
                     "Refresh this source's observations; preserve intended fields"
+                } else if report.source_basis.is_empty() && existing.is_some() {
+                    "Record observations for this confirmed resource; preserve intended fields"
                 } else if keep_fields {
                     "Keep previously accepted identity and local fields"
                 } else if existing.is_some() {

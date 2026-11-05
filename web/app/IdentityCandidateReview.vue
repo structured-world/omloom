@@ -11,6 +11,7 @@ const fields=computed(()=>[...new Set([...props.finding.fields.map(v=>v.name),..
 <div class="candidate-comparison"><article v-for="candidate in candidates" :key="key(candidate.target)">
 <h5>{{ label(candidate.kind) }}: {{ display(candidate.fields.find(v=>v.name==='name')) }}</h5>
 <p>Exact resource: {{ candidate.target?.assetId }} · {{ candidate.target?.incarnation }}</p>
+<a v-if="candidate.target" :href="`#/?asset=${encodeURIComponent(candidate.target.assetId)}&incarnation=${encodeURIComponent(candidate.target.incarnation)}`" target="_blank" rel="noopener">Inspect current resource and attachments</a>
 <dl><template v-for="field in fields" :key="field"><dt>{{ field.replaceAll('_',' ') }}</dt><dd>Package: {{ finding.fields.some(v=>v.name===field)?display(finding.fields.find(v=>v.name===field)):'Unknown' }}</dd><dd>Declared: {{ candidate.fields.some(v=>v.name===field)?display(candidate.fields.find(v=>v.name===field)):'Unknown or unavailable' }}</dd></template></dl>
 <button type="button" @click="$emit('confirm',candidate)">Confirm this existing resource</button>
 </article></div></section></template>
