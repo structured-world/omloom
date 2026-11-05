@@ -211,6 +211,13 @@ impl Store {
                 continue;
             }
             if report.source_basis.is_empty() {
+                if !report
+                    .findings
+                    .iter()
+                    .any(|finding| finding.key == "hardware")
+                {
+                    continue;
+                }
                 sources.push(api::HostSource {
                     reference,
                     label: name,

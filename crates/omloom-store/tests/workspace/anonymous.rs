@@ -74,6 +74,35 @@ fn anonymous_packages_require_fresh_matching_and_keep_current_custody() -> TestR
     Ok(())
 }
 
+// Refresh source options must never contain a selection absent from the new
+// package, even when prior manual host custody exists.
+#[test]
+fn anonymous_refresh_without_hardware_omits_host_source_option() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut input = host_import::draft();
+    input.report.as_mut().ok_or("report")?.source_basis.clear();
+    let accepted = host_import::accept(&store, &host_import::preview(&store, input.clone())?)?;
+    let mut report = input.report.ok_or("report")?;
+    report.findings.remove(0);
+    report.findings[0].parent = None;
+    let before = store.usage()?;
+    let Reply::HostSourceOptions(options) = call(
+        &store,
+        &operator(),
+        Command::HostSources(api::HostSources {
+            host: accepted.targets.first().cloned(),
+            report: Some(report),
+        }),
+    )?
+    else {
+        return Err("source options".into());
+    };
+    assert!(options.sources.is_empty());
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 fn candidates(
     store: &Store,
     actor: &Context,
