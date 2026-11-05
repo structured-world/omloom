@@ -35,7 +35,11 @@ pub(super) async fn collect(runner: &mut Runner, report: &mut api::HostReport) -
                 .run("/usr/sbin/sysctl", &["-n", "machdep.cpu.brand_string"])
                 .await
             {
-                Ok(v) if !v.text.trim().is_empty() && v.text.trim().len() <= 512 => {
+                Ok(v)
+                    if !v.text.trim().is_empty()
+                        && v.text.trim().len() <= 512
+                        && !v.text.trim().chars().any(char::is_control) =>
+                {
                     fields.push(super::super::text("cpu_model", v.text.trim()))
                 }
                 _ => unavailable += 1,
@@ -78,6 +82,10 @@ pub(super) async fn collect(runner: &mut Runner, report: &mut api::HostReport) -
                             continue;
                         }
                         let model = model.trim();
+                        if model.chars().any(char::is_control) {
+                            unavailable += 1;
+                            continue;
+                        }
                         if models.contains(model) {
                             continue;
                         }
@@ -110,8 +118,12 @@ pub(super) async fn collect(runner: &mut Runner, report: &mut api::HostReport) -
                 }
             }
             match value.get("model").and_then(Value::as_str) {
-                Some(model) if !model.trim().is_empty() && model.len() <= 512 => {
-                    fields.push(super::super::text("cpu_model", model))
+                Some(model)
+                    if !model.trim().is_empty()
+                        && model.trim().len() <= 512
+                        && !model.trim().chars().any(char::is_control) =>
+                {
+                    fields.push(super::super::text("cpu_model", model.trim()))
                 }
                 _ => unavailable += 1,
             }

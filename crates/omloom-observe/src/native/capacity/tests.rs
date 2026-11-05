@@ -119,3 +119,43 @@ async fn capacity_rejects_unsupported_units_and_overflow() {
         assert_eq!(report.findings[0].fields.len(), 1);
     }
 }
+
+// A malformed model must not make an otherwise useful report unimportable.
+// All native profiles omit that value and retain independent CPU/memory facts.
+#[tokio::test]
+async fn cpu_model_controls_are_unavailable_on_all_profiles() -> Result<()> {
+    const MAC: &[(&str, &str)] = &[
+        ("/usr/sbin/sysctl", "8"),
+        ("/usr/sbin/sysctl", "16384"),
+        ("/usr/sbin/sysctl", "Bad\0CPU"),
+    ];
+    const LINUX: &[(&str, &str)] = &[
+        ("getconf", "8"),
+        ("cat", "MemTotal: 16 kB\n"),
+        ("cat", "model name: Bad\0CPU\n"),
+    ];
+    const WINDOWS: &[(&str, &str)] = &[(
+        "Win32_ComputerSystem",
+        r#"{"cpus":8,"memory":16384,"model":"Bad\u0000CPU"}"#,
+    )];
+    for (platform, inputs) in [("macos", MAC), ("linux", LINUX), ("windows", WINDOWS)] {
+        let mut value = report(platform);
+        collect(&mut Runner::scripted(inputs, 16 * 1024 * 1024), &mut value).await?;
+        assert!(
+            !value.findings[0]
+                .fields
+                .iter()
+                .any(|f| f.name == "cpu_model"),
+            "{platform}"
+        );
+        assert!(
+            value.findings[0]
+                .fields
+                .iter()
+                .any(|f| f.name == "logical_cpus"),
+            "{platform}"
+        );
+        assert_eq!(value.coverage[0].status, "partial", "{platform}");
+    }
+    Ok(())
+}
