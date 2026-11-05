@@ -312,3 +312,25 @@ fn installation_claims_do_not_collapse_into_hardware_identity() {
         .is_err()
     );
 }
+
+// Equivalent UUID spellings must match without invalidating the native digest
+// already emitted for each installation namespace.
+#[test]
+fn installation_uuid_spellings_preserve_native_digests() {
+    let uuid = uuid::Uuid::parse_str("8d60c19a-489a-40c9-b381-d97e5d568df8").expect("fixture UUID");
+    for namespace in [
+        "linux/machine-id",
+        "windows/machine-guid",
+        "macos/apfs-volume",
+    ] {
+        let compact = installation_claim(namespace, &uuid.simple().to_string()).expect("compact");
+        let hyphenated = installation_claim(namespace, &uuid.to_string()).expect("hyphenated");
+        assert_eq!(compact.digest, hyphenated.digest, "{namespace}");
+        let native = if namespace == "linux/machine-id" {
+            uuid.simple().to_string()
+        } else {
+            uuid.to_string()
+        };
+        assert_eq!(compact.digest, super::super::digest(&native));
+    }
+}

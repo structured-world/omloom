@@ -187,7 +187,14 @@ fn installation_claim(namespace: &str, raw: &str) -> Option<api::HostIdentityCla
     if uuid.is_nil() || uuid == uuid::Uuid::max() {
         return None;
     }
-    identity_claim(api::HostIdentityKind::InstallationId, namespace, raw).ok()
+    // Preserve the native wire digest in each qualified namespace while
+    // accepting equivalent UUID input spellings within that namespace.
+    let canonical = if namespace == "linux/machine-id" {
+        uuid.simple().to_string()
+    } else {
+        uuid.to_string()
+    };
+    identity_claim(api::HostIdentityKind::InstallationId, namespace, &canonical).ok()
 }
 
 pub(super) async fn identity(runner: &mut Runner) -> Result<Identity> {
