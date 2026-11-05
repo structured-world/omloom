@@ -90,6 +90,7 @@ async fn collect_with(runner: &mut command::Runner) -> Result<api::HostReport> {
         name,
         hardware,
         installation: installation_claim,
+        coverage: identity_coverage,
     } = identity;
     let observed_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -106,6 +107,7 @@ async fn collect_with(runner: &mut command::Runner) -> Result<api::HostReport> {
             digest(&format!("omloom-native/1/{platform}/{source}"))
         },
         boot_basis: digest(&boot),
+        coverage: identity_coverage,
         observed_at,
         ..Default::default()
     };

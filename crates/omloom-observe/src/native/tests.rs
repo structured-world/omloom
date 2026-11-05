@@ -334,3 +334,87 @@ fn installation_uuid_spellings_preserve_native_digests() {
         assert_eq!(compact.digest, super::super::digest(&native));
     }
 }
+
+// Optional identity commands can fail independently. Their sanitized errors
+// must reach coverage instead of certifying a complete source basis.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn mac_identity_failure_preserves_source_coverage() -> Result<()> {
+    const INPUTS: &[(&str, &str)] = &[
+        ("unavailable-ioreg-fixture", ""),
+        (
+            "/usr/sbin/diskutil",
+            "Volume UUID: 8d60c19a-489a-40c9-b381-d97e5d568df8\n",
+        ),
+        ("/usr/sbin/sysctl", "same-boot"),
+        ("/usr/sbin/sysctl", "Fixture Mac"),
+    ];
+    let value = identity(&mut Runner::scripted(INPUTS, 16 * 1024 * 1024)).await?;
+    assert!(
+        value
+            .coverage
+            .iter()
+            .any(|c| c.module == "hardware-identity"
+                && c.status == "partial"
+                && c.detail.contains("ioreg"))
+    );
+    assert!(value.installation.is_some());
+    Ok(())
+}
+
+// A partial macOS basis must not introduce a new apparently qualified mapping
+// namespace; complete hardware/volume inputs retain the established source form.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn mac_incomplete_identity_is_anonymous() -> Result<()> {
+    const INPUTS: &[(&str, &str)] = &[
+        ("unavailable-ioreg-fixture", ""),
+        (
+            "/usr/sbin/diskutil",
+            "Volume UUID: 8d60c19a-489a-40c9-b381-d97e5d568df8\n",
+        ),
+        ("/usr/sbin/sysctl", "same-boot"),
+        ("/usr/sbin/sysctl", "Fixture Mac"),
+    ];
+    let value = identity(&mut Runner::scripted(INPUTS, 16 * 1024 * 1024)).await?;
+    assert!(value.source.is_empty());
+    const COMPLETE: &[(&str, &str)] = &[
+        (
+            "/usr/sbin/ioreg",
+            "\"IOPlatformUUID\" = \"8d60c19a-489a-40c9-b381-d97e5d568df8\"\n",
+        ),
+        (
+            "/usr/sbin/diskutil",
+            "Volume UUID: 18e80235-4cb2-4648-b710-7e327d577878\n",
+        ),
+        ("/usr/sbin/sysctl", "same-boot"),
+        ("/usr/sbin/sysctl", "Fixture Mac"),
+    ];
+    assert_eq!(
+        identity(&mut Runner::scripted(COMPLETE, 16 * 1024 * 1024))
+            .await?
+            .source,
+        "8d60c19a-489a-40c9-b381-d97e5d568df8/18e80235-4cb2-4648-b710-7e327d577878"
+    );
+    const MISSING_VOLUME: &[(&str, &str)] = &[
+        (
+            "/usr/sbin/ioreg",
+            "\"IOPlatformUUID\" = \"8d60c19a-489a-40c9-b381-d97e5d568df8\"\n",
+        ),
+        ("unavailable-diskutil-fixture", ""),
+        ("/usr/sbin/sysctl", "same-boot"),
+        ("/usr/sbin/sysctl", "Fixture Mac"),
+    ];
+    let value = identity(&mut Runner::scripted(MISSING_VOLUME, 16 * 1024 * 1024)).await?;
+    assert!(value.source.is_empty());
+    assert!(value.hardware.is_some());
+    assert!(
+        value
+            .coverage
+            .iter()
+            .any(|c| c.module == "installation-identity"
+                && c.status == "partial"
+                && c.detail.contains("diskutil"))
+    );
+    Ok(())
+}

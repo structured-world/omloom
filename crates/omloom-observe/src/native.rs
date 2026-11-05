@@ -124,6 +124,7 @@ pub(super) struct Identity {
     pub name: String,
     pub hardware: Option<api::HostIdentityClaim>,
     pub installation: Option<api::HostIdentityClaim>,
+    pub coverage: Vec<api::CollectionCoverage>,
 }
 
 const WINDOWS_IDENTITY_SOURCE: &str =
@@ -134,6 +135,7 @@ fn windows_identity(input: &str) -> Result<Identity> {
         let source = value.get("source").and_then(Value::as_str).unwrap_or("");
         let installation = installation_claim("windows/machine-guid", source);
         Ok(Identity {
+            coverage: Vec::new(),
             platform: "windows",
             source: if installation.is_some() {
                 source.into()
@@ -202,18 +204,19 @@ pub(super) async fn identity(runner: &mut Runner) -> Result<Identity> {
         "macos" => {
             let device = runner
                 .run("/usr/sbin/ioreg", &["-rd1", "-c", "IOPlatformExpertDevice"])
-                .await
-                .ok();
+                .await;
             let hardware = device
                 .as_ref()
+                .ok()
                 .into_iter()
                 .flat_map(|v| v.text.lines())
                 .find_map(|l| l.trim().strip_prefix("\"IOPlatformUUID\" = "))
                 .unwrap_or("")
                 .trim_matches('"');
-            let volume = runner.run("/usr/sbin/diskutil", &["info", "/"]).await.ok();
+            let volume = runner.run("/usr/sbin/diskutil", &["info", "/"]).await;
             let installation = volume
                 .as_ref()
+                .ok()
                 .into_iter()
                 .flat_map(|v| v.text.lines())
                 .find_map(|l| l.trim().strip_prefix("Volume UUID:"))
@@ -228,16 +231,33 @@ pub(super) async fn identity(runner: &mut Runner) -> Result<Identity> {
                 .await?
                 .text;
             let installation_claim = installation_claim("macos/apfs-volume", installation);
+            let hardware_claim = hardware_claim("apple/platform-uuid", hardware);
+            let mut identity_coverage = Vec::new();
+            for (module, source, result) in [
+                ("hardware-identity", "ioreg", &device),
+                ("installation-identity", "diskutil", &volume),
+            ] {
+                if let Err(error) = result {
+                    identity_coverage.push(api::CollectionCoverage {
+                        module: module.into(),
+                        status: "partial".into(),
+                        detail: format!("{source} identity unavailable: {error}"),
+                    });
+                }
+            }
             Ok(Identity {
+                coverage: identity_coverage,
                 platform: "macos",
-                source: if installation_claim.is_some() {
+                // Keep the established complete source spelling. A missing part
+                // enters explicit anonymous matching, never a new partial namespace.
+                source: if installation_claim.is_some() && hardware_claim.is_some() {
                     format!("{hardware}/{installation}")
                 } else {
                     String::new()
                 },
                 boot: boot.trim().into(),
                 name: model.trim().into(),
-                hardware: hardware_claim("apple/platform-uuid", hardware),
+                hardware: hardware_claim,
                 installation: installation_claim,
             })
         }
@@ -257,6 +277,7 @@ pub(super) async fn identity(runner: &mut Runner) -> Result<Identity> {
                 Err(_) => None,
             };
             Ok(Identity {
+                coverage: Vec::new(),
                 platform: "linux",
                 source: if installation.is_some() {
                     raw.into()
