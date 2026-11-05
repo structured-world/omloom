@@ -8,6 +8,7 @@ impl Tx<'_> {
                 let parent = string(before, "parent")?;
                 let class = match number(before, "class")? {
                     0 => Class::Inventory,
+                    1 => Class::Evidence,
                     5 => Class::Checkpoint,
                     _ => return Err(Error::Corrupt),
                 };
@@ -81,6 +82,24 @@ impl Store {
                             && !context.field(target, kind, &choice.name, true))
                     {
                         return Err(Error::Denied);
+                    }
+                }
+            }
+            let observation_parent = text(asset_key(from));
+            for before in inverse.rows.values().flatten() {
+                if before.get("parent") == Some(&observation_parent)
+                    && matches!(
+                        before.get("layer").and_then(Value::as_str),
+                        Some("observed" | "imported")
+                    )
+                {
+                    let field = string(before, "field")?;
+                    for target in [from, to] {
+                        if !context.field(target, kind, &field, false)
+                            || !context.field(target, kind, &field, true)
+                        {
+                            return Err(Error::Denied);
+                        }
                     }
                 }
             }

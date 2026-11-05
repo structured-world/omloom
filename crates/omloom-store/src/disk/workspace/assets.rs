@@ -250,7 +250,7 @@ impl Tx<'_> {
                     Value::Array(frontier.iter().map(text).collect()),
                 );
                 let path = ownership_path(false, reverse);
-                let rows=self.raw(&format!("UNWIND $keys AS key MATCH {path} WHERE {owner} RETURN DISTINCT p.key AS key LIMIT 1025"),values)?;
+                let rows = self.raw(&format!("UNWIND $keys AS key MATCH {path} WHERE {owner} RETURN DISTINCT p.key AS key LIMIT 1025"), values)?;
                 for row in rows {
                     next.insert(string(&row, "key")?);
                 }
@@ -266,6 +266,92 @@ impl Tx<'_> {
             }
         }
         Err(Error::Denied)
+    }
+
+    // Expand the union of the selected subjects' ancestors once. Reverse links
+    // propagate proven membership without rereading shared paths per subject.
+    pub(super) fn owned_focuses(
+        &self,
+        context: &Context,
+        roots: &[wire::AssetRef],
+        focuses: &[AssetRef],
+    ) -> Result<BTreeSet<AssetRef>> {
+        if focuses.len() > MAX_BULK {
+            return Err(Error::Limit);
+        }
+        let roots = roots
+            .iter()
+            .map(|r| parse_target(Some(r)).map(asset_key))
+            .collect::<Result<BTreeSet<_>>>()?;
+        let mut owned = roots;
+        let mut children = BTreeMap::<String, BTreeSet<String>>::new();
+        let mut edge_count = 0usize;
+        let mut seen = BTreeSet::new();
+        let mut frontier = focuses
+            .iter()
+            .map(|focus| asset_key(*focus))
+            .filter(|key| !owned.contains(key))
+            .collect::<BTreeSet<_>>();
+        while !frontier.is_empty() {
+            let mut next = BTreeSet::new();
+            for reverse in [false, true] {
+                let mut values = HashMap::new();
+                let owner = browse_clause(context, &mut values, Some(reverse), &[]);
+                values.insert(
+                    "keys".into(),
+                    Value::Array(frontier.iter().map(text).collect()),
+                );
+                let path = ownership_path(false, reverse);
+                let rows=self.raw(&format!("UNWIND $keys AS key MATCH {path} WHERE {owner} RETURN DISTINCT p.key AS parent, a.key AS child LIMIT 1025"),values)?;
+                for row in rows {
+                    let parent = string(&row, "parent")?;
+                    let child = string(&row, "child")?;
+                    let edges = children.entry(parent.clone()).or_default();
+                    if !edges.contains(&child) {
+                        if edge_count == 1024 {
+                            return Err(Error::Limit);
+                        }
+                        edges.insert(child);
+                        edge_count += 1;
+                    }
+                    next.insert(parent);
+                }
+                if next.len() > 1024 {
+                    return Err(Error::Limit);
+                }
+            }
+            let mut proven = next
+                .iter()
+                .filter(|key| owned.contains(*key))
+                .cloned()
+                .collect::<Vec<_>>();
+            while let Some(parent) = proven.pop() {
+                if let Some(direct) = children.get(&parent) {
+                    for child in direct {
+                        if owned.insert(child.clone()) {
+                            proven.push(child.clone());
+                        }
+                    }
+                }
+            }
+            if focuses
+                .iter()
+                .all(|focus| owned.contains(&asset_key(*focus)))
+            {
+                break;
+            }
+            seen.extend(frontier);
+            frontier = next;
+            frontier.retain(|key| !seen.contains(key) && !owned.contains(key));
+            if seen.len() + frontier.len() > 1024 {
+                return Err(Error::Limit);
+            }
+        }
+        Ok(focuses
+            .iter()
+            .copied()
+            .filter(|focus| owned.contains(&asset_key(*focus)))
+            .collect())
     }
 }
 fn scope_clause(scope: &Scope, values: &mut HashMap<String, Value>, alias: &str) -> String {

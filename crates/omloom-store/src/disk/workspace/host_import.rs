@@ -1,8 +1,17 @@
 //! Reviewed native input reuses current inventory and observation rows. Only
 //! selected proposals survive in bounded, expiring review custody until acceptance.
 use super::*;
+mod refresh;
 #[cfg(test)]
 mod tests;
+
+fn preview_reply(preview: api::Preview) -> Result<api::Reply> {
+    let response = reply(api::reply::Result::Preview(preview));
+    if response.encoded_len() > MAX_REPLY_BYTES {
+        return Err(Error::Limit);
+    }
+    Ok(response)
+}
 
 fn mapping(actor: &str, source: &str, basis: &str, key: &str) -> String {
     // Source names select independent import configurations, not cosmetic
@@ -22,7 +31,7 @@ fn network_suffix(part: i32) -> Result<&'static str> {
         _ => Err(Error::Invalid),
     }
 }
-fn validate(report: &api::HostReport) -> Result<()> {
+fn validate_parts(report: &api::HostReport, refresh: bool) -> Result<()> {
     if report.version != 1
         || !matches!(report.platform.as_str(), "macos" | "linux" | "windows")
         || report.findings.is_empty()
@@ -77,14 +86,9 @@ fn validate(report: &api::HostReport) -> Result<()> {
             return Err(Error::Invalid);
         }
         for parent in [&node.parent, &node.runtime].into_iter().flatten() {
-            if !keys.contains_key(parent) {
+            if !keys.contains_key(parent) && !refresh {
                 return Err(Error::Invalid);
             }
-        }
-        if let Some(runtime) = &node.runtime
-            && keys.get(runtime) != Some(&(wire::AssetKind::SoftwareInstallation as i32))
-        {
-            return Err(Error::Invalid);
         }
         if keys.insert(node.key.clone(), node.kind).is_some() {
             return Err(Error::Invalid);
@@ -94,6 +98,17 @@ fn validate(report: &api::HostReport) -> Result<()> {
         }
         for value in &node.addresses {
             interface_facts::validate_address(value)?;
+        }
+    }
+    // Refresh permits omitted or later context. Validate any declared runtime
+    // against the complete report before unselected findings are discarded.
+    for node in &report.findings {
+        if let Some(runtime) = &node.runtime
+            && keys
+                .get(runtime)
+                .is_some_and(|kind| *kind != wire::AssetKind::SoftwareInstallation as i32)
+        {
+            return Err(Error::Invalid);
         }
     }
     for item in &report.coverage {
@@ -144,7 +159,12 @@ impl Tx<'_> {
         now: u64,
     ) -> Result<Vec<api::ImportRow>> {
         let report = request.report.as_deref().ok_or(Error::Invalid)?;
-        validate(report)?;
+        validate_parts(report, request.refresh.is_some())?;
+        let importer = if request.refresh.is_some() {
+            self.refresh_source(context, request, working)?.1
+        } else {
+            context.actor.clone()
+        };
         if request.selection.is_empty()
             || request.selection.len() > MAX_IMPORT
             || request.source.is_empty()
@@ -165,18 +185,47 @@ impl Tx<'_> {
                 return Err(Error::Invalid);
             }
         }
+        let refresh_members = if let Some(refresh) = &request.refresh {
+            let keys = request
+                .selection
+                .iter()
+                .map(|node| {
+                    text(mapping(
+                        &importer,
+                        &request.source,
+                        &report.source_basis,
+                        &node.key,
+                    ))
+                })
+                .collect();
+            let rows = self.query(
+                "UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN properties(n) AS p LIMIT 129",
+                params([("keys", Value::Array(keys))]),
+            )?;
+            let targets = rows
+                .iter()
+                .map(super::super::target)
+                .collect::<Result<Vec<_>>>()?;
+            Some(self.owned_focuses(
+                context,
+                &[refresh.host.clone().ok_or(Error::Invalid)?],
+                &targets,
+            )?)
+        } else {
+            None
+        };
+        let refresh_is_working_scope = request.refresh.as_ref().is_some_and(|refresh| {
+            working.focus.is_none()
+                && working.roots.len() == 1
+                && working.roots.first() == refresh.host.as_ref()
+        });
         let mut resolved = BTreeMap::<&str, AssetRef>::new();
         let mut rows = Vec::with_capacity(request.selection.len());
         for node in &report.findings {
             let Some(explicit) = selected.get(node.key.as_str()) else {
                 continue;
             };
-            let key = mapping(
-                &context.actor,
-                &request.source,
-                &report.source_basis,
-                &node.key,
-            );
+            let key = mapping(&importer, &request.source, &report.source_basis, &node.key);
             let old = self.get(&key)?;
             let mut hash = Sha256::new();
             for field in &node.fields {
@@ -196,6 +245,9 @@ impl Tx<'_> {
                 }
             }
             let prior = old.as_ref().map(super::super::target).transpose()?;
+            if request.refresh.is_some() && prior.is_none() {
+                return Err(Error::Conflict);
+            }
             let projection_source = old
                 .as_ref()
                 .and_then(|row| row.get("namespace"))
@@ -217,6 +269,11 @@ impl Tx<'_> {
                 return Err(Error::Conflict);
             }
             let existing = explicit.or(prior);
+            if let Some(members) = &refresh_members
+                && !members.contains(&existing.ok_or(Error::Conflict)?)
+            {
+                return Err(Error::Denied);
+            }
             let mut kind = node.kind;
             let expected = if let Some(target) = existing {
                 let row = self.visible_asset(context, target)?;
@@ -233,8 +290,10 @@ impl Tx<'_> {
                 } else if actual_kind != kind {
                     return Err(Error::Invalid);
                 }
-                self.selection(context, working, false)?
-                    .contains(target, self)?;
+                if !refresh_is_working_scope {
+                    self.selection(context, working, false)?
+                        .contains(target, self)?;
+                }
                 Some(number(&row, "revision")?)
             } else {
                 if kind == wire::AssetKind::Unspecified as i32 {
@@ -251,7 +310,7 @@ impl Tx<'_> {
             let parent = node
                 .parent
                 .as_deref()
-                .map(|key| resolved.get(key).copied().ok_or(Error::Invalid))
+                .map(|parent| self.host_parent(context, request, parent, &importer, &resolved))
                 .transpose()?;
             let local = if existing.is_none() && parent.is_some() {
                 api::WorkingContext {
@@ -275,7 +334,25 @@ impl Tx<'_> {
             };
             let keep_fields = accepted_fields
                 || (node.kind == wire::AssetKind::Unspecified as i32 && existing.is_some());
-            let target = if keep_fields {
+            let mut evidence_source = old
+                .as_ref()
+                .and_then(|row| row.get("authority"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let mut previous_fields = Vec::new();
+            let target = if request.refresh.is_some() {
+                let target = existing.ok_or(Error::Conflict)?;
+                let (source, previous) = self.refresh_fields(
+                    context,
+                    target,
+                    old.as_ref().ok_or(Error::Conflict)?,
+                    node,
+                    report,
+                )?;
+                evidence_source = source;
+                previous_fields = previous;
+                target
+            } else if keep_fields {
                 change.changes.clear();
                 existing.ok_or(Error::Corrupt)?
             } else {
@@ -289,7 +366,11 @@ impl Tx<'_> {
                 return Err(Error::Conflict);
             }
             if let Some(runtime) = node.runtime.as_deref() {
-                let runtime = *resolved.get(runtime).ok_or(Error::Invalid)?;
+                let runtime = self.host_parent(context, request, runtime, &importer, &resolved)?;
+                let runtime_row = self.visible_asset(context, runtime)?;
+                if number(&runtime_row, "kind")? != wire::AssetKind::SoftwareInstallation as u64 {
+                    return Err(Error::Invalid);
+                }
                 let relations = self.working_relations(target)?;
                 let prior = relations.iter().find(|r| {
                     r.kind == wire::RelationKind::RunsOn as i32
@@ -300,6 +381,9 @@ impl Tx<'_> {
                         return Err(Error::Conflict);
                     }
                 } else {
+                    if request.refresh.is_some() {
+                        return Err(Error::Conflict);
+                    }
                     if !context.field(target, node.kind, "relations", true)
                         || !context.field(
                             runtime,
@@ -371,6 +455,14 @@ impl Tx<'_> {
             )?;
             let mut data = target_props(target);
             data.insert("source".into(), text(&request.source));
+            if node.key == "hardware" {
+                // The root binding owns the configuration's importer namespace.
+                data.insert("caller".into(), text(&importer));
+            }
+            if let Some(source) = evidence_source {
+                // One evidence-source UUID per binding, reused by current field claims.
+                data.insert("authority".into(), text(source));
+            }
             if projection_source != request.source {
                 data.insert("namespace".into(), text(&projection_source));
             }
@@ -391,7 +483,10 @@ impl Tx<'_> {
                 row: rows.len() as u32 + 1,
                 change: Some(change),
                 addresses,
-                diagnostic: if keep_fields {
+                previous_fields,
+                diagnostic: if request.refresh.is_some() {
+                    "Refresh this source's observations; preserve intended fields"
+                } else if keep_fields {
                     "Keep previously accepted identity and local fields"
                 } else if existing.is_some() {
                     "Update reviewed existing identity"
@@ -406,7 +501,7 @@ impl Tx<'_> {
         {
             let metadata = self
                 .get(&mapping(
-                    &context.actor,
+                    &importer,
                     &request.source,
                     &report.source_basis,
                     "installation",
@@ -485,7 +580,7 @@ impl Tx<'_> {
                 }
                 network_facts::validate(&selected)?;
                 let base = mapping(
-                    &context.actor,
+                    &importer,
                     &request.source,
                     &report.source_basis,
                     "installation",
@@ -510,47 +605,88 @@ impl Store {
                 || !request.selection.is_empty()
                 || !request.source.is_empty()
                 || !request.network_parts.is_empty()
+                || request.refresh.is_some()
             {
                 return Err(Error::Invalid);
             }
             let mut tx = self.begin()?;
-            let key = format!("preview/{id}");
-            let row = tx.get(&key)?.ok_or(Error::Expired)?;
-            if string(&row, "owner")? != context.actor {
-                return Err(Error::Denied);
+            let retry = api::HostImport {
+                preview: Some(id.clone()),
+                ..Default::default()
             }
-            if number(&row, "expires")? <= now {
-                return Err(Error::Expired);
+            .encode_to_vec();
+            if let Some(result) = tx.creation_outcome(
+                context,
+                working,
+                &retry,
+                addresses::knowledge::Outcome::Csv(&id),
+            )? {
+                return Ok(reply(api::reply::Result::Mutation(result)));
             }
-            if number(&row, "revision")? != number(&tx.root, "revision")? {
-                return Err(Error::Conflict);
-            }
-            let mut selector = working.clone();
-            selector.expected = None;
-            if binary(&row, "working")? != selector.encode_to_vec() {
-                return Err(Error::Conflict);
-            }
-            let request =
-                api::HostImport::decode(binary(&row, "payload")?).map_err(|_| Error::Corrupt)?;
-            let rows = tx.apply_host(context, &request, working, now)?;
-            let mut targets = Vec::with_capacity(rows.len());
-            let report = request.report.as_deref().ok_or(Error::Corrupt)?;
-            for selected in &request.selection {
-                let row = tx
-                    .get(&mapping(
-                        &context.actor,
-                        &request.source,
-                        &report.source_basis,
-                        &selected.key,
-                    ))?
-                    .ok_or(Error::Corrupt)?;
-                targets.push(target_wire(super::super::target(&row)?));
-            }
-            tx.delete(&key)?;
+            let targets = (|| -> Result<Vec<wire::AssetRef>> {
+                let key = format!("preview/{id}");
+                let row = tx.get(&key)?.ok_or(Error::Expired)?;
+                if string(&row, "owner")? != context.actor {
+                    return Err(Error::Denied);
+                }
+                if number(&row, "expires")? <= now {
+                    return Err(Error::Expired);
+                }
+                if number(&row, "revision")? != number(&tx.root, "revision")? {
+                    return Err(Error::Conflict);
+                }
+                let mut selector = working.clone();
+                selector.expected = None;
+                if binary(&row, "working")? != selector.encode_to_vec() {
+                    return Err(Error::Conflict);
+                }
+                let request = api::HostImport::decode(binary(&row, "payload")?)
+                    .map_err(|_| Error::Corrupt)?;
+                let rows = tx.apply_host(context, &request, working, now)?;
+                let mut targets = Vec::with_capacity(rows.len());
+                let report = request.report.as_deref().ok_or(Error::Corrupt)?;
+                let importer = if request.refresh.is_some() {
+                    tx.refresh_source(context, &request, working)?.1
+                } else {
+                    context.actor.clone()
+                };
+                for selected in &request.selection {
+                    let row = tx
+                        .get(&mapping(
+                            &importer,
+                            &request.source,
+                            &report.source_basis,
+                            &selected.key,
+                        ))?
+                        .ok_or(Error::Corrupt)?;
+                    targets.push(target_wire(super::super::target(&row)?));
+                }
+                tx.delete(&key)?;
+                tx.save_creation_outcome(
+                    context,
+                    working,
+                    &retry,
+                    &targets,
+                    now,
+                    addresses::knowledge::Outcome::Csv(&id),
+                )?;
+                Ok(targets)
+            })()
+            .map_err(|error| Error::Rejected(Box::new(error)))?;
             return Ok(mutation(tx.commit()?, targets));
         }
+        validate_parts(
+            request.report.as_deref().ok_or(Error::Invalid)?,
+            request.refresh.is_some(),
+        )?;
+        if request.refresh.is_some() {
+            if !request.source.is_empty() {
+                return Err(Error::Invalid);
+            }
+            let tx = self.begin()?;
+            request.source = tx.refresh_source(context, &request, working)?.0;
+        }
         let report = request.report.as_mut().ok_or(Error::Invalid)?;
-        validate(report)?;
         let parts: BTreeSet<_> = request.network_parts.iter().copied().collect();
         if parts.len() != request.network_parts.len()
             || parts.iter().any(|v| {
@@ -636,7 +772,7 @@ impl Store {
                     revision: base,
                     rows,
                 };
-                return Ok(reply(api::reply::Result::Preview(preview)));
+                return preview_reply(preview);
             }
             let key = string(&row, "key")?;
             for child in tx.children(&key)? {
@@ -651,6 +787,9 @@ impl Store {
             revision,
             rows,
         };
+        // Previous source claims can exceed the incoming package's size. Admit
+        // the complete response before storing custody the operator cannot read.
+        let response = preview_reply(preview)?;
         tx.put(
             &format!("preview/{id}"),
             "workspace-previews",
@@ -670,6 +809,6 @@ impl Store {
             ]),
         )?;
         tx.commit()?;
-        Ok(reply(api::reply::Result::Preview(preview)))
+        Ok(response)
     }
 }

@@ -3,6 +3,8 @@ use api::{reply::Result as Reply, request::Command};
 use omloom_store::Class;
 #[path = "correction/continuity.rs"]
 mod continuity;
+#[path = "correction/observations.rs"]
+mod observations;
 #[path = "correction/safety.rs"]
 mod safety;
 

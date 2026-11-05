@@ -18,7 +18,12 @@ impl Capture {
             .map(|p| number(p, "class"))
             .transpose()?
             .unwrap_or(class as u64);
-        if ![Class::Inventory as u64, Class::Checkpoint as u64].contains(&class)
+        if ![
+            Class::Inventory as u64,
+            Class::Evidence as u64,
+            Class::Checkpoint as u64,
+        ]
+        .contains(&class)
             || self.rows.contains_key(key)
         {
             return Ok(());

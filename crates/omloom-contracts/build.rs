@@ -23,6 +23,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .boxed(".omloom.workspace.v1.Reply.result.detail")
         .boxed(".omloom.workspace.v1.Reply.result.vm_placement_review")
         .boxed(".omloom.workspace.v1.HostImport.report")
+        .boxed(".omloom.workspace.v1.HostSources.report")
         // Keep the request stack bound; allocate this volume only for an explicit coverage assertion.
         .boxed(".omloom.workspace.v1.PhysicalDefinition.occupancy_coverage")
         .boxed(".omloom.workspace.v1.PhysicalDefinition.rack_grid")

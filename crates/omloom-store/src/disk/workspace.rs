@@ -318,6 +318,9 @@ impl Store {
                 working.as_ref().ok_or(Error::Invalid)?,
                 now,
             ),
+            C::HostSources(query) => {
+                self.workspace_host_sources(context, query, working.as_ref().ok_or(Error::Invalid)?)
+            }
             C::CompareHostIdentity(value) => self.workspace_compare_host_identity(
                 context,
                 value,

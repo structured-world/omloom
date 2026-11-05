@@ -23,7 +23,7 @@ ipnet = { version = "2.12", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 structured-email-address = { version = "0.0.22", default-features = false, features = ["alloc"], optional = true }
-structured-public-domains = { version = "0.0.44", default-features = false, features = ["alloc"], optional = true }
+structured-public-domains = { version = "0.0.46", default-features = false, features = ["alloc"], optional = true }
 phonenumber = { version = "0.3.10", optional = true }
 idna = { version = "1.1", optional = true }
 url = { version = "2.5", optional = true }

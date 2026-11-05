@@ -2874,6 +2874,83 @@ export interface HostImport {
      * @generated from protobuf field: repeated omloom.workspace.v1.HostNetworkPart network_parts = 5
      */
     networkParts: HostNetworkPart[];
+    /**
+     * Existing-only refresh selected by the operator. The source name above must
+     * be empty on input; the server resolves its own retained source binding.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.HostRefresh refresh = 6
+     */
+    refresh?: HostRefresh;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.HostRefresh
+ */
+export interface HostRefresh {
+    /**
+     * Operator-confirmed adopted device or VM incarnation, never inferred from IP.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef host = 1
+     */
+    host?: AssetRef;
+    /**
+     * Opaque source reference returned for this host and report by HostSources.
+     *
+     * @generated from protobuf field: string source_ref = 2
+     */
+    sourceRef: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.HostSources
+ */
+export interface HostSources {
+    /**
+     * Existing host whose reviewed source bindings may be considered.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef host = 1
+     */
+    host?: AssetRef;
+    /**
+     * Bounded native package, used only for compatibility and permitted matches.
+     * This read never retains the package or changes freshness.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.HostReport report = 2
+     */
+    report?: HostReport;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.HostSource
+ */
+export interface HostSource {
+    /**
+     * Server-owned opaque reference, independent of the displayed label.
+     *
+     * @generated from protobuf field: string reference = 1
+     */
+    reference: string;
+    /**
+     * Existing configuration label for operator selection, not an identity key.
+     *
+     * @generated from protobuf field: string label = 2
+     */
+    label: string;
+    /**
+     * Only permitted existing matches from this package, with exact incarnations.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.HostSelection matches = 3
+     */
+    matches: HostSelection[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.HostSourceOptions
+ */
+export interface HostSourceOptions {
+    /**
+     * Compatible permitted source bindings. Empty means no available binding,
+     * not that the host has no other sources or that new adoption is authorized.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.HostSource sources = 1
+     */
+    sources: HostSource[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Address
@@ -3147,6 +3224,13 @@ export interface ImportRow {
      * @generated from protobuf field: omloom.workspace.v1.AddressDelta addresses = 4
      */
     addresses?: AddressDelta;
+    /**
+     * Read-authorized current claims from the selected refresh source, projected
+     * for comparison only. Absence is unknown, never an implicit clear or default.
+     *
+     * @generated from protobuf field: repeated omloom.v1.Field previous_fields = 5
+     */
+    previousFields: Field[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Preview
@@ -6091,6 +6175,14 @@ export interface Request {
          */
         segmentInterfaces: SegmentInterfaces;
     } | {
+        oneofKind: "hostSources";
+        /**
+         * Read compatible existing host sources without retaining input or touching state.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.HostSources host_sources = 40
+         */
+        hostSources: HostSources;
+    } | {
         oneofKind: undefined;
     };
 }
@@ -6311,6 +6403,14 @@ export interface Reply {
          * @generated from protobuf field: omloom.workspace.v1.SegmentMembershipPage segment_membership_page = 26
          */
         segmentMembershipPage: SegmentMembershipPage;
+    } | {
+        oneofKind: "hostSourceOptions";
+        /**
+         * Existing source choices for one explicit host and package.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.HostSourceOptions host_source_options = 27
+         */
+        hostSourceOptions: HostSourceOptions;
     } | {
         oneofKind: undefined;
     };
@@ -8599,7 +8699,8 @@ class HostImport$Type extends MessageType<HostImport> {
             { no: 2, name: "source", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 3, name: "selection", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostSelection },
             { no: 4, name: "preview", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
-            { no: 5, name: "network_parts", kind: "enum", repeat: 1 /*RepeatType.PACKED*/, T: () => ["omloom.workspace.v1.HostNetworkPart", HostNetworkPart, "HOST_NETWORK_PART_"] }
+            { no: 5, name: "network_parts", kind: "enum", repeat: 1 /*RepeatType.PACKED*/, T: () => ["omloom.workspace.v1.HostNetworkPart", HostNetworkPart, "HOST_NETWORK_PART_"] },
+            { no: 6, name: "refresh", kind: "message", T: () => HostRefresh }
         ]);
     }
 }
@@ -8607,6 +8708,58 @@ class HostImport$Type extends MessageType<HostImport> {
  * @generated MessageType for protobuf message omloom.workspace.v1.HostImport
  */
 export const HostImport = new HostImport$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class HostRefresh$Type extends MessageType<HostRefresh> {
+    constructor() {
+        super("omloom.workspace.v1.HostRefresh", [
+            { no: 1, name: "host", kind: "message", T: () => AssetRef },
+            { no: 2, name: "source_ref", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostRefresh
+ */
+export const HostRefresh = new HostRefresh$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class HostSources$Type extends MessageType<HostSources> {
+    constructor() {
+        super("omloom.workspace.v1.HostSources", [
+            { no: 1, name: "host", kind: "message", T: () => AssetRef },
+            { no: 2, name: "report", kind: "message", T: () => HostReport }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostSources
+ */
+export const HostSources = new HostSources$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class HostSource$Type extends MessageType<HostSource> {
+    constructor() {
+        super("omloom.workspace.v1.HostSource", [
+            { no: 1, name: "reference", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "label", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "matches", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostSelection }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostSource
+ */
+export const HostSource = new HostSource$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class HostSourceOptions$Type extends MessageType<HostSourceOptions> {
+    constructor() {
+        super("omloom.workspace.v1.HostSourceOptions", [
+            { no: 1, name: "sources", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostSource }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostSourceOptions
+ */
+export const HostSourceOptions = new HostSourceOptions$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class Address$Type extends MessageType<Address> {
     constructor() {
@@ -8692,7 +8845,8 @@ class ImportRow$Type extends MessageType<ImportRow> {
             { no: 1, name: "row", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
             { no: 2, name: "change", kind: "message", T: () => Write },
             { no: 3, name: "diagnostic", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 4, name: "addresses", kind: "message", T: () => AddressDelta }
+            { no: 4, name: "addresses", kind: "message", T: () => AddressDelta },
+            { no: 5, name: "previous_fields", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Field }
         ]);
     }
 }
@@ -9899,7 +10053,8 @@ class Request$Type extends MessageType<Request> {
             { no: 36, name: "segment", kind: "message", oneof: "command", T: () => Segment },
             { no: 37, name: "preview_segment", kind: "message", oneof: "command", T: () => Segment },
             { no: 38, name: "segment_memberships", kind: "message", oneof: "command", T: () => SegmentMemberships },
-            { no: 39, name: "segment_interfaces", kind: "message", oneof: "command", T: () => SegmentInterfaces }
+            { no: 39, name: "segment_interfaces", kind: "message", oneof: "command", T: () => SegmentInterfaces },
+            { no: 40, name: "host_sources", kind: "message", oneof: "command", T: () => HostSources }
         ]);
     }
 }
@@ -9936,7 +10091,8 @@ class Reply$Type extends MessageType<Reply> {
             { no: 23, name: "physical", kind: "message", oneof: "result", T: () => PhysicalView },
             { no: 24, name: "address_review", kind: "message", oneof: "result", T: () => AddressReview },
             { no: 25, name: "segment_review", kind: "message", oneof: "result", T: () => SegmentReview },
-            { no: 26, name: "segment_membership_page", kind: "message", oneof: "result", T: () => SegmentMembershipPage }
+            { no: 26, name: "segment_membership_page", kind: "message", oneof: "result", T: () => SegmentMembershipPage },
+            { no: 27, name: "host_source_options", kind: "message", oneof: "result", T: () => HostSourceOptions }
         ]);
     }
 }

@@ -36,6 +36,122 @@ fn require(context: &Context, from: AssetRef, to: AssetRef, kind: i32, field: &s
     Ok(())
 }
 impl Tx<'_> {
+    pub(super) fn move_correction_observations(
+        &mut self,
+        context: &Context,
+        from: AssetRef,
+        to: AssetRef,
+        kind: i32,
+        rows: &[Properties],
+    ) -> Result<()> {
+        if !rows.iter().any(|row| {
+            matches!(
+                row.get("layer").and_then(Value::as_str),
+                Some("observed" | "imported")
+            )
+        }) {
+            if rows
+                .iter()
+                .any(|row| row.get("layer").and_then(Value::as_str) == Some("freshness"))
+            {
+                return Err(Error::Corrupt);
+            }
+            return Ok(());
+        }
+        let by_key = rows
+            .iter()
+            .map(|row| {
+                Ok((
+                    row.get("key")
+                        .and_then(Value::as_str)
+                        .ok_or(Error::Corrupt)?,
+                    row,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        for row in rows {
+            if row.get("layer").and_then(Value::as_str) == Some("freshness") {
+                let key = row
+                    .get("claim")
+                    .and_then(Value::as_str)
+                    .ok_or(Error::Corrupt)?;
+                let claim = by_key.get(key).ok_or(Error::Corrupt)?;
+                if !matches!(
+                    claim.get("layer").and_then(Value::as_str),
+                    Some("observed" | "imported")
+                ) {
+                    return Err(Error::Conflict);
+                }
+            }
+        }
+        let destination = asset_key(to);
+        let origin = asset_key(from);
+        let existing = self.children(&destination)?;
+        let occupied = existing
+            .iter()
+            .map(|row| row.get("key").and_then(Value::as_str).ok_or(Error::Corrupt))
+            .collect::<Result<BTreeSet<_>>>()?;
+        let mut count = existing.len();
+        for row in rows {
+            let Some(layer @ ("observed" | "imported")) = row.get("layer").and_then(Value::as_str)
+            else {
+                continue;
+            };
+            let name = row
+                .get("field")
+                .and_then(Value::as_str)
+                .ok_or(Error::Corrupt)?;
+            require(context, from, to, kind, name)?;
+            let source = row
+                .get("source")
+                .and_then(Value::as_str)
+                .ok_or(Error::Corrupt)?;
+            let old = row
+                .get("key")
+                .and_then(Value::as_str)
+                .ok_or(Error::Corrupt)?;
+            if old != format!("{origin}/{layer}/{source}/{name}") {
+                return Err(Error::Corrupt);
+            }
+            let old_window = format!("{old}/freshness");
+            let window = by_key.get(old_window.as_str()).ok_or(Error::Corrupt)?;
+            if window.get("layer").and_then(Value::as_str) != Some("freshness")
+                || window.get("claim").and_then(Value::as_str) != Some(old)
+            {
+                return Err(Error::Corrupt);
+            }
+            let next = format!("{destination}/{layer}/{source}/{name}");
+            let next_window = format!("{next}/freshness");
+            if occupied.contains(next.as_str()) || occupied.contains(next_window.as_str()) {
+                return Err(Error::Conflict);
+            }
+            if count > MAX_CHILDREN - 2 {
+                return Err(Error::Limit);
+            }
+            count += 2;
+            self.put(&next, &destination, Class::Evidence, strip(row.clone()))?;
+            let mut data = strip((*window).clone());
+            data.insert("claim".into(), text(&next));
+            self.put(&next_window, &destination, Class::Evidence, data)?;
+            self.delete(&old_window)?;
+            self.delete(old)?;
+        }
+        let rows = self.children(&destination)?;
+        let by_key = rows
+            .iter()
+            .map(|row| {
+                Ok((
+                    row.get("key")
+                        .and_then(Value::as_str)
+                        .ok_or(Error::Corrupt)?,
+                    row,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        inventory::validate_evidence(&wire::Asset::default(), &rows, &by_key)?;
+        Ok(())
+    }
+
     pub(super) fn move_correction_sources(
         &mut self,
         context: &Context,

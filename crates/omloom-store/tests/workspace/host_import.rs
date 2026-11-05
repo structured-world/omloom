@@ -51,6 +51,7 @@ pub(super) fn draft() -> api::HostImport {
             .collect(),
         preview: None,
         network_parts: Vec::new(),
+        refresh: None,
     }
 }
 
@@ -422,6 +423,24 @@ pub(super) fn accept(store: &Store, preview: &api::Preview) -> Result<api::Mutat
     };
     Ok(value)
 }
+
+// A lost commit reply must be recoverable after the consumed preview is gone.
+// Repeating acceptance returns the retained identities without another write.
+#[test]
+fn consumed_host_preview_returns_retained_outcome_after_reopen() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let review = preview(&store, draft())?;
+    let first = accept(&store, &review)?;
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    let before = store.usage()?;
+    let replay = accept(&store, &review)?;
+    assert_eq!(first.targets, replay.targets);
+    assert_eq!(first.revision, replay.revision);
+    assert_eq!(before, store.usage()?);
+    Ok(())
+}
 // Preview cannot adopt inventory. Acceptance commits the whole selected tree;
 // a repeated exact report after reopen must create no writes or duplicate assets.
 #[test]
@@ -487,7 +506,9 @@ fn host_preview_rechecks_the_commit_revision() -> TestResult {
     let store = Store::open(dir.path(), policy())?;
     let proposed = preview(&store, draft())?;
     create(&store, &operator(), K::Device, "Concurrent host")?;
-    assert!(matches!(accept(&store, &proposed), Err(Error::Conflict)));
+    assert!(
+        matches!(accept(&store, &proposed), Err(Error::Rejected(error)) if matches!(*error, Error::Conflict))
+    );
     Ok(())
 }
 
