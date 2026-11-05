@@ -295,3 +295,53 @@ fn clones_reinstall_and_moved_interfaces_remain_explained_candidates() -> TestRe
     assert_eq!(store.usage()?, before);
     Ok(())
 }
+
+// A prior store has current fields but no descriptive projections. Reopening
+// rebuilds them across batch boundaries without new inventory or read writes.
+#[cfg(feature = "diagnostics")]
+#[test]
+fn prior_fields_upgrade_without_duplicate_inventory_or_repeated_rebuild() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    for index in 0..129 {
+        create(&store, &operator(), K::Device, &format!("Existing {index}"))?;
+    }
+    let rows = store.usage()?.rows;
+    let db = store.diagnostic_database();
+    db.execute_cypher_shared(
+        "MATCH (n:OmRow) WHERE n.layer='intent' AND n.field='name' REMOVE n.claim",
+        None,
+        None,
+        None,
+        None,
+    )?;
+    db.execute_cypher_shared(
+        "MATCH (n:OmRow {key:'installation'}) SET n.`schema`=23",
+        None,
+        None,
+        None,
+        None,
+    )?;
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    assert_eq!(store.usage()?.rows, rows);
+    let finding = api::HostFinding {
+        key: "hardware".into(),
+        kind: K::Device as i32,
+        fields: vec![text_field("name", "Existing 128")],
+        ..Default::default()
+    };
+    let result = candidates(&store, &operator(), finding.clone(), None)?;
+    assert_eq!(result.items.len(), 1);
+    assert_eq!(result.items[0].fields, finding.fields);
+    let before = store.usage()?;
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    assert_eq!(store.usage()?, before);
+    assert_eq!(
+        candidates(&store, &operator(), finding, None)?.items.len(),
+        1
+    );
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
