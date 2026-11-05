@@ -2356,6 +2356,9 @@ pub(super) fn network_column(name: &str) -> bool {
 }
 pub(super) fn validate_column(name: &str, definitions: &[api::Definition]) -> Result<()> {
     if [
+        "cpu_model",
+        "logical_cpus",
+        "visible_memory_bytes",
         "name",
         "description",
         "serial",

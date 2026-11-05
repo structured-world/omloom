@@ -47,13 +47,13 @@ fn anonymous_packages_require_fresh_matching_and_keep_current_custody() -> TestR
             .fields,
         vec![text_field("name", "Observed OS label")]
     );
-    let rows = store.usage()?.classes;
+    let rows = store.usage()?.rows;
     input.report.as_mut().ok_or("report")?.observed_at = 300;
     host_import::accept(&store, &host_import::preview(&store, input.clone())?)?;
-    assert_eq!(store.usage()?.classes[0].rows, rows[0].rows);
+    assert_eq!(store.usage()?.rows[0], rows[0]);
     assert_eq!(
-        store.usage()?.classes[1].rows,
-        rows[1].rows,
+        store.usage()?.rows[1],
+        rows[1],
         "fresh equal packages do not accumulate evidence history"
     );
     drop(store);

@@ -1,6 +1,7 @@
 use super::command::Runner;
 use super::{MAX_FACTS, Result, add, api, coverage, finding, local, wire};
 use serde_json::Value;
+mod capacity;
 #[cfg(test)]
 mod tests;
 
@@ -286,6 +287,9 @@ pub(super) fn failure_status(error: &str) -> &'static str {
     }
 }
 pub(super) async fn collect(runner: &mut Runner, report: &mut api::HostReport) -> Result<()> {
+    if let Err(error) = capacity::collect(runner, report).await {
+        coverage(report, "execution-capacity", failure_status(&error), &error);
+    }
     let mut excluded = std::collections::BTreeSet::new();
     let interfaces = match report.platform.as_str() {
         "macos" => mac_interfaces(runner, report, &mut excluded).await,

@@ -38,7 +38,7 @@ pub(in crate::disk) fn upgrade(store: &Store) -> Result<()> {
         let mut tx = store.begin()?;
         let rows = tx.query(
             "MATCH (n:OmRow) WHERE n.key>$after AND n.layer IN ['intent','observed','imported'] AND n.field IN $fields RETURN properties(n) AS p ORDER BY n.key LIMIT 128",
-            params([("after", text(&after)), ("fields", Value::Array(DESCRIPTORS.iter().map(|v| text(v)).collect()))]),
+            params([("after", text(&after)), ("fields", Value::Array(DESCRIPTORS.iter().map(|v| text(*v)).collect()))]),
         )?;
         if rows.is_empty() {
             return Ok(());
@@ -192,20 +192,60 @@ impl Store {
             wire::Adoption::Adopted as i32, permitted.join(" OR ")
         ), Some(values))?;
         let more = rows.len() > 25;
+        let mut parents = Vec::with_capacity(50);
+        for row in rows.iter().take(25) {
+            let target = super::super::super::target(row)?;
+            parents.push(text(asset_key(target)));
+            parents.push(text(parent(target)));
+        }
+        let facts = tx.query(
+            "UNWIND $parents AS parent MATCH (n:OmRow {parent:parent}) WHERE (n.layer IN ['intent','observed','imported'] AND n.field IN $fields) OR n.parent ENDS WITH '/identity-evidence' RETURN properties(n) AS p LIMIT 2049",
+            params([("parents", Value::Array(parents)), ("fields", Value::Array(DESCRIPTORS.iter().map(|v| text(*v)).collect()))]),
+        )?;
+        if facts.len() > MAX_CHILDREN {
+            return Err(Error::Limit);
+        }
         let mut items = Vec::with_capacity(rows.len().min(25));
         let mut explanations = Vec::with_capacity(rows.len().min(25));
         let mut position = String::new();
         for row in rows.iter().take(25) {
             let target = super::super::super::target(row)?;
             selection.contains(target, &tx)?;
-            let subject = tx.identity_subject(context, target)?;
-            let item = subject.item.ok_or(Error::Corrupt)?;
+            let asset = asset_key(target);
+            let identity_parent = parent(target);
+            let mut item = api::Item {
+                target: Some(target_wire(target)),
+                kind,
+                revision: number(row, "revision")?,
+                fields: Vec::new(),
+            };
+            let mut identity = Vec::with_capacity(MAX_CLAIMS * current_facts::MAX_SOURCES);
+            let mut observations = Vec::new();
+            for fact in &facts {
+                if fact.get("parent").and_then(Value::as_str) == Some(&identity_parent)
+                    && context.field(target, kind, FIELD, false)
+                {
+                    identity.push(
+                        api::HostIdentityClaim::decode(binary(fact, "payload")?)
+                            .map_err(|_| Error::Corrupt)?,
+                    );
+                } else if fact.get("parent").and_then(Value::as_str) == Some(&asset) {
+                    let name = string(fact, "field")?;
+                    if !context.field(target, kind, &name, false) {
+                        continue;
+                    }
+                    let field = inventory::read_field(fact)?;
+                    if fact.get("layer").and_then(Value::as_str) == Some("intent") {
+                        item.fields.push(field);
+                    } else {
+                        observations.push((field, string(fact, "source")?));
+                    }
+                }
+            }
             let mut explanation = api::IdentityCandidateExplanation::default();
             for claim in &finding.identity {
-                let same_namespace = subject
-                    .identity
+                let same_namespace = identity
                     .iter()
-                    .filter_map(|v| v.claim.as_ref())
                     .filter(|v| v.kind == claim.kind && v.namespace == claim.namespace)
                     .collect::<Vec<_>>();
                 if same_namespace.is_empty() {
@@ -239,6 +279,22 @@ impl Store {
                 }
                 if !context.field(target, kind, &proposed.name, false) {
                     continue;
+                }
+                for (observed, source) in &observations {
+                    if observed.name != proposed.name {
+                        continue;
+                    }
+                    let message = format!(
+                        "{}: source {} reports {:?}; inspect its collection window before assuming continuity",
+                        observed.name, source, observed.value
+                    );
+                    if descriptor(proposed).is_some()
+                        && descriptor(proposed) == descriptor(observed)
+                    {
+                        explanation.matches.push(message);
+                    } else {
+                        explanation.conflicts.push(message);
+                    }
                 }
                 if let Some(accepted) = item.fields.iter().find(|v| v.name == proposed.name) {
                     if descriptor(proposed).is_some()

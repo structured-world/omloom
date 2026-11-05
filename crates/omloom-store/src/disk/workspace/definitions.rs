@@ -540,6 +540,27 @@ impl Tx<'_> {
             return software::validate_field(kind, value);
         }
         match value.name.as_str() {
+            "cpu_model" | "logical_cpus" | "visible_memory_bytes" => {
+                if kind != wire::AssetKind::SoftwareInstallation as i32 {
+                    return Err(Error::Invalid);
+                }
+                match (value.name.as_str(), value.value.as_ref()) {
+                    ("cpu_model", Some(field::Value::Text(v)))
+                        if !v.trim().is_empty()
+                            && v.len() <= 512
+                            && !v.chars().any(char::is_control) =>
+                    {
+                        Ok(())
+                    }
+                    ("logical_cpus" | "visible_memory_bytes", Some(field::Value::Integer(v)))
+                        if *v > 0 =>
+                    {
+                        Ok(())
+                    }
+                    (_, Some(field::Value::Clear(EXPLICIT_CLEAR))) => Ok(()),
+                    _ => Err(Error::Invalid),
+                }
+            }
             "dns_name" if kind == wire::AssetKind::Domain as i32 => match value.value.as_ref() {
                 Some(field::Value::Text(value)) => typed_values::dns_name(value),
                 Some(field::Value::Clear(EXPLICIT_CLEAR)) => Ok(()),

@@ -2,6 +2,7 @@
 import { ref, computed, onBeforeUnmount } from 'vue';
 import Dialog from './Dialog.vue';
 import AddressDelta from './AddressDelta.vue';
+import IdentityCandidateReview from './IdentityCandidateReview.vue';
 import { readHostReport } from './host-report';
 import { call, model, AssetKind, label, display, key, type AssetRef } from './api';
 import { softwareFields } from './software-fields';
@@ -9,6 +10,9 @@ const props=defineProps<{working:model.WorkingContext;host?:model.Item}>();
 const emit=defineEmits<{close:[];saved:[]}>();
 const report=ref<model.HostReport>();const source=ref('');const error=ref('');
 const selected=ref<string[]>([]);const matches=ref(new Map<string,{target:AssetRef;name:string}>());
+const adopting=ref(new Set<string>());
+const anonymous=computed(()=>!!report.value&&!report.value.sourceBasis);
+const needsDecision=computed(()=>anonymous.value&&selected.value.some(key=>!matches.value.has(key)&&!adopting.value.has(key)));
 const networkParts=ref<model.HostNetworkPart[]>([]);
 const hostKind=ref<AssetKind>();
 const sources=ref<model.HostSource[]>([]);const sourceRef=ref('');const confirmed=ref(false);
@@ -25,6 +29,7 @@ const fieldLabels=new Map(softwareFields().map(v=>[v.id,v.name]));
 const unclassified=(item:model.HostFinding)=>item.kind===AssetKind.UNSPECIFIED&&item.key==='hardware';
 const preview=ref<model.Preview>();const revision=ref<bigint>();const busy=ref(false);
 const matching=ref('');const search=ref('');const choices=ref<model.Item[]>([]);const next=ref<string>();
+const explanations=ref<model.IdentityCandidateExplanation[]>([]);const explained=ref(false);const compared=ref<model.Item[]>([]);
 let matchGeneration=0;
 let fileGeneration=0;
 onBeforeUnmount(()=>{fileGeneration++;matchGeneration++;});
@@ -34,6 +39,7 @@ async function file(event:Event){
   error.value='';preview.value=undefined;selected.value=[];networkParts.value=[];matches.value=new Map();report.value=undefined;
   hostKind.value=undefined;
   sources.value=[];sourceRef.value='';confirmed.value=false;
+  adopting.value=new Set();compared.value=[];explanations.value=[];explained.value=false;
   try {
     const input=(event.target as HTMLInputElement).files?.[0];if(!input)return;
     if(input.size>262144)throw Error('The report exceeds the supported 256 KiB import limit.');
@@ -59,6 +65,7 @@ async function prepare(apply:boolean){
       if(response.oneofKind!=='actions')throw Error('Current import scope is unavailable.');revision.value=response.actions.revision;
     }
     if(props.host&&!confirmed.value)throw Error('Confirm that the package describes this host and its selected installation.');
+    if(needsDecision.value)throw Error('Match or explicitly adopt each selected anonymous finding. Leave unresolved findings unselected.');
     if(apply){
       if(!applyWorking.value)applyWorking.value=model.WorkingContext.create({...props.working,expected:preview.value?.revision});
       pending.value=true;
@@ -76,7 +83,7 @@ async function prepare(apply:boolean){
 }
 async function find(candidate:string,more=false){
   const generation=++matchGeneration;
-  matching.value=candidate;error.value='';
+  matching.value=candidate;error.value='';explained.value=false;explanations.value=[];compared.value=[];
   try {
     const item=report.value?.findings.find(v=>v.key===candidate);if(!item)return;
     const response=await call({oneofKind:'query',query:model.Query.create({kinds:unclassified(item)?[AssetKind.DEVICE,AssetKind.VIRTUAL_MACHINE]:[item.kind],search:search.value,roots:props.working.roots,focus:props.working.focus,columns:['name'],limit:25,cursor:more?next.value:undefined})});
@@ -84,7 +91,10 @@ async function find(candidate:string,more=false){
     if(response.oneofKind!=='page')throw Error('Matching resources are unavailable.');choices.value=response.page.items;next.value=response.page.next;
   }catch(e){if(generation===matchGeneration)error.value=String(e);}
 }
-function match(candidate:string,choice:model.Item){if(!choice.target)return;matchGeneration++;matches.value.set(candidate,{target:choice.target,name:display(choice.fields.find(v=>v.name==='name'))});matching.value='';preview.value=undefined;}
+function match(candidate:string,choice:model.Item){if(!choice.target)return;matchGeneration++;matches.value.set(candidate,{target:choice.target,name:display(choice.fields.find(v=>v.name==='name'))});adopting.value.delete(candidate);matching.value='';preview.value=undefined;}
+function unresolved(candidate:string){matchGeneration++;matches.value.delete(candidate);adopting.value.delete(candidate);selected.value=selected.value.filter(v=>v!==candidate);matching.value='';preview.value=undefined;}
+function adopt(candidate:string){matches.value.delete(candidate);adopting.value.add(candidate);if(!selected.value.includes(candidate))selected.value.push(candidate);matching.value='';preview.value=undefined;}
+function compare(choice:model.Item){if(compared.value.some(v=>key(v.target)===key(choice.target)))compared.value=compared.value.filter(v=>key(v.target)!==key(choice.target));else if(compared.value.length<2)compared.value.push(choice);}
 async function matchScope(candidate:string){
   const generation=++matchGeneration;
   let target=props.working.focus;
@@ -98,14 +108,15 @@ async function matchScope(candidate:string){
     match(candidate,response.detail.item);
   }catch(e){if(generation===matchGeneration)error.value=String(e);}
 }
-async function identityMatches(item:model.HostFinding){
+async function identityMatches(item:model.HostFinding,more=false){
+  const candidateCursor=next.value;
   const generation=++matchGeneration;matching.value=item.key;choices.value=[];next.value=undefined;error.value='';
   try {
     const kind=unclassified(item)?hostKind.value:item.kind;
     if(!kind)throw Error('Choose the hardware subject type before comparing its claims.');
-    const response=await call({oneofKind:'findIdentityCandidates',findIdentityCandidates:model.FindIdentityCandidates.create({claims:item.identity,kind})},props.working);
+    const response=await call({oneofKind:'findIdentityCandidates',findIdentityCandidates:model.FindIdentityCandidates.create({finding:item,kind:unclassified(item)?kind:undefined,cursor:more?candidateCursor:undefined})},props.working);
     if(generation!==matchGeneration)return;
-    if(response.oneofKind!=='identityCandidates')throw Error('Identity candidates are unavailable.');choices.value=response.identityCandidates.items;
+    if(response.oneofKind!=='identityCandidates')throw Error('Identity candidates are unavailable.');choices.value=response.identityCandidates.items;explanations.value=response.identityCandidates.explanations;next.value=response.identityCandidates.next;explained.value=true;compared.value=[];
     if(!choices.value.length)error.value='No comparable candidates in this selection. Missing evidence does not establish a new identity.';
   }catch(e){if(generation===matchGeneration)error.value=String(e);}
 }
@@ -122,9 +133,10 @@ async function identityMatches(item:model.HostFinding){
 <p>Observed {{ new Date(Number(report.observedAt)).toISOString() }}. This is the source collection time, not current freshness.</p>
 <ul><li v-for="coverage in report.coverage" :key="coverage.module"><strong>{{ coverage.module }}: {{ coverage.status }}</strong> {{ coverage.detail }}</li></ul>
 <p>Names, addresses and process IDs do not establish permanent identity or human ownership. Match an existing resource only after confirming it is the same incarnation.</p>
+<p v-if="anonymous" role="note">Permanent installation identity is unavailable. Confirm each selected finding again for this package. Equal configuration or the same filename does not establish continuity.</p>
 <details v-if="report.binds.some(v=>!v.owner)"><summary>Unattributed kernel binds (not adopted)</summary><ul><li v-for="(bind,index) in report.binds.filter(v=>!v.owner)" :key="index">{{ bind.value?.protocol }} {{ bind.value?.family }} {{ bind.value?.bind }}:{{ bind.value?.port }}. Owning service unknown.</li></ul></details>
 <div v-for="item in report.findings" :key="item.key" class="preview">
-<label><input v-model="selected" type="checkbox" :disabled="!!host&&!available.has(item.key)" :value="item.key" @change="preview=undefined">{{ unclassified(item)?'Execution host':label(item.kind) }}: {{ display(item.fields.find(v=>v.name==='name')) }}</label>
+<label><input v-model="selected" type="checkbox" :disabled="!!host&&!available.has(item.key)&&!matches.has(item.key)" :value="item.key" @change="preview=undefined">{{ unclassified(item)?'Execution host':label(item.kind) }}: {{ display(item.fields.find(v=>v.name==='name')) }}</label>
 <p v-if="host&&!available.has(item.key)" class="hint">Excluded: no permitted existing match in this source. Not adopted by refresh.</p>
 <template v-if="!host&&unclassified(item)&&!matches.has(item.key)"><label>New execution host type<select v-model="hostKind" aria-label="New execution host type" @change="preview=undefined"><option :value="undefined">Reuse a reviewed mapping, or choose for new adoption</option><option :value="AssetKind.DEVICE">Physical device</option><option :value="AssetKind.VIRTUAL_MACHINE">Virtual machine</option></select></label><p>The OS does not prove a physical or virtual host. Existing matches retain their type, accepted name and fields.</p></template>
 <details><summary>Proposed fields ({{ item.fields.length }})</summary><dl><div v-for="field in item.fields" :key="field.name"><dt v-if="fieldLabels.has(field.name)">{{ fieldLabels.get(field.name) }}</dt><dt v-else>Source field: {{ field.name }}</dt><dd>{{ display(field) }}</dd></div></dl></details>
@@ -132,15 +144,19 @@ async function identityMatches(item:model.HostFinding){
 <p v-if="item.addresses.length">{{ item.addresses.map(v=>v.address).join(', ') }}</p>
 <ul v-if="report.binds.some(v=>v.owner===item.key)"><li v-for="(bind,index) in report.binds.filter(v=>v.owner===item.key)" :key="index">{{ bind.value?.protocol }} {{ bind.value?.family }} {{ bind.value?.bind }}:{{ bind.value?.port }}</li></ul>
 <p v-if="matches.has(item.key)">Existing match: {{ matches.get(item.key)?.name }}</p><p v-else-if="!host">New adoption or previously reviewed source mapping</p>
-<template v-if="!host"><button type="button" @click="search=''; find(item.key)">Match existing resource</button>
-<button v-if="item.identity.length" type="button" @click="identityMatches(item)">Find candidates by reported identifiers</button>
-<p v-if="matching===item.key&&item.identity.length">Candidates share this subject layer and at least one reported identifier. Cloned or movable identifiers are not proof. Choose a match only after review.</p>
+<template v-if="!host||anonymous"><button type="button" @click="search=''; find(item.key)">Match existing resource</button>
+<button type="button" @click="identityMatches(item)">Compare possible matches</button>
+<p v-if="matching===item.key">Candidates share this subject layer. Cloned or movable identifiers and similar configurations are not proof. Choose a match only after review.</p>
 <button v-if="unclassified(item)&&(working.focus||working.roots.length===1)" type="button" @click="matchScope(item.key)">Use current device or VM scope</button>
 <button v-if="matches.has(item.key)" type="button" @click="matches.delete(item.key); preview=undefined">Clear match</button>
+<button type="button" @click="unresolved(item.key)">Leave unresolved</button>
+<button v-if="!host&&anonymous" type="button" @click="adopt(item.key)">Adopt as a new resource</button><p v-if="adopting.has(item.key)">Explicit new adoption selected. This does not identify future packages.</p>
 </template>
 <section v-if="matching===item.key"><label>Find existing resource<input v-model="search" @input="find(item.key)"></label>
-<button v-for="choice in choices" :key="key(choice.target)" type="button" @click="match(item.key,choice)">{{ display(choice.fields.find(v=>v.name==='name')) }}</button>
-<button v-if="next" type="button" @click="find(item.key,true)">Next matches</button></section>
+<ul><li v-for="(choice,index) in choices" :key="key(choice.target)" class="identity-candidate">{{ display(choice.fields.find(v=>v.name==='name')) }} · {{ choice.target?.assetId.slice(-8) }}<ul v-if="explanations[index]"><li v-for="reason in explanations[index]!.matches" :key="`match-${reason}`">Supporting: {{ reason }}</li><li v-for="reason in explanations[index]!.conflicts" :key="`conflict-${reason}`">Difference: {{ reason }}</li><li v-for="reason in explanations[index]!.unknowns" :key="`unknown-${reason}`">Unknown: {{ reason }}</li></ul><button type="button" :disabled="compared.length===2&&!compared.some(v=>key(v.target)===key(choice.target))" @click="compare(choice)">{{compared.some(v=>key(v.target)===key(choice.target))?'Remove from comparison':'Compare candidate'}}</button></li></ul>
+<p v-if="choices.length>1">Similar machines may remain indistinguishable. Check a rack label or known location; leave unresolved when you cannot establish the match.</p>
+<IdentityCandidateReview v-if="compared.length" :finding="item" :candidates="compared" @confirm="choice=>match(item.key,choice)" />
+<button v-if="next" type="button" @click="explained?identityMatches(item,true):find(item.key,true)">Next matches</button></section>
 </div>
 <fieldset v-if="report.network"><legend>Optional current network observations</legend>
 <p>Select the OS installation above before importing these sections. Nothing is selected by default.</p>
@@ -153,5 +169,5 @@ async function identityMatches(item:model.HostFinding){
 <li v-for="rule in report.network.rules" :key="rule.subject">{{ rule.subject }}: {{ rule.action }}</li></ul></details>
 </fieldset></section></fieldset>
 <section v-if="preview"><h3>Review {{ preview.rows.length }} selected resources</h3><p v-if="host">Source: {{ sources.find(v=>v.reference===sourceRef)?.label }}. Only selected current observations change.</p><ol><li v-for="row in preview.rows" :key="row.row">{{ row.diagnostic }}<span v-if="row.change?.changes.length">: {{ display(row.change.changes.find(v=>v.name==='name')) }}</span> <a v-if="row.change?.target" :href="`#/?asset=${encodeURIComponent(row.change.target.assetId)}&incarnation=${encodeURIComponent(row.change.target.incarnation)}`" target="_blank" rel="noopener">Inspect existing resource</a><dl v-if="host"><template v-for="field in row.change?.changes" :key="field.name"><dt>{{ fieldLabels.get(field.name)??field.name.replaceAll('_',' ') }}</dt><dd><span v-if="row.previousFields.some(v=>v.name===field.name)">Previous: {{ display(row.previousFields.find(v=>v.name===field.name)) }}. </span><span v-else>No previous claim from this source. </span>Observed: {{ display(field) }}</dd></template></dl><AddressDelta v-if="row.addresses" :value="row.addresses" /></li></ol></section>
-<p v-if="error" role="alert">{{ error }}</p><footer><button type="button" :disabled="busy||pending" @click="back">{{preview?'Back':'Cancel'}}</button><button v-if="!preview" :disabled="busy||pending||!selected.length||!!host&&(!sourceRef||!confirmed)">Prepare host preview</button><button v-if="preview?.id" type="button" class="primary" :disabled="busy" @click="prepare(true)">{{pending?'Retry same acceptance':'Accept selected observations'}}</button></footer>
+<p v-if="error" role="alert">{{ error }}</p><footer><button type="button" :disabled="busy||pending" @click="back">{{preview?'Back':'Cancel'}}</button><button v-if="!preview" :disabled="busy||pending||needsDecision||!selected.length||!!host&&(!sourceRef||!confirmed)">Prepare host preview</button><button v-if="preview?.id" type="button" class="primary" :disabled="busy" @click="prepare(true)">{{pending?'Retry same acceptance':'Accept selected observations'}}</button></footer>
 </form></Dialog></template>
