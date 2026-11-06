@@ -976,6 +976,36 @@ test('a move requires its source enclosure on desktop and phone',async({browser}
   }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
 });
 
+test('physical planning enters the enclosing selection on desktop and phone',async({browser})=>{
+  // The explicit enclosing-scope entry must retain selected roots while allowing
+  // a rack plan to inspect sibling equipment, independently of the detail focus.
+  const dir=await mkdtemp(join(tmpdir(),'omloom-plan-context-')),server=await host(dir);
+  try{
+    const {m,rpc}=await workspaceClient(server.url);
+    const resource=async(kind,name)=>(await rpc({oneofKind:'write',write:m.Write.create({kind,changes:[{name:'name',value:{oneofKind:'text',text:name}}]})})).mutation.targets[0];
+    const site=await resource(m.AssetKind.SITE,'Selected site'),rack=await resource(m.AssetKind.RACK,'Selected rack'),equipment=await resource(m.AssetKind.DEVICE,'Sibling equipment');
+    for(const from of [rack,equipment])await rpc({oneofKind:'relation',relation:m.Relationship.create({relation:{from,to:site,kind:m.RelationKind.INSTALLED_IN}})});
+    for(const width of [1440,390]){
+      const page=await browser.newPage({viewport:{width,height:900},isMobile:width<600,hasTouch:width<600});
+      try{
+        await page.goto(`${server.url}/#/?view=2&asset=${rack.assetId}&incarnation=${rack.incarnation}&scope=${site.assetId}&scopeInc=${site.incarnation}`);
+        await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
+        const planner=page.locator('.physical-planner');
+        await planner.getByRole('combobox',{name:'Find equipment',exact:true}).fill('Sibling equipment');
+        const reading=page.waitForRequest(request=>{
+          const bytes=request.postDataBuffer();if(!bytes||!request.url().endsWith('/omloom.workspace.v1.Workspace/Call'))return false;
+          const command=m.Request.fromBinary(bytes.subarray(5)).command;
+          return command.oneofKind==='physical'&&command.physical.action.oneofKind==='read'&&command.physical.action.read.enclosure?.assetId===equipment.assetId;
+        });
+        await planner.getByRole('option',{name:'Use equipment: Sibling equipment',exact:true}).click();
+        const working=m.Request.fromBinary((await reading).postDataBuffer().subarray(5)).working;
+        expect(working.roots).toEqual([site]);expect(working.focus).toBeUndefined();
+        await expect(planner.getByLabel('Use an explicit plan-only allocation',{exact:true})).toBeVisible();
+      }finally{await page.close();}
+    }
+  }finally{await server.stop();await rm(dir,{recursive:true,force:true});}
+});
+
 test('unsaved replacement drafts disable judgments on desktop and phone',async({browser})=>{
   // Cached evidence cannot enable an action that requires the last saved draft revision.
   const dir=await mkdtemp(join(tmpdir(),'omloom-unsaved-judgment-'));const server=await host(dir);
