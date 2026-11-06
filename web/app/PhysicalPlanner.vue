@@ -81,7 +81,11 @@ function removeMaterial(index:number){
 }
 function selectedMaterial(item:model.Item){const index=planItems.value.findIndex(old=>key(old.target)===key(item.target));if(index===-1)planItems.value.push(item);else planItems.value[index]=item;}
 async function receiveMaterial(material:number,allocation:model.PhysicalMaterialAllocation){await run(async()=>{
-  const reply=await invoke({oneofKind:'receive',receive:{plan:planKey('current'),material,allocation}});
+  const selection=working();
+  if(selection.roots.length&&allocation.item&&!selection.roots.some(r=>key(r)===key(allocation.item)))selection.roots.push(allocation.item);
+  const response=await call({oneofKind:'physical',physical:{action:{oneofKind:'receive',receive:{plan:planKey('current'),material,allocation}}}},selection);
+  if(response.oneofKind!=='physical')throw Error('The allocation result is unavailable.');
+  const reply=response.physical;revision.value=reply.revision;planItems.value=reply.items;changed=true;
   acceptPlan(reply.plan);selected.value=[];notPerformed.value=[];notice.value='Actual material allocation recorded. Nothing was installed.';
 });}
 const equipment=ref<model.Item>(),equipmentVolume=ref<model.PhysicalVolume>();
@@ -102,7 +106,13 @@ const elevation=ref<SVGSVGElement>();
 const coordinatesOpen=ref(false);
 const coordinateRows=computed(()=>view.value.occupancy);
 function coordinate(value:model.PhysicalExtent|undefined){return value===undefined?'Unavailable':`${millimetres(value.startUm)} + ${millimetres(value.lengthUm)}`;}
-const working=()=>model.WorkingContext.create({roots:props.working.roots,expected:revision.value});
+const working=()=>{
+  const roots=props.working.roots.slice();
+  if(roots.length)for(const allocation of plan.value?.materials.flatMap(m=>m.allocations)??[]){
+    if(allocation.item&&!roots.some(root=>key(root)===key(allocation.item)))roots.push(allocation.item);
+  }
+  return model.WorkingContext.create({roots,expected:revision.value});
+};
 const editable=computed(()=>plan.value===undefined||plan.value.state===model.PhysicalPlanState.DRAFT);
 const geometryEditable=computed(()=>mode.value==='placement'||(mode.value==='replacement'&&props.kind===K.RACK&&!removePart.value));
 const reservable=computed(()=>plan.value?.state===model.PhysicalPlanState.DRAFT);
@@ -489,6 +499,7 @@ async function exportPlan(){await run(async()=>{
 <label v-if="installable&&![model.PhysicalStepState.RECORDED,model.PhysicalStepState.NOT_PERFORMED].includes(step.state)"><input v-model="selected" type="checkbox" :value="index" :disabled="!placementTarget(step.action.placement)||notPerformed.includes(index)||(!actualReport&&step.readiness!==model.PlanReadiness.READY)"/>Actually installed: <span v-if="placementTitle(step.action.placement)">{{placementTitle(step.action.placement)}}</span><span v-else>Equipment name unavailable</span></label>
 <span v-else-if="placementTitle(step.action.placement)">{{placementTitle(step.action.placement)}}</span><span v-else>Equipment name unavailable</span>
 <p v-if="step.action.placement.material&&!placementTarget(step.action.placement)">Receive or select the actual requested unit before reporting installation.</p>
+<button v-if="step.action.placement.material&&!placementTarget(step.action.placement)&&plan.materials[step.action.placement.material.material]?.kind===K.DEVICE" type="button" :disabled="busy" @click="startReceipt(step.action.placement.material.material,step.action.placement.material.unit)">Create received device for step {{index+1}}</button>
 <template v-for="axis in axes" :key="axis"><small v-if="step.action.placement.volume?.[axis]">{{axis.toUpperCase()}} allocation: {{millimetres(step.action.placement.volume[axis]!.startUm)}} mm + {{millimetres(step.action.placement.volume[axis]!.lengthUm)}} mm</small></template>
 </template>
 <template v-if="step.action.oneofKind==='replacement'">

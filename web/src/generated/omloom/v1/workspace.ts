@@ -5156,7 +5156,7 @@ export interface PhysicalDeviceReceipt {
      */
     changes: Field[];
     /**
-     * Optional receipt explanation/reference, at most 480 UTF-8 bytes, no secrets.
+     * Optional receipt explanation/reference, at most 160 UTF-8 bytes, no secrets.
      * Submission itself attests receipt; the server supplies actor/recording time.
      *
      * @generated from protobuf field: optional string explanation = 6

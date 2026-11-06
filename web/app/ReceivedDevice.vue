@@ -34,6 +34,7 @@ async function recover(){
 async function submit(changes:Field[],creation:model.WorkingContext,next:boolean){
   if(reference())throw Error('Resolve the earlier receipt before creating another device.');
   if(!reviewedPlan.id||creation.expected===undefined)throw Error('Save and review this plan first.');
+  if(new TextEncoder().encode(explanation.value).length>160||/[\u0000-\u001f\u007f]/.test(explanation.value))throw Error('The optional reference must use at most 160 UTF-8 bytes, without control characters.');
   // Store only a non-authorizing lookup reference before the request can leave this tab.
   localStorage.setItem(storageKey,JSON.stringify({plan:reviewedPlan.id,revision:String(creation.expected)}));
   pending.value=true;
@@ -62,14 +63,15 @@ function openCard(){
 </script>
 <template><section aria-label="Create received device" class="received-device">
 <h4>Create received device</h4>
-<p>{{plan.name}} · {{plan.materials[material]?.name}} · Unit {{unit+1}}</p>
+<p v-if="!recovered">{{plan.name}} · {{plan.materials[material]?.name}} · Unit {{unit+1}}</p>
+<p v-else>Original receipt: material {{recovered.material+1}}, unit {{recovered.unit+1}} in plan {{recovered.plan?.id}}.</p>
 <p>Creation context: permitted installation inventory. Physical placement: not recorded. Planned specifications are not actual facts.</p>
 <p>Recording attests that this item was received. It does not install it, verify fit or complete work. Actor and recording time come from the server.</p>
 <p v-if="error" role="alert">{{error}}</p>
 <template v-if="pending"><p role="status">An earlier receipt needs its original result. No creation will be repeated.</p><button type="button" @click="recover">Recover receipt result</button><button type="button" @click="emit('close')">Close, keep recovery reference</button></template>
 <template v-else-if="recovered"><p role="status">Receipt accepted at revision {{String(recovered.revision)}}. Current allocation and hold are shown by the reloaded plan, separately from this original result.</p><button type="button" @click="openCard">Open received device</button><button type="button" @click="emit('close')">Close receiving</button></template>
 <div v-show="!pending&&!recovered">
-<label>Optional delivery reference or explanation<input v-model="explanation" maxlength="480"/></label>
+<label>Optional delivery reference or explanation<input v-model="explanation" maxlength="160"/></label>
 <AssetEditor inline :definitions="definitions" :initial-kind="AssetKind.DEVICE" :working="inventory" :view="model.View.HARDWARE" :receipt="{name:plan.materials[material]!.name,submit}" @close="emit('close')"/>
 </div>
 </section></template>

@@ -168,7 +168,7 @@ onMounted(async () => {
     if (!props.item && parents.value.length === 1) selectedParent.value = key(parents.value[0]!.target);
   } catch (e) { error.value = String(e); } finally {
     preparing.value = false;
-    if (focused.value && mounted) { await nextTick(); (form.value?.querySelector<HTMLElement>('[data-fact-value]') ?? form.value?.querySelector<HTMLElement>('textarea,input'))?.focus(); }
+    if ((focused.value || props.receipt) && mounted) { await nextTick(); (form.value?.querySelector<HTMLElement>('[data-fact-value]') ?? form.value?.querySelector<HTMLElement>('#value-name,textarea,input'))?.focus(); }
   }
 });
 function reviewedChanges() {

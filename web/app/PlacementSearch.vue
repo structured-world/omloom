@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
 import { call, model, AssetKind as K, input, key, type AssetRef } from './api';
-const props = defineProps<{ kind: 'server' | 'hypervisor' | 'equipment' | 'component' | 'enclosure' | 'port' | 'power' | 'material'; roots: AssetRef[]; direct?:boolean }>();
+const props = defineProps<{ kind: 'server' | 'hypervisor' | 'equipment' | 'component' | 'enclosure' | 'port' | 'power' | 'material'; roots: AssetRef[]; direct?:boolean; allowedKinds?:number[] }>();
 const emit = defineEmits<{ select: [item?: model.Item]; ready: [value: boolean] }>();
 const search = ref(''); const selected = ref<model.Item>(); const opened = ref(false);
 const page = ref(model.Page.create()); const loading = ref(false); const error = ref('');
@@ -25,6 +25,7 @@ function reset() {
   page.value = model.Page.create(); error.value = ''; emit('select'); emit('ready', true);
 }
 watch(() => props.kind, reset);
+watch(() => props.allowedKinds?.join('|'), reset);
 watch(() => props.roots.map(key).join('|'), reset);
 onMounted(() => emit('ready', true));
 onBeforeUnmount(cancel);
@@ -33,7 +34,7 @@ async function load(cursor?: string) {
   try {
     const reply = await call({ oneofKind: 'query', query: model.Query.create({
       roots: props.roots, view: config.value.view,
-      kinds: config.value.kinds,
+      kinds: props.allowedKinds ?? config.value.kinds,
       columns: ['name'], search: search.value, cursor, limit: 25, includeContext: true, levelOnly:props.direct===true,
     }) });
     if (reply.oneofKind !== 'page') throw Error('Placement choices are unavailable');

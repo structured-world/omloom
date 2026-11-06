@@ -1123,6 +1123,26 @@ clearance and load. Receipt supplies the real adopted incarnation to the same
 step; installation cannot be recorded while that unit remains unreceived.
 
 Explicit receipt or reuse links an adopted resource to one requested unit.
+For a saved draft, reserved or partially completed plan, **Create received device**
+uses the ordinary inventory editor and commits one new Device, actual entered
+fields, the exact unit assignment and any required hold together. The material
+label is an editable name suggestion; serial and measured characteristics may
+remain unknown. Planned specifications never become actual equipment facts.
+The creation context is explicitly permitted installation inventory. No rack
+attachment, move, installation completion, warehouse receipt or verified fit is
+implied. The recorded assertion includes the server actor and recording time,
+not an invented delivery or inspection date.
+
+**Record and next** independently confirms each item and clears its serial and
+actual characteristics. A conflict leaves earlier successes intact. Before
+submission the browser keeps only a non-authorizing plan/revision reference for
+recovering the original result after a lost reply or reopening. Recovery and
+exact repeated requests write nothing; changed arguments cannot reuse the
+attempt. Expired outcomes do not admit the old attempt as fresh creation, and
+restored stores retain their existing mutation fence. An unavailable result
+remains unresolved, never an automatic inventory-only fallback. Original accepted
+revision and current plan allocation/hold state are separate meanings.
+
 Receipt may be partial and can continue after reservation. It neither installs
 the resource nor proves compatibility or health. Real allocations use the same
 serialized-part locks as plan steps.

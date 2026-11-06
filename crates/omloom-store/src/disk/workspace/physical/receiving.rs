@@ -117,7 +117,7 @@ impl Tx<'_> {
         if request
             .explanation
             .as_ref()
-            .is_some_and(|v| v.len() > 480 || v.chars().any(char::is_control))
+            .is_some_and(|v| v.len() > 160 || v.chars().any(char::is_control))
         {
             return Err(Error::Invalid);
         }
@@ -172,10 +172,16 @@ impl Tx<'_> {
             if !selected.roots.is_empty() {
                 selected.roots.push(target_wire(item));
             }
-            let basis = match request.explanation.as_deref() {
-                Some(value) if !value.trim().is_empty() => format!("Receipt asserted: {value}"),
-                _ => "Receipt asserted".into(),
-            };
+            let mut basis = format!(
+                "Receipt asserted by {} at {now} ms UTC (recording time)",
+                context.actor
+            );
+            if let Some(explanation) = &request.explanation
+                && !explanation.trim().is_empty()
+            {
+                basis.push_str(": ");
+                basis.push_str(explanation);
+            }
             self.receive_material(
                 context,
                 api::PhysicalMaterialReceipt {

@@ -2224,7 +2224,7 @@ message PhysicalDeviceReceipt {
   // Actual user-entered fields, using ordinary Device validation and authority.
   // Planned specifications are not copied. Unknown serials may be omitted.
   repeated omloom.v1.Field changes = 5;
-  // Optional receipt explanation/reference, at most 480 UTF-8 bytes, no secrets.
+  // Optional receipt explanation/reference, at most 160 UTF-8 bytes, no secrets.
   // Submission itself attests receipt; the server supplies actor/recording time.
   optional string explanation = 6;
 }
