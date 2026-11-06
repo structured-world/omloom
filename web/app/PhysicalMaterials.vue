@@ -5,14 +5,16 @@ import {equipmentFields} from './equipment-fields';
 import type {Field} from '../src/generated/omloom/v1/contracts';
 import PlacementSearch from './PlacementSearch.vue';
 import EquipmentField from './EquipmentField.vue';
+import {firstFreeUnit} from './material-unit';
 const props=defineProps<{materials:model.PhysicalMaterial[];uses:model.PhysicalMaterialUnit[];items:model.Item[];working:model.WorkingContext;editable:boolean;receivable:boolean;canPlace:boolean;busy:boolean}>();
-const emit=defineEmits<{update:[materials:model.PhysicalMaterial[]];remove:[material:number];place:[unit:model.PhysicalMaterialUnit];receive:[material:number,allocation:model.PhysicalMaterialAllocation];selected:[item:model.Item]}>();
+const emit=defineEmits<{update:[materials:model.PhysicalMaterial[]];remove:[material:number];place:[unit:model.PhysicalMaterialUnit];receive:[material:number,allocation:model.PhysicalMaterialAllocation];selected:[item:model.Item];create:[material:number,unit:number]}>();
 const opened=ref(false),editing=ref(false),index=ref<number>(),error=ref(''),loading=ref(false);
 const draft=ref(model.PhysicalMaterial.create()),quantity=ref(''),field=ref(equipmentFields[0]!),valid=ref(true);
 const source=ref<model.Item>(),receiving=ref<number>(),unit=ref(''),basis=ref('');
+const wider=ref(false);
 const placing=ref<number>(),placementUnit=ref('');
 const page=ref(0);
-watch(()=>props.materials,()=>{editing.value=false;receiving.value=undefined;placing.value=undefined;page.value=0;});
+watch(()=>props.materials,(current,previous)=>{editing.value=false;if(receiving.value!==undefined){const line=receiving.value;const a=previous[line],b=current[line];if(!a||!b||!model.PhysicalMaterial.equals(a,b))receiving.value=undefined;}placing.value=undefined;page.value=0;});
 const rows=computed(()=>props.materials.slice(page.value*25,(page.value+1)*25));
 const names=computed(()=>{
   const result=new Map<string,string>();
@@ -21,7 +23,8 @@ const names=computed(()=>{
 });
 const kinds=[K.DEVICE,K.PHYSICAL_COMPONENT,K.RACK,K.CABLE];
 function start(line?:number){placing.value=undefined;receiving.value=undefined;index.value=line;draft.value=line===undefined?model.PhysicalMaterial.create({kind:K.DEVICE}):model.PhysicalMaterial.clone(props.materials[line]!);quantity.value=line===undefined?'':String(draft.value.quantity);field.value=equipmentFields[0]!;source.value=undefined;valid.value=true;editing.value=true;error.value='';}
-function startReceiving(line:number){placing.value=undefined;editing.value=false;receiving.value=line;source.value=undefined;unit.value='';basis.value='';}
+function startReceiving(line:number){placing.value=undefined;editing.value=false;receiving.value=line;source.value=undefined;wider.value=false;const free=firstFreeUnit(props.materials[line]!);unit.value=free===undefined?'':String(free+1);basis.value='';}
+function createReceived(){error.value='';try{const line=receiving.value;if(line===undefined)return;emit('create',line,integer(unit.value,props.materials[line]!.quantity)-1);}catch(e){error.value=String(e);}}
 function integer(value:string,max:number){if(!/^\d+$/.test(value))throw Error('Enter a whole positive count.');const n=Number(value);if(!Number.isSafeInteger(n)||n<1||n>max)throw Error(`Enter a count between 1 and ${max}.`);return n;}
 function claim(value:Field|undefined){draft.value.specifications=draft.value.specifications.filter(f=>f.name!==field.value);if(value)draft.value.specifications.push(value);}
 async function copySpecification(){
@@ -78,21 +81,21 @@ function place(){error.value='';try{
 <details class="material-demand" @toggle="opened=($event.target as HTMLDetailsElement).open">
 <summary>Required materials and receiving ({{materials.length}} lines)</summary>
 <template v-if="opened">
-<p>Requested quantities stay in this plan. They create no inventory, stock promise, order or payment. Receive only actual adopted resources; receipt does not install them.</p>
-<p v-if="editable">Material edits and allocations remain unsaved until you save the installation plan.</p>
+<p>Requested quantities stay in this plan. They create no inventory, stock promise, order or payment. Select an existing actual resource or record a received device; receipt does not install it.</p>
+<p v-if="editable">Requirement edits and existing-card selections need Save installation plan. Recorded new-device receipts are already saved.</p>
 <p v-if="error" role="alert">{{error}}</p>
 <fieldset :disabled="busy||loading">
 <button v-if="editable&&!editing" type="button" :disabled="materials.length>=64" @click="start()">Add material requirement</button>
 <ol :start="page*25+1"><li v-for="(material,offset) in rows" :key="page*25+offset">
 <strong>{{material.name}}</strong> · {{K[material.kind]?.toLowerCase().replaceAll('_',' ')}} · {{material.allocations.length}} allocated of {{material.quantity}} requested
 <dl><template v-for="f in material.specifications" :key="f.name"><dt>{{f.name.replaceAll('_',' ')}}</dt><dd>{{input(f)}}</dd></template></dl>
-<ul><li v-for="a in material.allocations" :key="a.unit">Unit {{a.unit+1}}: <template v-if="resource(a.item)">{{resource(a.item)}}</template><template v-else>Resource name unavailable</template> · {{a.basis}}</li></ul>
+<ul><li v-for="a in material.allocations" :key="a.unit">Unit {{a.unit+1}}: <template v-if="resource(a.item)">{{resource(a.item)}}</template><template v-else>Resource name unavailable</template><details><summary>Receipt or reuse basis</summary>{{a.basis}}</details></li></ul>
 <button v-if="editable" type="button" @click="start(page*25+offset)">Edit requirement {{page*25+offset+1}}</button>
 <button v-if="editable" type="button" @click="emit('remove',page*25+offset)">Remove requirement {{page*25+offset+1}}</button>
 <button v-if="editable&&canPlace&&material.kind===K.DEVICE" type="button" @click="placing=page*25+offset;placementUnit='';editing=false;receiving=undefined">Place a unit from requirement {{page*25+offset+1}}</button>
 <button v-if="receivable" type="button" @click="startReceiving(page*25+offset)">Receive or reuse a unit for requirement {{page*25+offset+1}}</button>
 </li></ol>
-<div><button type="button" :disabled="page===0" @click="page--">Previous materials</button><button type="button" :disabled="(page+1)*25>=materials.length" @click="page++">Next materials</button></div>
+<div v-if="materials.length>25"><button type="button" :disabled="page===0" @click="page--">Previous materials</button><button type="button" :disabled="(page+1)*25>=materials.length" @click="page++">Next materials</button></div>
 <form v-if="placing!==undefined&&editable" aria-label="Place requested material" @submit.prevent="place">
 <label>Unit to place<input v-model="placementUnit" required inputmode="numeric"/></label>
 <button type="submit">Select requested unit for placement</button><button type="button" @click="placing=undefined">Close requested placement</button>
@@ -109,7 +112,10 @@ function place(){error.value='';try{
 <button type="submit">Apply material requirement</button><button type="button" @click="editing=false">Close requirement editor</button>
 </form>
 <form v-if="receiving!==undefined&&receivable" aria-label="Material receiving" @submit.prevent="receive(receiving)">
-<label>Requested unit number<input v-model="unit" type="text" inputmode="numeric" required/></label><PlacementSearch kind="material" :roots="working.roots" @select="source=$event"/>
+<label>Requested unit number<input v-model="unit" type="text" inputmode="numeric" required/></label>
+<label v-if="working.roots.length"><input v-model="wider" type="checkbox"/>Search permitted inventory outside this selection</label>
+<PlacementSearch kind="material" :roots="wider?[]:working.roots" :allowed-kinds="[materials[receiving]!.kind]" @select="source=$event"/>
+<button v-if="materials[receiving]?.kind===K.DEVICE" type="button" @click="createReceived">Create received device</button>
 <label>Receipt or reuse basis<input v-model="basis" required maxlength="512"/></label>
 <button type="submit" :disabled="!source">Record actual material allocation</button><button type="button" @click="receiving=undefined">Close receiving</button>
 </form>
