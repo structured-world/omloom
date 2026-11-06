@@ -485,6 +485,80 @@ fn identical_concurrent_receipts_return_the_same_outcome() -> TestResult {
     Ok(())
 }
 
+// Resolving saved allocations cannot turn a focused position into its whole rack.
+#[test]
+fn saved_plan_cannot_edit_a_sibling_of_the_focused_position() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let rack = create(&store, &actor, K::Rack, "Rack")?;
+    let mut positions = Vec::new();
+    for name in ["first", "second"] {
+        let result = physical(
+            &store,
+            &actor,
+            api::physical::Action::Position(api::PhysicalPositionEdit {
+                owner: Some(rack.clone()),
+                structural_key: name.into(),
+                name: name.into(),
+                component_kind: api::PhysicalComponentKind::Chassis as i32,
+                expected: None,
+            }),
+        )?;
+        positions.push(result.positions[0].target.clone().ok_or(Error::Missing)?);
+    }
+    let mut plan = saved(&store, &actor)?;
+    plan.steps.push(api::PhysicalStep {
+        action: Some(api::physical_step::Action::Placement(
+            api::PhysicalPlacement {
+                enclosure: Some(positions[1].clone()),
+                material: Some(api::PhysicalMaterialUnit {
+                    material: 0,
+                    unit: 0,
+                }),
+                volume: Some(volume()),
+                item: None,
+            },
+        )),
+        ..Default::default()
+    });
+    let plan = physical(
+        &store,
+        &actor,
+        api::physical::Action::Save(api::PhysicalSave { plan: Some(plan) }),
+    )?
+    .plan
+    .ok_or(Error::Missing)?;
+    let before = store.usage()?;
+    let working = api::WorkingContext {
+        roots: vec![rack],
+        focus: Some(positions[0].clone()),
+        expected: Some(before.revision),
+    };
+    for action in [
+        api::physical::Action::Save(api::PhysicalSave {
+            plan: Some(plan.clone()),
+        }),
+        api::physical::Action::Preview(api::PhysicalPreview {
+            plan: Some(plan.clone()),
+        }),
+        api::physical::Action::Reserve(api::PhysicalReserve {
+            plan: Some(api::PhysicalPlanKey {
+                id: plan.id.clone().ok_or(Error::Missing)?,
+                revision: plan.revision,
+            }),
+            until_ms: 1000,
+        }),
+    ] {
+        assert!(matches!(
+            submit(&store, &actor, &working, action),
+            Err(Error::Denied)
+        ));
+        assert_eq!(store.usage()?, before);
+    }
+    Ok(())
+}
+
 // An actual received item need not fit its proposed location. Its hold survives
 // cancellation while installation is unresolved; receipt cannot certify the fit.
 #[test]

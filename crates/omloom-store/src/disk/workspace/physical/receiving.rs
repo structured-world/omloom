@@ -83,13 +83,14 @@ impl Tx<'_> {
             usize::try_from(count).map_err(|_| Error::Corrupt)?,
             number(&row, "class")? == Class::Detail as u64,
         )?;
-        let mut roots = working
-            .roots
-            .iter()
-            .map(|r| parse_target(Some(r)))
-            .collect::<Result<BTreeSet<_>>>()?;
+        let mut roots = BTreeSet::new();
         if let Some(focus) = &working.focus {
+            // Focus narrows browsing roots; allocations are separate exact operands.
             roots.insert(parse_target(Some(focus))?);
+        } else {
+            for root in &working.roots {
+                roots.insert(parse_target(Some(root))?);
+            }
         }
         for allocation in materials.iter().flat_map(|m| &m.allocations) {
             let target = parse_target(allocation.item.as_ref())?;
