@@ -57,6 +57,7 @@ impl Tx<'_> {
         &self,
         context: &Context,
         base: u64,
+        expected_plan: &str,
     ) -> Result<api::PhysicalReceiptOutcome> {
         let row = self
             .get(&format!("mutation-outcome/{base}"))?
@@ -76,6 +77,9 @@ impl Tx<'_> {
         let target = network::groups::reference(targets[0].as_str().ok_or(Error::Corrupt)?)?;
         self.physical_access(context, target, &api::WorkingContext::default(), false)?;
         let id = string(&row, "owner")?;
+        if id != expected_plan {
+            return Err(Error::Conflict);
+        }
         let plan = self.get(&format!("plan/{id}"))?.ok_or(Error::Expired)?;
         if string(&plan, "actor")? != context.actor {
             return Err(Error::Denied);
@@ -127,7 +131,7 @@ impl Tx<'_> {
             .creation_outcome(context, working, &input, outcome())?
             .is_some()
         {
-            return self.receipt_outcome(context, base);
+            return self.receipt_outcome(context, base, &key.id);
         }
         self.selection(context, working, true)?;
         let plan_working = self.plan_context(context, &key.id, working)?;
@@ -191,6 +195,6 @@ impl Tx<'_> {
             now,
             outcome(),
         )?;
-        self.receipt_outcome(context, base)
+        self.receipt_outcome(context, base, &key.id)
     }
 }

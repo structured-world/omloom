@@ -4,12 +4,14 @@ import { call, input, key, model, AssetKind as K, type AssetRef } from './api';
 import PlacementSearch from './PlacementSearch.vue';
 import PlanStepControls from './PlanStepControls.vue';
 import PhysicalMaterials from './PhysicalMaterials.vue';
+import ReceivedDevice from './ReceivedDevice.vue';
+import {firstFreeUnit} from './material-unit';
 import EndpointMappings from './EndpointMappings.vue';
 import ReplacementReview from './ReplacementReview.vue';
 import { millimetres,micrometres,signedMicrometres,upperMicrometres } from './physical-units';
 import {frameSize,projectElevation,depthOrder,type Face} from './physical-elevation';
 import {rackAllocation,rackUnitAt,adjacentRackUnit} from './rack-grid';
-const props = defineProps<{target:AssetRef;kind:number;working:model.WorkingContext;inactive?:boolean}>();
+const props = defineProps<{target:AssetRef;kind:number;working:model.WorkingContext;definitions:model.Definition[];inactive?:boolean}>();
 const emit=defineEmits<{changed:[]}>();
 const opened=ref(false),busy=ref(false),error=ref(''),notice=ref('');
 const view=ref(model.PhysicalView.create());
@@ -48,6 +50,23 @@ const assessmentText=computed(()=>{
   return `Physical result unknown: ${model.RequirementReason[assessment.value.reason]?.toLowerCase().replaceAll('_',' ')}. Nothing was saved or reserved.`;
 });
 const planItems=ref<model.Item[]>([]);
+const receiptUnit=ref<{material:number;unit:number}>();
+function startReceipt(material:number,unit:number){
+  try{planKey('current');receiptUnit.value={material,unit};error.value='';}
+  catch(e){error.value=String(e)+' Save installation plan explicitly first; the receiving input is retained.';}
+}
+async function receivedDevice(outcome:model.PhysicalReceiptOutcome,next:boolean){await run(async()=>{
+  changed=true;
+  const response=await invoke({oneofKind:'load',load:{id:plan.value!.id!,revision:0n}});
+  acceptPlan(response.plan);
+  notice.value=`Device receipt accepted at revision ${outcome.revision}. Nothing was installed.`;
+  if(next&&receiptUnit.value&&plan.value!.revision===outcome.revision){
+    const material=receiptUnit.value.material;
+    const current=plan.value!.materials[material];
+    if(current){const unit=firstFreeUnit(current);if(unit!==undefined){receiptUnit.value={material,unit};return;}}
+    receiptUnit.value=undefined;
+  }
+});}
 const emptyMaterials:model.PhysicalMaterial[]=[];
 const future=ref<model.PhysicalMaterialUnit>();
 const materialUses=computed(()=>{const units:model.PhysicalMaterialUnit[]=[];for(const step of plan.value?.steps??[])if(step.action.oneofKind==='placement'&&step.action.placement.material)units.push(step.action.placement.material);return units;});
@@ -78,7 +97,7 @@ const oldOccupancy=computed(()=>sourceView.value?.occupancy??view.value.occupanc
 const actualReport=ref(false),notPerformed=ref<number[]>([]);
 const unit=ref('1'),side=ref<Face>('front'),lane=ref('left'),selected=ref<number[]>([]);
 function resetReport(){actualReport.value=false;selected.value=[];notPerformed.value=[];discrepancy.value='';}
-function newPlan(){plan.value=undefined;name.value='';resetReport();}
+function newPlan(){receiptUnit.value=undefined;plan.value=undefined;name.value='';resetReport();}
 const elevation=ref<SVGSVGElement>();
 const coordinatesOpen=ref(false);
 const coordinateRows=computed(()=>view.value.occupancy);
@@ -414,7 +433,8 @@ async function exportPlan(){await run(async()=>{
 </details>
 </section>
 <section aria-label="Installation plan editor">
-<PhysicalMaterials :materials="plan?.materials??emptyMaterials" :uses="materialUses" :items="planItems" :working="working()" :editable="editable" :receivable="editable||plan?.state===model.PhysicalPlanState.RESERVED||plan?.state===model.PhysicalPlanState.PARTIAL" :can-place="kind===K.RACK" :busy="busy" @update="updateMaterials" @receive="receiveMaterial" @selected="selectedMaterial" @place="chooseFuture" @remove="removeMaterial"/>
+<PhysicalMaterials :materials="plan?.materials??emptyMaterials" :uses="materialUses" :items="planItems" :working="working()" :editable="editable" :receivable="editable||plan?.state===model.PhysicalPlanState.RESERVED||plan?.state===model.PhysicalPlanState.PARTIAL" :can-place="kind===K.RACK" :busy="busy" @update="updateMaterials" @receive="receiveMaterial" @create="startReceipt" @selected="selectedMaterial" @place="chooseFuture" @remove="removeMaterial"/>
+<ReceivedDevice v-if="receiptUnit&&plan" :key="plan.id+'/'+receiptUnit.material+'/'+receiptUnit.unit" :plan="plan" :material="receiptUnit.material" :unit="receiptUnit.unit" :working="working()" :definitions="definitions" @recorded="receivedDevice" @close="receiptUnit=undefined"/>
 <form v-if="editable" @submit.prevent="save"><fieldset :disabled="busy">
 <label>Installation plan name<input v-model="name" required maxlength="160" /></label>
 <div class="placement-controls"><button v-if="kind===K.RACK" type="button" :aria-pressed="mode==='placement'" @click="mode='placement'">Plan rack placement</button><button v-if="kind!==K.CABLE" type="button" :aria-pressed="mode==='replacement'" @click="mode='replacement'">Replace, remove or move a part</button></div>

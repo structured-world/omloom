@@ -483,16 +483,18 @@ impl Store {
         let action = request.action.ok_or(Error::Invalid)?;
         let original = working.ok_or(Error::Invalid)?;
         let mut tx = self.begin()?;
-        let plan_key = match &action {
-            Action::Load(key) | Action::Cancel(key) => Some(key),
-            Action::Receive(value) => value.plan.as_ref(),
-            Action::Reserve(value) => value.plan.as_ref(),
-            Action::Complete(value) => value.plan.as_ref(),
-            Action::ReviewReplacement(value) => value.plan.as_ref(),
+        let plan_id = match &action {
+            Action::Load(key) | Action::Cancel(key) => Some(key.id.as_str()),
+            Action::Receive(value) => value.plan.as_ref().map(|key| key.id.as_str()),
+            Action::Reserve(value) => value.plan.as_ref().map(|key| key.id.as_str()),
+            Action::Complete(value) => value.plan.as_ref().map(|key| key.id.as_str()),
+            Action::ReviewReplacement(value) => value.plan.as_ref().map(|key| key.id.as_str()),
+            Action::Save(value) => value.plan.as_ref().and_then(|plan| plan.id.as_deref()),
+            Action::Preview(value) => value.plan.as_ref().and_then(|plan| plan.id.as_deref()),
             _ => None,
         };
-        let selected = plan_key
-            .map(|key| tx.plan_context(context, &key.id, original))
+        let selected = plan_id
+            .map(|id| tx.plan_context(context, id, original))
             .transpose()?;
         let working = || Ok(selected.as_ref().unwrap_or(original));
         let mut view = api::PhysicalView {
@@ -503,10 +505,14 @@ impl Store {
         };
         match action {
             Action::ReceiveDevice(value) => {
-                view.receipt = Some(tx.receive_device(context, value, original, now)?);
+                view.receipt = Some(Box::new(tx.receive_device(context, value, original, now)?));
             }
             Action::ReceiptOutcome(value) => {
-                view.receipt = Some(tx.receipt_outcome(context, value.revision)?);
+                view.receipt = Some(Box::new(tx.receipt_outcome(
+                    context,
+                    value.revision,
+                    &value.plan,
+                )?));
             }
             Action::Scene(value) => tx.physical_scene(context, value, working()?, &mut view)?,
             Action::PortAnchor(value) => {

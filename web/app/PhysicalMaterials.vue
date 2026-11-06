@@ -5,8 +5,9 @@ import {equipmentFields} from './equipment-fields';
 import type {Field} from '../src/generated/omloom/v1/contracts';
 import PlacementSearch from './PlacementSearch.vue';
 import EquipmentField from './EquipmentField.vue';
+import {firstFreeUnit} from './material-unit';
 const props=defineProps<{materials:model.PhysicalMaterial[];uses:model.PhysicalMaterialUnit[];items:model.Item[];working:model.WorkingContext;editable:boolean;receivable:boolean;canPlace:boolean;busy:boolean}>();
-const emit=defineEmits<{update:[materials:model.PhysicalMaterial[]];remove:[material:number];place:[unit:model.PhysicalMaterialUnit];receive:[material:number,allocation:model.PhysicalMaterialAllocation];selected:[item:model.Item]}>();
+const emit=defineEmits<{update:[materials:model.PhysicalMaterial[]];remove:[material:number];place:[unit:model.PhysicalMaterialUnit];receive:[material:number,allocation:model.PhysicalMaterialAllocation];selected:[item:model.Item];create:[material:number,unit:number]}>();
 const opened=ref(false),editing=ref(false),index=ref<number>(),error=ref(''),loading=ref(false);
 const draft=ref(model.PhysicalMaterial.create()),quantity=ref(''),field=ref(equipmentFields[0]!),valid=ref(true);
 const source=ref<model.Item>(),receiving=ref<number>(),unit=ref(''),basis=ref('');
@@ -21,7 +22,8 @@ const names=computed(()=>{
 });
 const kinds=[K.DEVICE,K.PHYSICAL_COMPONENT,K.RACK,K.CABLE];
 function start(line?:number){placing.value=undefined;receiving.value=undefined;index.value=line;draft.value=line===undefined?model.PhysicalMaterial.create({kind:K.DEVICE}):model.PhysicalMaterial.clone(props.materials[line]!);quantity.value=line===undefined?'':String(draft.value.quantity);field.value=equipmentFields[0]!;source.value=undefined;valid.value=true;editing.value=true;error.value='';}
-function startReceiving(line:number){placing.value=undefined;editing.value=false;receiving.value=line;source.value=undefined;unit.value='';basis.value='';}
+function startReceiving(line:number){placing.value=undefined;editing.value=false;receiving.value=line;source.value=undefined;const free=firstFreeUnit(props.materials[line]!);unit.value=free===undefined?'':String(free+1);basis.value='';}
+function createReceived(){error.value='';try{const line=receiving.value;if(line===undefined)return;emit('create',line,integer(unit.value,props.materials[line]!.quantity)-1);}catch(e){error.value=String(e);}}
 function integer(value:string,max:number){if(!/^\d+$/.test(value))throw Error('Enter a whole positive count.');const n=Number(value);if(!Number.isSafeInteger(n)||n<1||n>max)throw Error(`Enter a count between 1 and ${max}.`);return n;}
 function claim(value:Field|undefined){draft.value.specifications=draft.value.specifications.filter(f=>f.name!==field.value);if(value)draft.value.specifications.push(value);}
 async function copySpecification(){
@@ -110,6 +112,7 @@ function place(){error.value='';try{
 </form>
 <form v-if="receiving!==undefined&&receivable" aria-label="Material receiving" @submit.prevent="receive(receiving)">
 <label>Requested unit number<input v-model="unit" type="text" inputmode="numeric" required/></label><PlacementSearch kind="material" :roots="working.roots" @select="source=$event"/>
+<button v-if="materials[receiving]?.kind===K.DEVICE" type="button" @click="createReceived">Create received device</button>
 <label>Receipt or reuse basis<input v-model="basis" required maxlength="512"/></label>
 <button type="submit" :disabled="!source">Record actual material allocation</button><button type="button" @click="receiving=undefined">Close receiving</button>
 </form>

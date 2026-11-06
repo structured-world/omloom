@@ -5174,6 +5174,13 @@ export interface PhysicalReceiptLookup {
      * @generated from protobuf field: uint64 revision = 1
      */
     revision: bigint;
+    /**
+     * Original server-issued plan UUID, binding recovery to this installation's
+     * saved plan rather than a revision reused by an unrelated installation.
+     *
+     * @generated from protobuf field: string plan = 2
+     */
+    plan: string;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.PhysicalReceiptOutcome
@@ -10056,7 +10063,8 @@ export const PhysicalDeviceReceipt = new PhysicalDeviceReceipt$Type();
 class PhysicalReceiptLookup$Type extends MessageType<PhysicalReceiptLookup> {
     constructor() {
         super("omloom.workspace.v1.PhysicalReceiptLookup", [
-            { no: 1, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
+            { no: 1, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 2, name: "plan", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
         ]);
     }
 }

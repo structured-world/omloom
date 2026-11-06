@@ -11,7 +11,7 @@ import { equipmentFields as equipmentNames } from './equipment-fields';
 import { softwareFields, softwareChoiceLabel } from './software-fields';
 import { call, typedField, input, display, label, key, model, AssetKind, type AssetRef } from './api';
 
-const props = defineProps<{ item?: model.Item; definitions: model.Definition[]; initialKind?: AssetKind; initialHypervisor?: boolean; working: model.WorkingContext; view: model.View; fieldMask?: readonly string[]; question?: string }>();
+const props = defineProps<{ item?: model.Item; definitions: model.Definition[]; initialKind?: AssetKind; initialHypervisor?: boolean; working: model.WorkingContext; view: model.View; fieldMask?: readonly string[]; question?: string; receipt?: {name:string;submit:(changes:import('./api').Field[],working:model.WorkingContext,next:boolean)=>Promise<void>}; inline?:boolean }>();
 const emit = defineEmits<{ close: []; saved: [target?: AssetRef]; recheck: [] }>();
 const focused = computed(() => props.fieldMask !== undefined);
 const form = ref<HTMLFormElement>();
@@ -114,6 +114,7 @@ watch(fields, available => {
   for (const f of available) {
     const first = !(f.id in values);
     if (!(f.id in values)) values[f.id] = input(props.item?.fields.find(v => v.name === f.id));
+    if (first && f.id === 'name' && props.receipt) values[f.id] = props.receipt.name;
     if (!(f.id in modes)) modes[f.id] = props.item ? 'preserve' : ['name', 'address'].includes(f.id) ? 'set' : 'preserve';
     if (!props.item && hypervisor.value && f.id === 'virtualization_role' && first) { values[f.id] = virtualizationChoices[0]!.value; modes[f.id] = 'set'; }
   }
@@ -195,7 +196,7 @@ async function reviewCurrent() {
   }
   finally { preparing.value = false; }
 }
-async function save() {
+async function save(next = false) {
   let dispatched = false;
   busy.value = true; error.value = '';
   try {
@@ -211,6 +212,11 @@ async function save() {
     if (placementKind.value && !placementReady.value) throw Error('Choose a listed placement or clear the search to leave it unknown');
     if (props.item && !changes.length && !known.value) { if (focused.value) emit('recheck'); else emit('saved'); return; }
     const working = model.WorkingContext.create({ ...(focused.value ? editWorking : props.working), focus: props.working.focus && placement.value?.target ? placement.value.target : props.working.focus, expected: placementActions.value?.revision ?? actions.value.revision });
+    if (props.receipt) {
+      if (kind.value !== AssetKind.DEVICE || choice.value?.parent) throw Error('Choose the permitted unplaced device context.');
+      await props.receipt.submit(changes, working, next);
+      return;
+    }
     const parent: AssetRef | undefined = props.item ? undefined : choice.value?.parent?.target;
     const addresses: model.InitialAddress[] = [];
     if (!props.item && [AssetKind.DEVICE, AssetKind.VIRTUAL_MACHINE, AssetKind.SOFTWARE_INSTALLATION].includes(kind.value)) {
@@ -264,7 +270,7 @@ async function save() {
   } finally { busy.value = false; }
 }
 </script>
-<template><Dialog :title="focused ? 'Clarify recorded fact' : item ? 'Edit resource' : known ? 'Record known address' : 'Create resource'" :dismissible="!busy" @close="emit('close')"><form ref="form" @submit.prevent="save">
+<template><component :is="inline ? 'section' : Dialog" :title="receipt ? 'Create received device' : focused ? 'Clarify recorded fact' : item ? 'Edit resource' : known ? 'Record known address' : 'Create resource'" :dismissible="!busy" @close="emit('close')"><form ref="form" aria-label="Resource editor" @submit.prevent="save()">
 <p v-if="question">{{ question }}. This is the question, not the value to record.</p>
 <section v-if="focused && reviewedItem" aria-label="Review fact change"><p>{{ input(reviewedItem.fields.find(f=>f.name==='name')) || 'Device' }}</p><p v-for="name in fieldMask" :key="name">Currently recorded {{ name.replaceAll('_',' ') }}: {{ display(reviewedItem.fields.find(f=>f.name===name)) || 'Unknown' }}<template v-if="delta.find(f=>f.name===name)"> → {{ display(delta.find(f=>f.name===name)) }}</template></p></section>
 <p v-if="uncertain" role="status">The write outcome is unknown. Reading the current fact does not establish whether this attempt saved it. No write is retried automatically.</p>
@@ -281,7 +287,7 @@ async function save() {
 <select v-if="!item && parents.length > 1" id="creation-parent" v-model="selectedParent" required><option value="" disabled>Choose the actual parent</option><option v-for="p in parents" :key="key(p.target)" :value="key(p.target)">{{ parentLabel(p) }} · {{ label(p.kind) }}</option></select>
 <p v-if="!item && choice?.parent" class="hint">Review ownership in the new resource's responsibility card. Owned-component links can supply inheritance; catalog and runtime placement do not assign a workload's owner.</p>
 <label v-if="!focused" for="resource-kind">Resource kind</label>
-<select v-show="!focused" id="resource-kind" v-model="resourceType" :disabled="!!item || busy" required>
+<select v-show="!focused" id="resource-kind" v-model="resourceType" :disabled="!!item || busy || !!receipt" required>
 <option v-if="item" :value="item.kind">{{ label(item.kind) }}</option>
 <option v-else-if="!choices.length" disabled value="">No available action in this context</option>
 <template v-for="c in item ? [] : choices" :key="c.kind">
@@ -292,7 +298,7 @@ async function save() {
 <PlacementPicker v-if="placementKind" :kind="placementKind" :roots="placementRoots" @select="selectPlacement" @ready="placementReady = $event" />
 <p v-if="placementBusy" role="status">Checking placement permissions…</p>
 <ObserveHypervisor v-if="!item && kind === AssetKind.SOFTWARE_INSTALLATION" :current-name="values.name" @use="useObservation" />
-<InitialAddresses v-if="!item && kind !== undefined && [AssetKind.DEVICE,AssetKind.VIRTUAL_MACHINE,AssetKind.SOFTWARE_INSTALLATION].includes(kind)" v-model="initialAddresses" />
+<InitialAddresses v-if="!receipt && !item && kind !== undefined && [AssetKind.DEVICE,AssetKind.VIRTUAL_MACHINE,AssetKind.SOFTWARE_INSTALLATION].includes(kind)" v-model="initialAddresses" />
 <button v-if="!item && kind === AssetKind.SOFTWARE_INSTALLATION && fields.some(f => f.id === 'virtualization_role')" type="button" @click="useProxmox">Use Proxmox VE defaults</button>
 <details v-if="equipmentFields.length" :open="focused"><summary>Equipment knowledge</summary><p v-if="!focused">Record only what is known. Manufacturer, generation and model are separate facts. Refinement keeps this device's identity.</p>
 <EquipmentField v-for="name in selectedEquipment.filter(f=>equipmentFields.includes(f))" :key="name" :name="name" :focused="focused" :disabled="busy" :value="equipmentChanges[name] ?? item?.fields.find(f=>f.name===name)" @change="equipmentChanges[name]=$event" @valid="equipmentValidity[name]=$event" />
@@ -330,8 +336,8 @@ async function save() {
 <p v-if="addressReview && derivedBroadcast" class="hint">Calculated subnet broadcast: {{ derivedBroadcast }}. This is a display calculation, not a recorded endpoint setting.</p>
 <p v-else-if="addressReview?.address?.includes(':')" class="hint">IPv6 has no broadcast address.</p>
 <p v-else-if="addressReview?.prefixLength === 31 || addressReview?.prefixLength === 32" class="hint">This mask has no directed broadcast. A /31 may describe a point-to-point link.</p>
-<p v-if="error" role="alert">{{ error }}</p><footer><button type="button" :disabled="busy" @click="emit('close')">Cancel</button><button v-if="focused" type="button" :disabled="busy || preparing" @click="emit('recheck')">Recheck without saving</button><button class="primary" :disabled="busy || preparing || placementBusy || (!!placementKind && !placementReady) || (!item && !choice) || (focused && ['conflict','uncertain','denied'].includes(outcome))">{{ busy ? known && !addressReview ? 'Preparing review…' : 'Saving…' : focused ? 'Save and recheck' : known ? addressReview ? 'Save known address' : 'Review known address' : 'Save resource' }}</button></footer>
-</form></Dialog></template>
+<p v-if="error" role="alert">{{ error }}</p><footer><button type="button" :disabled="busy" @click="emit('close')">Cancel</button><button v-if="focused" type="button" :disabled="busy || preparing" @click="emit('recheck')">Recheck without saving</button><button class="primary" :disabled="busy || preparing || placementBusy || (!!placementKind && !placementReady) || (!item && !choice) || (focused && ['conflict','uncertain','denied'].includes(outcome))">{{ busy ? known && !addressReview ? 'Preparing review…' : 'Saving…' : receipt ? 'Record received device' : focused ? 'Save and recheck' : known ? addressReview ? 'Save known address' : 'Review known address' : 'Save resource' }}</button><button v-if="receipt" type="button" :disabled="busy || preparing || !choice" @click="save(true)">Record and next</button></footer>
+</form></component></template>
 <style scoped>
 .field-edit > .hint, .field-edit > .role-selector, .field-edit > textarea { grid-column:1/-1; }
 .field-edit > .hint { margin:0; }

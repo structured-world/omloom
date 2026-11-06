@@ -2232,6 +2232,9 @@ message PhysicalReceiptLookup {
   // Application revision reviewed before submission, identifying this attempt.
   // Lookup grants no access and never creates or retries a device.
   uint64 revision = 1;
+  // Original server-issued plan UUID, binding recovery to this installation's
+  // saved plan rather than a revision reused by an unrelated installation.
+  string plan = 2;
 }
 message PhysicalReceiptOutcome {
   // Exact accepted result revision, not the current plan or resource revision.

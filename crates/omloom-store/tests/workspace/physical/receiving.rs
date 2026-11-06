@@ -33,7 +33,7 @@ fn request(plan: &api::PhysicalPlan, base: u64) -> Result<api::PhysicalDeviceRec
             expected: Some(base),
             ..Default::default()
         }),
-        changes: vec![text("name", "Unpacked node")],
+        changes: vec![text_field("name", "Unpacked node")],
         explanation: None,
     })
 }
@@ -87,11 +87,21 @@ fn received_device_is_atomic_unplaced_and_recoverable_after_reopen() -> TestResu
     .ok_or(Error::Missing)?;
     let item = outcome.item.clone().ok_or(Error::Missing)?;
     let asset = store.asset(AssetRef::try_from(&item).map_err(|_| Error::Invalid)?)?;
-    assert_eq!(asset.kind, K::Device as i32);
+    assert_eq!(asset.kind, K::Device);
+    let detail = call(
+        &store,
+        &actor,
+        Command::Read(api::Read {
+            target: Some(item.clone()),
+            ..Default::default()
+        }),
+    )?;
+    let Reply::Detail(detail) = detail else {
+        return Err(Error::Corrupt.into());
+    };
     assert_eq!(
-        asset.fields.len(),
-        1,
-        "Planned characteristics and unknown serial are not actual facts"
+        detail.item.ok_or(Error::Missing)?.fields,
+        vec![text_field("name", "Unpacked node")]
     );
     let loaded = submit(
         &store,
@@ -119,7 +129,7 @@ fn received_device_is_atomic_unplaced_and_recoverable_after_reopen() -> TestResu
             target: Some(item.clone()),
             expected: Some(asset.revision),
             kind: K::Device as i32,
-            changes: vec![text("name", "Later corrected name")],
+            changes: vec![text_field("name", "Later corrected name")],
             ..Default::default()
         }),
     )?;
@@ -137,7 +147,10 @@ fn received_device_is_atomic_unplaced_and_recoverable_after_reopen() -> TestResu
         &store,
         &actor,
         &api::WorkingContext::default(),
-        api::physical::Action::ReceiptOutcome(api::PhysicalReceiptLookup { revision: base }),
+        api::physical::Action::ReceiptOutcome(api::PhysicalReceiptLookup {
+            revision: base,
+            plan: plan.id.ok_or(Error::Missing)?,
+        }),
     )?;
     assert_eq!(recovered.receipt, Some(outcome));
     assert_eq!(
@@ -146,7 +159,7 @@ fn received_device_is_atomic_unplaced_and_recoverable_after_reopen() -> TestResu
         "Recovery and exact replay must write nothing"
     );
     let mut different = receipt;
-    different.changes = vec![text("name", "Different arguments")];
+    different.changes = vec![text_field("name", "Different arguments")];
     assert!(matches!(
         submit(
             &store,

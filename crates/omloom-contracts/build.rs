@@ -29,6 +29,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .boxed(".omloom.workspace.v1.PhysicalDefinition.rack_grid")
         .boxed(".omloom.workspace.v1.PhysicalDefinition.clearance")
         .boxed(".omloom.workspace.v1.PhysicalMaterial.physical")
+        .boxed(".omloom.workspace.v1.PhysicalView.receipt")
         .boxed(".omloom.workspace.v1.PhysicalReplacement.feedback")
         .file_descriptor_set_path(&descriptor)
         .compile_protos(&[workspace], &["../../proto"])?;
