@@ -11,11 +11,12 @@ import { equipmentFields as equipmentNames } from './equipment-fields';
 import { softwareFields, softwareChoiceLabel } from './software-fields';
 import { call, typedField, input, display, label, key, model, AssetKind, type AssetRef } from './api';
 
-const props = defineProps<{ item?: model.Item; definitions: model.Definition[]; initialKind?: AssetKind; initialHypervisor?: boolean; working: model.WorkingContext; view: model.View; fieldMask?: readonly string[]; question?: string; receipt?: {name:string;submit:(changes:import('./api').Field[],working:model.WorkingContext,next:boolean)=>Promise<void>}; inline?:boolean }>();
+const props = defineProps<{ item?: model.Item; definitions: model.Definition[]; initialKind?: AssetKind; initialHypervisor?: boolean; working: model.WorkingContext; view: model.View; fieldMask?: readonly string[]; question?: string; receipt?: {name:string;submit:(changes:import('./api').Field[],working:model.WorkingContext,next:boolean)=>Promise<void>}; inline?:boolean; inactive?:boolean }>();
 const emit = defineEmits<{ close: []; saved: [target?: AssetRef]; recheck: [] }>();
 const focused = computed(() => props.fieldMask !== undefined);
 const form = ref<HTMLFormElement>();
-const entryFocus=document.activeElement;
+let entryFocus:Element|null=null;
+let focusPending=true;
 const reviewedItem = ref(props.item);
 const outcome = ref<'' | 'conflict' | 'uncertain' | 'reviewed' | 'denied'>('');
 const uncertain = ref(false);
@@ -58,6 +59,14 @@ function addEquipment(){if(equipmentFields.value.includes(equipmentToAdd.value)&
 const modes = reactive<Record<string, string>>({});
 const submittedMask = computed(() => modes.prefix_length !== 'clear' && values.prefix_length !== undefined && values.prefix_length !== '' ? Number(values.prefix_length) : undefined);
 const error = ref(''); const busy = ref(false); const preparing = ref(true); const more = ref(false);
+watch([preparing,()=>props.inactive],async()=>{
+  if(preparing.value||props.inactive||!focusPending||(!focused.value&&!props.receipt))return;
+  await nextTick();
+  if(!mounted||preparing.value||props.inactive)return;
+  focusPending=false;
+  // Never steal input begun while preparation or the enclosing refresh was pending.
+  if(document.activeElement===entryFocus||document.activeElement===document.body)(form.value?.querySelector<HTMLElement>('[data-fact-value]')??form.value?.querySelector<HTMLElement>('#value-name,textarea,input'))?.focus();
+});
 watch(()=>props.receipt,async(value,previous)=>{
   if(value||!previous)return;
   preparing.value=true;error.value='';
@@ -165,6 +174,7 @@ function useObservation(value: { name?: string; addresses: model.InitialAddress[
   if (value.name !== undefined) { values.name = value.name; modes.name = 'set'; }
 }
 onMounted(async () => {
+  entryFocus=document.activeElement;
   try {
     if (focused.value && (props.fieldMask?.length !== 1 || props.item?.kind !== AssetKind.DEVICE)) throw Error('Choose one accepted device fact.');
     const working = model.WorkingContext.create({ ...props.working, focus: props.item?.target ?? props.working.focus, expected: undefined });
@@ -179,11 +189,6 @@ onMounted(async () => {
     if (!props.item && parents.value.length === 1) selectedParent.value = key(parents.value[0]!.target);
   } catch (e) { error.value = String(e); } finally {
     preparing.value = false;
-    if ((focused.value || props.receipt) && mounted) {
-      await nextTick();
-      // Preparation may finish after the user starts entering another receipt field.
-      if(document.activeElement===entryFocus||document.activeElement===document.body)(form.value?.querySelector<HTMLElement>('[data-fact-value]') ?? form.value?.querySelector<HTMLElement>('#value-name,textarea,input'))?.focus();
-    }
   }
 });
 function reviewedChanges() {

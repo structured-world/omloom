@@ -2,7 +2,7 @@
 import {onBeforeUnmount,ref} from 'vue';
 import AssetEditor from './AssetEditor.vue';
 import {call,model,AssetKind,type Field} from './api';
-const props=defineProps<{plan:model.PhysicalPlan;material:number;unit:number;working:model.WorkingContext;definitions:model.Definition[];sharedReference?:string}>();
+const props=defineProps<{plan:model.PhysicalPlan;material:number;unit:number;working:model.WorkingContext;definitions:model.Definition[];sharedReference?:string;inactive?:boolean}>();
 const emit=defineEmits<{recorded:[outcome:model.PhysicalReceiptOutcome,next:boolean,sharedReference?:string];inventoryChanged:[];close:[];open:[item:import('./api').AssetRef]}>();
 const reviewedPlan=model.PhysicalPlan.clone(props.plan);
 const explanation=ref(props.sharedReference===undefined?'':props.sharedReference),shareReference=ref(props.sharedReference!==undefined),error=ref(''),pending=ref(false),recovered=ref<model.PhysicalReceiptOutcome>();
@@ -81,6 +81,6 @@ function inventorySaved(target:import('./api').AssetRef|undefined){if(!target)re
 <div v-show="!pending&&!recovered&&!inventoryCreated">
 <label v-if="!inventoryOnly">Optional delivery reference or explanation<input v-model="explanation" maxlength="160"/></label>
 <label v-if="!inventoryOnly&&explanation.trim()"><input v-model="shareReference" type="checkbox"/>Use this reference for the next received device</label>
-<AssetEditor inline :definitions="definitions" :initial-kind="AssetKind.DEVICE" :working="inventory" :view="model.View.HARDWARE" :receipt="inventoryOnly?undefined:{name:plan.materials[material]!.name,submit}" @saved="inventorySaved" @close="emit('close')"/>
+<AssetEditor inline :inactive="inactive" :definitions="definitions" :initial-kind="AssetKind.DEVICE" :working="inventory" :view="model.View.HARDWARE" :receipt="inventoryOnly?undefined:{name:plan.materials[material]!.name,submit}" @saved="inventorySaved" @close="emit('close')"/>
 </div>
 </section></template>

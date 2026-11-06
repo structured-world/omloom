@@ -38,6 +38,7 @@ for(const width of [1440,390])test(`received devices remain unplaced and record-
     await expect(editor).toContainText('Unit 1');
     await expect(editor.getByLabel('Serial number',{exact:true})).toHaveValue('');
     await expect(editor.getByLabel('Serial number change',{exact:true})).toHaveValue('preserve');
+    await expect(planner).not.toHaveAttribute('inert','');
     await editor.getByLabel('Name',{exact:true}).fill('Unpacked node one');
     await expect(editor.getByLabel('Name',{exact:true})).toHaveValue('Unpacked node one');
     await editor.getByRole('button',{name:'Record received device',exact:true}).click();
@@ -77,11 +78,13 @@ test('a lost receipt reply is recovered after reload without another device',asy
     await editor.getByLabel('Optional delivery reference or explanation',{exact:true}).fill('Delivery batch A');
     await editor.getByLabel('Use this reference for the next received device',{exact:true}).check();
     for(const name of ['First accepted node','Second accepted node']){
+      await expect(planner).not.toHaveAttribute('inert','');
       await editor.getByLabel('Name',{exact:true}).fill(name);
       await editor.getByRole('button',{name:'Record and next',exact:true}).click();
       await expect(editor.getByLabel('Name',{exact:true})).toHaveValue('Ordered compute node');
       await expect(editor.getByLabel('Optional delivery reference or explanation',{exact:true})).toHaveValue('Delivery batch A');
     }
+    await expect(planner).not.toHaveAttribute('inert','');
     await editor.getByLabel('Name',{exact:true}).fill('Reply lost node');
     let lossFinished;
     const loss=new Promise(resolve=>{lossFinished=resolve;});
@@ -110,6 +113,38 @@ test('a lost receipt reply is recovered after reload without another device',asy
     const loaded=(await f.rpc({oneofKind:'physical',physical:f.m.Physical.create({action:{oneofKind:'load',load:{id:f.plan.id}}})})).physical.plan;
     expect(loaded.materials[0].allocations.map(a=>a.unit)).toEqual([0,1,2]);
     expect(loaded.materials[0].quantity).toBe(5);
+  });
+});
+
+test('record-next focuses its new form after the enclosing refresh',async({page})=>{
+  // Keep the parent read pending until the next editor has prepared. Its initial
+  // focus must wait for the enclosing inert state to end, without losing input.
+  await withFieldHost(async url=>{
+    const f=await fixture(url);const planner=await openPlan(page,url,f);
+    await planner.getByRole('button',{name:'Create received device',exact:true}).click();
+    const editor=planner.getByRole('region',{name:'Create received device',exact:true});
+    await editor.getByLabel('Name',{exact:true}).fill('First device');
+    let releaseRead,releasePrepare;
+    const readGate=new Promise(resolve=>{releaseRead=resolve;});
+    const prepareGate=new Promise(resolve=>{releasePrepare=resolve;});
+    const hold=async route=>{
+      const command=f.m.Request.fromBinary(route.request().postDataBuffer().subarray(5)).command;
+      if(command.oneofKind==='query')await readGate;
+      if(command.oneofKind==='prepare')await prepareGate;
+      await route.continue();
+    };
+    await page.route('**/omloom.workspace.v1.Workspace/Call',hold);
+    try{
+      await editor.getByRole('button',{name:'Record and next',exact:true}).click();
+      await expect(planner).toHaveAttribute('inert','');
+      releasePrepare();
+      await expect(editor.getByLabel('Name',{exact:true})).toHaveValue('Ordered compute node');
+      releaseRead();
+      await expect(planner).not.toHaveAttribute('inert','');
+      await expect(editor.getByLabel('Name',{exact:true})).toBeFocused();
+      await page.keyboard.type(' refined');
+      await expect(editor.getByLabel('Name',{exact:true})).toHaveValue('Ordered compute node refined');
+    }finally{releaseRead();releasePrepare();await page.unroute('**/omloom.workspace.v1.Workspace/Call',hold);}
   });
 });
 
