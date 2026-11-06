@@ -352,7 +352,7 @@ fn concurrent_receipts_commit_one_identity_and_one_allocation() -> TestResult {
         &actor,
         Command::Query(api::Query {
             kinds: vec![K::Device as i32],
-            ..Default::default()
+            ..query()
         }),
     )?
     else {
