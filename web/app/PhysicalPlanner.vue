@@ -35,6 +35,10 @@ const assessment=ref<{state:number;reason:number;revision:bigint}>();
 const reviewHypotheses=ref(new Map<number,model.PhysicalReplacementHypothesis>());
 const quality=ref<model.PhysicalReplacementQuality[]>(),qualityNext=ref<string>();
 function clearQuality(){quality.value=undefined;qualityNext.value=undefined;}
+function acceptRevision(value:bigint){
+  if(value!==revision.value){assessment.value=undefined;reviewHypotheses.value.clear();clearQuality();}
+  revision.value=value;
+}
 const qualityScope=computed(()=>props.working.roots.map(key).sort().join('|'));
 watch(qualityScope,clearQuality);
 watch(()=>plan.value?.id,()=>{reviewHypotheses.value.clear();});
@@ -92,7 +96,7 @@ async function updatedReceipt(view:model.PhysicalView,reviewed:model.PhysicalPla
   await receiptReady();
   const applied=await run(async()=>{
     if(!view.plan||view.plan.id!==plan.value?.id)throw Error('Reopen the original plan to inspect this device.');
-    changed=revision.value!==view.revision;revision.value=view.revision;planItems.value=view.items;
+    changed=revision.value!==view.revision;acceptRevision(view.revision);planItems.value=view.items;
     if(kind!=='checked'||savedCurrent.value||view.plan.revision!==plan.value?.revision)
       applyReceiptPlan(view.plan,reviewed,material,kind==='assigned'?view.plan.revision:undefined);
     notice.value=kind==='assigned'?'Existing device assigned. Nothing was created or installed.':'Current plan refreshed. No device was created.';
@@ -105,7 +109,7 @@ const applied=await run(async()=>{
   if(outcome.plan?.id!==plan.value?.id){notice.value='The original receipt belongs to a different saved plan. This plan was not changed.';return;}
   changed=true;
   const response=view??await invoke({oneofKind:'load',load:{id:plan.value!.id!,revision:0n}});
-  revision.value=response.revision;planItems.value=response.items;
+  acceptRevision(response.revision);planItems.value=response.items;
   applyReceiptPlan(response.plan,reviewed,outcome.material,outcome.revision);
   notice.value=`Device receipt accepted at revision ${outcome.revision}. Nothing was installed.`;
 });
@@ -139,7 +143,7 @@ async function receiveMaterial(material:number,allocation:model.PhysicalMaterial
   const selection=working();
   const response=await call({oneofKind:'physical',physical:{action:{oneofKind:'receive',receive:{plan:planKey('current'),material,allocation}}}},selection);
   if(response.oneofKind!=='physical')throw Error('The allocation result is unavailable.');
-  const reply=response.physical;revision.value=reply.revision;planItems.value=reply.items;changed=true;
+  const reply=response.physical;acceptRevision(reply.revision);planItems.value=reply.items;changed=true;
   acceptPlan(reply.plan);selected.value=[];notPerformed.value=[];notice.value='Actual material allocation recorded. Nothing was installed.';
 });}
 const equipment=ref<model.Item>(),equipmentVolume=ref<model.PhysicalVolume>();
@@ -185,8 +189,7 @@ async function invoke(action:model.Physical['action']) {
   const response=await call({oneofKind:'physical',physical:{action}},working());
   if(response.oneofKind!=='physical')throw Error('Physical planning is unavailable.');
   if((action.oneofKind==='save'||action.oneofKind==='reserve'||action.oneofKind==='complete'||action.oneofKind==='cancel'||action.oneofKind==='receive'||action.oneofKind==='reviewReplacement')&&response.physical.revision!==revision.value)changed=true;
-  if(response.physical.revision!==revision.value){assessment.value=undefined;reviewHypotheses.value.clear();clearQuality();}
-  revision.value=response.physical.revision;
+  acceptRevision(response.physical.revision);
   if(response.physical.plan)planItems.value=response.physical.items;
   return response.physical;
 }

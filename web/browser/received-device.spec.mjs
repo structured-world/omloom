@@ -79,6 +79,43 @@ for(const line of [0,1])test(`unapplied requirement ${line+1} input survives rec
   });
 });
 
+test('allocating existing equipment clears revision-bound reviews',async({page})=>{
+  // Allocation changes inventory even though it bypasses the ordinary planner
+  // command helper. Old hypotheses and quality results must disappear together.
+  await withFieldHost(async url=>{
+    const f=await fixture(url),{m,rpc}=f;
+    const create=async name=>(await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.DEVICE,changes:[{name:'name',value:{oneofKind:'text',text:name}}]})})).mutation.targets[0];
+    const old=await create('Installed predecessor'),incoming=await create('Actual received node');
+    await rpc({oneofKind:'relation',relation:m.Relationship.create({relation:{from:old,to:f.rack,kind:m.RelationKind.INSTALLED_IN}})});
+    const binding=(await rpc({oneofKind:'read',read:m.Read.create({target:old})})).detail.relations.find(r=>r.kind===m.RelationKind.INSTALLED_IN);
+    const draft=m.PhysicalPlan.clone(f.plan);
+    draft.steps=[m.PhysicalStep.create({action:{oneofKind:'replacement',replacement:{position:f.rack,previous:old,previousBinding:binding.relationId,previousRevision:binding.revision}}})];
+    f.plan=(await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'save',save:{plan:draft}}})})).physical.plan;
+    const planner=await openPlan(page,url,f);
+    await planner.getByLabel('Reserve until',{exact:true}).fill(await page.evaluate(()=>{const date=new Date(Date.now()+3600000);date.setMinutes(date.getMinutes()-date.getTimezoneOffset());return date.toISOString().slice(0,16);}));
+    await planner.getByRole('button',{name:'Check and reserve capacity',exact:true}).click();
+    await expect(planner).toContainText('Capacity reserved. Installation is not confirmed.');
+    const review=planner.locator('.replacement-review');
+    await review.getByText('Replacement evidence and event decision',{exact:true}).click();
+    await review.getByRole('button',{name:'Explain current replacement hypothesis',exact:true}).click();
+    await expect(review.locator('h4')).toBeVisible();
+    await planner.getByText('Local replacement review quality',{exact:true}).click();
+    await planner.getByRole('button',{name:'Load current review counts',exact:true}).click();
+    await expect(planner.getByText('No retained judgments in this contributing scope.',{exact:true})).toBeVisible();
+    await planner.getByRole('button',{name:'Receive or reuse a unit for requirement 1',exact:true}).click();
+    const receiving=planner.getByRole('form',{name:'Material receiving',exact:true});
+    await receiving.getByLabel('Search permitted inventory outside this selection',{exact:true}).check();
+    await receiving.getByRole('combobox',{name:'Find material',exact:true}).fill('Actual received node');
+    await receiving.getByRole('option',{name:'Use material: Actual received node',exact:true}).click();
+    await receiving.getByLabel('Receipt or reuse basis',{exact:true}).fill('Received actual equipment');
+    await receiving.getByRole('button',{name:'Record actual material allocation',exact:true}).click();
+    await expect(planner).toContainText('Actual material allocation recorded. Nothing was installed.');
+    await expect(review.locator('h4')).toHaveCount(0);
+    await expect(planner.getByText('No retained judgments in this contributing scope.',{exact:true})).toHaveCount(0);
+    expect((await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'load',load:{id:f.plan.id}}})})).physical.plan.materials[0].allocations[0].item).toEqual(incoming);
+  });
+});
+
 test('an unavailable URL plan leaves other saved plans usable',async({page})=>{
   // A failed optional restoration must not lock the whole planner or repeat
   // the same failed load whenever the details control is opened.
