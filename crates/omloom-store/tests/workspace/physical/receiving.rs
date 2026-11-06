@@ -401,14 +401,15 @@ fn receipt_expiry_and_older_restore_keep_admission_closed() -> TestResult {
     let store = Store::open(dir.path(), policy())?;
     let actor = operator();
     let plan = saved(&store, &actor)?;
+    let mut old = Vec::new();
+    store.export(&mut old)?;
+    create(&store, &actor, K::Device, "Unrelated intervening inventory")?;
     let base = store.usage()?.revision;
     let working = api::WorkingContext {
         expected: Some(base),
         ..Default::default()
     };
     let request = request(&plan)?;
-    let mut old = Vec::new();
-    store.export(&mut old)?;
     let accepted = submit(
         &store,
         &actor,
@@ -433,6 +434,10 @@ fn receipt_expiry_and_older_restore_keep_admission_closed() -> TestResult {
     let older_path = tempfile::tempdir()?;
     let older = Store::restore(older_path.path(), &old, policy(), old.len() as u64)?;
     let before = older.usage()?;
+    assert_eq!(
+        before.revision, base,
+        "The restore fence must reject even when the reviewed revision matches"
+    );
     assert!(matches!(
         submit(
             &older,
@@ -440,7 +445,7 @@ fn receipt_expiry_and_older_restore_keep_admission_closed() -> TestResult {
             &working,
             api::physical::Action::ReceiveDevice(request.clone())
         ),
-        Err(Error::Conflict)
+        Err(Error::RecoveryRequired)
     ));
     assert_eq!(older.usage()?, before);
     let mut cursor = None;
