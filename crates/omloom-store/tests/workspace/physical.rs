@@ -21,6 +21,8 @@ mod occupancy;
 mod power;
 #[path = "physical/rack_grid.rs"]
 mod rack_grid;
+#[path = "physical/receiving.rs"]
+mod receiving;
 #[path = "physical/reviews.rs"]
 mod reviews;
 #[path = "physical/scene.rs"]

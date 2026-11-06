@@ -1123,6 +1123,50 @@ clearance and load. Receipt supplies the real adopted incarnation to the same
 step; installation cannot be recorded while that unit remains unreceived.
 
 Explicit receipt or reuse links an adopted resource to one requested unit.
+For a saved draft, reserved or partially completed plan, **Create received device**
+uses the ordinary inventory editor and commits one new Device, actual entered
+fields, the exact unit assignment and any required hold together. The material
+label is an editable name suggestion; serial and measured characteristics may
+remain unknown. Planned specifications never become actual equipment facts.
+The creation context is explicitly permitted installation inventory. No rack
+attachment, move, installation completion, warehouse receipt or verified fit is
+implied. The recorded assertion includes the server actor and recording time,
+not an invented delivery or inspection date.
+
+**Record and next** independently confirms each item and clears its serial and
+actual characteristics. A conflict leaves earlier successes intact. Allocated
+resources are exact action operands, not additional
+recursive browsing roots. An allocated enclosure does not admit its siblings
+or descendants outside the selected viewing context. Before
+submission the browser keeps a non-authorizing plan, material, unit and revision
+reference. Lost replies and reopening trigger automatic recovery. Transactional
+browser storage admits one unresolved save per exact material unit across tabs,
+with at most 128 unresolved references. Other units and plans remain usable.
+Checks of another unit only retrieve an already accepted outcome; they cannot
+close its admission while its save may still be in flight.
+Generated keys prevent delayed cleanup from removing another attempt's reference;
+no actual fields or request payload are stored. Storage failure prevents dispatch.
+Lookup and exact replay write nothing. The recovery command can close an unused
+admission revision through the existing root CAS, without creating a device or
+another outcome ledger. Changed arguments cannot reuse the attempt.
+Expired outcomes do not admit the old attempt as fresh creation, and
+restored stores retain their existing mutation fence. An unavailable result
+remains unresolved for that unit, never an automatic inventory-only fallback.
+**Find existing device** uses the ordinary inventory picker and assignment command
+to resolve the physical item without creating it again. There is no separate
+manual approval process. The browser removes that unit's reference only after
+known recovery, definitive non-acceptance or confirmed existing-device assignment.
+Original accepted
+revision and current plan allocation/hold state are separate meanings.
+After a definitive rejection, the form retains actual input and offers a separate
+**Create in inventory only instead** action. That action does not receive or assign
+a plan unit. **Review current receipt** explicitly refreshes the saved material
+unit and inventory creation context without clearing entered actual fields.
+Receipt application preserves unrelated draft edits rather than saving them.
+Changed material lines require explicit reconciliation against the saved plan.
+A delivery reference carries to the next item only when explicitly
+selected; serials and measured facts never carry over.
+
 Receipt may be partial and can continue after reservation. It neither installs
 the resource nor proves compatibility or health. Real allocations use the same
 serialized-part locks as plan steps.

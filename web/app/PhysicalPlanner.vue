@@ -1,16 +1,20 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import {useRoute,useRouter} from 'vue-router';
 import { call, input, key, model, AssetKind as K, type AssetRef } from './api';
 import PlacementSearch from './PlacementSearch.vue';
 import PlanStepControls from './PlanStepControls.vue';
 import PhysicalMaterials from './PhysicalMaterials.vue';
+import ReceivedDevice from './ReceivedDevice.vue';
+import {firstFreeUnit} from './material-unit';
 import EndpointMappings from './EndpointMappings.vue';
 import ReplacementReview from './ReplacementReview.vue';
 import { millimetres,micrometres,signedMicrometres,upperMicrometres } from './physical-units';
 import {frameSize,projectElevation,depthOrder,type Face} from './physical-elevation';
 import {rackAllocation,rackUnitAt,adjacentRackUnit} from './rack-grid';
-const props = defineProps<{target:AssetRef;kind:number;working:model.WorkingContext;inactive?:boolean}>();
-const emit=defineEmits<{changed:[]}>();
+const props = defineProps<{target:AssetRef;kind:number;working:model.WorkingContext;definitions:model.Definition[];inactive?:boolean}>();
+const emit=defineEmits<{changed:[];open:[target:AssetRef]}>();
+const router=useRouter(),route=useRoute();
 const opened=ref(false),busy=ref(false),error=ref(''),notice=ref('');
 const view=ref(model.PhysicalView.create());
 const revision=ref(props.working.expected);
@@ -25,11 +29,16 @@ const requiredPostconditions=computed(()=>{
   return indexes;
 });
 const savedCurrent=ref(false);
-function acceptPlan(value:model.PhysicalPlan|undefined){if(!value)throw Error('The saved plan was not returned. Reload before continuing.');plan.value=value;name.value=value.name;savedCurrent.value=true;}
+const receiptDraftConflict=ref(false);
+function acceptPlan(value:model.PhysicalPlan|undefined){if(!value)throw Error('The saved plan was not returned. Reload before continuing.');plan.value=value;name.value=value.name;savedCurrent.value=true;receiptDraftConflict.value=false;}
 const assessment=ref<{state:number;reason:number;revision:bigint}>();
 const reviewHypotheses=ref(new Map<number,model.PhysicalReplacementHypothesis>());
 const quality=ref<model.PhysicalReplacementQuality[]>(),qualityNext=ref<string>();
 function clearQuality(){quality.value=undefined;qualityNext.value=undefined;}
+function acceptRevision(value:bigint){
+  if(value!==revision.value){assessment.value=undefined;reviewHypotheses.value.clear();clearQuality();}
+  revision.value=value;
+}
 const qualityScope=computed(()=>props.working.roots.map(key).sort().join('|'));
 watch(qualityScope,clearQuality);
 watch(()=>plan.value?.id,()=>{reviewHypotheses.value.clear();});
@@ -48,21 +57,93 @@ const assessmentText=computed(()=>{
   return `Physical result unknown: ${model.RequirementReason[assessment.value.reason]?.toLowerCase().replaceAll('_',' ')}. Nothing was saved or reserved.`;
 });
 const planItems=ref<model.Item[]>([]);
+const receiptUnit=ref<{material:number;unit:number;sharedReference?:string}>();
+async function openReceived(target:AssetRef){
+  if(!plan.value?.id)return;
+  await router.replace({path:'/',query:{...route.query,physicalPlan:plan.value.id}});
+  emit('open',target);
+}
+function startReceipt(material:number,unit:number){
+  try{if(!receivable.value)throw Error('This plan no longer accepts receipts.');planKey('current');receiptUnit.value={material,unit};error.value='';}
+  catch(e){error.value=String(e)+' Save installation plan explicitly first; the receiving input is retained.';}
+}
+const receiptLifetime=new AbortController();
+onBeforeUnmount(()=>receiptLifetime.abort());
+async function receiptReady(){
+  if(receiptLifetime.signal.aborted)throw Error('The plan view was closed; recover the receipt when reopening.');
+  if(!busy.value&&!props.inactive)return;
+  await new Promise<void>((resolve,reject)=>{
+    const stop=watch([busy,()=>props.inactive],()=>{
+      if(busy.value||props.inactive)return;
+      stop();receiptLifetime.signal.removeEventListener('abort',closed);resolve();
+    });
+    const closed=()=>{stop();reject(Error('The plan view was closed; the receipt reference remains recoverable.'));};
+    receiptLifetime.signal.addEventListener('abort',closed,{once:true});
+  });
+}
+function applyReceiptPlan(fresh:model.PhysicalPlan|undefined,reviewed:model.PhysicalPlan,material:number,acceptedRevision?:bigint){
+  const current=plan.value;
+  if(!fresh||!current||current.id!==fresh.id)throw Error('Reopen the saved plan to inspect the device.');
+  if(savedCurrent.value)acceptPlan(fresh);
+  else{
+    const line=current.materials[material],before=reviewed.materials[material];
+    if(current.revision===reviewed.revision&&fresh.revision===acceptedRevision&&current.state===model.PhysicalPlanState.DRAFT&&line&&before&&model.PhysicalMaterial.equals(line,before)){
+      line.allocations=fresh.materials[material]!.allocations;current.revision=fresh.revision;
+    }else receiptDraftConflict.value=true;
+  }
+}
+async function updatedReceipt(view:model.PhysicalView,reviewed:model.PhysicalPlan,material:number,kind:'checked'|'assigned'){
+  await receiptReady();
+  const applied=await run(async()=>{
+    if(!view.plan||view.plan.id!==plan.value?.id)throw Error('Reopen the original plan to inspect this device.');
+    changed=revision.value!==view.revision;acceptRevision(view.revision);planItems.value=view.items;
+    if(kind!=='checked'||savedCurrent.value||view.plan.revision!==plan.value?.revision)
+      applyReceiptPlan(view.plan,reviewed,material,kind==='assigned'?view.plan.revision:undefined);
+    notice.value=kind==='assigned'?'Existing device assigned. Nothing was created or installed.':'Current plan refreshed. No device was created.';
+  });
+  if(!applied)throw Error('The current plan could not be refreshed.');
+}
+async function receivedDevice(outcome:model.PhysicalReceiptOutcome,reviewed:model.PhysicalPlan,view?:model.PhysicalView){
+await receiptReady();
+const applied=await run(async()=>{
+  if(outcome.plan?.id!==plan.value?.id){notice.value='The original receipt belongs to a different saved plan. This plan was not changed.';return;}
+  changed=true;
+  const response=view??await invoke({oneofKind:'load',load:{id:plan.value!.id!,revision:0n}});
+  acceptRevision(response.revision);planItems.value=response.items;
+  applyReceiptPlan(response.plan,reviewed,outcome.material,outcome.revision);
+  notice.value=`Device receipt accepted at revision ${outcome.revision}. Nothing was installed.`;
+});
+if(!applied)throw Error('Receipt accepted, but the plan could not be refreshed. Recover its result to refresh again.');
+}
+function advanceReceived(outcome:model.PhysicalReceiptOutcome,sharedReference?:string){
+  // The previous editor clears its recovery reference before mounting the next one.
+  if(savedCurrent.value&&outcome.plan?.id===plan.value?.id&&receiptUnit.value&&plan.value!.revision===outcome.revision){
+    const material=receiptUnit.value.material;
+    const current=plan.value!.materials[material];
+    if(current){const unit=firstFreeUnit(current);if(unit!==undefined){receiptUnit.value={material,unit,sharedReference};return;}}
+    receiptUnit.value=undefined;
+  }
+}
 const emptyMaterials:model.PhysicalMaterial[]=[];
 const future=ref<model.PhysicalMaterialUnit>();
 const materialUses=computed(()=>{const units:model.PhysicalMaterialUnit[]=[];for(const step of plan.value?.steps??[])if(step.action.oneofKind==='placement'&&step.action.placement.material)units.push(step.action.placement.material);return units;});
-watch(()=>plan.value?.id,()=>{future.value=undefined;selected.value=[];notPerformed.value=[];});
+watch(()=>plan.value?.id,()=>{receiptUnit.value=undefined;future.value=undefined;selected.value=[];notPerformed.value=[];},{flush:'sync'});
 function updateMaterials(materials:model.PhysicalMaterial[]){future.value=undefined;plan.value=model.PhysicalPlan.create({...plan.value,name:name.value,state:model.PhysicalPlanState.DRAFT,materials});}
 function removeMaterial(index:number){
   if(!plan.value)return;
   if(materialUses.value.some(u=>u.material===index)){error.value='Remove the material’s planned placements before removing its requirement.';return;}
+  // A removed or shifted index cannot silently retarget a reviewed receipt.
+  if(receiptUnit.value&&index<=receiptUnit.value.material)receiptUnit.value=undefined;
   plan.value.materials=plan.value.materials.filter((_,i)=>i!==index);
   for(const unit of materialUses.value)if(unit.material>index)unit.material--;
   future.value=undefined;
 }
 function selectedMaterial(item:model.Item){const index=planItems.value.findIndex(old=>key(old.target)===key(item.target));if(index===-1)planItems.value.push(item);else planItems.value[index]=item;}
 async function receiveMaterial(material:number,allocation:model.PhysicalMaterialAllocation){await run(async()=>{
-  const reply=await invoke({oneofKind:'receive',receive:{plan:planKey('current'),material,allocation}});
+  const selection=working();
+  const response=await call({oneofKind:'physical',physical:{action:{oneofKind:'receive',receive:{plan:planKey('current'),material,allocation}}}},selection);
+  if(response.oneofKind!=='physical')throw Error('The allocation result is unavailable.');
+  const reply=response.physical;acceptRevision(reply.revision);planItems.value=reply.items;changed=true;
   acceptPlan(reply.plan);selected.value=[];notPerformed.value=[];notice.value='Actual material allocation recorded. Nothing was installed.';
 });}
 const equipment=ref<model.Item>(),equipmentVolume=ref<model.PhysicalVolume>();
@@ -78,13 +159,16 @@ const oldOccupancy=computed(()=>sourceView.value?.occupancy??view.value.occupanc
 const actualReport=ref(false),notPerformed=ref<number[]>([]);
 const unit=ref('1'),side=ref<Face>('front'),lane=ref('left'),selected=ref<number[]>([]);
 function resetReport(){actualReport.value=false;selected.value=[];notPerformed.value=[];discrepancy.value='';}
-function newPlan(){plan.value=undefined;name.value='';resetReport();}
+function newPlan(){receiptUnit.value=undefined;receiptDraftConflict.value=false;plan.value=undefined;name.value='';resetReport();}
 const elevation=ref<SVGSVGElement>();
 const coordinatesOpen=ref(false);
 const coordinateRows=computed(()=>view.value.occupancy);
 function coordinate(value:model.PhysicalExtent|undefined){return value===undefined?'Unavailable':`${millimetres(value.startUm)} + ${millimetres(value.lengthUm)}`;}
-const working=()=>model.WorkingContext.create({roots:props.working.roots,expected:revision.value});
+const working=()=>{
+  return model.WorkingContext.create({...props.working,expected:revision.value});
+};
 const editable=computed(()=>plan.value===undefined||plan.value.state===model.PhysicalPlanState.DRAFT);
+const receivable=computed(()=>plan.value!==undefined&&[model.PhysicalPlanState.DRAFT,model.PhysicalPlanState.RESERVED,model.PhysicalPlanState.PARTIAL].includes(plan.value.state));
 const geometryEditable=computed(()=>mode.value==='placement'||(mode.value==='replacement'&&props.kind===K.RACK&&!removePart.value));
 const reservable=computed(()=>plan.value?.state===model.PhysicalPlanState.DRAFT);
 const installable=computed(()=>plan.value!==undefined&&([model.PhysicalPlanState.RESERVED,model.PhysicalPlanState.PARTIAL,model.PhysicalPlanState.CANCELLED].includes(plan.value.state)||(plan.value.state===model.PhysicalPlanState.DRAFT&&actualReport.value)));
@@ -105,18 +189,17 @@ async function invoke(action:model.Physical['action']) {
   const response=await call({oneofKind:'physical',physical:{action}},working());
   if(response.oneofKind!=='physical')throw Error('Physical planning is unavailable.');
   if((action.oneofKind==='save'||action.oneofKind==='reserve'||action.oneofKind==='complete'||action.oneofKind==='cancel'||action.oneofKind==='receive'||action.oneofKind==='reviewReplacement')&&response.physical.revision!==revision.value)changed=true;
-  if(response.physical.revision!==revision.value){assessment.value=undefined;reviewHypotheses.value.clear();clearQuality();}
-  revision.value=response.physical.revision;
+  acceptRevision(response.physical.revision);
   if(response.physical.plan)planItems.value=response.physical.items;
   return response.physical;
 }
 let changed=false;
 async function run(action:()=>Promise<void>) {
-  if(busy.value||props.inactive)return;
+  if(busy.value||props.inactive)return false;
   changed=false;
   busy.value=true;error.value='';notice.value='';
   // Refresh before enabling actions so the parent refresh cannot disable the next click.
-  try{await action();if(changed&&view.value.revision!==revision.value)await refresh(false);}catch(e){error.value=String(e);}finally{busy.value=false;if(changed)emit('changed');}
+  try{await action();if(changed&&view.value.revision!==revision.value)await refresh(false);return true;}catch(e){error.value=String(e);return false;}finally{busy.value=false;if(changed)emit('changed');}
 }
 async function summaries(after?:string) {
   const reply=await invoke({oneofKind:'list',list:{after,limit:25}});
@@ -156,8 +239,21 @@ function addWiring(){
 }
 async function open() {
   if(opened.value)return;
-  await run(async()=>{await refresh();await summaries();opened.value=true;});
+  await run(async()=>{await refresh();await summaries();
+    opened.value=true;
+    if(typeof route.query.physicalPlan==='string'){
+      const requested=route.query.physicalPlan;
+      try{
+        const reply=await invoke({oneofKind:'load',load:{id:requested,revision:0n}});
+        acceptPlan(reply.plan);
+      }catch(e){
+        if(route.query.physicalPlan===requested)await router.replace({path:'/',query:{...route.query,physicalPlan:undefined}});
+        throw e;
+      }
+    }
+  });
 }
+watch(()=>props.inactive,inactive=>{if(!inactive&&!opened.value&&typeof route.query.physicalPlan==='string')void open();},{immediate:true});
 async function load(saved:model.PhysicalPlanSummary) {
   await run(async()=>{
     const reply=await invoke({oneofKind:'load',load:{id:saved.id,revision:saved.revision}});
@@ -261,6 +357,7 @@ function addAtCoordinates(){if(mode.value==='placement')add();else if(mode.value
 async function save() {
   await run(async()=>{
     if(!plan.value)throw Error('Add a physical step or material requirement.');
+    if(receiptDraftConflict.value)throw Error('Receipt accepted; draft input is retained. Reopen the saved plan before reconciling these changed material lines.');
     const reply=await invoke({oneofKind:'save',save:{plan:{...plan.value,name:name.value}}});
     acceptPlan(reply.plan);notice.value='Plan saved. Nothing is reserved or installed.';await summaries();
   });
@@ -381,7 +478,7 @@ async function exportPlan(){await run(async()=>{
 });}
 </script>
 <template>
-<details class="physical-planner" :inert="inactive" @toggle="($event.target as HTMLDetailsElement).open&&open()">
+<details class="physical-planner" :open="opened" :inert="inactive" @toggle="($event.target as HTMLDetailsElement).open&&open()">
 <summary>Plan installation from enclosing scope</summary>
 <p>Choose equipment from the enclosing selection. A draft changes no actual placement. Reservations and reported installation are separate actions.</p>
 <p v-if="busy||notice||assessment" role="status">{{busy?'Updating physical plan…':notice?notice:assessmentText}}</p><p v-if="error" role="alert">{{error}}</p>
@@ -414,7 +511,9 @@ async function exportPlan(){await run(async()=>{
 </details>
 </section>
 <section aria-label="Installation plan editor">
-<PhysicalMaterials :materials="plan?.materials??emptyMaterials" :uses="materialUses" :items="planItems" :working="working()" :editable="editable" :receivable="editable||plan?.state===model.PhysicalPlanState.RESERVED||plan?.state===model.PhysicalPlanState.PARTIAL" :can-place="kind===K.RACK" :busy="busy" @update="updateMaterials" @receive="receiveMaterial" @selected="selectedMaterial" @place="chooseFuture" @remove="removeMaterial"/>
+<p v-if="receiptDraftConflict" role="alert">Receipt accepted; draft input is retained. The changed material lines cannot be reconciled automatically. Reopen the saved plan to review the confirmed allocation before saving.</p>
+<PhysicalMaterials :materials="plan?.materials??emptyMaterials" :uses="materialUses" :items="planItems" :working="working()" :editable="editable" :receivable="receivable" :can-place="kind===K.RACK" :busy="busy" @update="updateMaterials" @receive="receiveMaterial" @create="startReceipt" @selected="selectedMaterial" @place="chooseFuture" @remove="removeMaterial"/>
+<ReceivedDevice v-if="receiptUnit&&plan&&plan.materials[receiptUnit.material]" :key="plan.id+'/'+receiptUnit.material+'/'+receiptUnit.unit" :plan="plan" :material="receiptUnit.material" :unit="receiptUnit.unit" :shared-reference="receiptUnit.sharedReference" :working="working()" :definitions="definitions" :inactive="busy||inactive" :recorded="receivedDevice" :updated="updatedReceipt" @advance="advanceReceived" @inventory-changed="emit('changed')" @open="openReceived" @close="receiptUnit=undefined"/>
 <form v-if="editable" @submit.prevent="save"><fieldset :disabled="busy">
 <label>Installation plan name<input v-model="name" required maxlength="160" /></label>
 <div class="placement-controls"><button v-if="kind===K.RACK" type="button" :aria-pressed="mode==='placement'" @click="mode='placement'">Plan rack placement</button><button v-if="kind!==K.CABLE" type="button" :aria-pressed="mode==='replacement'" @click="mode='replacement'">Replace, remove or move a part</button></div>
@@ -469,6 +568,7 @@ async function exportPlan(){await run(async()=>{
 <label v-if="installable&&![model.PhysicalStepState.RECORDED,model.PhysicalStepState.NOT_PERFORMED].includes(step.state)"><input v-model="selected" type="checkbox" :value="index" :disabled="!placementTarget(step.action.placement)||notPerformed.includes(index)||(!actualReport&&step.readiness!==model.PlanReadiness.READY)"/>Actually installed: <span v-if="placementTitle(step.action.placement)">{{placementTitle(step.action.placement)}}</span><span v-else>Equipment name unavailable</span></label>
 <span v-else-if="placementTitle(step.action.placement)">{{placementTitle(step.action.placement)}}</span><span v-else>Equipment name unavailable</span>
 <p v-if="step.action.placement.material&&!placementTarget(step.action.placement)">Receive or select the actual requested unit before reporting installation.</p>
+<button v-if="receivable&&step.action.placement.material&&!placementTarget(step.action.placement)&&plan.materials[step.action.placement.material.material]?.kind===K.DEVICE" type="button" :disabled="busy" @click="startReceipt(step.action.placement.material.material,step.action.placement.material.unit)">Create received device for step {{index+1}}</button>
 <template v-for="axis in axes" :key="axis"><small v-if="step.action.placement.volume?.[axis]">{{axis.toUpperCase()}} allocation: {{millimetres(step.action.placement.volume[axis]!.startUm)}} mm + {{millimetres(step.action.placement.volume[axis]!.lengthUm)}} mm</small></template>
 </template>
 <template v-if="step.action.oneofKind==='replacement'">

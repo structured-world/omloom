@@ -5120,6 +5120,105 @@ export interface PhysicalMaterialReceipt {
     allocation?: PhysicalMaterialAllocation;
 }
 /**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalDeviceReceipt
+ */
+export interface PhysicalDeviceReceipt {
+    /**
+     * User-selected saved plan and reviewed revision. Receipt changes no placement.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalPlanKey plan = 1
+     */
+    plan?: PhysicalPlanKey;
+    /**
+     * Exact zero-based line and unit reviewed by the caller; never chosen on retry.
+     *
+     * @generated from protobuf field: uint32 material = 2
+     */
+    material: number;
+    /**
+     * Zero-based unit less than the selected line's requested quantity.
+     *
+     * @generated from protobuf field: uint32 unit = 3
+     */
+    unit: number;
+    /**
+     * Explicit permitted inventory context for a new, unplaced Device. Required;
+     * empty roots deliberately select permitted installation inventory, not the rack.
+     * Omit expected here; the enclosing request supplies the shared reviewed revision.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.WorkingContext inventory = 4
+     */
+    inventory?: WorkingContext;
+    /**
+     * Actual user-entered fields, using ordinary Device validation and authority.
+     * Planned specifications are not copied. Unknown serials may be omitted.
+     *
+     * @generated from protobuf field: repeated omloom.v1.Field changes = 5
+     */
+    changes: Field[];
+    /**
+     * Optional receipt explanation/reference, at most 160 UTF-8 bytes, no secrets.
+     * Submission itself attests receipt; the server supplies actor/recording time.
+     *
+     * @generated from protobuf field: optional string explanation = 6
+     */
+    explanation?: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalReceiptLookup
+ */
+export interface PhysicalReceiptLookup {
+    /**
+     * Application revision reviewed before submission, identifying this attempt.
+     * Lookup grants no access and never creates or retries a device.
+     *
+     * @generated from protobuf field: uint64 revision = 1
+     */
+    revision: bigint;
+    /**
+     * Original server-issued plan UUID, binding recovery to this installation's
+     * saved plan rather than a revision reused by an unrelated installation.
+     *
+     * @generated from protobuf field: string plan = 2
+     */
+    plan: string;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalReceiptOutcome
+ */
+export interface PhysicalReceiptOutcome {
+    /**
+     * Exact accepted result revision, not the current plan or resource revision.
+     *
+     * @generated from protobuf field: uint64 revision = 1
+     */
+    revision: bigint;
+    /**
+     * Originally created incarnation, disclosed only under current resource rights.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef item = 2
+     */
+    item?: AssetRef;
+    /**
+     * Original saved plan and accepted revision, not a claim of current allocation.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalPlanKey plan = 3
+     */
+    plan?: PhysicalPlanKey;
+    /**
+     * Original zero-based material line, which may since have changed.
+     *
+     * @generated from protobuf field: uint32 material = 4
+     */
+    material: number;
+    /**
+     * Original zero-based unit, not a claim of current reservation or installation.
+     *
+     * @generated from protobuf field: uint32 unit = 5
+     */
+    unit: number;
+}
+/**
  * @generated from protobuf message omloom.workspace.v1.PhysicalPreview
  */
 export interface PhysicalPreview {
@@ -5541,6 +5640,32 @@ export interface Physical {
          */
         receive: PhysicalMaterialReceipt;
     } | {
+        oneofKind: "receiveDevice";
+        /**
+         * Explicitly attest receipt, create one Device and allocate it atomically.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PhysicalDeviceReceipt receive_device = 22
+         */
+        receiveDevice: PhysicalDeviceReceipt;
+    } | {
+        oneofKind: "receiptOutcome";
+        /**
+         * Retrieve an earlier accepted receipt without repeating its mutation.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PhysicalReceiptLookup receipt_outcome = 23
+         */
+        receiptOutcome: PhysicalReceiptLookup;
+    } | {
+        oneofKind: "recoverReceipt";
+        /**
+         * Resolve an uncertain save without repeating creation. May atomically close
+         * an unused application revision; plan ownership and current operand rights
+         * are checked. Recovery does not grant authority to create or assign a device.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PhysicalReceiptLookup recover_receipt = 24
+         */
+        recoverReceipt: PhysicalReceiptLookup;
+    } | {
         oneofKind: "reviewReplacement";
         /**
          * Explain or explicitly judge a replacement using current scoped evidence.
@@ -5945,6 +6070,21 @@ export interface PhysicalOffers {
  * @generated from protobuf message omloom.workspace.v1.PhysicalView
  */
 export interface PhysicalView {
+    /**
+     * Server-established missing-result classification for recover_receipt.
+     * Unspecified when receipt contains the accepted outcome or for unrelated
+     * commands. Unavailable preserves uncertainty about past creation.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalReceiptRecovery receipt_recovery = 19
+     */
+    receiptRecovery: PhysicalReceiptRecovery;
+    /**
+     * Original accepted receipt, independently of the plan's current assignment,
+     * hold or completion. Absent when recovery cannot return the original result.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.PhysicalReceiptOutcome receipt = 18
+     */
+    receipt?: PhysicalReceiptOutcome;
     /**
      * Server-qualified assemblies with exactly two accepted named ends, both
      * currently attached to visible scene ports. Omission conveys no hidden end
@@ -7617,6 +7757,28 @@ export enum PhysicalPlanState {
      * @generated from protobuf enum value: PHYSICAL_PLAN_STATE_CANCELLED = 5;
      */
     CANCELLED = 5
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.PhysicalReceiptRecovery
+ */
+export enum PhysicalReceiptRecovery {
+    /**
+     * @generated from protobuf enum value: PHYSICAL_RECEIPT_RECOVERY_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * The server proved non-acceptance and closed the old admission revision.
+     *
+     * @generated from protobuf enum value: PHYSICAL_RECEIPT_RECOVERY_NOT_COMMITTED = 1;
+     */
+    NOT_COMMITTED = 1,
+    /**
+     * Old admission is closed, but retained data cannot establish its past result.
+     * Inspect current inventory; do not repeat creation for this physical item.
+     *
+     * @generated from protobuf enum value: PHYSICAL_RECEIPT_RECOVERY_UNAVAILABLE = 2;
+     */
+    UNAVAILABLE = 2
 }
 /**
  * @generated from protobuf enum omloom.workspace.v1.PhysicalWiringIntent
@@ -9922,6 +10084,52 @@ class PhysicalMaterialReceipt$Type extends MessageType<PhysicalMaterialReceipt> 
  */
 export const PhysicalMaterialReceipt = new PhysicalMaterialReceipt$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class PhysicalDeviceReceipt$Type extends MessageType<PhysicalDeviceReceipt> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalDeviceReceipt", [
+            { no: 1, name: "plan", kind: "message", T: () => PhysicalPlanKey },
+            { no: 2, name: "material", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 3, name: "unit", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 4, name: "inventory", kind: "message", T: () => WorkingContext },
+            { no: 5, name: "changes", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Field },
+            { no: 6, name: "explanation", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalDeviceReceipt
+ */
+export const PhysicalDeviceReceipt = new PhysicalDeviceReceipt$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalReceiptLookup$Type extends MessageType<PhysicalReceiptLookup> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalReceiptLookup", [
+            { no: 1, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 2, name: "plan", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalReceiptLookup
+ */
+export const PhysicalReceiptLookup = new PhysicalReceiptLookup$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalReceiptOutcome$Type extends MessageType<PhysicalReceiptOutcome> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalReceiptOutcome", [
+            { no: 1, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
+            { no: 2, name: "item", kind: "message", T: () => AssetRef },
+            { no: 3, name: "plan", kind: "message", T: () => PhysicalPlanKey },
+            { no: 4, name: "material", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 5, name: "unit", kind: "scalar", T: 13 /*ScalarType.UINT32*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalReceiptOutcome
+ */
+export const PhysicalReceiptOutcome = new PhysicalReceiptOutcome$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class PhysicalPreview$Type extends MessageType<PhysicalPreview> {
     constructor() {
         super("omloom.workspace.v1.PhysicalPreview", [
@@ -10107,6 +10315,9 @@ class Physical$Type extends MessageType<Physical> {
             { no: 15, name: "availability", kind: "message", oneof: "action", T: () => PhysicalOfferRead },
             { no: 16, name: "offers", kind: "message", oneof: "action", T: () => PhysicalOffers },
             { no: 17, name: "receive", kind: "message", oneof: "action", T: () => PhysicalMaterialReceipt },
+            { no: 22, name: "receive_device", kind: "message", oneof: "action", T: () => PhysicalDeviceReceipt },
+            { no: 23, name: "receipt_outcome", kind: "message", oneof: "action", T: () => PhysicalReceiptLookup },
+            { no: 24, name: "recover_receipt", kind: "message", oneof: "action", T: () => PhysicalReceiptLookup },
             { no: 18, name: "review_replacement", kind: "message", oneof: "action", T: () => PhysicalReplacementReview },
             { no: 19, name: "replacement_quality", kind: "message", oneof: "action", T: () => PhysicalReplacementQualityQuery },
             { no: 20, name: "scene", kind: "message", oneof: "action", T: () => PhysicalSceneQuery },
@@ -10264,6 +10475,8 @@ export const PhysicalOffers = new PhysicalOffers$Type();
 class PhysicalView$Type extends MessageType<PhysicalView> {
     constructor() {
         super("omloom.workspace.v1.PhysicalView", [
+            { no: 19, name: "receipt_recovery", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalReceiptRecovery", PhysicalReceiptRecovery, "PHYSICAL_RECEIPT_RECOVERY_"] },
+            { no: 18, name: "receipt", kind: "message", T: () => PhysicalReceiptOutcome },
             { no: 17, name: "two_end_cables", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AssetRef },
             { no: 16, name: "scene_connections", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalSceneConnection },
             { no: 14, name: "replacement_hypothesis", kind: "message", T: () => PhysicalReplacementHypothesis },

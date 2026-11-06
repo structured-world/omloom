@@ -15,6 +15,7 @@ mod lifecycle;
 mod materials;
 mod positions;
 mod rack_grid;
+mod receiving;
 mod replacements;
 mod reservations;
 mod reviews;
@@ -479,15 +480,44 @@ impl Store {
         now: u64,
     ) -> Result<api::Reply> {
         use api::physical::Action;
-        let working = || working.ok_or(Error::Invalid);
+        let action = request.action.ok_or(Error::Invalid)?;
+        let original = working;
         let mut tx = self.begin()?;
+        let plan_id = match &action {
+            Action::Load(key) | Action::Cancel(key) => Some(key.id.as_str()),
+            Action::Receive(value) => value.plan.as_ref().map(|key| key.id.as_str()),
+            Action::RecoverReceipt(value) => Some(value.plan.as_str()),
+            Action::Reserve(value) => value.plan.as_ref().map(|key| key.id.as_str()),
+            Action::Complete(value) => value.plan.as_ref().map(|key| key.id.as_str()),
+            Action::ReviewReplacement(value) => value.plan.as_ref().map(|key| key.id.as_str()),
+            Action::Save(value) => value.plan.as_ref().and_then(|plan| plan.id.as_deref()),
+            Action::Preview(value) => value.plan.as_ref().and_then(|plan| plan.id.as_deref()),
+            _ => None,
+        };
+        if let Some(id) = plan_id {
+            tx.admit_plan_operands(context, id, original.ok_or(Error::Invalid)?)?;
+        }
+        let working = || original.ok_or(Error::Invalid);
         let mut view = api::PhysicalView {
             revision: number(&tx.root, "revision")?,
             state: api::RequirementState::Unknown as i32,
             reason: api::RequirementReason::Missing as i32,
             ..Default::default()
         };
-        match request.action.ok_or(Error::Invalid)? {
+        match action {
+            Action::ReceiveDevice(value) => {
+                return self.commit_receipt(tx, context, &value, working()?, now);
+            }
+            Action::ReceiptOutcome(value) => {
+                view.receipt = Some(Box::new(tx.receipt_outcome(
+                    context,
+                    value.revision,
+                    &value.plan,
+                )?));
+            }
+            Action::RecoverReceipt(value) => {
+                tx.recover_receipt(context, &value, working()?, &mut view)?;
+            }
             Action::Scene(value) => tx.physical_scene(context, value, working()?, &mut view)?,
             Action::PortAnchor(value) => {
                 tx.save_port_anchor(context, value, working()?, now)?;
@@ -638,6 +668,10 @@ impl Store {
             Action::Save(save) => {
                 let mut plan = save.plan.ok_or(Error::Invalid)?;
                 materials::normalize(&mut plan)?;
+                for allocation in plan.materials.iter().flat_map(|m| &m.allocations) {
+                    tx.physical_operands
+                        .insert(parse_target(allocation.item.as_ref())?);
+                }
                 tx.prepare_wiring_plan(context, &mut plan, working()?)?;
                 let materials = tx.validate_physical_draft(context, &plan, working()?, true)?;
                 tx.refresh_plan_control(context, &mut plan, working()?, now)?;
@@ -740,6 +774,9 @@ impl Store {
                 view.plan = Some(tx.load_physical_plan(context, &key, working()?, false)?);
             }
             Action::Receive(receipt) => {
+                let allocation = receipt.allocation.as_ref().ok_or(Error::Invalid)?;
+                tx.physical_operands
+                    .insert(parse_target(allocation.item.as_ref())?);
                 view.plan = Some(tx.receive_material(context, receipt, working()?, now)?);
             }
             Action::Reserve(value) => {
