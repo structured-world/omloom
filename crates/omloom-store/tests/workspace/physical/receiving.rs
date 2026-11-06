@@ -440,6 +440,51 @@ fn concurrent_receipts_commit_one_identity_and_one_allocation() -> TestResult {
     Ok(())
 }
 
+// Overlapping retries of the identical command must resolve to the winning
+// identity, rather than turning an accepted attempt into an unexplained conflict.
+#[test]
+fn identical_concurrent_receipts_return_the_same_outcome() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let plan = saved(&store, &actor)?;
+    let working = api::WorkingContext {
+        expected: Some(store.usage()?.revision),
+        ..Default::default()
+    };
+    let input = request(&plan)?;
+    let barrier = std::sync::Barrier::new(2);
+    let (first, second) = std::thread::scope(|scope| {
+        let run = || {
+            barrier.wait();
+            submit(
+                &store,
+                &actor,
+                &working,
+                api::physical::Action::ReceiveDevice(input.clone()),
+            )
+        };
+        let first = scope.spawn(run);
+        let second = scope.spawn(run);
+        (first.join(), second.join())
+    });
+    let first = first.map_err(|_| "first retry panicked")??;
+    let second = second.map_err(|_| "second retry panicked")??;
+    assert_eq!(first.receipt, second.receipt);
+    let loaded = physical(
+        &store,
+        &actor,
+        api::physical::Action::Load(api::PhysicalPlanKey {
+            id: plan.id.ok_or(Error::Missing)?,
+            revision: 0,
+        }),
+    )?
+    .plan
+    .ok_or(Error::Missing)?;
+    assert_eq!(loaded.materials[0].allocations.len(), 1);
+    Ok(())
+}
+
 // An actual received item need not fit its proposed location. Its hold survives
 // cancellation while installation is unresolved; receipt cannot certify the fit.
 #[test]

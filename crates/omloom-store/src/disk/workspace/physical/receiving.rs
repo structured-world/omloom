@@ -2,6 +2,57 @@
 use super::*;
 use addresses::knowledge::Outcome;
 
+impl Store {
+    pub(super) fn commit_receipt(
+        &self,
+        mut tx: Tx<'_>,
+        context: &Context,
+        request: &api::PhysicalDeviceReceipt,
+        working: &api::WorkingContext,
+        now: u64,
+    ) -> Result<api::Reply> {
+        let receipt = tx.receive_device(context, request, working, now)?;
+        let (revision, receipt) = match tx.commit() {
+            Ok(revision) => (revision, receipt),
+            Err(Error::Conflict) => {
+                // Only reread the winner; never execute this mutation again.
+                let fresh = self.begin()?;
+                let key = request.plan.as_ref().ok_or(Error::Invalid)?;
+                fresh
+                    .creation_outcome(
+                        context,
+                        working,
+                        &request.encode_to_vec(),
+                        Outcome::Receipt {
+                            plan: &key.id,
+                            material: request.material,
+                            unit: request.unit,
+                        },
+                    )
+                    .map_err(|error| match error {
+                        Error::Conflict => Error::Rejected(Box::new(Error::Conflict)),
+                        error => error,
+                    })?
+                    .ok_or(Error::Conflict)?;
+                let receipt = fresh.receipt_outcome(
+                    context,
+                    working.expected.ok_or(Error::Conflict)?,
+                    &key.id,
+                )?;
+                (number(&fresh.root, "revision")?, receipt)
+            }
+            Err(error) => return Err(error),
+        };
+        Ok(reply(api::reply::Result::Physical(api::PhysicalView {
+            revision,
+            receipt: Some(Box::new(receipt)),
+            state: api::RequirementState::Unknown as i32,
+            reason: api::RequirementReason::Missing as i32,
+            ..Default::default()
+        })))
+    }
+}
+
 impl Tx<'_> {
     pub(super) fn plan_context(
         &self,
@@ -98,7 +149,7 @@ impl Tx<'_> {
     pub(super) fn receive_device(
         &mut self,
         context: &Context,
-        request: api::PhysicalDeviceReceipt,
+        request: &api::PhysicalDeviceReceipt,
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<api::PhysicalReceiptOutcome> {

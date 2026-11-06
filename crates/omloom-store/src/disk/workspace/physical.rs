@@ -505,12 +505,7 @@ impl Store {
         };
         match action {
             Action::ReceiveDevice(value) => {
-                view.receipt = Some(Box::new(tx.receive_device(
-                    context,
-                    value,
-                    working()?,
-                    now,
-                )?));
+                return self.commit_receipt(tx, context, &value, working()?, now);
             }
             Action::ReceiptOutcome(value) => {
                 view.receipt = Some(Box::new(tx.receipt_outcome(
