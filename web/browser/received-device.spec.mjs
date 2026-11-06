@@ -763,6 +763,9 @@ test('an earlier recovered unit does not hide review of a rejected next device',
     const editor=planner.getByRole('region',{name:'Create received device',exact:true});
     await expect(editor).toContainText('Earlier device saved');
     await expect(planner).not.toHaveAttribute('inert','');
+    // Recovery can start the enclosing inventory refresh after the status renders.
+    // Unlike fill, a real click waits for inert ancestors to allow interaction.
+    await editor.getByLabel('Name',{exact:true}).click();
     await editor.getByLabel('Name',{exact:true}).fill('Next actual device');
     await expect(editor.getByLabel('Name',{exact:true})).toHaveValue('Next actual device');
     await f.rpc({oneofKind:'physical',physical:f.m.Physical.create({action:{oneofKind:'save',save:{plan:{name:'Concurrent write',materials:[{name:'Demand',quantity:1,kind:f.m.AssetKind.DEVICE}]}}}})});
