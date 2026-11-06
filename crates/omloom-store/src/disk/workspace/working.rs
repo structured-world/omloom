@@ -41,7 +41,14 @@ fn writable_fields(
     } else if kind == K::Domain {
         &["name", "description", "dns_name"]
     } else if kind == K::SoftwareInstallation {
-        &["name", "description", "virtualization_role"]
+        &[
+            "name",
+            "description",
+            "virtualization_role",
+            "cpu_model",
+            "logical_cpus",
+            "visible_memory_bytes",
+        ]
     } else if matches!(
         kind,
         K::Device | K::Rack | K::Port | K::Cable | K::PhysicalComponent

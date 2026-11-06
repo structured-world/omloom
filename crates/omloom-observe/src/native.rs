@@ -1,6 +1,7 @@
 use super::command::Runner;
 use super::{MAX_FACTS, Result, add, api, coverage, finding, local, wire};
 use serde_json::Value;
+mod capacity;
 #[cfg(test)]
 mod tests;
 
@@ -122,7 +123,8 @@ pub(super) struct Identity {
     pub boot: String,
     pub name: String,
     pub hardware: Option<api::HostIdentityClaim>,
-    pub installation: api::HostIdentityClaim,
+    pub installation: Option<api::HostIdentityClaim>,
+    pub coverage: Vec<api::CollectionCoverage>,
 }
 
 const WINDOWS_IDENTITY_SOURCE: &str =
@@ -130,21 +132,23 @@ const WINDOWS_IDENTITY_SOURCE: &str =
 fn windows_identity(input: &str) -> Result<Identity> {
     (|| {
         let value = json(input)?;
-        let source = string(&value, "source")?;
+        let source = value.get("source").and_then(Value::as_str).unwrap_or("");
+        let installation = installation_claim("windows/machine-guid", source);
         Ok(Identity {
+            coverage: Vec::new(),
             platform: "windows",
-            source: source.into(),
+            source: if installation.is_some() {
+                source.into()
+            } else {
+                String::new()
+            },
             boot: string(&value, "boot")?.into(),
             name: string(&value, "name")?.into(),
             hardware: value
                 .get("hardware")
                 .and_then(Value::as_str)
                 .and_then(|v| hardware_claim("smbios/system-uuid", v)),
-            installation: identity_claim(
-                api::HostIdentityKind::InstallationId,
-                "windows/machine-guid",
-                source,
-            )?,
+            installation,
         })
     })()
     .map_err(|error: String| format!("{error}; source: {WINDOWS_IDENTITY_SOURCE}"))
@@ -180,23 +184,43 @@ fn hardware_claim(namespace: &str, raw: &str) -> Option<api::HostIdentityClaim> 
     .ok()
 }
 
+fn installation_claim(namespace: &str, raw: &str) -> Option<api::HostIdentityClaim> {
+    let uuid = uuid::Uuid::parse_str(raw.trim()).ok()?;
+    if uuid.is_nil() || uuid == uuid::Uuid::max() {
+        return None;
+    }
+    // Preserve the native wire digest in each qualified namespace while
+    // accepting equivalent UUID input spellings within that namespace.
+    let canonical = if namespace == "linux/machine-id" {
+        uuid.simple().to_string()
+    } else {
+        uuid.to_string()
+    };
+    identity_claim(api::HostIdentityKind::InstallationId, namespace, &canonical).ok()
+}
+
 pub(super) async fn identity(runner: &mut Runner) -> Result<Identity> {
     match std::env::consts::OS {
         "macos" => {
             let device = runner
                 .run("/usr/sbin/ioreg", &["-rd1", "-c", "IOPlatformExpertDevice"])
-                .await?
-                .text;
+                .await;
             let hardware = device
-                .lines()
+                .as_ref()
+                .ok()
+                .into_iter()
+                .flat_map(|v| v.text.lines())
                 .find_map(|l| l.trim().strip_prefix("\"IOPlatformUUID\" = "))
-                .ok_or("Hardware basis unavailable")?
+                .unwrap_or("")
                 .trim_matches('"');
-            let volume = runner.run("/usr/sbin/diskutil", &["info", "/"]).await?.text;
+            let volume = runner.run("/usr/sbin/diskutil", &["info", "/"]).await;
             let installation = volume
-                .lines()
+                .as_ref()
+                .ok()
+                .into_iter()
+                .flat_map(|v| v.text.lines())
                 .find_map(|l| l.trim().strip_prefix("Volume UUID:"))
-                .ok_or("Installation basis unavailable")?
+                .unwrap_or("")
                 .trim();
             let boot = runner
                 .run("/usr/sbin/sysctl", &["-n", "kern.bootsessionuuid"])
@@ -206,21 +230,41 @@ pub(super) async fn identity(runner: &mut Runner) -> Result<Identity> {
                 .run("/usr/sbin/sysctl", &["-n", "hw.model"])
                 .await?
                 .text;
+            let installation_claim = installation_claim("macos/apfs-volume", installation);
+            let hardware_claim = hardware_claim("apple/platform-uuid", hardware);
+            let mut identity_coverage = Vec::new();
+            for (module, source, result) in [
+                ("hardware-identity", "ioreg", &device),
+                ("installation-identity", "diskutil", &volume),
+            ] {
+                if let Err(error) = result {
+                    identity_coverage.push(api::CollectionCoverage {
+                        module: module.into(),
+                        status: "partial".into(),
+                        detail: format!("{source} identity unavailable: {error}"),
+                    });
+                }
+            }
             Ok(Identity {
+                coverage: identity_coverage,
                 platform: "macos",
-                source: format!("{hardware}/{installation}"),
+                // Keep the established complete source spelling. A missing part
+                // enters explicit anonymous matching, never a new partial namespace.
+                source: if installation_claim.is_some() && hardware_claim.is_some() {
+                    format!("{hardware}/{installation}")
+                } else {
+                    String::new()
+                },
                 boot: boot.trim().into(),
                 name: model.trim().into(),
-                hardware: hardware_claim("apple/platform-uuid", hardware),
-                installation: identity_claim(
-                    api::HostIdentityKind::InstallationId,
-                    "macos/apfs-volume",
-                    installation,
-                )?,
+                hardware: hardware_claim,
+                installation: installation_claim,
             })
         }
         "linux" => {
-            let source = runner.run("cat", &["/etc/machine-id"]).await?.text;
+            let source = runner.run("cat", &["/etc/machine-id"]).await.ok();
+            let raw = source.as_ref().map(|v| v.text.trim()).unwrap_or("");
+            let installation = installation_claim("linux/machine-id", raw);
             let boot = runner
                 .run("cat", &["/proc/sys/kernel/random/boot_id"])
                 .await?
@@ -233,20 +277,21 @@ pub(super) async fn identity(runner: &mut Runner) -> Result<Identity> {
                 Err(_) => None,
             };
             Ok(Identity {
+                coverage: Vec::new(),
                 platform: "linux",
-                source: source.trim().into(),
+                source: if installation.is_some() {
+                    raw.into()
+                } else {
+                    String::new()
+                },
                 boot: boot.trim().into(),
                 name: name.trim().into(),
                 hardware,
-                installation: identity_claim(
-                    api::HostIdentityKind::InstallationId,
-                    "linux/machine-id",
-                    &source,
-                )?,
+                installation,
             })
         }
         "windows" => {
-            let result = ps(runner, WINDOWS_IDENTITY_SOURCE, "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $os=Get-CimInstance Win32_OperatingSystem -Property LastBootUpTime; $cs=Get-CimInstance Win32_ComputerSystemProduct -Property Name,UUID; @{source=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography').MachineGuid; boot=$os.LastBootUpTime.ToUniversalTime().ToString('o'); name=$cs.Name; hardware=$cs.UUID} | ConvertTo-Json -Compress").await?;
+            let result = ps(runner, WINDOWS_IDENTITY_SOURCE, "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $os=Get-CimInstance Win32_OperatingSystem -Property LastBootUpTime; $cs=Get-CimInstance Win32_ComputerSystemProduct -Property Name,UUID; $guid=Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography' -ErrorAction SilentlyContinue; @{source=$guid.MachineGuid; boot=$os.LastBootUpTime.ToUniversalTime().ToString('o'); name=$cs.Name; hardware=$cs.UUID} | ConvertTo-Json -Compress").await?;
             windows_identity(&result)
         }
         _ => Err("Native platform is not supported".into()),
@@ -270,6 +315,9 @@ pub(super) fn failure_status(error: &str) -> &'static str {
     }
 }
 pub(super) async fn collect(runner: &mut Runner, report: &mut api::HostReport) -> Result<()> {
+    if let Err(error) = capacity::collect(runner, report).await {
+        coverage(report, "execution-capacity", failure_status(&error), &error);
+    }
     let mut excluded = std::collections::BTreeSet::new();
     let interfaces = match report.platform.as_str() {
         "macos" => mac_interfaces(runner, report, &mut excluded).await,

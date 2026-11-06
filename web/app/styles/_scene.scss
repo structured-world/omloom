@@ -1,0 +1,40 @@
+@use 'tokens' as t;
+.representation-controls { display:flex;gap:t.$space*2;margin-block:12px; }
+.physical-scene { min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:24px;overflow:hidden; }
+.scene-heading { display:flex;align-items:start;justify-content:space-between;gap:16px;padding:20px; }
+.scene-heading h2 { margin-bottom:4px; }
+.scene-heading p { margin:0;max-width:64ch;color:var(--ink-soft); }
+.scene-root { display:flex;gap:12px;align-items:center;padding:0 20px 16px; }
+.scene-root select { min-width:0;max-width:100%; }
+.scene-stage { position:relative;height:480px;min-height:280px;isolation:isolate;background:#f3f7f5; }
+.scene-stage canvas { display:block;width:100%;height:100%;touch-action:none; }
+.scene-empty { position:absolute;inset:0;display:grid;place-content:center;text-align:center;margin:0;padding:32px;color:var(--ink-soft);pointer-events:none; }
+.scene-camera { display:flex;gap:8px;flex-wrap:wrap;padding:12px 20px;border-bottom:1px solid var(--line); }
+.scene-inspection { display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:20px; }
+.scene-inspection section { min-width:0; }
+.scene-inspection h3 { margin:0 0 8px; }
+.scene-inspection ul { list-style:none;max-height:240px;overflow:auto;padding:0;margin:0; }
+.scene-inspection li { display:flex;align-items:center;gap:8px;margin:4px 0; }
+.scene-inspection li span { font-size:12px;color:var(--ink-soft); }
+.physical-scene > [role=alert],.physical-scene > [role=status] { margin:12px 20px; }
+/* Desktop keeps the checkbox target in place for pointer and keyboard access. */
+@media (min-width:1101px) and (hover:hover) and (pointer:fine) {
+  .inventory td:first-child input[type=checkbox],.inventory th:first-child input[type=checkbox] { opacity:0; }
+  .inventory tr:hover td:first-child input[type=checkbox],.inventory tr:focus-within td:first-child input[type=checkbox],.inventory th:hover input[type=checkbox],.inventory th:focus-within input[type=checkbox],.selecting .inventory input[type=checkbox] { opacity:1; }
+}
+@media (max-width:700px) {
+  .inventory tbody tr { grid-template-columns:minmax(0,1fr); }
+  .inventory tbody td { grid-column:1; }
+  .inventory tbody td:first-child,.phone-list-tools .select-page { display:none; }
+  .selecting .inventory tbody tr { grid-template-columns:32px minmax(0,1fr); }
+  .selecting .inventory tbody td { grid-column:2; }
+  .selecting .inventory tbody td:first-child { display:block;grid-column:1; }
+  .selecting .phone-list-tools .select-page { display:flex; }
+  .inventory tbody .context-group { display:block; }
+  .inventory tbody .context-group td:first-child { display:block; }
+  .scene-stage { height:360px; }
+  .scene-heading { padding:16px;flex-wrap:wrap; }
+  .scene-root { display:grid;padding-inline:16px;gap:4px; }
+  .scene-inspection { grid-template-columns:1fr;padding:16px;gap:16px; }
+  .has-detail .physical-scene { display:none; }
+}

@@ -18,6 +18,7 @@ fn refreshed(store: &Store, basis: char) -> Result<Vec<wire::AssetRef>, Error> {
         Command::HostSources(api::HostSources {
             host: Some(accepted.targets[0].clone()),
             report: input.report.clone(),
+            ..Default::default()
         }),
     )?
     else {
@@ -217,6 +218,7 @@ fn refreshed_duplicate_correction_preserves_evidence_and_undo() -> TestResult {
         Command::HostSources(api::HostSources {
             host: Some(retained[0].clone()),
             report: input.report.clone(),
+            ..Default::default()
         }),
     )?
     else {

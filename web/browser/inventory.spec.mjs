@@ -301,6 +301,7 @@ test('prefix correction reviews domain changes and allocation ownership before a
       const page = await browser.newPage({ viewport: { width, height: 900 } }); page.setDefaultTimeout(5000);
       try {
         await page.goto(`${server.url}/#/?view=1&kind=${m.AssetKind.PREFIX}`);
+        if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
         for (const name of [`Allocated subnet ${width}`, `Unresolved subnet ${width}`]) await page.getByRole('checkbox', { name: `Select ${name}`, exact: true }).check();
         await page.getByRole('button', { name: 'Compare identity', exact: true }).click();
         const dialog = page.getByRole('dialog');
@@ -354,6 +355,7 @@ for (const width of [1440, 390]) test(`prefix correction opens and accepts with 
       const page = await browser.newPage({ viewport: { width, height: 900 } }); page.setDefaultTimeout(5000);
       try {
         await page.goto(`${server.url}/#/?view=1&kind=${m.AssetKind.PREFIX}`);
+        if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
         for (const name of [`Retained ${width}`, `Duplicate ${width}`]) await page.getByRole('checkbox', { name: `Select ${name}`, exact: true }).check();
         await page.getByRole('button', { name: 'Compare identity', exact: true }).click();
         const dialog = page.getByRole('dialog');
@@ -733,6 +735,7 @@ for (const width of [1440, 390]) test(`known prefix refinement, contextual creat
     expect(retained.target).toEqual(prefix);
     await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) });
     await page.goto(`${server.url}/#/?view=1`);
+    if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
     await page.getByRole('checkbox', { name: 'Select Workshop subnet', exact: true }).check();
     await page.getByRole('checkbox', { name: /^Select 192\.0\.2\.0\/24 \([0-9a-f]{8}\)$/ }).check();
     await page.getByRole('button', { name: 'Compare identity', exact: true }).click();
@@ -836,6 +839,7 @@ test('known IP/CIDR review preserves drafts and atomically creates an unresolved
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         await page.screenshot({ path: `test-results/known-prefix-${width}.png`, fullPage: true });
         await page.goto(`${server.url}/#/?view=1`);
+        if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
         await expect(page.getByRole('checkbox', { name: /^Select 192\.0\.2\.0\/24 \([0-9a-f]{8}\)$/ })).toHaveCount(width === 1440 ? 1 : 2);
       } finally { await page.close(); }
     }
@@ -2798,6 +2802,7 @@ test('duplicate installation review maps only selected layers on desktop and pho
         const accepted=await rpc({oneofKind:'hostImport',hostImport:m.HostImport.create({preview:prepared.preview.id})});targets.push(accepted.mutation.targets);
       }
       await page.setViewportSize({width,height:900});await page.goto(`${server.url}/#/?view=2&search=${encodeURIComponent(prefix)}`);
+      if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
       for(const side of ['left','right'])await page.getByRole('checkbox',{name:`Select ${prefix} ${side}`,exact:true}).check();
       await page.getByRole('button',{name:'Compare identity',exact:true}).click();const dialog=page.getByRole('dialog');
       await dialog.getByRole('button',{name:'Plan identity correction',exact:true}).click();await dialog.getByRole('radio',{name:'Duplicate records of the same hardware and installation',exact:true}).check();await dialog.getByRole('button',{name:'Continue',exact:true}).click();
@@ -2853,6 +2858,7 @@ test('identity comparison keeps two selected machines distinct on desktop and ph
       expect(before.page.total).toBe(2n);
       await page.setViewportSize({ width, height: 900 });
       await page.goto(`${server.url}/#/?view=2&search=${encodeURIComponent(prefix)}`);
+      if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
       await page.getByRole('checkbox', { name: `Select ${prefix} left`, exact: true }).check();
       await page.getByRole('checkbox', { name: `Select ${prefix} right`, exact: true }).check();
       await page.getByRole('button', { name: 'Compare identity', exact: true }).click();
@@ -4087,6 +4093,7 @@ test('mutations reset ordinary and local continuations on desktop and phone', as
       await page.setViewportSize({ width, height: 900 });
       await page.goto(server.url);
       await expect(page.getByRole('button', { name: '+ Create resource', exact: true })).toBeEnabled();
+      if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
       // The previous page stays visible while its replacement loads, but cannot be selected.
       let held = false;
       const resumed = new Promise(resolve => { release = resolve; });
@@ -4503,6 +4510,13 @@ test('inventory choices apply together, cancel cleanly and keep the list compact
   try {
     await page.setViewportSize({ width: 1024, height: 768 });
     await page.goto(server.url);
+    // Medium-width layouts keep secondary actions reachable without pushing
+    // the first resource below the working area.
+    await expect(page.getByRole('button', { name: 'Import CSV', exact: true })).toBeHidden();
+    await page.getByRole('button', { name: 'More', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Import CSV', exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('button', { name: 'More', exact: true })).toHaveAttribute('aria-expanded', 'false');
     await create(page, 'Rack host');
     await create(page, 'Build guest', 'VIRTUAL_MACHINE');
     await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
@@ -5024,6 +5038,7 @@ test('dense containers paginate and restore the enclosing view on desktop and ph
     const root=`${server.url}/#/?view=2&search=Dense&sort=name&desc=1&columns=name,serial`;
     for(const width of [1440,390]){
       await page.setViewportSize({width,height:844});await page.goto(root);
+      if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
       await page.getByRole('checkbox',{name:'Select Dense chassis',exact:true}).check();
       await page.getByRole('button',{name:'Dense chassis',exact:true}).click();
       const details=page.getByRole('region',{name:'Resource details',exact:true});
@@ -5062,6 +5077,20 @@ test('phone inventory opens a dedicated detail and returns to the same search', 
     for (const name of ['Field node A', 'Field node B', 'Field node C', 'Field node D']) await create(page, name);
     await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
     await page.setViewportSize({ width: 390, height: 844 });
+    // Navigation and actions use one control template, even across the two
+    // layout containers. A page-specific override must not change their shape.
+    const controls = [
+      page.getByRole('navigation', { name: 'Views' }).getByRole('button', { name: 'Overview', exact: true }),
+      page.getByRole('button', { name: '+ Create resource', exact: true }),
+      page.getByRole('button', { name: 'More', exact: true }),
+    ];
+    const styles = await Promise.all(controls.map(control => control.evaluate(element => {
+      const style = getComputedStyle(element);
+      return { radius: style.borderRadius, size: style.fontSize, weight: style.fontWeight, height: element.getBoundingClientRect().height };
+    })));
+    expect(styles[0]).toEqual(styles[1]);
+    expect(styles[1]).toEqual(styles[2]);
+    expect(styles[0].height).toBeGreaterThanOrEqual(44);
     await expect(page.getByRole('button', { name: 'Import CSV', exact: true })).toBeHidden();
     await page.getByRole('button', { name: 'More', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Import CSV', exact: true })).toBeVisible();
@@ -5071,6 +5100,8 @@ test('phone inventory opens a dedicated detail and returns to the same search', 
     expect((await page.locator('tbody tr').first().boundingBox()).y).toBeLessThan(560);
     await page.getByLabel('Search inventory').fill('Field');
     await page.getByRole('button', { name: 'Search', exact: true }).click();
+    await expect(page.locator('tbody input[type=checkbox]').first()).toBeHidden();
+    await page.getByRole('button',{name:'Select',exact:true}).click();
     await page.getByRole('checkbox', { name: 'Select Field router', exact: true }).check();
     await page.getByRole('button', { name: 'Field router', exact: true }).scrollIntoViewIfNeeded();
     const listPosition = await page.evaluate(() => scrollY);

@@ -57,6 +57,16 @@ pub(super) fn field_props(field: &wire::Field) -> Result<Properties> {
         (name, value),
     ]))
 }
+
+pub(super) fn subject_field_props(kind: i32, field: &wire::Field) -> Result<Properties> {
+    let mut properties = field_props(field)?;
+    if workspace::host_identity::matching::subject_kind(kind)
+        && let Some(probe) = workspace::host_identity::matching::descriptor(field)
+    {
+        properties.insert("claim".into(), text(probe));
+    }
+    Ok(properties)
+}
 pub(super) fn read_field(p: &Properties) -> Result<wire::Field> {
     let value = match number(p, "vtype")? {
         1 => field::Value::Text(string(p, "vtext")?),
@@ -309,7 +319,7 @@ impl Tx<'_> {
                 let changed = !previous.is_some_and(|p| field_matches(field, p));
                 self.validate_equipment_change(kind, field, kind_changed || changed)?;
                 if changed {
-                    let mut value = field_props(field)?;
+                    let mut value = subject_field_props(kind, field)?;
                     value.extend(props([
                         ("layer", text(layer)),
                         ("source", text(&evidence.source_id)),
@@ -520,7 +530,7 @@ impl Store {
             if same_claim {
                 continue;
             }
-            let mut p = field_props(field)?;
+            let mut p = subject_field_props(asset.kind, field)?;
             if asset.kind == wire::AssetKind::Container as i32
                 && matches!(
                     field.name.as_str(),

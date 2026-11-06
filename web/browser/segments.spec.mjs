@@ -110,6 +110,7 @@ for (const width of [1440, 390]) test(`selected VMs share and refine a segment a
     const nic = await create(m.AssetKind.INTERFACE, 'eth0', first);
     await page.setViewportSize({ width, height: 900 });
     await page.goto(`${url}/#/?view=3`);
+    if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
     await page.getByRole('checkbox', { name: 'Select Segment VM one', exact: true }).check();
     await page.getByRole('checkbox', { name: 'Select Segment VM two', exact: true }).check();
     await page.getByRole('button', { name: 'Record shared segment', exact: true }).click();
@@ -203,6 +204,7 @@ for (const width of [1440,390]) test(`CSV segment import and reviewed merge at $
     const kept=(await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.L2_DOMAIN,changes:[{name:'name',value:{oneofKind:'text',text:'Retained segment'}}]})})).mutation.targets[0];
     await rpc({oneofKind:'segment',segment:m.Segment.create({target:kept,participants:[{subject:vm}]})});
     await page.goto(`${url}/#/?view=1`);
+    if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
     await page.getByRole('checkbox',{name:new RegExp(`^Select l2 domain.*${imported.assetId.slice(-8)}`)}).check();
     await page.getByRole('checkbox',{name:'Select Retained segment',exact:true}).check();
     await page.getByRole('button',{name:'Compare identity',exact:true}).click();

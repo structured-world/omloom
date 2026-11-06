@@ -41,6 +41,14 @@ export interface Predicate {
  */
 export interface Query {
     /**
+     * Explicitly restrict this result to objects with current physical-field
+     * read permission, before count and pagination. Used for automatic scene
+     * expansion; grants are still derived by the server, never supplied here.
+     *
+     * @generated from protobuf field: bool require_physical_read = 17
+     */
+    requirePhysicalRead: boolean;
+    /**
      * User-selected presentation; it never grants access or changes adoption.
      *
      * @generated from protobuf field: omloom.workspace.v1.View view = 1
@@ -2272,6 +2280,8 @@ export interface HostReport {
     platform: string;
     /**
      * Source installation evidence, not authenticated machine identity or a grant.
+     * Empty when unavailable: each finding requires new explicit matching or
+     * separate adoption. Names, configuration and boot sessions are no substitute.
      *
      * @generated from protobuf field: string source_basis = 3
      */
@@ -2549,6 +2559,21 @@ export interface FindIdentityCandidates {
      * @generated from protobuf field: omloom.v1.AssetKind kind = 3
      */
     kind: AssetKind;
+    /**
+     * Explicit pre-adoption comparison of this bounded finding. Mutually exclusive
+     * with target and claims. Kind above supplies a reviewed physical/VM type
+     * only for an unclassified execution host. Similarity never establishes identity.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.HostFinding finding = 4
+     */
+    finding?: HostFinding;
+    /**
+     * Server-issued continuation bound to this input, working context, authority
+     * and current revision. Omit for the first page; stale continuations fail.
+     *
+     * @generated from protobuf field: optional string cursor = 5
+     */
+    cursor?: string;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.IdentityCandidates
@@ -2560,6 +2585,49 @@ export interface IdentityCandidates {
      * @generated from protobuf field: repeated omloom.workspace.v1.Item items = 1
      */
     items: Item[];
+    /**
+     * Explanations in the same order as items for descriptive lookup. Existing
+     * exact-claim lookup omits these. Values obey current field disclosure rights.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.IdentityCandidateExplanation explanations = 2
+     */
+    explanations: IdentityCandidateExplanation[];
+    /**
+     * Server-issued continuation when more permitted candidates remain.
+     *
+     * @generated from protobuf field: optional string next = 3
+     */
+    next?: string;
+    /**
+     * Server snapshot revision used for this comparison. A subsequent import
+     * preview supplies it as WorkingContext.expected, never a client-derived stamp.
+     *
+     * @generated from protobuf field: uint64 revision = 4
+     */
+    revision: bigint;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.IdentityCandidateExplanation
+ */
+export interface IdentityCandidateExplanation {
+    /**
+     * Permitted same-layer evidence supporting comparison, not authentication.
+     *
+     * @generated from protobuf field: repeated string matches = 1
+     */
+    matches: string[];
+    /**
+     * Material incompatible claims, never outweighed by generic similarities.
+     *
+     * @generated from protobuf field: repeated string conflicts = 2
+     */
+    conflicts: string[];
+    /**
+     * Missing or unavailable comparison evidence. Absence is not disagreement.
+     *
+     * @generated from protobuf field: repeated string unknowns = 3
+     */
+    unknowns: string[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.ResolveIdentity
@@ -2916,6 +2984,31 @@ export interface HostSources {
      * @generated from protobuf field: omloom.workspace.v1.HostReport report = 2
      */
     report?: HostReport;
+    /**
+     * Optional bounded candidate check for one selected anonymous source. Omit
+     * report in this mode; the server derives current custody and scope itself.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.HostSourceProbe probe = 3
+     */
+    probe?: HostSourceProbe;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.HostSourceProbe
+ */
+export interface HostSourceProbe {
+    /**
+     * Server-issued selected source reference, never a caller identity or grant.
+     *
+     * @generated from protobuf field: string source_ref = 1
+     */
+    sourceRef: string;
+    /**
+     * Current candidate incarnations already shown by search, at most 25. This
+     * selects work only; source custody and host membership are checked server-side.
+     *
+     * @generated from protobuf field: repeated omloom.v1.AssetRef targets = 2
+     */
+    targets: AssetRef[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.HostSource
@@ -2939,6 +3032,13 @@ export interface HostSource {
      * @generated from protobuf field: repeated omloom.workspace.v1.HostSelection matches = 3
      */
     matches: HostSelection[];
+    /**
+     * Permitted probe targets with existing custody in this selected source and
+     * host. These are eligible choices, not confirmed matches or new adoption.
+     *
+     * @generated from protobuf field: repeated omloom.v1.AssetRef matchable_targets = 4
+     */
+    matchableTargets: AssetRef[];
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.HostSourceOptions
@@ -5068,6 +5168,67 @@ export interface PhysicalRead {
     after?: string;
 }
 /**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalSceneQuery
+ */
+export interface PhysicalSceneQuery {
+    /**
+     * User-visible exact incarnations to reproject, at most 128 distinct subjects.
+     * The first subject selects the local coordinate frame, not a site placement.
+     * These select work, not authority; current object, field and scope rights apply.
+     *
+     * @generated from protobuf field: repeated omloom.v1.AssetRef subjects = 1
+     */
+    subjects: AssetRef[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalPortAnchorEdit
+ */
+export interface PhysicalPortAnchorEdit {
+    /**
+     * UUID of an existing HasPort relation chosen by the caller. The server
+     * derives both endpoints and their current incarnations and authority.
+     *
+     * @generated from protobuf field: string binding_id = 1
+     */
+    bindingId: string;
+    /**
+     * Measured port envelope in the owning equipment's micrometre coordinate
+     * frame. This records geometry only, never creates ownership or connectivity.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalVolume volume = 2
+     */
+    volume?: PhysicalVolume;
+    /**
+     * Positive binding revision reviewed by the caller; checked before mutation.
+     *
+     * @generated from protobuf field: uint64 expected_binding_revision = 3
+     */
+    expectedBindingRevision: bigint;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.PhysicalSceneConnection
+ */
+export interface PhysicalSceneConnection {
+    /**
+     * Current permitted cable identity; no hidden endpoint or route is implied.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef cable = 1
+     */
+    cable?: AssetRef;
+    /**
+     * Current permitted port in the explicitly selected scene population.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef port = 2
+     */
+    port?: AssetRef;
+    /**
+     * Source-qualified named cable end whose actual binding is still current.
+     *
+     * @generated from protobuf field: string end_key = 3
+     */
+    endKey: string;
+}
+/**
  * @generated from protobuf message omloom.workspace.v1.PhysicalPlanKey
  */
 export interface PhysicalPlanKey {
@@ -5194,6 +5355,8 @@ export interface PhysicalCompletion {
 export interface PhysicalOccupancy {
     /**
      * Current installed placement, independent of the reservation's expiry.
+     * In a scene projection, also carries measured HasPort geometry with the
+     * port as item and its owning equipment as enclosure, not another installation.
      *
      * @generated from protobuf field: omloom.workspace.v1.PhysicalPlacement placement = 1
      */
@@ -5212,7 +5375,7 @@ export interface PhysicalOccupancy {
      */
     revision: bigint;
     /**
-     * Exact current installed binding, disclosed only with relationship access on
+     * Exact current placement/HasPort binding, disclosed only with relationship access on
      * both endpoints. Absence supplies no permission to guess its identity/revision.
      *
      * @generated from protobuf field: optional omloom.v1.Relation binding = 4
@@ -5394,6 +5557,25 @@ export interface Physical {
          * @generated from protobuf field: omloom.workspace.v1.PhysicalReplacementQualityQuery replacement_quality = 19
          */
         replacementQuality: PhysicalReplacementQualityQuery;
+    } | {
+        oneofKind: "scene";
+        /**
+         * Read bounded current geometry and actual connections for explicit visible
+         * subjects in one snapshot. No recursive expansion, layout or inventory
+         * writes occur. Adjacent actual cables are independently authorized.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PhysicalSceneQuery scene = 20
+         */
+        scene: PhysicalSceneQuery;
+    } | {
+        oneofKind: "portAnchor";
+        /**
+         * Refine a measured port anchor on an existing ownership binding using
+         * the ordinary current-pose store. No placement or cable effect occurs.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PhysicalPortAnchorEdit port_anchor = 21
+         */
+        portAnchor: PhysicalPortAnchorEdit;
     } | {
         oneofKind: undefined;
     };
@@ -5763,6 +5945,21 @@ export interface PhysicalOffers {
  * @generated from protobuf message omloom.workspace.v1.PhysicalView
  */
 export interface PhysicalView {
+    /**
+     * Server-qualified assemblies with exactly two accepted named ends, both
+     * currently attached to visible scene ports. Omission conveys no hidden end
+     * count or disconnection. Clients cannot derive this from filtered attachments.
+     *
+     * @generated from protobuf field: repeated omloom.v1.AssetRef two_end_cables = 17
+     */
+    twoEndCables: AssetRef[];
+    /**
+     * Only actual named-end attachments inside the explicit scene selection;
+     * omitted endpoints remain unknown or outside this projection, not loose.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.PhysicalSceneConnection scene_connections = 16
+     */
+    sceneConnections: PhysicalSceneConnection[];
     /**
      * Explicitly requested current replacement hypothesis, without durable writes.
      *
@@ -7460,6 +7657,7 @@ export const Predicate = new Predicate$Type();
 class Query$Type extends MessageType<Query> {
     constructor() {
         super("omloom.workspace.v1.Query", [
+            { no: 17, name: "require_physical_read", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
             { no: 1, name: "view", kind: "enum", T: () => ["omloom.workspace.v1.View", View, "VIEW_"] },
             { no: 2, name: "roots", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AssetRef },
             { no: 3, name: "kinds", kind: "enum", repeat: 1 /*RepeatType.PACKED*/, T: () => ["omloom.v1.AssetKind", AssetKind, "ASSET_KIND_"] },
@@ -8504,7 +8702,9 @@ class FindIdentityCandidates$Type extends MessageType<FindIdentityCandidates> {
         super("omloom.workspace.v1.FindIdentityCandidates", [
             { no: 1, name: "target", kind: "message", T: () => AssetRef },
             { no: 2, name: "claims", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostIdentityClaim },
-            { no: 3, name: "kind", kind: "enum", T: () => ["omloom.v1.AssetKind", AssetKind, "ASSET_KIND_"] }
+            { no: 3, name: "kind", kind: "enum", T: () => ["omloom.v1.AssetKind", AssetKind, "ASSET_KIND_"] },
+            { no: 4, name: "finding", kind: "message", T: () => HostFinding },
+            { no: 5, name: "cursor", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
         ]);
     }
 }
@@ -8516,7 +8716,10 @@ export const FindIdentityCandidates = new FindIdentityCandidates$Type();
 class IdentityCandidates$Type extends MessageType<IdentityCandidates> {
     constructor() {
         super("omloom.workspace.v1.IdentityCandidates", [
-            { no: 1, name: "items", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Item }
+            { no: 1, name: "items", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Item },
+            { no: 2, name: "explanations", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => IdentityCandidateExplanation },
+            { no: 3, name: "next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
         ]);
     }
 }
@@ -8524,6 +8727,20 @@ class IdentityCandidates$Type extends MessageType<IdentityCandidates> {
  * @generated MessageType for protobuf message omloom.workspace.v1.IdentityCandidates
  */
 export const IdentityCandidates = new IdentityCandidates$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class IdentityCandidateExplanation$Type extends MessageType<IdentityCandidateExplanation> {
+    constructor() {
+        super("omloom.workspace.v1.IdentityCandidateExplanation", [
+            { no: 1, name: "matches", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "conflicts", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "unknowns", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.IdentityCandidateExplanation
+ */
+export const IdentityCandidateExplanation = new IdentityCandidateExplanation$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class ResolveIdentity$Type extends MessageType<ResolveIdentity> {
     constructor() {
@@ -8726,7 +8943,8 @@ class HostSources$Type extends MessageType<HostSources> {
     constructor() {
         super("omloom.workspace.v1.HostSources", [
             { no: 1, name: "host", kind: "message", T: () => AssetRef },
-            { no: 2, name: "report", kind: "message", T: () => HostReport }
+            { no: 2, name: "report", kind: "message", T: () => HostReport },
+            { no: 3, name: "probe", kind: "message", T: () => HostSourceProbe }
         ]);
     }
 }
@@ -8735,12 +8953,26 @@ class HostSources$Type extends MessageType<HostSources> {
  */
 export const HostSources = new HostSources$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class HostSourceProbe$Type extends MessageType<HostSourceProbe> {
+    constructor() {
+        super("omloom.workspace.v1.HostSourceProbe", [
+            { no: 1, name: "source_ref", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "targets", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AssetRef }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.HostSourceProbe
+ */
+export const HostSourceProbe = new HostSourceProbe$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class HostSource$Type extends MessageType<HostSource> {
     constructor() {
         super("omloom.workspace.v1.HostSource", [
             { no: 1, name: "reference", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 2, name: "label", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 3, name: "matches", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostSelection }
+            { no: 3, name: "matches", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => HostSelection },
+            { no: 4, name: "matchable_targets", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AssetRef }
         ]);
     }
 }
@@ -9728,6 +9960,46 @@ class PhysicalRead$Type extends MessageType<PhysicalRead> {
  */
 export const PhysicalRead = new PhysicalRead$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class PhysicalSceneQuery$Type extends MessageType<PhysicalSceneQuery> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalSceneQuery", [
+            { no: 1, name: "subjects", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AssetRef }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalSceneQuery
+ */
+export const PhysicalSceneQuery = new PhysicalSceneQuery$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalPortAnchorEdit$Type extends MessageType<PhysicalPortAnchorEdit> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalPortAnchorEdit", [
+            { no: 1, name: "binding_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "volume", kind: "message", T: () => PhysicalVolume },
+            { no: 3, name: "expected_binding_revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalPortAnchorEdit
+ */
+export const PhysicalPortAnchorEdit = new PhysicalPortAnchorEdit$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class PhysicalSceneConnection$Type extends MessageType<PhysicalSceneConnection> {
+    constructor() {
+        super("omloom.workspace.v1.PhysicalSceneConnection", [
+            { no: 1, name: "cable", kind: "message", T: () => AssetRef },
+            { no: 2, name: "port", kind: "message", T: () => AssetRef },
+            { no: 3, name: "end_key", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.PhysicalSceneConnection
+ */
+export const PhysicalSceneConnection = new PhysicalSceneConnection$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class PhysicalPlanKey$Type extends MessageType<PhysicalPlanKey> {
     constructor() {
         super("omloom.workspace.v1.PhysicalPlanKey", [
@@ -9836,7 +10108,9 @@ class Physical$Type extends MessageType<Physical> {
             { no: 16, name: "offers", kind: "message", oneof: "action", T: () => PhysicalOffers },
             { no: 17, name: "receive", kind: "message", oneof: "action", T: () => PhysicalMaterialReceipt },
             { no: 18, name: "review_replacement", kind: "message", oneof: "action", T: () => PhysicalReplacementReview },
-            { no: 19, name: "replacement_quality", kind: "message", oneof: "action", T: () => PhysicalReplacementQualityQuery }
+            { no: 19, name: "replacement_quality", kind: "message", oneof: "action", T: () => PhysicalReplacementQualityQuery },
+            { no: 20, name: "scene", kind: "message", oneof: "action", T: () => PhysicalSceneQuery },
+            { no: 21, name: "port_anchor", kind: "message", oneof: "action", T: () => PhysicalPortAnchorEdit }
         ]);
     }
 }
@@ -9990,6 +10264,8 @@ export const PhysicalOffers = new PhysicalOffers$Type();
 class PhysicalView$Type extends MessageType<PhysicalView> {
     constructor() {
         super("omloom.workspace.v1.PhysicalView", [
+            { no: 17, name: "two_end_cables", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AssetRef },
+            { no: 16, name: "scene_connections", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalSceneConnection },
             { no: 14, name: "replacement_hypothesis", kind: "message", T: () => PhysicalReplacementHypothesis },
             { no: 15, name: "replacement_quality", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalReplacementQuality },
             { no: 1, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },

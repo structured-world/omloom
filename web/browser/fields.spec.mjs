@@ -47,6 +47,7 @@ for (const width of [1440, 390]) test(`integer forms preserve empty and exact in
     }
     // Bulk edits use the same typed contract and leave every unselected field intact.
     await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
+    if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
     await page.getByRole('checkbox', { name: 'Select Typed resource', exact: true }).check();
     await page.getByRole('button', { name: 'Review bulk change', exact: true }).click();
     dialog = page.getByRole('dialog');

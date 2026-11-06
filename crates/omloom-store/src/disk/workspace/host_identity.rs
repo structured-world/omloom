@@ -1,6 +1,7 @@
 //! Current layer-specific source claims. Equality supplies comparison evidence,
 //! never an identity decision, a grant or permission to retarget an operation.
 use super::*;
+pub(in crate::disk) mod matching;
 
 const MAX_CLAIMS: usize = 4;
 const FIELD: &str = "identity_evidence";
@@ -338,7 +339,14 @@ impl Store {
         request: api::FindIdentityCandidates,
         working: &api::WorkingContext,
     ) -> Result<api::Reply> {
+        if request.finding.is_some() {
+            return self.workspace_descriptive_candidates(context, request, working);
+        }
+        if request.cursor.is_some() {
+            return Err(Error::Invalid);
+        }
         let tx = self.begin()?;
+        let revision = number(&tx.root, "revision")?;
         let selection = tx.selection(context, working, false)?;
         let (target, kind, claims) = if let Some(reference) = &request.target {
             if !request.claims.is_empty() || request.kind != 0 {
@@ -378,7 +386,11 @@ impl Store {
         if claims.is_empty() {
             tx.commit()?;
             return Ok(reply(api::reply::Result::IdentityCandidates(
-                api::IdentityCandidates { items: Vec::new() },
+                api::IdentityCandidates {
+                    items: Vec::new(),
+                    revision,
+                    ..Default::default()
+                },
             )));
         }
         let mut values = HashMap::from([
@@ -439,7 +451,11 @@ impl Store {
         }
         tx.commit()?;
         Ok(reply(api::reply::Result::IdentityCandidates(
-            api::IdentityCandidates { items },
+            api::IdentityCandidates {
+                items,
+                revision,
+                ..Default::default()
+            },
         )))
     }
     pub(super) fn workspace_compare_host_identity(

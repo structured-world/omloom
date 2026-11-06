@@ -729,8 +729,10 @@ External commands have a ten-second deadline within the ninety-second collection
 budget. A timed-out child is terminated and reaped; diagnostics identify the
 executable and, for Windows PowerShell sources, the module and native cmdlets,
 without dumping scripts or their output. Timeouts leave coverage unavailable.
-Optional source failures remain in the report's coverage. If required identity
-or interface evidence cannot be collected, the command reports collection
+Optional source failures remain in the report's coverage. Permanent hardware and
+installation identifiers are optional; their absence produces partial identity
+coverage, not an invented fingerprint. The collector still checks boot consistency
+before publishing. If required boot or interface evidence cannot be collected, the command reports collection
 unavailable and exits successfully without writing a report or replacing an
 existing file. This is not a verified inventory or an empty scan. Invalid
 arguments, malformed report frames and file publication errors remain errors.
@@ -742,11 +744,55 @@ Names, matching addresses, process names and Compose labels do not establish
 continuity, ownership or permission. Review the proposed changes before acceptance.
 The same flow works on a phone, including selecting a report from its file picker.
 
+### Reports without permanent identifiers
+
+An empty `HostReport.source_basis` means continuity is unavailable. Each selected
+finding must be explicitly matched or separately adopted. A later package starts
+unresolved even if its filename, boot, name, addresses or configuration are equal.
+An unselected finding creates no permanent unknown resource. Current manually
+confirmed source custody is keyed by the selected resource incarnation, rather
+than creating a new binding for every package. Retry an uncertain acceptance with
+the same preview receipt, as described below.
+
+**Compare possible matches** queries the current authorized working context.
+Results show same-layer supporting evidence, differences and unknowns, with a
+revision-bound continuation for further candidates. Select up to two candidates
+to compare against the report before confirming an exact resource. Similar fleet
+configurations remain ambiguous. A shared installation UUID can be cloned; a
+factory MAC concerns an interface, not the chassis. There is no probability score,
+automatic first-result choice, permission transfer or implied remote access.
+Use manual search or leave the finding unresolved when the available evidence
+cannot distinguish machines. Duplicate accepted records still use the separate
+identity-correction workflow.
+
+Comparison and manual search return their inventory revision. Preparing an
+import rechecks that basis; an intervening change preserves the draft but
+requires another comparison. Candidate retrieval is paginated, with bounded
+upward membership checks for selected roots and field authorization before
+comparison details are decoded. Exhausting a work bound is an explicit error,
+not evidence that no matching resource exists.
+
+The native profile can additionally report OS-visible logical CPU count,
+visible memory in bytes and a reported CPU model. These describe the installation's
+execution context, not a unique host ID, physical installed RAM certification or
+capacity reservation. Missing values remain absent. Selected current fields are
+probed independently through the existing index; there is no combined fingerprint,
+similarity table, candidate history or writes caused by opening a comparison.
+Current field projections are rebuilt resumably on upgrade.
+
 For a host already imported, open its device or VM card and choose **Load
 observation package**. Select an existing compatible source and confirm that the
 package describes this host and the selected installation. Source references are
 server-owned; no source-name retyping or renaming is required. Only permitted,
 already mapped resources can be selected. New findings require separate adoption.
+If no compatible source can establish continuity, choose **Match this package
+manually**. Confirm the existing host and each selected finding explicitly through
+the same import workflow. This records current observations without renaming or
+replacing an existing qualified source, and without adopting another chassis.
+During anonymous refresh, candidate pages are checked against the chosen source's
+existing custody and this host before choices are offered. This bounded read sends
+only the selected source reference and candidate identities, not the report again.
+Eligibility never confirms the match automatically or permits new adoption.
 Source discovery considers at most 128 host bindings, each matching at most the
 package's 128 findings, within the shared 512 KiB encoded reply ceiling. Exceeding
 an aggregate reply bound returns a limit error rather than silently omitting sources.
@@ -882,6 +928,49 @@ requires current rights and no subsequent accepted mutation; otherwise prepare a
 fresh correction. Old references resolve read-only to the canonical incarnation
 only when both original and canonical rights permit it. They never become write
 or execution aliases.
+
+## Inspect current infrastructure in 3D
+
+Choose **3D scene** in Hardware or Overview (inside **More** on a phone), then
+choose an enclosure from the current selection. The scene uses current accepted
+physical definitions, placement envelopes and port ownership. **Show components**
+reads one page of that resource's local children; **More components** explicitly
+continues it. The scene admits at most 128 selected resources and 256 selected
+bindings. It never loads an entire site just to draw one rack.
+Automatic expansion requests `Query.require_physical_read`, applying current
+physical-field permission before count and pagination. Ordinary inventory can
+still show a permitted label without geometry; an explicit unauthorized scene
+subject remains an error rather than being silently redacted.
+
+Rotate, zoom and pan the view, select an object or use the equivalent resource
+list, then **Open resource** for its ordinary card. **Return to table** preserves
+the inventory journey. If graphics are unavailable or the context is lost, the
+resource list remains available. A viewport test does not qualify a native phone
+GPU or webview.
+
+Only recorded geometry is drawn. Unknown or ambiguous positions stay in the list;
+the renderer does not assign plausible dimensions or invent empty space. The
+selected enclosure and bodies whose measured children have been expanded use
+a labeled translucent cutaway. Their surfaces do not intercept child selection;
+the enclosing resources remain selectable in the list. Closed bodies remain
+opaque. This is an occlusion treatment, not a confidence score.
+
+`Physical.scene` reprojects explicit current incarnations in one read snapshot.
+Current named cable ends may add up to 64 independently authorized cable labels,
+but no remote unselected port. A dashed straight line requires exactly two visible,
+located actual ends. It is a connection diagram, not a surveyed route, fit proof
+or service-health claim. Breakout assemblies are not paired by guesswork.
+
+`Physical.port_anchor` records a measured port envelope against a reviewed
+`HasPort` binding in its owner's coordinate frame. It uses the same current-pose
+store as installed geometry, checks both objects' physical rights and the current
+binding, and leaves ownership and connectivity unchanged. Repeating unchanged
+geometry from the same reporter adds no record or audit entry. Removing or moving the binding removes
+its old pose. Missing coordinates remain unknown.
+
+On a phone, use **Select** to show row checkboxes, then **Cancel selection** to
+clear selection and reclaim the column. Tablet lists keep them visible. Desktop
+lists reveal them on row hover, keyboard focus or while a selection is active.
 
 ## Record a VM's new hypervisor
 

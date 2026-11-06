@@ -542,6 +542,9 @@ impl Store {
             "a.parent='assets'".to_owned(),
             visible_clause(context, None, &mut values),
         ];
+        if query.require_physical_read {
+            clauses.push(visible_clause(context, Some("physical"), &mut values));
+        }
         clauses.push(format!(
             "a.adoption={}",
             parameter(
@@ -2155,7 +2158,7 @@ impl Tx<'_> {
             {
                 continue;
             }
-            let mut data = super::super::inventory::field_props(field)?;
+            let mut data = super::super::inventory::subject_field_props(write.kind, field)?;
             data.extend(props([
                 ("layer", text("intent")),
                 ("authority", text(&authority)),
@@ -2356,6 +2359,9 @@ pub(super) fn network_column(name: &str) -> bool {
 }
 pub(super) fn validate_column(name: &str, definitions: &[api::Definition]) -> Result<()> {
     if [
+        "cpu_model",
+        "logical_cpus",
+        "visible_memory_bytes",
         "name",
         "description",
         "serial",
@@ -2413,13 +2419,17 @@ pub(super) fn validate_predicate(
                 if predicate.field == "vrid"
                     || predicate.field == "vlan_id"
                     || predicate.field == "vlan_tag"
-                    || predicate.field == "prefix_length" => {}
+                    || predicate.field == "prefix_length"
+                    || predicate.field == "logical_cpus"
+                    || predicate.field == "visible_memory_bytes" => {}
             Some(field::Value::Text(s))
                 if s.len() <= 2048
                     && predicate.field != "vrid"
                     && predicate.field != "vlan_id"
                     && predicate.field != "vlan_tag"
-                    && predicate.field != "prefix_length" => {}
+                    && predicate.field != "prefix_length"
+                    && predicate.field != "logical_cpus"
+                    && predicate.field != "visible_memory_bytes" => {}
             Some(field::Value::Clear(EXPLICIT_CLEAR)) if !network_column(&predicate.field) => {}
             _ => return Err(Error::Invalid),
         }

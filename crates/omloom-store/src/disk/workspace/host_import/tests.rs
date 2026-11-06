@@ -1,5 +1,28 @@
 use super::*;
 
+// A missing permanent subject ID must not discard useful local observations.
+// It supplies no continuity and is distinct from malformed supplied evidence.
+#[test]
+fn anonymous_report_is_valid_without_a_permanent_source_basis() {
+    let report = api::HostReport {
+        version: 1,
+        platform: "linux".into(),
+        boot_basis: "b".repeat(64),
+        observed_at: 100,
+        findings: vec![api::HostFinding {
+            key: "hardware".into(),
+            fields: vec![wire::Field {
+                name: "name".into(),
+                value: Some(wire::field::Value::Text("Observed host".into())),
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    assert!(validate_parts(&report, false).is_ok());
+    assert!(validate_parts(&report, true).is_ok());
+}
+
 // Reject a forged runtime type at report validation, before resolving targets
 // or attempting relation writes with installation-scoped authorization.
 #[test]

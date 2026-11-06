@@ -14,6 +14,7 @@ fn refresh(store: &Store, host: &wire::AssetRef) -> Result<api::HostImport, Erro
         Command::HostSources(api::HostSources {
             host: Some(host.clone()),
             report: request.report.clone(),
+            ..Default::default()
         }),
     )?
     else {
@@ -229,6 +230,7 @@ fn permitted_operator_refreshes_original_source_without_duplicate_mapping() -> T
         Command::HostSources(api::HostSources {
             host: Some(accepted.targets[0].clone()),
             report: request.report.clone(),
+            ..Default::default()
         }),
     )?
     else {
@@ -284,6 +286,7 @@ fn refresh_keeps_other_source_fields_and_rejects_old_collection() -> TestResult 
         Command::HostSources(api::HostSources {
             host: Some(accepted.targets[0].clone()),
             report: second.report.clone(),
+            ..Default::default()
         }),
     )?
     else {
@@ -437,6 +440,7 @@ fn source_options_and_refresh_do_not_cross_hidden_ownership_edges() -> TestResul
         Command::HostSources(api::HostSources {
             host: Some(accepted.targets[0].clone()),
             report: request.report.clone(),
+            ..Default::default()
         }),
     )?
     else {
@@ -479,6 +483,7 @@ fn source_options_require_interface_address_write_access() -> TestResult {
         Command::HostSources(api::HostSources {
             host: Some(accepted.targets[0].clone()),
             report: request.report.clone(),
+            ..Default::default()
         }),
     )?
     else {
@@ -544,6 +549,7 @@ fn source_options_allow_each_sources_full_package() -> TestResult {
         Command::HostSources(api::HostSources {
             host: Some(accepted.targets[0].clone()),
             report: first.report,
+            ..Default::default()
         }),
     )?
     else {
@@ -573,6 +579,7 @@ fn source_options_exclude_sources_without_permitted_matches() -> TestResult {
         Command::HostSources(api::HostSources {
             host: Some(accepted.targets[0].clone()),
             report: host_import::draft().report,
+            ..Default::default()
         }),
     )?
     else {
@@ -611,6 +618,7 @@ fn source_options_require_identity_write_for_reported_claims() -> TestResult {
         Command::HostSources(api::HostSources {
             host: Some(accepted.targets[0].clone()),
             report: request.report.clone(),
+            ..Default::default()
         }),
     )?
     else {

@@ -1,0 +1,17 @@
+$space: 4px;
+$control-height: 44px;
+$control-radius: 999px;
+$control-inline: $space * 4;
+$control-font: 13px;
+$control-weight: 550;
+
+:root {
+  --space-1: #{$space};
+  --space-2: #{$space * 2};
+  --space-3: #{$space * 3};
+  --space-4: #{$space * 4};
+  --control-height: #{$control-height};
+  --control-radius: #{$control-radius};
+  --control-font: #{$control-font};
+  --control-inline: #{$control-inline};
+}

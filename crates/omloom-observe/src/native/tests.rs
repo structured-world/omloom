@@ -17,13 +17,14 @@ fn valid_windows_identity_preserves_its_typed_claims() -> Result<()> {
         hardware.digest,
         crate::digest("12345678-1234-1234-1234-123456789abc")
     );
+    let installation = identity.installation.ok_or("installation claim")?;
     assert_eq!(
-        identity.installation.kind,
+        installation.kind,
         api::HostIdentityKind::InstallationId as i32
     );
-    assert_eq!(identity.installation.namespace, "windows/machine-guid");
+    assert_eq!(installation.namespace, "windows/machine-guid");
     assert_eq!(
-        identity.installation.digest,
+        installation.digest,
         crate::digest("abcdef12-3456-7890-abcd-ef1234567890")
     );
     Ok(())
@@ -109,6 +110,10 @@ async fn readable_windows_tables_have_verified_coverage() -> Result<()> {
     };
     const INPUTS: &[(&str, &str)] = &[
         (
+            "Win32_ComputerSystem",
+            r#"{"cpus":8,"memory":17179869184,"model":"Fixture CPU"}"#,
+        ),
+        (
             "Get-NetIPAddress",
             r#"[{"InterfaceIndex":5,"InterfaceAlias":"Ethernet","IPAddress":"192.0.2.5","PrefixLength":24,"State":"Preferred"}]"#,
         ),
@@ -128,8 +133,14 @@ async fn readable_windows_tables_have_verified_coverage() -> Result<()> {
     let bytes = INPUTS.iter().map(|(_, output)| output.len()).sum::<usize>();
     let budget = 16 * 1024 * 1024;
     let mut runner = Runner::scripted(INPUTS, budget);
+    report.findings.push(finding(
+        "installation",
+        wire::AssetKind::SoftwareInstallation,
+        None,
+        "Windows fixture",
+    ));
     collect(&mut runner, &mut report).await?;
-    assert_eq!(runner.budget(), (4, budget - bytes));
+    assert_eq!(runner.budget(), (5, budget - bytes));
     let network = report.network.as_ref().expect("network");
     assert!(network.routes_complete);
     assert_eq!(network.routes.len(), 1);
@@ -212,19 +223,40 @@ async fn native_identity_observation_keeps_layers_separate() -> Result<()> {
             return Ok(());
         }
     };
-    assert!(!value.source.is_empty());
     assert!(!value.boot.is_empty());
-    assert_eq!(value.installation.namespace, namespace);
-    assert_eq!(
-        value.installation.kind,
-        api::HostIdentityKind::InstallationId as i32
-    );
-    assert_eq!(value.installation.digest.len(), 64);
+    if let Some(installation) = value.installation {
+        assert!(!value.source.is_empty());
+        assert_eq!(installation.namespace, namespace);
+        assert_eq!(
+            installation.kind,
+            api::HostIdentityKind::InstallationId as i32
+        );
+        assert_eq!(installation.digest.len(), 64);
+    } else {
+        assert!(value.source.is_empty());
+    }
     if let Some(hardware) = value.hardware {
         assert_eq!(hardware.kind, api::HostIdentityKind::HardwareUuid as i32);
         assert_eq!(hardware.quality, api::HostIdentityQuality::Reported as i32);
         assert_eq!(hardware.digest.len(), 64);
-        assert_ne!(hardware.namespace, value.installation.namespace);
+        assert_ne!(hardware.namespace, namespace);
+    }
+    Ok(())
+}
+
+// Unset, denied or placeholder permanent IDs leave a useful anonymous subject,
+// not a hostname/shape-derived replacement ID. A boot fence remains required.
+#[test]
+fn absent_windows_ids_do_not_reject_useful_observations() -> Result<()> {
+    for source in ["null", "\"\"", "\"00000000-0000-0000-0000-000000000000\""] {
+        let identity = windows_identity(&format!(
+            "{{\"source\":{source},\"boot\":\"boot-session\",\"name\":\"Same fleet model\",\"hardware\":null}}"
+        ))?;
+        assert!(identity.source.is_empty());
+        assert!(identity.installation.is_none());
+        assert!(identity.hardware.is_none());
+        assert_eq!(identity.name, "Same fleet model");
+        assert_eq!(identity.boot, "boot-session");
     }
     Ok(())
 }
@@ -279,4 +311,110 @@ fn installation_claims_do_not_collapse_into_hardware_identity() {
         )
         .is_err()
     );
+}
+
+// Equivalent UUID spellings must match without invalidating the native digest
+// already emitted for each installation namespace.
+#[test]
+fn installation_uuid_spellings_preserve_native_digests() {
+    let uuid = uuid::Uuid::parse_str("8d60c19a-489a-40c9-b381-d97e5d568df8").expect("fixture UUID");
+    for namespace in [
+        "linux/machine-id",
+        "windows/machine-guid",
+        "macos/apfs-volume",
+    ] {
+        let compact = installation_claim(namespace, &uuid.simple().to_string()).expect("compact");
+        let hyphenated = installation_claim(namespace, &uuid.to_string()).expect("hyphenated");
+        assert_eq!(compact.digest, hyphenated.digest, "{namespace}");
+        let native = if namespace == "linux/machine-id" {
+            uuid.simple().to_string()
+        } else {
+            uuid.to_string()
+        };
+        assert_eq!(compact.digest, super::super::digest(&native));
+    }
+}
+
+// Optional identity commands can fail independently. Their sanitized errors
+// must reach coverage instead of certifying a complete source basis.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn mac_identity_failure_preserves_source_coverage() -> Result<()> {
+    const INPUTS: &[(&str, &str)] = &[
+        ("unavailable-ioreg-fixture", ""),
+        (
+            "/usr/sbin/diskutil",
+            "Volume UUID: 8d60c19a-489a-40c9-b381-d97e5d568df8\n",
+        ),
+        ("/usr/sbin/sysctl", "same-boot"),
+        ("/usr/sbin/sysctl", "Fixture Mac"),
+    ];
+    let value = identity(&mut Runner::scripted(INPUTS, 16 * 1024 * 1024)).await?;
+    assert!(
+        value
+            .coverage
+            .iter()
+            .any(|c| c.module == "hardware-identity"
+                && c.status == "partial"
+                && c.detail.contains("ioreg"))
+    );
+    assert!(value.installation.is_some());
+    Ok(())
+}
+
+// A partial macOS basis must not introduce a new apparently qualified mapping
+// namespace; complete hardware/volume inputs retain the established source form.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn mac_incomplete_identity_is_anonymous() -> Result<()> {
+    const INPUTS: &[(&str, &str)] = &[
+        ("unavailable-ioreg-fixture", ""),
+        (
+            "/usr/sbin/diskutil",
+            "Volume UUID: 8d60c19a-489a-40c9-b381-d97e5d568df8\n",
+        ),
+        ("/usr/sbin/sysctl", "same-boot"),
+        ("/usr/sbin/sysctl", "Fixture Mac"),
+    ];
+    let value = identity(&mut Runner::scripted(INPUTS, 16 * 1024 * 1024)).await?;
+    assert!(value.source.is_empty());
+    const COMPLETE: &[(&str, &str)] = &[
+        (
+            "/usr/sbin/ioreg",
+            "\"IOPlatformUUID\" = \"8d60c19a-489a-40c9-b381-d97e5d568df8\"\n",
+        ),
+        (
+            "/usr/sbin/diskutil",
+            "Volume UUID: 18e80235-4cb2-4648-b710-7e327d577878\n",
+        ),
+        ("/usr/sbin/sysctl", "same-boot"),
+        ("/usr/sbin/sysctl", "Fixture Mac"),
+    ];
+    assert_eq!(
+        identity(&mut Runner::scripted(COMPLETE, 16 * 1024 * 1024))
+            .await?
+            .source,
+        "8d60c19a-489a-40c9-b381-d97e5d568df8/18e80235-4cb2-4648-b710-7e327d577878"
+    );
+    const MISSING_VOLUME: &[(&str, &str)] = &[
+        (
+            "/usr/sbin/ioreg",
+            "\"IOPlatformUUID\" = \"8d60c19a-489a-40c9-b381-d97e5d568df8\"\n",
+        ),
+        ("unavailable-diskutil-fixture", ""),
+        ("/usr/sbin/sysctl", "same-boot"),
+        ("/usr/sbin/sysctl", "Fixture Mac"),
+    ];
+    let value = identity(&mut Runner::scripted(MISSING_VOLUME, 16 * 1024 * 1024)).await?;
+    assert!(value.source.is_empty());
+    assert!(value.hardware.is_some());
+    assert!(
+        value
+            .coverage
+            .iter()
+            .any(|c| c.module == "installation-identity"
+                && c.status == "partial"
+                && c.detail.contains("diskutil"))
+    );
+    Ok(())
 }

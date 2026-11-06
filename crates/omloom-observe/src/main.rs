@@ -90,6 +90,7 @@ async fn collect_with(runner: &mut command::Runner) -> Result<api::HostReport> {
         name,
         hardware,
         installation: installation_claim,
+        coverage: identity_coverage,
     } = identity;
     let observed_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -100,8 +101,13 @@ async fn collect_with(runner: &mut command::Runner) -> Result<api::HostReport> {
     let mut report = api::HostReport {
         version: 1,
         platform: platform.into(),
-        source_basis: digest(&format!("omloom-native/1/{platform}/{source}")),
+        source_basis: if source.is_empty() {
+            String::new()
+        } else {
+            digest(&format!("omloom-native/1/{platform}/{source}"))
+        },
         boot_basis: digest(&boot),
+        coverage: identity_coverage,
         observed_at,
         ..Default::default()
     };
@@ -118,13 +124,21 @@ async fn collect_with(runner: &mut command::Runner) -> Result<api::HostReport> {
         "installation_kind",
         wire::InstallationKind::OperatingSystem.as_str_name(),
     ));
-    installation.identity.push(installation_claim);
+    installation.identity.extend(installation_claim);
     add(&mut report, installation)?;
     coverage(
         &mut report,
         "host",
-        "verified",
-        "Native execution-host and installation basis; review supplies physical/VM type; not authenticated identity",
+        if source.is_empty() {
+            "partial"
+        } else {
+            "verified"
+        },
+        if source.is_empty() {
+            "Permanent installation identity unavailable; confirm each finding manually; boot consistency is checked"
+        } else {
+            "Native execution-host and installation basis; review supplies physical/VM type; not authenticated identity"
+        },
     );
     report.network = Some(api::HostNetwork {
         observed_at,

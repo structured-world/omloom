@@ -23,6 +23,8 @@ mod power;
 mod rack_grid;
 #[path = "physical/reviews.rs"]
 mod reviews;
+#[path = "physical/scene.rs"]
+mod scene;
 #[path = "physical/shared_loads.rs"]
 mod shared_loads;
 

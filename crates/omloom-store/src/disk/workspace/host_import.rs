@@ -23,6 +23,37 @@ fn mapping(actor: &str, source: &str, basis: &str, key: &str) -> String {
     }
     format!("host-mapping/{:x}", hash.finalize())
 }
+fn manual_mapping(actor: &str, source: &str, target: AssetRef) -> String {
+    // Current manually confirmed source custody, not a permanent subject claim
+    // or a per-package record. Every anonymous package must supply the target.
+    mapping(
+        actor,
+        source,
+        &target.incarnation.to_string(),
+        &asset_key(target),
+    )
+}
+fn selected_mapping(
+    actor: &str,
+    request: &api::HostImport,
+    selected: &api::HostSelection,
+) -> Result<String> {
+    let report = request.report.as_deref().ok_or(Error::Invalid)?;
+    if report.source_basis.is_empty() {
+        Ok(manual_mapping(
+            actor,
+            &request.source,
+            parse_target(selected.target.as_ref())?,
+        ))
+    } else {
+        Ok(mapping(
+            actor,
+            &request.source,
+            &report.source_basis,
+            &selected.key,
+        ))
+    }
+}
 fn network_suffix(part: i32) -> Result<&'static str> {
     match api::HostNetworkPart::try_from(part).map_err(|_| Error::Invalid)? {
         api::HostNetworkPart::Sockets => Ok("sockets"),
@@ -44,7 +75,10 @@ fn validate_parts(report: &api::HostReport, refresh: bool) -> Result<()> {
     {
         return Err(Error::Limit);
     }
-    for basis in [&report.source_basis, &report.boot_basis] {
+    for (basis, optional) in [(&report.source_basis, true), (&report.boot_basis, false)] {
+        if optional && basis.is_empty() {
+            continue;
+        }
         if basis.len() != 64 || !basis.bytes().all(|v| v.is_ascii_hexdigit()) {
             return Err(Error::Invalid);
         }
@@ -157,7 +191,7 @@ impl Tx<'_> {
         request: &api::HostImport,
         working: &api::WorkingContext,
         now: u64,
-    ) -> Result<Vec<api::ImportRow>> {
+    ) -> Result<(Vec<api::ImportRow>, Vec<wire::AssetRef>)> {
         let report = request.report.as_deref().ok_or(Error::Invalid)?;
         validate_parts(report, request.refresh.is_some())?;
         let importer = if request.refresh.is_some() {
@@ -189,15 +223,8 @@ impl Tx<'_> {
             let keys = request
                 .selection
                 .iter()
-                .map(|node| {
-                    text(mapping(
-                        &importer,
-                        &request.source,
-                        &report.source_basis,
-                        &node.key,
-                    ))
-                })
-                .collect();
+                .map(|node| selected_mapping(&importer, request, node).map(text))
+                .collect::<Result<Vec<_>>>()?;
             let rows = self.query(
                 "UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN properties(n) AS p LIMIT 129",
                 params([("keys", Value::Array(keys))]),
@@ -220,13 +247,22 @@ impl Tx<'_> {
                 && working.roots.first() == refresh.host.as_ref()
         });
         let mut resolved = BTreeMap::<&str, AssetRef>::new();
+        let mut targets = Vec::with_capacity(request.selection.len());
         let mut rows = Vec::with_capacity(request.selection.len());
         for node in &report.findings {
             let Some(explicit) = selected.get(node.key.as_str()) else {
                 continue;
             };
-            let key = mapping(&importer, &request.source, &report.source_basis, &node.key);
-            let old = self.get(&key)?;
+            let old_key = if report.source_basis.is_empty() && explicit.target.is_none() {
+                None
+            } else {
+                Some(selected_mapping(&importer, request, explicit)?)
+            };
+            let old = old_key
+                .as_deref()
+                .map(|key| self.get(key))
+                .transpose()?
+                .flatten();
             let mut hash = Sha256::new();
             for field in &node.fields {
                 hash.update((field.encoded_len() as u64).to_be_bytes());
@@ -340,12 +376,15 @@ impl Tx<'_> {
                 .and_then(Value::as_str)
                 .map(str::to_owned);
             let mut previous_fields = Vec::new();
-            let target = if request.refresh.is_some() {
+            let target = if request.refresh.is_some()
+                || (report.source_basis.is_empty() && existing.is_some())
+            {
                 let target = existing.ok_or(Error::Conflict)?;
+                let empty = props([("observed", int(0)?)]);
                 let (source, previous) = self.refresh_fields(
                     context,
                     target,
-                    old.as_ref().ok_or(Error::Conflict)?,
+                    old.as_ref().unwrap_or(&empty),
                     node,
                     report,
                 )?;
@@ -357,6 +396,11 @@ impl Tx<'_> {
                 existing.ok_or(Error::Corrupt)?
             } else {
                 self.context_write(context, change.clone(), &local, now)?
+            };
+            let key = if report.source_basis.is_empty() {
+                manual_mapping(&importer, &request.source, target)
+            } else {
+                mapping(&importer, &request.source, &report.source_basis, &node.key)
             };
             // An existing match must retain the reviewed local ownership, not
             // silently move across machines when a source key is reused.
@@ -479,6 +523,7 @@ impl Tx<'_> {
                 old.as_ref(),
             )?;
             resolved.insert(&node.key, target);
+            targets.push(target_wire(target));
             rows.push(api::ImportRow {
                 row: rows.len() as u32 + 1,
                 change: Some(change),
@@ -486,6 +531,8 @@ impl Tx<'_> {
                 previous_fields,
                 diagnostic: if request.refresh.is_some() {
                     "Refresh this source's observations; preserve intended fields"
+                } else if report.source_basis.is_empty() && existing.is_some() {
+                    "Record observations for this confirmed resource; preserve intended fields"
                 } else if keep_fields {
                     "Keep previously accepted identity and local fields"
                 } else if existing.is_some() {
@@ -499,14 +546,17 @@ impl Tx<'_> {
         if let Some(installation) = resolved.get("installation")
             && let Some(source) = &report.network
         {
-            let metadata = self
-                .get(&mapping(
+            let installation_key = if report.source_basis.is_empty() {
+                manual_mapping(&importer, &request.source, *installation)
+            } else {
+                mapping(
                     &importer,
                     &request.source,
                     &report.source_basis,
                     "installation",
-                ))?
-                .ok_or(Error::Corrupt)?;
+                )
+            };
+            let metadata = self.get(&installation_key)?.ok_or(Error::Corrupt)?;
             let projection_source = metadata
                 .get("namespace")
                 .and_then(Value::as_str)
@@ -579,16 +629,11 @@ impl Tx<'_> {
                         "Not selected for this projection source".into();
                 }
                 network_facts::validate(&selected)?;
-                let base = mapping(
-                    &importer,
-                    &request.source,
-                    &report.source_basis,
-                    "installation",
-                );
+                let base = &installation_key;
                 self.accept_native_network(&selected, &format!("{base}/{suffix}"))?;
             }
         }
-        Ok(rows)
+        Ok((rows, targets))
     }
 }
 impl Store {
@@ -642,25 +687,7 @@ impl Store {
                 }
                 let request = api::HostImport::decode(binary(&row, "payload")?)
                     .map_err(|_| Error::Corrupt)?;
-                let rows = tx.apply_host(context, &request, working, now)?;
-                let mut targets = Vec::with_capacity(rows.len());
-                let report = request.report.as_deref().ok_or(Error::Corrupt)?;
-                let importer = if request.refresh.is_some() {
-                    tx.refresh_source(context, &request, working)?.1
-                } else {
-                    context.actor.clone()
-                };
-                for selected in &request.selection {
-                    let row = tx
-                        .get(&mapping(
-                            &importer,
-                            &request.source,
-                            &report.source_basis,
-                            &selected.key,
-                        ))?
-                        .ok_or(Error::Corrupt)?;
-                    targets.push(target_wire(super::super::target(&row)?));
-                }
+                let (_, targets) = tx.apply_host(context, &request, working, now)?;
                 tx.delete(&key)?;
                 tx.save_creation_outcome(
                     context,
@@ -737,7 +764,7 @@ impl Store {
             // the real mutation checks here and rolling back validates the whole
             // ancestry atomically without journal writes or a second validator.
             let mut dry = self.begin()?;
-            let rows = dry.apply_host(context, &request, working, now)?;
+            let (rows, _) = dry.apply_host(context, &request, working, now)?;
             (rows, dry.changed)
         };
         if !changed {

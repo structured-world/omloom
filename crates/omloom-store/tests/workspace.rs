@@ -8,6 +8,8 @@ use omloom_store::{Error, Store, workspace::*};
 use support::*;
 #[path = "workspace/accounts.rs"]
 mod accounts;
+#[path = "workspace/anonymous.rs"]
+mod anonymous;
 #[path = "workspace/contexts.rs"]
 mod contexts;
 #[path = "workspace/correction.rs"]
