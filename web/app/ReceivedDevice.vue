@@ -57,12 +57,14 @@ async function recover(reference?:ReceiptReference,resolveAdmission=true){
     const response=await call({oneofKind:'physical',physical:{action}},model.WorkingContext.create());
     if(response.oneofKind!=='physical')throw Error('The saved device could not be checked.');
     const view=response.physical;
-    if(view.receipt){
+    if(view.receipt&&(saved.material===undefined||saved.unit===undefined))throw Error('The saved reference does not identify a material unit. Its outcome remains unresolved.');
+    if(view.receipt&&view.receipt.material===saved.material&&view.receipt.unit===saved.unit){
       recovered.value=view.receipt;
       await props.recorded(view.receipt,reviewedPlan.value,view.plan?view:undefined);
       await clearReceiptReference(saved);pending.value=false;
-    }else if(view.receiptRecovery===model.PhysicalReceiptRecovery.NOT_COMMITTED){
-      await props.updated(view,reviewedPlan.value,saved.material===undefined?props.material:saved.material,'checked');
+    }else if(view.receipt||view.receiptRecovery===model.PhysicalReceiptRecovery.NOT_COMMITTED){
+      // A different unit committed at this revision, so this attempt cannot commit.
+      if(view.plan)await props.updated(view,reviewedPlan.value,saved.material===undefined?props.material:saved.material,'checked');
       await clearReceiptReference(saved);pending.value=false;
       if(matchesReceipt(saved,scope())){rejected.value=true;error.value='This device was not saved. Your input is retained. Review current receipt before trying again.';}
     }else if(view.receiptRecovery===model.PhysicalReceiptRecovery.UNAVAILABLE){

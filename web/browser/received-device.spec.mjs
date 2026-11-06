@@ -18,6 +18,63 @@ async function openPlan(page,url,f){
   return planner;
 }
 
+for(const material of [0,1])test(`a recovered winner does not accept another material unit (${material})`,async({page})=>{
+  // The admission revision identifies a winning mutation, not necessarily this
+  // unit's attempt. A different unit must retain its input and require review.
+  await withFieldHost(async url=>{
+    const f=await fixture(url);
+    if(material===1){
+      const plan=f.m.PhysicalPlan.clone(f.plan);plan.materials.push(f.m.PhysicalMaterial.create({name:'Second material',kind:f.m.AssetKind.DEVICE,quantity:1}));
+      f.plan=(await f.rpc({oneofKind:'physical',physical:f.m.Physical.create({action:{oneofKind:'save',save:{plan}}})})).physical.plan;
+    }
+    const base=f.plan.revision,unit=material===0?1:0;
+    await f.rpc({oneofKind:'physical',physical:f.m.Physical.create({action:{oneofKind:'receiveDevice',receiveDevice:{plan:{id:f.plan.id,revision:base},material:0,unit:0,inventory:{},changes:[{name:'name',value:{oneofKind:'text',text:'Winning unit'}}]}}})});
+    const planner=await openPlan(page,url,f);
+    if(material===1)await planner.getByRole('button',{name:'Receive or reuse a unit for requirement 2',exact:true}).click();
+    await page.evaluate(({plan,revision,material,unit})=>new Promise((resolve,reject)=>{
+      const request=indexedDB.open('omloom-receipt-recovery',1);
+      request.onupgradeneeded=()=>request.result.createObjectStore('pending',{autoIncrement:true});
+      request.onerror=()=>reject(request.error);
+      request.onsuccess=()=>{const db=request.result,tx=db.transaction('pending','readwrite');tx.objectStore('pending').add({plan,revision,material,unit});tx.oncomplete=()=>{db.close();resolve();};tx.onabort=()=>reject(tx.error);};
+    }),{plan:f.plan.id,revision:String(base),material,unit});
+    await planner.getByRole('button',{name:'Create received device',exact:true}).click();
+    const editor=planner.getByRole('region',{name:'Create received device',exact:true});
+    await expect(editor).toContainText('This device was not saved');
+    await expect(editor).not.toContainText('Receipt accepted');
+    await editor.getByRole('button',{name:'Review current receipt',exact:true}).click();
+    await editor.getByLabel('Name',{exact:true}).click();
+    await editor.getByLabel('Name',{exact:true}).fill('Reviewed second unit');
+    await editor.getByRole('button',{name:'Record received device',exact:true}).click();
+    await expect(planner).toContainText(`Unit ${unit+1}: Reviewed second unit`);
+    const devices=(await f.rpc({oneofKind:'query',query:f.m.Query.create({kinds:[f.m.AssetKind.DEVICE],columns:['name'],limit:25})})).page;
+    expect(devices.total).toBe(2n);
+  });
+});
+
+test('a reference without a unit stays unresolved',async({page})=>{
+  // An incomplete saved reference cannot identify which competing attempt won.
+  // Keep it retrievable rather than reporting another unit as its success.
+  await withFieldHost(async url=>{
+    const f=await fixture(url),base=f.plan.revision;
+    await f.rpc({oneofKind:'physical',physical:f.m.Physical.create({action:{oneofKind:'receiveDevice',receiveDevice:{plan:{id:f.plan.id,revision:base},material:0,unit:0,inventory:{},changes:[{name:'name',value:{oneofKind:'text',text:'Winning unit'}}]}}})});
+    const planner=await openPlan(page,url,f);
+    await page.evaluate(({plan,revision})=>new Promise((resolve,reject)=>{
+      const request=indexedDB.open('omloom-receipt-recovery',1);
+      request.onupgradeneeded=()=>request.result.createObjectStore('pending',{autoIncrement:true});
+      request.onerror=()=>reject(request.error);
+      request.onsuccess=()=>{const db=request.result,tx=db.transaction('pending','readwrite');tx.objectStore('pending').add({plan,revision});tx.oncomplete=()=>{db.close();resolve();};tx.onabort=()=>reject(tx.error);};
+    }),{plan:f.plan.id,revision:String(base)});
+    await planner.getByRole('button',{name:'Create received device',exact:true}).click();
+    const editor=planner.getByRole('region',{name:'Create received device',exact:true});
+    await expect(editor).toContainText('does not identify a material unit');
+    await expect(editor).not.toContainText('Receipt accepted');
+    expect(await page.evaluate(()=>new Promise((resolve,reject)=>{
+      const request=indexedDB.open('omloom-receipt-recovery');request.onerror=()=>reject(request.error);
+      request.onsuccess=()=>{const db=request.result,tx=db.transaction('pending');const read=tx.objectStore('pending').count();read.onsuccess=()=>resolve(read.result);tx.oncomplete=()=>db.close();};
+    }))).toBe(1);
+  });
+});
+
 test('record-and-next validates required input before dispatch',async({page})=>{
   // The secondary submit action must use the same browser constraints as the
   // main action, without claiming recovery storage or sending invalid input.
