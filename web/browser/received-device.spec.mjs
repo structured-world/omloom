@@ -333,6 +333,26 @@ test('cancelled plans do not offer receipt from a waiting placement',async({page
   });
 });
 
+test('explicit receipt review refreshes a changed saved plan and retains input',async({page})=>{
+  // Inventory preparation alone cannot refresh the separately reviewed plan key.
+  await withFieldHost(async url=>{
+    const f=await fixture(url);const planner=await openPlan(page,url,f);
+    await planner.getByRole('button',{name:'Create received device',exact:true}).click();
+    const editor=planner.getByRole('region',{name:'Create received device',exact:true});
+    await editor.getByLabel('Name',{exact:true}).fill('Retain through plan review');
+    await editor.getByLabel('Serial number change',{exact:true}).selectOption('set');
+    await editor.getByLabel('Serial number',{exact:true}).fill('PLAN-REVIEW-SERIAL');
+    await f.rpc({oneofKind:'physical',physical:f.m.Physical.create({action:{oneofKind:'save',save:{plan:{...f.plan,name:'Reviewed receiving plan'}}}})});
+    await editor.getByRole('button',{name:'Record received device',exact:true}).click();
+    await expect(editor).toContainText('Nothing was created by this rejected receipt');
+    await editor.getByRole('button',{name:'Review current receipt',exact:true}).click();
+    await expect(editor.getByLabel('Serial number',{exact:true})).toHaveValue('PLAN-REVIEW-SERIAL');
+    await expect(editor).toContainText('Reviewed receiving plan');
+    await editor.getByRole('button',{name:'Record received device',exact:true}).click();
+    await expect(planner).toContainText('Unit 1: Retain through plan review');
+  });
+});
+
 test('late creation preparation does not steal receipt input focus',async({page})=>{
   // The optional reference is usable before ordinary creation choices arrive.
   // Late autofocus must not redirect typing into the suggested device name.

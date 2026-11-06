@@ -4,7 +4,7 @@ import AssetEditor from './AssetEditor.vue';
 import {call,model,AssetKind,type Field} from './api';
 const props=defineProps<{plan:model.PhysicalPlan;material:number;unit:number;working:model.WorkingContext;definitions:model.Definition[];sharedReference?:string;inactive?:boolean;recorded:(outcome:model.PhysicalReceiptOutcome,reviewed:model.PhysicalPlan)=>Promise<void>}>();
 const emit=defineEmits<{inventoryChanged:[];close:[];open:[item:import('./api').AssetRef];advance:[outcome:model.PhysicalReceiptOutcome,sharedReference?:string]}>();
-const reviewedPlan=model.PhysicalPlan.clone(props.plan);
+const reviewedPlan=ref(model.PhysicalPlan.clone(props.plan));
 const explanation=ref(props.sharedReference===undefined?'':props.sharedReference),shareReference=ref(props.sharedReference!==undefined),error=ref(''),pending=ref(false),recovered=ref<model.PhysicalReceiptOutcome>();
 const storageKey='omloom.pending-device-receipt';
 type Reference={plan:string;revision:string};
@@ -24,7 +24,12 @@ async function review(){
   if(pending.value||reviewing.value)return;
   reviewing.value=true;error.value='';
   try{
+    const response=await call({oneofKind:'physical',physical:{action:{oneofKind:'load',load:{id:reviewedPlan.value.id!,revision:0n}}}},model.WorkingContext.create({...props.working,expected:undefined}));
+    if(response.oneofKind!=='physical'||!response.physical.plan)throw Error('The current saved plan could not be reviewed.');
+    const current=response.physical.plan,line=current.materials[props.material];
+    if(![model.PhysicalPlanState.DRAFT,model.PhysicalPlanState.RESERVED,model.PhysicalPlanState.PARTIAL].includes(current.state)||!line||line.kind!==AssetKind.DEVICE||props.unit>=line.quantity||line.allocations.some(a=>a.unit===props.unit))throw Error('The current material unit no longer accepts this receipt. Input is retained.');
     if(!await editor.value?.reprepareCreation())throw Error('Current creation context could not be reviewed.');
+    reviewedPlan.value=current;
     rejected.value=false;
   }catch(e){error.value=String(e);}finally{reviewing.value=false;}
 }
@@ -39,27 +44,27 @@ async function recover(){
     const response=await call({oneofKind:'physical',physical:{action:{oneofKind:'receiptOutcome',receiptOutcome:{revision:BigInt(saved.revision),plan:saved.plan}}}},model.WorkingContext.create());
     if(response.oneofKind!=='physical'||!response.physical.receipt)throw Error('The original receipt result is unavailable.');
     recovered.value=response.physical.receipt;
-    await props.recorded(response.physical.receipt,reviewedPlan);
+    await props.recorded(response.physical.receipt,reviewedPlan.value);
     localStorage.removeItem(storageKey);pending.value=false;
   }catch(e){error.value=String(e)+' The original outcome remains unresolved; no new device was submitted.';}
 }
 async function submit(changes:Field[],creation:model.WorkingContext,next:boolean){
   if(reference())throw Error('Resolve the earlier receipt before creating another device.');
-  if(!reviewedPlan.id||creation.expected===undefined)throw Error('Save and review this plan first.');
+  if(!reviewedPlan.value.id||creation.expected===undefined)throw Error('Save and review this plan first.');
   if(changes.length>32)throw Error('Record at most 32 actual fields in one device creation.');
   if(new TextEncoder().encode(explanation.value).length>160||/[\u0000-\u001f\u007f-\u009f]/.test(explanation.value))throw Error('The optional reference must use at most 160 UTF-8 bytes, without control characters.');
   // Store only a non-authorizing lookup reference before the request can leave this tab.
-  localStorage.setItem(storageKey,JSON.stringify({plan:reviewedPlan.id,revision:String(creation.expected)}));
+  localStorage.setItem(storageKey,JSON.stringify({plan:reviewedPlan.value.id,revision:String(creation.expected)}));
   pending.value=true;
   const working=model.WorkingContext.create({...props.working,expected:creation.expected});
   try{
     const response=await call({oneofKind:'physical',physical:{action:{oneofKind:'receiveDevice',receiveDevice:{
-      plan:{id:reviewedPlan.id,revision:reviewedPlan.revision},material:props.material,unit:props.unit,
+      plan:{id:reviewedPlan.value.id,revision:reviewedPlan.value.revision},material:props.material,unit:props.unit,
       inventory:model.WorkingContext.create({...creation,expected:undefined}),changes,explanation:explanation.value.trim()?explanation.value:undefined,
     }}}},working);
     if(response.oneofKind!=='physical'||!response.physical.receipt)throw Error('The receipt response is unavailable.');
     recovered.value=response.physical.receipt;
-    await props.recorded(response.physical.receipt,reviewedPlan);
+    await props.recorded(response.physical.receipt,reviewedPlan.value);
     localStorage.removeItem(storageKey);pending.value=false;
     if(next)emit('advance',response.physical.receipt,shareReference.value?explanation.value:undefined);
   }catch(e){
@@ -80,7 +85,7 @@ function inventorySaved(target:import('./api').AssetRef|undefined){if(!target)re
 </script>
 <template><section aria-label="Create received device" class="received-device" @input="touched=true" @change="touched=true">
 <h4>{{inventoryOnly?'Create in inventory only':'Create received device'}}</h4>
-<p v-if="!recovered">{{plan.name}} · {{plan.materials[material]?.name}} · Unit {{unit+1}}</p>
+<p v-if="!recovered">{{reviewedPlan.name}} · {{reviewedPlan.materials[material]?.name}} · Unit {{unit+1}}</p>
 <p v-else>Original receipt: material {{recovered.material+1}}, unit {{recovered.unit+1}}.</p>
 <p v-if="!recovered&&!inventoryOnly">Unplaced device in permitted installation inventory. Recording confirms receipt, not installation. Planned specifications are not actual facts.</p>
 <p v-if="error" role="alert">{{error}}</p>
@@ -93,6 +98,6 @@ function inventorySaved(target:import('./api').AssetRef|undefined){if(!target)re
 <div v-show="!pending&&!recovered&&!inventoryCreated">
 <label v-if="!inventoryOnly">Optional delivery reference or explanation<input v-model="explanation" maxlength="160"/></label>
 <label v-if="!inventoryOnly&&explanation.trim()"><input v-model="shareReference" type="checkbox"/>Use this reference for the next received device</label>
-<AssetEditor ref="editor" inline :inactive="inactive" :definitions="definitions" :initial-kind="AssetKind.DEVICE" :working="inventory" :view="model.View.HARDWARE" :receipt="inventoryOnly?undefined:{name:plan.materials[material]!.name,submit}" @saved="inventorySaved" @close="emit('close')"/>
+<AssetEditor ref="editor" inline :inactive="inactive||reviewing" :definitions="definitions" :initial-kind="AssetKind.DEVICE" :working="inventory" :view="model.View.HARDWARE" :receipt="inventoryOnly?undefined:{name:reviewedPlan.materials[material]!.name,submit}" @saved="inventorySaved" @close="emit('close')"/>
 </div>
 </section></template>
