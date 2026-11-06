@@ -319,6 +319,20 @@ test('receipt acceptance never retargets a changed draft requirement',async({pag
   });
 });
 
+test('cancelled plans do not offer receipt from a waiting placement',async({page})=>{
+  // A retained unallocated step is not a receivable plan after cancellation.
+  await withFieldHost(async url=>{
+    const f=await fixture(url);
+    const extent={startUm:0n,lengthUm:1000n};
+    f.plan=(await f.rpc({oneofKind:'physical',physical:f.m.Physical.create({action:{oneofKind:'save',save:{plan:{...f.plan,steps:[{action:{oneofKind:'placement',placement:{enclosure:f.rack,volume:{x:extent,y:extent,z:extent},material:{material:0,unit:0}}}}]}}}})})).physical.plan;
+    const planner=await openPlan(page,url,f);
+    await expect(planner.getByRole('button',{name:'Create received device for step 1',exact:true})).toBeVisible();
+    await planner.getByRole('button',{name:'Stop remaining work',exact:true}).click();
+    await expect(planner).toContainText('Remaining work stopped.');
+    await expect(planner.getByRole('button',{name:'Create received device for step 1',exact:true})).toHaveCount(0);
+  });
+});
+
 test('late creation preparation does not steal receipt input focus',async({page})=>{
   // The optional reference is usable before ordinary creation choices arrive.
   // Late autofocus must not redirect typing into the suggested device name.

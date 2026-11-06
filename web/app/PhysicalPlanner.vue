@@ -60,7 +60,7 @@ async function openReceived(target:AssetRef){
   emit('open',target);
 }
 function startReceipt(material:number,unit:number){
-  try{planKey('current');receiptUnit.value={material,unit};error.value='';}
+  try{if(!receivable.value)throw Error('This plan no longer accepts receipts.');planKey('current');receiptUnit.value={material,unit};error.value='';}
   catch(e){error.value=String(e)+' Save installation plan explicitly first; the receiving input is retained.';}
 }
 const receiptLifetime=new AbortController();
@@ -156,6 +156,7 @@ const working=()=>{
   return model.WorkingContext.create({roots,expected:revision.value});
 };
 const editable=computed(()=>plan.value===undefined||plan.value.state===model.PhysicalPlanState.DRAFT);
+const receivable=computed(()=>plan.value!==undefined&&[model.PhysicalPlanState.DRAFT,model.PhysicalPlanState.RESERVED,model.PhysicalPlanState.PARTIAL].includes(plan.value.state));
 const geometryEditable=computed(()=>mode.value==='placement'||(mode.value==='replacement'&&props.kind===K.RACK&&!removePart.value));
 const reservable=computed(()=>plan.value?.state===model.PhysicalPlanState.DRAFT);
 const installable=computed(()=>plan.value!==undefined&&([model.PhysicalPlanState.RESERVED,model.PhysicalPlanState.PARTIAL,model.PhysicalPlanState.CANCELLED].includes(plan.value.state)||(plan.value.state===model.PhysicalPlanState.DRAFT&&actualReport.value)));
@@ -494,7 +495,7 @@ async function exportPlan(){await run(async()=>{
 </section>
 <section aria-label="Installation plan editor">
 <p v-if="receiptDraftConflict" role="alert">Receipt accepted; draft input is retained. The changed material lines cannot be reconciled automatically. Reopen the saved plan to review the confirmed allocation before saving.</p>
-<PhysicalMaterials :materials="plan?.materials??emptyMaterials" :uses="materialUses" :items="planItems" :working="working()" :editable="editable" :receivable="editable||plan?.state===model.PhysicalPlanState.RESERVED||plan?.state===model.PhysicalPlanState.PARTIAL" :can-place="kind===K.RACK" :busy="busy" @update="updateMaterials" @receive="receiveMaterial" @create="startReceipt" @selected="selectedMaterial" @place="chooseFuture" @remove="removeMaterial"/>
+<PhysicalMaterials :materials="plan?.materials??emptyMaterials" :uses="materialUses" :items="planItems" :working="working()" :editable="editable" :receivable="receivable" :can-place="kind===K.RACK" :busy="busy" @update="updateMaterials" @receive="receiveMaterial" @create="startReceipt" @selected="selectedMaterial" @place="chooseFuture" @remove="removeMaterial"/>
 <ReceivedDevice v-if="receiptUnit&&plan&&plan.materials[receiptUnit.material]" :key="plan.id+'/'+receiptUnit.material+'/'+receiptUnit.unit" :plan="plan" :material="receiptUnit.material" :unit="receiptUnit.unit" :shared-reference="receiptUnit.sharedReference" :working="working()" :definitions="definitions" :inactive="busy||inactive" :recorded="receivedDevice" @advance="advanceReceived" @inventory-changed="emit('changed')" @open="openReceived" @close="receiptUnit=undefined"/>
 <form v-if="editable" @submit.prevent="save"><fieldset :disabled="busy">
 <label>Installation plan name<input v-model="name" required maxlength="160" /></label>
@@ -550,7 +551,7 @@ async function exportPlan(){await run(async()=>{
 <label v-if="installable&&![model.PhysicalStepState.RECORDED,model.PhysicalStepState.NOT_PERFORMED].includes(step.state)"><input v-model="selected" type="checkbox" :value="index" :disabled="!placementTarget(step.action.placement)||notPerformed.includes(index)||(!actualReport&&step.readiness!==model.PlanReadiness.READY)"/>Actually installed: <span v-if="placementTitle(step.action.placement)">{{placementTitle(step.action.placement)}}</span><span v-else>Equipment name unavailable</span></label>
 <span v-else-if="placementTitle(step.action.placement)">{{placementTitle(step.action.placement)}}</span><span v-else>Equipment name unavailable</span>
 <p v-if="step.action.placement.material&&!placementTarget(step.action.placement)">Receive or select the actual requested unit before reporting installation.</p>
-<button v-if="step.action.placement.material&&!placementTarget(step.action.placement)&&plan.materials[step.action.placement.material.material]?.kind===K.DEVICE" type="button" :disabled="busy" @click="startReceipt(step.action.placement.material.material,step.action.placement.material.unit)">Create received device for step {{index+1}}</button>
+<button v-if="receivable&&step.action.placement.material&&!placementTarget(step.action.placement)&&plan.materials[step.action.placement.material.material]?.kind===K.DEVICE" type="button" :disabled="busy" @click="startReceipt(step.action.placement.material.material,step.action.placement.material.unit)">Create received device for step {{index+1}}</button>
 <template v-for="axis in axes" :key="axis"><small v-if="step.action.placement.volume?.[axis]">{{axis.toUpperCase()}} allocation: {{millimetres(step.action.placement.volume[axis]!.startUm)}} mm + {{millimetres(step.action.placement.volume[axis]!.lengthUm)}} mm</small></template>
 </template>
 <template v-if="step.action.oneofKind==='replacement'">
