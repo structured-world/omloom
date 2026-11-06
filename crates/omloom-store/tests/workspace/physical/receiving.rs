@@ -63,6 +63,51 @@ fn submit(
     }
 }
 
+// A different creation consuming the same application revision proves this
+// receipt was not committed; the client must not get stuck recovering it.
+#[test]
+fn outcome_collision_is_a_definitive_receipt_refusal() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let plan = saved(&store, &actor)?;
+    let base = store.usage()?.revision;
+    store.workspace(
+        &actor,
+        api::Request {
+            working: Some(api::WorkingContext {
+                expected: Some(base),
+                ..Default::default()
+            }),
+            command: Some(Command::Address(api::Address {
+                address: Some("192.0.2.77".into()),
+                ..Default::default()
+            })),
+        },
+        100,
+    )?;
+    let before = store.usage()?;
+    let result = store.workspace(
+        &actor,
+        api::Request {
+            working: Some(api::WorkingContext {
+                expected: Some(base),
+                ..Default::default()
+            }),
+            command: Some(Command::Physical(api::Physical {
+                action: Some(api::physical::Action::ReceiveDevice(request(&plan)?)),
+            })),
+        },
+        100,
+    );
+    assert!(
+        matches!(result, Err(Error::Rejected(cause)) if matches!(*cause, Error::Conflict)),
+        "A foreign outcome must definitively reject this receipt"
+    );
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // A lost reply and later edits never create another item or replay the old field values.
 #[test]
 fn received_device_is_atomic_unplaced_and_recoverable_after_reopen() -> TestResult {

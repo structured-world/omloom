@@ -126,10 +126,14 @@ impl Tx<'_> {
             unit: request.unit,
         };
         // The fingerprint includes both contexts; lookup precedes fresh lifecycle/CAS admission.
-        if self
-            .creation_outcome(context, working, &input, outcome())?
-            .is_some()
-        {
+        let previous = self
+            .creation_outcome(context, working, &input, outcome())
+            .map_err(|error| match error {
+                // A different committed fingerprint proves this input was not accepted.
+                Error::Conflict => Error::Rejected(Box::new(Error::Conflict)),
+                error => error,
+            })?;
+        if previous.is_some() {
             return self.receipt_outcome(context, base, &key.id);
         }
         (|| {
