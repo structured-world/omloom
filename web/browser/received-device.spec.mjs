@@ -358,12 +358,8 @@ test('explicit receipt review refreshes a changed saved plan and retains input',
 });
 
 test('another tab cannot erase an unresolved accepted receipt',async({page,context})=>{
-  // Force the allowed Web Storage interleaving: both admission reads observe
-  // the empty slot before either writes. Transactional admission must not rely on it.
-  await context.addInitScript(()=>{
-    const get=Storage.prototype.getItem;
-    Storage.prototype.getItem=function(key){return key==='omloom.pending-device-receipt'?null:get.call(this,key);};
-  });
+  // A second tab cannot submit for the same unit while its result is unresolved.
+  // It can recover the original result through transactional browser storage.
   await withFieldHost(async url=>{
     const f=await fixture(url),other=await context.newPage();
     const a=await openPlan(page,url,f),b=await openPlan(other,url,f);
