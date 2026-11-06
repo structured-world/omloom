@@ -2,10 +2,10 @@ import {test,expect} from '@playwright/test';
 import {withFieldHost} from './field-host.mjs';
 import {workspaceClient} from './workspace-client.mjs';
 
-async function fixture(url,quantity=3){
+async function fixture(url,quantity=3,specifications=[]){
   const {m,rpc}=await workspaceClient(url);
   const rack=(await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.RACK,changes:[{name:'name',value:{oneofKind:'text',text:'Receiving rack'}}]})})).mutation.targets[0];
-  const plan=(await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'save',save:{plan:{name:'Unpack three nodes',materials:[{name:'Ordered compute node',quantity,kind:m.AssetKind.DEVICE}]}}}})})).physical.plan;
+  const plan=(await rpc({oneofKind:'physical',physical:m.Physical.create({action:{oneofKind:'save',save:{plan:{name:'Unpack three nodes',materials:[{name:'Ordered compute node',quantity,kind:m.AssetKind.DEVICE,specifications}]}}}})})).physical.plan;
   return {m,rpc,rack,plan};
 }
 async function openPlan(page,url,f){
@@ -22,7 +22,7 @@ for(const width of [1440,390])test(`received devices remain unplaced and record-
   // The existing inventory editor creates actual fields and allocation in one commit,
   // without a create/search detour, copied serial, or fabricated rack attachment.
   await withFieldHost(async url=>{
-    const f=await fixture(url);await page.setViewportSize({width,height:900});
+    const f=await fixture(url,3,[{name:'width',value:{oneofKind:'equipment',equipment:{basis:'Planned supplier width',assertion:{oneofKind:'quantity',quantity:{upper:500000n,unit:'mm',scale:3}}}}}]);await page.setViewportSize({width,height:900});
     const planner=await openPlan(page,url,f);
     await planner.getByLabel('Requested unit number',{exact:true}).fill('2');
     await planner.getByRole('button',{name:'Create received device',exact:true}).click();
