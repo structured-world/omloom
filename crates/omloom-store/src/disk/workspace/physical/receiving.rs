@@ -212,10 +212,8 @@ impl Tx<'_> {
         if id != expected_plan {
             return Err(Error::Conflict);
         }
-        let plan = self.get(&format!("plan/{id}"))?.ok_or(Error::Expired)?;
-        if string(&plan, "actor")? != context.actor {
-            return Err(Error::Denied);
-        }
+        // The retained outcome owns this immutable actor/plan binding even
+        // after terminal-plan cleanup. Device disclosure still uses current rights.
         let revision = base.checked_add(1).ok_or(Error::Corrupt)?;
         Ok(api::PhysicalReceiptOutcome {
             revision,

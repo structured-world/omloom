@@ -63,6 +63,82 @@ fn submit(
     }
 }
 
+// A retained outcome owns its actor/plan binding independently of terminal-plan
+// retention. Releasing that plan cannot hide the accepted device from its owner.
+#[test]
+fn pinned_receipt_survives_terminal_plan_cleanup() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let plan = saved(&store, &actor)?;
+    let base = store.usage()?.revision;
+    let accepted = submit(
+        &store,
+        &actor,
+        &api::WorkingContext {
+            expected: Some(base),
+            ..Default::default()
+        },
+        api::physical::Action::ReceiveDevice(request(&plan)?),
+    )?
+    .receipt
+    .ok_or(Error::Missing)?;
+    store.pin_detail(
+        &format!("mutation-outcome/{base}"),
+        true,
+        store.usage()?.revision,
+    )?;
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Cancel(accepted.plan.clone().ok_or(Error::Missing)?),
+    )?;
+    let mut cursor = None;
+    loop {
+        let result = store.cleanup(2000, cursor.as_deref())?;
+        cursor = result.cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert!(matches!(
+        physical(
+            &store,
+            &actor,
+            api::physical::Action::Load(api::PhysicalPlanKey {
+                id: plan.id.clone().ok_or(Error::Missing)?,
+                revision: 0,
+            })
+        ),
+        Err(Error::Missing)
+    ));
+    let before = store.usage()?;
+    let lookup = api::PhysicalReceiptLookup {
+        revision: base,
+        plan: plan.id.ok_or(Error::Missing)?,
+    };
+    let recovered = submit(
+        &store,
+        &actor,
+        &api::WorkingContext::default(),
+        api::physical::Action::ReceiptOutcome(lookup.clone()),
+    )?;
+    assert_eq!(recovered.receipt, Some(accepted));
+    let mut denied = actor.clone();
+    denied.grants.clear();
+    assert!(matches!(
+        submit(
+            &store,
+            &denied,
+            &api::WorkingContext::default(),
+            api::physical::Action::ReceiptOutcome(lookup)
+        ),
+        Err(Error::Denied)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // A different creation consuming the same application revision proves this
 // receipt was not committed; the client must not get stuck recovering it.
 #[test]
