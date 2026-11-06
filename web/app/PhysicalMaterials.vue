@@ -10,11 +10,21 @@ const props=defineProps<{materials:model.PhysicalMaterial[];uses:model.PhysicalM
 const emit=defineEmits<{update:[materials:model.PhysicalMaterial[]];remove:[material:number];place:[unit:model.PhysicalMaterialUnit];receive:[material:number,allocation:model.PhysicalMaterialAllocation];selected:[item:model.Item];create:[material:number,unit:number]}>();
 const opened=ref(false),editing=ref(false),index=ref<number>(),error=ref(''),loading=ref(false);
 const draft=ref(model.PhysicalMaterial.create()),quantity=ref(''),field=ref(equipmentFields[0]!),valid=ref(true);
+const draftStale=ref(false);
 const source=ref<model.Item>(),receiving=ref<number>(),unit=ref(''),basis=ref('');
 const wider=ref(false);
 const placing=ref<number>(),placementUnit=ref('');
 const page=ref(0);
-watch(()=>props.materials,(current,previous)=>{editing.value=false;if(receiving.value!==undefined){const line=receiving.value;const a=previous[line],b=current[line];if(!a||!b||!model.PhysicalMaterial.equals(a,b))receiving.value=undefined;}placing.value=undefined;page.value=0;});
+watch(()=>props.materials,(current,previous)=>{
+  if(editing.value&&index.value!==undefined){
+    const a=previous[index.value],b=current[index.value];
+    if(!a||!b||!model.PhysicalMaterial.equals({...a,allocations:[]},{...b,allocations:[]})){
+      draftStale.value=true;error.value='This requirement changed. Your input is retained. Close and reopen it to review the current requirement before applying.';
+    }
+  }
+  if(receiving.value!==undefined){const line=receiving.value;const a=previous[line],b=current[line];if(!a||!b||!model.PhysicalMaterial.equals(a,b))receiving.value=undefined;}
+  placing.value=undefined;page.value=0;
+});
 const rows=computed(()=>props.materials.slice(page.value*25,(page.value+1)*25));
 const names=computed(()=>{
   const result=new Map<string,string>();
@@ -22,7 +32,7 @@ const names=computed(()=>{
   return result;
 });
 const kinds=[K.DEVICE,K.PHYSICAL_COMPONENT,K.RACK,K.CABLE];
-function start(line?:number){placing.value=undefined;receiving.value=undefined;index.value=line;draft.value=line===undefined?model.PhysicalMaterial.create({kind:K.DEVICE}):model.PhysicalMaterial.clone(props.materials[line]!);quantity.value=line===undefined?'':String(draft.value.quantity);field.value=equipmentFields[0]!;source.value=undefined;valid.value=true;editing.value=true;error.value='';}
+function start(line?:number){placing.value=undefined;receiving.value=undefined;index.value=line;draft.value=line===undefined?model.PhysicalMaterial.create({kind:K.DEVICE}):model.PhysicalMaterial.clone(props.materials[line]!);quantity.value=line===undefined?'':String(draft.value.quantity);field.value=equipmentFields[0]!;source.value=undefined;valid.value=true;draftStale.value=false;editing.value=true;error.value='';}
 function startReceiving(line:number){placing.value=undefined;editing.value=false;receiving.value=line;source.value=undefined;wider.value=false;const free=firstFreeUnit(props.materials[line]!);unit.value=free===undefined?'':String(free+1);basis.value='';}
 function createReceived(){error.value='';try{const line=receiving.value;if(line===undefined)return;emit('create',line,integer(unit.value,props.materials[line]!.quantity)-1);}catch(e){error.value=String(e);}}
 function integer(value:string,max:number){if(!/^\d+$/.test(value))throw Error('Enter a whole positive count.');const n=Number(value);if(!Number.isSafeInteger(n)||n<1||n>max)throw Error(`Enter a count between 1 and ${max}.`);return n;}
@@ -44,12 +54,15 @@ async function copySpecification(){
   }catch(e){error.value=String(e);}finally{loading.value=false;}
 }
 function commit(){error.value='';try{
+  if(draftStale.value)throw Error('This requirement changed. Your input is retained. Close and reopen it before applying.');
   if(!draft.value.name.trim())throw Error('Name the material requirement.');
   if(!valid.value)throw Error('Complete or remove the selected specification.');
   const count=integer(quantity.value,4294967295);
-  if(draft.value.allocations.some(a=>a.unit>=count))throw Error('The quantity cannot exclude an allocated unit.');
+  const allocations=index.value===undefined?draft.value.allocations:props.materials[index.value]?.allocations;
+  if(!allocations)throw Error('This requirement no longer exists. Your input is retained.');
+  if(allocations.some(a=>a.unit>=count))throw Error('The quantity cannot exclude an allocated unit.');
   if(index.value!==undefined&&props.uses.some(u=>u.material===index.value&&u.unit>=count))throw Error('Remove the affected planned placement before reducing its requested quantity.');
-  const value=model.PhysicalMaterial.create({...draft.value,quantity:count});
+  const value=model.PhysicalMaterial.create({...draft.value,quantity:count,allocations});
   const next=props.materials.slice();
   if(index.value===undefined){if(next.length>=64)throw Error('One plan supports at most 64 material lines.');next.push(value);}else next[index.value]=value;
   emit('update',next);editing.value=false;

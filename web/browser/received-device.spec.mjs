@@ -13,10 +13,49 @@ async function openPlan(page,url,f){
   const planner=page.locator('.physical-planner');
   if(await planner.getAttribute('open')===null)await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
   await planner.getByRole('button',{name:'Unpack three nodes · draft',exact:true}).click();
-  await planner.getByText('Required materials and receiving (1 lines)',{exact:true}).click();
+  await planner.getByText(`Required materials and receiving (${f.plan.materials.length} lines)`,{exact:true}).click();
   await planner.getByRole('button',{name:'Receive or reuse a unit for requirement 1',exact:true}).click();
   return planner;
 }
+
+for(const line of [0,1])test(`unapplied requirement ${line+1} input survives receipt completion`,async({page})=>{
+  // A receipt updates its own allocation, not an unrelated open requirement's
+  // unsaved input. Applying that input afterward must preserve the receipt too.
+  await withFieldHost(async url=>{
+    const f=await fixture(url),plan=f.m.PhysicalPlan.clone(f.plan);
+    plan.materials.push(f.m.PhysicalMaterial.create({name:'Additional demand',kind:f.m.AssetKind.DEVICE,quantity:1}));
+    f.plan=(await f.rpc({oneofKind:'physical',physical:f.m.Physical.create({action:{oneofKind:'save',save:{plan}}})})).physical.plan;
+    const planner=await openPlan(page,url,f);
+    await planner.getByRole('button',{name:'Create received device',exact:true}).click();
+    const editor=planner.getByRole('region',{name:'Create received device',exact:true});
+    let release,started;const gate=new Promise(resolve=>{release=resolve;}),sent=new Promise(resolve=>{started=resolve;});
+    const hold=async route=>{
+      const command=f.m.Request.fromBinary(route.request().postDataBuffer().subarray(5)).command;
+      if(command.oneofKind==='physical'&&command.physical.action.oneofKind==='receiveDevice'){
+        started();await gate;
+      }
+      await route.continue();
+    };
+    await page.route('**/omloom.workspace.v1.Workspace/Call',hold);
+    try{
+      await editor.getByRole('button',{name:'Record received device',exact:true}).click();await sent;
+      await planner.getByRole('button',{name:`Edit requirement ${line+1}`,exact:true}).click();
+      const draft=planner.getByRole('form',{name:'Material requirement editor',exact:true});
+      await draft.getByLabel('Material requirement name',{exact:true}).fill('Unapplied new demand');
+      await draft.getByLabel('Required quantity',{exact:true}).fill('7');release();
+      await expect(editor).toContainText('Receipt accepted');
+      await expect(draft.getByLabel('Material requirement name',{exact:true})).toHaveValue('Unapplied new demand');
+      await expect(draft.getByLabel('Required quantity',{exact:true})).toHaveValue('7');
+      await draft.getByRole('button',{name:'Apply material requirement',exact:true}).click();
+      await planner.getByRole('button',{name:'Save installation plan',exact:true}).click();
+      await expect(planner).toContainText('Plan saved. Nothing is reserved or installed.');
+      const loaded=(await f.rpc({oneofKind:'physical',physical:f.m.Physical.create({action:{oneofKind:'load',load:{id:f.plan.id}}})})).physical.plan;
+      expect(loaded.materials[line].name).toBe('Unapplied new demand');
+      expect(loaded.materials[line].quantity).toBe(7);
+      expect(loaded.materials[0].allocations.map(a=>a.unit)).toEqual([0]);
+    }finally{release();await page.unroute('**/omloom.workspace.v1.Workspace/Call',hold);}
+  });
+});
 
 test('an unavailable URL plan leaves other saved plans usable',async({page})=>{
   // A failed optional restoration must not lock the whole planner or repeat
