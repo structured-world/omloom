@@ -1142,6 +1142,10 @@ attempt. Expired outcomes do not admit the old attempt as fresh creation, and
 restored stores retain their existing mutation fence. An unavailable result
 remains unresolved, never an automatic inventory-only fallback. Original accepted
 revision and current plan allocation/hold state are separate meanings.
+After a definitive rejection, the form retains actual input and offers a separate
+**Create in inventory only instead** action. That action does not receive or assign
+a plan unit. A delivery reference carries to the next item only when explicitly
+selected; serials and measured facts never carry over.
 
 Receipt may be partial and can continue after reservation. It neither installs
 the resource nor proves compatibility or health. Real allocations use the same
