@@ -233,6 +233,39 @@ test('explicit review prepares a rejected receipt without losing actual input',a
   });
 });
 
+test('an accepted receipt is applied after an overlapping planner read',async({page})=>{
+  // The server has committed, but an unrelated list read is still pending when
+  // the receipt response reaches the UI. It must still advance record-next.
+  await withFieldHost(async url=>{
+    const f=await fixture(url);const planner=await openPlan(page,url,f);
+    await planner.getByRole('button',{name:'Create received device',exact:true}).click();
+    const editor=planner.getByRole('region',{name:'Create received device',exact:true});
+    await editor.getByLabel('Name',{exact:true}).fill('Accepted while reading');
+    let releaseReceipt,releaseRead,accepted,reading;
+    const receiptGate=new Promise(resolve=>{releaseReceipt=resolve;}),readGate=new Promise(resolve=>{releaseRead=resolve;});
+    const committed=new Promise(resolve=>{accepted=resolve;}),readStarted=new Promise(resolve=>{reading=resolve;});
+    const hold=async route=>{
+      const command=f.m.Request.fromBinary(route.request().postDataBuffer().subarray(5)).command;
+      if(command.oneofKind==='physical'&&command.physical.action.oneofKind==='receiveDevice'){
+        const response=await route.fetch();accepted();await receiptGate;await route.fulfill({response});return;
+      }
+      if(command.oneofKind==='physical'&&command.physical.action.oneofKind==='list'){reading();await readGate;}
+      await route.continue();
+    };
+    await page.route('**/omloom.workspace.v1.Workspace/Call',hold);
+    try{
+      await editor.getByRole('button',{name:'Record and next',exact:true}).click();await committed;
+      await planner.getByRole('button',{name:'First saved plans',exact:true}).click();await readStarted;
+      releaseReceipt();await expect(editor).toContainText('Receipt accepted');
+      releaseRead();
+      await expect(planner).toContainText('Unit 1: Accepted while reading');
+      await expect(editor).toContainText('Unit 2');
+      await expect(planner).not.toHaveAttribute('inert','');
+      await expect(editor.getByLabel('Name',{exact:true})).toHaveValue('Ordered compute node');
+    }finally{releaseReceipt();releaseRead();await page.unroute('**/omloom.workspace.v1.Workspace/Call',hold);}
+  });
+});
+
 test('late creation preparation does not steal receipt input focus',async({page})=>{
   // The optional reference is usable before ordinary creation choices arrive.
   // Late autofocus must not redirect typing into the suggested device name.

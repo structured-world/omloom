@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import {useRoute,useRouter} from 'vue-router';
 import { call, input, key, model, AssetKind as K, type AssetRef } from './api';
 import PlacementSearch from './PlacementSearch.vue';
@@ -62,19 +62,40 @@ function startReceipt(material:number,unit:number){
   try{planKey('current');receiptUnit.value={material,unit};error.value='';}
   catch(e){error.value=String(e)+' Save installation plan explicitly first; the receiving input is retained.';}
 }
-async function receivedDevice(outcome:model.PhysicalReceiptOutcome,next:boolean,sharedReference?:string){await run(async()=>{
+const receiptLifetime=new AbortController();
+onBeforeUnmount(()=>receiptLifetime.abort());
+async function receiptReady(){
+  if(receiptLifetime.signal.aborted)throw Error('The plan view was closed; recover the receipt when reopening.');
+  if(!busy.value&&!props.inactive)return;
+  await new Promise<void>((resolve,reject)=>{
+    const stop=watch([busy,()=>props.inactive],()=>{
+      if(busy.value||props.inactive)return;
+      stop();receiptLifetime.signal.removeEventListener('abort',closed);resolve();
+    });
+    const closed=()=>{stop();reject(Error('The plan view was closed; the receipt reference remains recoverable.'));};
+    receiptLifetime.signal.addEventListener('abort',closed,{once:true});
+  });
+}
+async function receivedDevice(outcome:model.PhysicalReceiptOutcome){
+await receiptReady();
+const applied=await run(async()=>{
   if(outcome.plan?.id!==plan.value?.id){notice.value='The original receipt belongs to a different saved plan. This plan was not changed.';return;}
   changed=true;
   const response=await invoke({oneofKind:'load',load:{id:plan.value!.id!,revision:0n}});
   acceptPlan(response.plan);
   notice.value=`Device receipt accepted at revision ${outcome.revision}. Nothing was installed.`;
-  if(next&&receiptUnit.value&&plan.value!.revision===outcome.revision){
+});
+if(!applied)throw Error('Receipt accepted, but the plan could not be refreshed. Recover its result to refresh again.');
+}
+function advanceReceived(outcome:model.PhysicalReceiptOutcome,sharedReference?:string){
+  // The previous editor clears its recovery reference before mounting the next one.
+  if(outcome.plan?.id===plan.value?.id&&receiptUnit.value&&plan.value!.revision===outcome.revision){
     const material=receiptUnit.value.material;
     const current=plan.value!.materials[material];
     if(current){const unit=firstFreeUnit(current);if(unit!==undefined){receiptUnit.value={material,unit,sharedReference};return;}}
     receiptUnit.value=undefined;
   }
-});}
+}
 const emptyMaterials:model.PhysicalMaterial[]=[];
 const future=ref<model.PhysicalMaterialUnit>();
 const materialUses=computed(()=>{const units:model.PhysicalMaterialUnit[]=[];for(const step of plan.value?.steps??[])if(step.action.oneofKind==='placement'&&step.action.placement.material)units.push(step.action.placement.material);return units;});
@@ -151,11 +172,11 @@ async function invoke(action:model.Physical['action']) {
 }
 let changed=false;
 async function run(action:()=>Promise<void>) {
-  if(busy.value||props.inactive)return;
+  if(busy.value||props.inactive)return false;
   changed=false;
   busy.value=true;error.value='';notice.value='';
   // Refresh before enabling actions so the parent refresh cannot disable the next click.
-  try{await action();if(changed&&view.value.revision!==revision.value)await refresh(false);}catch(e){error.value=String(e);}finally{busy.value=false;if(changed)emit('changed');}
+  try{await action();if(changed&&view.value.revision!==revision.value)await refresh(false);return true;}catch(e){error.value=String(e);return false;}finally{busy.value=false;if(changed)emit('changed');}
 }
 async function summaries(after?:string) {
   const reply=await invoke({oneofKind:'list',list:{after,limit:25}});
@@ -461,7 +482,7 @@ async function exportPlan(){await run(async()=>{
 </section>
 <section aria-label="Installation plan editor">
 <PhysicalMaterials :materials="plan?.materials??emptyMaterials" :uses="materialUses" :items="planItems" :working="working()" :editable="editable" :receivable="editable||plan?.state===model.PhysicalPlanState.RESERVED||plan?.state===model.PhysicalPlanState.PARTIAL" :can-place="kind===K.RACK" :busy="busy" @update="updateMaterials" @receive="receiveMaterial" @create="startReceipt" @selected="selectedMaterial" @place="chooseFuture" @remove="removeMaterial"/>
-<ReceivedDevice v-if="receiptUnit&&plan&&plan.materials[receiptUnit.material]" :key="plan.id+'/'+receiptUnit.material+'/'+receiptUnit.unit" :plan="plan" :material="receiptUnit.material" :unit="receiptUnit.unit" :shared-reference="receiptUnit.sharedReference" :working="working()" :definitions="definitions" :inactive="busy||inactive" @recorded="receivedDevice" @inventory-changed="emit('changed')" @open="openReceived" @close="receiptUnit=undefined"/>
+<ReceivedDevice v-if="receiptUnit&&plan&&plan.materials[receiptUnit.material]" :key="plan.id+'/'+receiptUnit.material+'/'+receiptUnit.unit" :plan="plan" :material="receiptUnit.material" :unit="receiptUnit.unit" :shared-reference="receiptUnit.sharedReference" :working="working()" :definitions="definitions" :inactive="busy||inactive" :recorded="receivedDevice" @advance="advanceReceived" @inventory-changed="emit('changed')" @open="openReceived" @close="receiptUnit=undefined"/>
 <form v-if="editable" @submit.prevent="save"><fieldset :disabled="busy">
 <label>Installation plan name<input v-model="name" required maxlength="160" /></label>
 <div class="placement-controls"><button v-if="kind===K.RACK" type="button" :aria-pressed="mode==='placement'" @click="mode='placement'">Plan rack placement</button><button v-if="kind!==K.CABLE" type="button" :aria-pressed="mode==='replacement'" @click="mode='replacement'">Replace, remove or move a part</button></div>

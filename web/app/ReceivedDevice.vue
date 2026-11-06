@@ -2,8 +2,8 @@
 import {onBeforeUnmount,ref} from 'vue';
 import AssetEditor from './AssetEditor.vue';
 import {call,model,AssetKind,type Field} from './api';
-const props=defineProps<{plan:model.PhysicalPlan;material:number;unit:number;working:model.WorkingContext;definitions:model.Definition[];sharedReference?:string;inactive?:boolean}>();
-const emit=defineEmits<{recorded:[outcome:model.PhysicalReceiptOutcome,next:boolean,sharedReference?:string];inventoryChanged:[];close:[];open:[item:import('./api').AssetRef]}>();
+const props=defineProps<{plan:model.PhysicalPlan;material:number;unit:number;working:model.WorkingContext;definitions:model.Definition[];sharedReference?:string;inactive?:boolean;recorded:(outcome:model.PhysicalReceiptOutcome)=>Promise<void>}>();
+const emit=defineEmits<{inventoryChanged:[];close:[];open:[item:import('./api').AssetRef];advance:[outcome:model.PhysicalReceiptOutcome,sharedReference?:string]}>();
 const reviewedPlan=model.PhysicalPlan.clone(props.plan);
 const explanation=ref(props.sharedReference===undefined?'':props.sharedReference),shareReference=ref(props.sharedReference!==undefined),error=ref(''),pending=ref(false),recovered=ref<model.PhysicalReceiptOutcome>();
 const storageKey='omloom.pending-device-receipt';
@@ -39,8 +39,8 @@ async function recover(){
     const response=await call({oneofKind:'physical',physical:{action:{oneofKind:'receiptOutcome',receiptOutcome:{revision:BigInt(saved.revision),plan:saved.plan}}}},model.WorkingContext.create());
     if(response.oneofKind!=='physical'||!response.physical.receipt)throw Error('The original receipt result is unavailable.');
     recovered.value=response.physical.receipt;
+    await props.recorded(response.physical.receipt);
     localStorage.removeItem(storageKey);pending.value=false;
-    emit('recorded',response.physical.receipt,false);
   }catch(e){error.value=String(e)+' The original outcome remains unresolved; no new device was submitted.';}
 }
 async function submit(changes:Field[],creation:model.WorkingContext,next:boolean){
@@ -58,8 +58,10 @@ async function submit(changes:Field[],creation:model.WorkingContext,next:boolean
       inventory:model.WorkingContext.create({...creation,expected:undefined}),changes,explanation:explanation.value.trim()?explanation.value:undefined,
     }}}},working);
     if(response.oneofKind!=='physical'||!response.physical.receipt)throw Error('The receipt response is unavailable.');
-    recovered.value=response.physical.receipt;localStorage.removeItem(storageKey);pending.value=false;
-    emit('recorded',response.physical.receipt,next,shareReference.value?explanation.value:undefined);
+    recovered.value=response.physical.receipt;
+    await props.recorded(response.physical.receipt);
+    localStorage.removeItem(storageKey);pending.value=false;
+    if(next)emit('advance',response.physical.receipt,shareReference.value?explanation.value:undefined);
   }catch(e){
     const meta=e instanceof Error&&'meta'in e?e.meta:undefined;
     if(meta&&typeof meta==='object'&&'omloom-mutation-outcome'in meta&&meta['omloom-mutation-outcome']==='not-committed'){
@@ -84,7 +86,7 @@ function inventorySaved(target:import('./api').AssetRef|undefined){if(!target)re
 <p v-if="error" role="alert">{{error}}</p>
 <button v-if="rejected&&!pending&&!inventoryOnly&&!recovered" type="button" @click="inventoryOnly=true;error=''">Create in inventory only instead</button>
 <button v-if="rejected&&!pending&&!inventoryOnly&&!recovered" type="button" :disabled="reviewing" @click="review">Review current receipt</button>
-<template v-if="pending"><p role="status">An earlier receipt needs its original result. No creation will be repeated.</p><button type="button" @click="recover">Recover receipt result</button><button type="button" @click="emit('close')">Close, keep recovery reference</button></template>
+<template v-if="pending"><p role="status">{{recovered?'Receipt accepted. Refreshing the plan.':'An earlier receipt needs its original result. No creation will be repeated.'}}</p><button type="button" @click="recover">Recover receipt result</button><button type="button" @click="emit('close')">Close, keep recovery reference</button></template>
 <template v-else-if="recovered"><p role="status">Receipt accepted at revision {{String(recovered.revision)}}. Not installed. Current assignment and hold are shown in the plan.</p><button type="button" @click="openCard">Open received device</button><button type="button" @click="emit('close')">Close receiving</button></template>
 <p v-if="inventoryOnly&&!inventoryCreated">This separate action creates inventory only. It does not assign or receive a unit in this plan.</p>
 <template v-if="inventoryCreated"><p role="status">Device created in inventory only. The plan was not changed.</p><button type="button" @click="openCard">Open inventory device</button><button type="button" @click="emit('close')">Close receiving</button></template>
