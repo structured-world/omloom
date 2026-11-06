@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import {onBeforeUnmount,ref} from 'vue';
+import {onBeforeUnmount,ref,shallowRef} from 'vue';
 import AssetEditor from './AssetEditor.vue';
 import {call,model,AssetKind,type Field} from './api';
 import {readReceiptReference,claimReceiptReference,clearReceiptReference} from './receipt-reference';
 const props=defineProps<{plan:model.PhysicalPlan;material:number;unit:number;working:model.WorkingContext;definitions:model.Definition[];sharedReference?:string;inactive?:boolean;recorded:(outcome:model.PhysicalReceiptOutcome,reviewed:model.PhysicalPlan)=>Promise<void>}>();
 const emit=defineEmits<{inventoryChanged:[];close:[];open:[item:import('./api').AssetRef];advance:[outcome:model.PhysicalReceiptOutcome,sharedReference?:string]}>();
-const reviewedPlan=ref(model.PhysicalPlan.clone(props.plan));
+const reviewedPlan=shallowRef(model.PhysicalPlan.clone(props.plan));
 const explanation=ref(props.sharedReference===undefined?'':props.sharedReference),shareReference=ref(props.sharedReference!==undefined),error=ref(''),pending=ref(true),recovered=ref<model.PhysicalReceiptOutcome>();
 async function checkReference(){try{pending.value=await readReceiptReference()!==undefined;}catch(e){error.value=String(e);}}
 void checkReference();
@@ -92,6 +92,6 @@ function inventorySaved(target:import('./api').AssetRef|undefined){if(!target)re
 <div v-show="!pending&&!recovered&&!inventoryCreated">
 <label v-if="!inventoryOnly">Optional delivery reference or explanation<input v-model="explanation" maxlength="160"/></label>
 <label v-if="!inventoryOnly&&explanation.trim()"><input v-model="shareReference" type="checkbox"/>Use this reference for the next received device</label>
-<AssetEditor ref="editor" inline :inactive="inactive||reviewing" :definitions="definitions" :initial-kind="AssetKind.DEVICE" :working="inventory" :view="model.View.HARDWARE" :receipt="inventoryOnly?undefined:{name:reviewedPlan.materials[material]!.name,submit}" @saved="inventorySaved" @close="emit('close')"/>
+<AssetEditor ref="editor" inline :inactive="inactive||reviewing||pending" :definitions="definitions" :initial-kind="AssetKind.DEVICE" :working="inventory" :view="model.View.HARDWARE" :receipt="inventoryOnly?undefined:{name:reviewedPlan.materials[material]!.name,submit}" @saved="inventorySaved" @close="emit('close')"/>
 </div>
 </section></template>
