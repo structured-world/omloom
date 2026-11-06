@@ -386,6 +386,37 @@ test('receipt acceptance preserves in-flight plan edits without saving them',asy
   });
 });
 
+test('a dirty plan receipt advances the receiving selection',async({page})=>{
+  // Rebasing an accepted allocation into an edited plan must not leave the
+  // receiving form pointing at the unit that was just consumed.
+  await withFieldHost(async url=>{
+    const f=await fixture(url),planner=await openPlan(page,url,f);
+    await planner.getByRole('button',{name:'Create received device',exact:true}).click();
+    const editor=planner.getByRole('region',{name:'Create received device',exact:true});
+    let release,started;const gate=new Promise(resolve=>{release=resolve;}),sent=new Promise(resolve=>{started=resolve;});
+    const hold=async route=>{
+      const command=f.m.Request.fromBinary(route.request().postDataBuffer().subarray(5)).command;
+      if(command.oneofKind==='physical'&&command.physical.action.oneofKind==='receiveDevice'){started();await gate;}
+      await route.continue();
+    };
+    await page.route('**/omloom.workspace.v1.Workspace/Call',hold);
+    try{
+      await editor.getByRole('button',{name:'Record received device',exact:true}).click();await sent;
+      await planner.getByLabel('Installation plan name',{exact:true}).fill('Edited receiving plan');release();
+      await expect(editor).toContainText('Receipt accepted');
+      await planner.getByRole('button',{name:'Save installation plan',exact:true}).click();
+      await expect(planner).toContainText('Plan saved. Nothing is reserved or installed.');
+      await editor.getByRole('button',{name:'Close receiving',exact:true}).click();
+      await expect(planner.getByLabel('Requested unit number',{exact:true})).toHaveValue('2');
+      await planner.getByRole('button',{name:'Create received device',exact:true}).click();
+      await editor.getByRole('button',{name:'Record received device',exact:true}).click();
+      await expect(planner).toContainText('2 allocated of 3 requested');
+      const saved=(await f.rpc({oneofKind:'physical',physical:f.m.Physical.create({action:{oneofKind:'load',load:{id:f.plan.id}}})})).physical.plan;
+      expect(saved.materials[0].allocations.map(a=>a.unit)).toEqual([0,1]);
+    }finally{release();await page.unroute('**/omloom.workspace.v1.Workspace/Call',hold);}
+  });
+});
+
 test('receipt acceptance never retargets a changed draft requirement',async({page})=>{
   // A changed line has no inferred identity. Keep the draft, surface the accepted
   // result, and prevent an unaware save from removing its confirmed allocation.

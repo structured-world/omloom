@@ -34,6 +34,13 @@ const names=computed(()=>{
 const kinds=[K.DEVICE,K.PHYSICAL_COMPONENT,K.RACK,K.CABLE];
 function start(line?:number){placing.value=undefined;receiving.value=undefined;index.value=line;draft.value=line===undefined?model.PhysicalMaterial.create({kind:K.DEVICE}):model.PhysicalMaterial.clone(props.materials[line]!);quantity.value=line===undefined?'':String(draft.value.quantity);field.value=equipmentFields[0]!;source.value=undefined;valid.value=true;draftStale.value=false;editing.value=true;error.value='';}
 function startReceiving(line:number){placing.value=undefined;editing.value=false;receiving.value=line;source.value=undefined;wider.value=false;const free=firstFreeUnit(props.materials[line]!);unit.value=free===undefined?'':String(free+1);basis.value='';}
+watch(()=>receiving.value===undefined?undefined:props.materials[receiving.value]?.allocations,()=>{
+  if(receiving.value===undefined||!/^\d+$/.test(unit.value))return;
+  const material=props.materials[receiving.value],selected=Number(unit.value)-1;
+  if(!material||!Number.isSafeInteger(selected)||selected<0)return;
+  if(selected<material.quantity&&!material.allocations.some(a=>a.unit===selected))return;
+  const free=firstFreeUnit(material);unit.value=free===undefined?'':String(free+1);
+},{deep:true});
 function createReceived(){error.value='';try{const line=receiving.value;if(line===undefined)return;emit('create',line,integer(unit.value,props.materials[line]!.quantity)-1);}catch(e){error.value=String(e);}}
 function integer(value:string,max:number){if(!/^\d+$/.test(value))throw Error('Enter a whole positive count.');const n=Number(value);if(!Number.isSafeInteger(n)||n<1||n>max)throw Error(`Enter a count between 1 and ${max}.`);return n;}
 function claim(value:Field|undefined){draft.value.specifications=draft.value.specifications.filter(f=>f.name!==field.value);if(value)draft.value.specifications.push(value);}
