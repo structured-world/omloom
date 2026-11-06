@@ -724,6 +724,9 @@ for (const width of [1440, 390]) test(`known prefix refinement, contextual creat
     await expect(dialog.getByRole('region', { name: 'Review known address' })).toContainText('Selected prefix');
     await dialog.getByRole('button', { name: 'Save known address', exact: true }).click();
     await expect(dialog).toBeHidden();
+    // Saving closes the dialog before metadata refresh opens the accepted address.
+    // Complete that navigation before returning to the prefix for its next edit.
+    await expect(page.getByRole('region', { name: 'Resource details', exact: true }).getByRole('heading', { name: '192.0.2.20', exact: true })).toBeVisible();
     await page.goto(server.url + path);
     await page.getByRole('button', { name: 'Review network settings', exact: true }).click();
     dialog = page.getByRole('dialog');
