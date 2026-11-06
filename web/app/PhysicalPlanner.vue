@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import {useRoute,useRouter} from 'vue-router';
 import { call, input, key, model, AssetKind as K, type AssetRef } from './api';
 import PlacementSearch from './PlacementSearch.vue';
 import PlanStepControls from './PlanStepControls.vue';
@@ -12,7 +13,8 @@ import { millimetres,micrometres,signedMicrometres,upperMicrometres } from './ph
 import {frameSize,projectElevation,depthOrder,type Face} from './physical-elevation';
 import {rackAllocation,rackUnitAt,adjacentRackUnit} from './rack-grid';
 const props = defineProps<{target:AssetRef;kind:number;working:model.WorkingContext;definitions:model.Definition[];inactive?:boolean}>();
-const emit=defineEmits<{changed:[]}>();
+const emit=defineEmits<{changed:[];open:[target:AssetRef]}>();
+const router=useRouter(),route=useRoute();
 const opened=ref(false),busy=ref(false),error=ref(''),notice=ref('');
 const view=ref(model.PhysicalView.create());
 const revision=ref(props.working.expected);
@@ -50,12 +52,18 @@ const assessmentText=computed(()=>{
   return `Physical result unknown: ${model.RequirementReason[assessment.value.reason]?.toLowerCase().replaceAll('_',' ')}. Nothing was saved or reserved.`;
 });
 const planItems=ref<model.Item[]>([]);
-const receiptUnit=ref<{material:number;unit:number}>();
+const receiptUnit=ref<{material:number;unit:number;sharedReference?:string}>();
+async function openReceived(target:AssetRef){
+  if(!plan.value?.id)return;
+  await router.replace({path:'/',query:{...route.query,physicalPlan:plan.value.id}});
+  emit('open',target);
+}
 function startReceipt(material:number,unit:number){
   try{planKey('current');receiptUnit.value={material,unit};error.value='';}
   catch(e){error.value=String(e)+' Save installation plan explicitly first; the receiving input is retained.';}
 }
-async function receivedDevice(outcome:model.PhysicalReceiptOutcome,next:boolean){await run(async()=>{
+async function receivedDevice(outcome:model.PhysicalReceiptOutcome,next:boolean,sharedReference?:string){await run(async()=>{
+  if(outcome.plan?.id!==plan.value?.id){notice.value='The original receipt belongs to a different saved plan. This plan was not changed.';return;}
   changed=true;
   const response=await invoke({oneofKind:'load',load:{id:plan.value!.id!,revision:0n}});
   acceptPlan(response.plan);
@@ -63,7 +71,7 @@ async function receivedDevice(outcome:model.PhysicalReceiptOutcome,next:boolean)
   if(next&&receiptUnit.value&&plan.value!.revision===outcome.revision){
     const material=receiptUnit.value.material;
     const current=plan.value!.materials[material];
-    if(current){const unit=firstFreeUnit(current);if(unit!==undefined){receiptUnit.value={material,unit};return;}}
+    if(current){const unit=firstFreeUnit(current);if(unit!==undefined){receiptUnit.value={material,unit,sharedReference};return;}}
     receiptUnit.value=undefined;
   }
 });}
@@ -185,8 +193,15 @@ function addWiring(){
 }
 async function open() {
   if(opened.value)return;
-  await run(async()=>{await refresh();await summaries();opened.value=true;});
+  await run(async()=>{await refresh();await summaries();
+    if(typeof route.query.physicalPlan==='string'){
+      const reply=await invoke({oneofKind:'load',load:{id:route.query.physicalPlan,revision:0n}});
+      acceptPlan(reply.plan);
+    }
+    opened.value=true;
+  });
 }
+watch(()=>props.inactive,inactive=>{if(!inactive&&!opened.value&&typeof route.query.physicalPlan==='string')void open();},{immediate:true});
 async function load(saved:model.PhysicalPlanSummary) {
   await run(async()=>{
     const reply=await invoke({oneofKind:'load',load:{id:saved.id,revision:saved.revision}});
@@ -410,7 +425,7 @@ async function exportPlan(){await run(async()=>{
 });}
 </script>
 <template>
-<details class="physical-planner" :inert="inactive" @toggle="($event.target as HTMLDetailsElement).open&&open()">
+<details class="physical-planner" :open="opened" :inert="inactive" @toggle="($event.target as HTMLDetailsElement).open&&open()">
 <summary>Plan installation from enclosing scope</summary>
 <p>Choose equipment from the enclosing selection. A draft changes no actual placement. Reservations and reported installation are separate actions.</p>
 <p v-if="busy||notice||assessment" role="status">{{busy?'Updating physical plan…':notice?notice:assessmentText}}</p><p v-if="error" role="alert">{{error}}</p>
@@ -444,7 +459,7 @@ async function exportPlan(){await run(async()=>{
 </section>
 <section aria-label="Installation plan editor">
 <PhysicalMaterials :materials="plan?.materials??emptyMaterials" :uses="materialUses" :items="planItems" :working="working()" :editable="editable" :receivable="editable||plan?.state===model.PhysicalPlanState.RESERVED||plan?.state===model.PhysicalPlanState.PARTIAL" :can-place="kind===K.RACK" :busy="busy" @update="updateMaterials" @receive="receiveMaterial" @create="startReceipt" @selected="selectedMaterial" @place="chooseFuture" @remove="removeMaterial"/>
-<ReceivedDevice v-if="receiptUnit&&plan" :key="plan.id+'/'+receiptUnit.material+'/'+receiptUnit.unit" :plan="plan" :material="receiptUnit.material" :unit="receiptUnit.unit" :working="working()" :definitions="definitions" @recorded="receivedDevice" @close="receiptUnit=undefined"/>
+<ReceivedDevice v-if="receiptUnit&&plan" :key="plan.id+'/'+receiptUnit.material+'/'+receiptUnit.unit" :plan="plan" :material="receiptUnit.material" :unit="receiptUnit.unit" :shared-reference="receiptUnit.sharedReference" :working="working()" :definitions="definitions" @recorded="receivedDevice" @open="openReceived" @close="receiptUnit=undefined"/>
 <form v-if="editable" @submit.prevent="save"><fieldset :disabled="busy">
 <label>Installation plan name<input v-model="name" required maxlength="160" /></label>
 <div class="placement-controls"><button v-if="kind===K.RACK" type="button" :aria-pressed="mode==='placement'" @click="mode='placement'">Plan rack placement</button><button v-if="kind!==K.CABLE" type="button" :aria-pressed="mode==='replacement'" @click="mode='replacement'">Replace, remove or move a part</button></div>

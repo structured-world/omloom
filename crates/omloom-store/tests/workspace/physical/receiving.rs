@@ -21,7 +21,7 @@ fn saved(store: &Store, actor: &Context) -> Result<api::PhysicalPlan, Error> {
     .plan
     .ok_or(Error::Missing)
 }
-fn request(plan: &api::PhysicalPlan, base: u64) -> Result<api::PhysicalDeviceReceipt, Error> {
+fn request(plan: &api::PhysicalPlan) -> Result<api::PhysicalDeviceReceipt, Error> {
     Ok(api::PhysicalDeviceReceipt {
         plan: Some(api::PhysicalPlanKey {
             id: plan.id.clone().ok_or(Error::Missing)?,
@@ -29,10 +29,7 @@ fn request(plan: &api::PhysicalPlan, base: u64) -> Result<api::PhysicalDeviceRec
         }),
         material: 0,
         unit: 1,
-        inventory: Some(api::WorkingContext {
-            expected: Some(base),
-            ..Default::default()
-        }),
+        inventory: Some(api::WorkingContext::default()),
         changes: vec![text_field("name", "Unpacked node")],
         explanation: None,
     })
@@ -80,7 +77,7 @@ fn received_device_is_atomic_unplaced_and_recoverable_after_reopen() -> TestResu
         expected: Some(base),
         ..Default::default()
     };
-    let receipt = request(&plan, base)?;
+    let receipt = request(&plan)?;
     let outcome = submit(
         &store,
         &actor,
@@ -193,7 +190,7 @@ fn receiving_refusal_leaves_no_orphan_inventory() -> TestResult {
         expected: Some(base),
         ..Default::default()
     };
-    let mut value = request(&plan, base)?;
+    let mut value = request(&plan)?;
     value.unit = 3;
     let before = store.usage()?;
     assert!(matches!(
@@ -215,7 +212,7 @@ fn receiving_refusal_leaves_no_orphan_inventory() -> TestResult {
             &store,
             &denied,
             &working,
-            api::physical::Action::ReceiveDevice(request(&plan, base)?)
+            api::physical::Action::ReceiveDevice(request(&plan)?)
         ),
         Err(Error::Denied)
     ));
@@ -237,7 +234,7 @@ fn receipt_expiry_and_older_restore_keep_admission_closed() -> TestResult {
         expected: Some(base),
         ..Default::default()
     };
-    let request = request(&plan, base)?;
+    let request = request(&plan)?;
     let mut old = Vec::new();
     store.export(&mut old)?;
     let accepted = submit(
@@ -277,7 +274,7 @@ fn receipt_expiry_and_older_restore_keep_admission_closed() -> TestResult {
     let mut cursor = None;
     loop {
         let pass = store.cleanup(2000, cursor.as_deref())?;
-        cursor = pass.next;
+        cursor = pass.cursor;
         if cursor.is_none() {
             break;
         }
@@ -320,7 +317,7 @@ fn concurrent_receipts_commit_one_identity_and_one_allocation() -> TestResult {
         expected: Some(base),
         ..Default::default()
     };
-    let first = request(&plan, base)?;
+    let first = request(&plan)?;
     let mut second = first.clone();
     second.changes = vec![text_field("name", "Concurrent other device")];
     let barrier = std::sync::Barrier::new(2);
@@ -440,7 +437,7 @@ fn reserved_receipt_preserves_actual_dimensions_and_unresolved_hold() -> TestRes
         expected: Some(base),
         ..Default::default()
     };
-    let mut request = request(&reserved, base)?;
+    let mut request = request(&reserved)?;
     request.changes.extend([
         equipment_quantity("height", 3_000_000, "mm", 3),
         equipment_quantity("width", 500_000, "mm", 3),
@@ -508,5 +505,294 @@ fn reserved_receipt_preserves_actual_dimensions_and_unresolved_hold() -> TestRes
             .kind,
         K::Device as i32
     );
+    Ok(())
+}
+
+// Sparse allocation limits and material-kind checks run before a new identity can survive.
+#[test]
+fn full_material_allocation_and_wrong_kind_refuse_new_identity() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let mut plan = saved(&store, &actor)?;
+    plan.materials[0].quantity = 65;
+    for unit in 0..64 {
+        let item = create(&store, &actor, K::Device, &format!("Selected spare {unit}"))?;
+        plan.materials[0]
+            .allocations
+            .push(api::PhysicalMaterialAllocation {
+                unit,
+                item: Some(item),
+                basis: "Selected existing spare".into(),
+            });
+    }
+    plan = physical(
+        &store,
+        &actor,
+        api::physical::Action::Save(api::PhysicalSave { plan: Some(plan) }),
+    )?
+    .plan
+    .ok_or(Error::Missing)?;
+    let base = store.usage()?.revision;
+    let working = api::WorkingContext {
+        expected: Some(base),
+        ..Default::default()
+    };
+    let mut input = request(&plan)?;
+    input.unit = 64;
+    let before = store.usage()?;
+    assert!(matches!(
+        submit(
+            &store,
+            &actor,
+            &working,
+            api::physical::Action::ReceiveDevice(input)
+        ),
+        Err(Error::Limit)
+    ));
+    assert_eq!(store.usage()?, before);
+    plan.materials = vec![api::PhysicalMaterial {
+        name: "Cable demand".into(),
+        quantity: 3,
+        kind: K::Cable as i32,
+        ..Default::default()
+    }];
+    plan = physical(
+        &store,
+        &actor,
+        api::physical::Action::Save(api::PhysicalSave { plan: Some(plan) }),
+    )?
+    .plan
+    .ok_or(Error::Missing)?;
+    let base = store.usage()?.revision;
+    let working = api::WorkingContext {
+        expected: Some(base),
+        ..Default::default()
+    };
+    let before = store.usage()?;
+    assert!(matches!(
+        submit(
+            &store,
+            &actor,
+            &working,
+            api::physical::Action::ReceiveDevice(request(&plan)?)
+        ),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// Recovery discloses the original identity only under current rights; a visible
+// plan, another actor or a forged inventory context supplies no new authority.
+#[test]
+fn receipt_recovery_rechecks_resource_rights_and_both_contexts() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let rack = create(&store, &actor, K::Rack, "Other context")?;
+    let plan = saved(&store, &actor)?;
+    let base = store.usage()?.revision;
+    let working = api::WorkingContext {
+        roots: vec![rack.clone()],
+        expected: Some(base),
+        ..Default::default()
+    };
+    let mut forged = request(&plan)?;
+    forged
+        .inventory
+        .as_mut()
+        .ok_or(Error::Missing)?
+        .roots
+        .push(rack);
+    let before = store.usage()?;
+    assert!(matches!(
+        submit(
+            &store,
+            &actor,
+            &working,
+            api::physical::Action::ReceiveDevice(forged)
+        ),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
+    submit(
+        &store,
+        &actor,
+        &working,
+        api::physical::Action::ReceiveDevice(request(&plan)?),
+    )?;
+    let lookup = api::physical::Action::ReceiptOutcome(api::PhysicalReceiptLookup {
+        revision: base,
+        plan: plan.id.ok_or(Error::Missing)?,
+    });
+    let before = store.usage()?;
+    let mut hidden = actor.clone();
+    hidden.grants[0].scope = Scope::Kinds(vec![K::Rack]);
+    assert!(matches!(
+        submit(
+            &store,
+            &hidden,
+            &api::WorkingContext::default(),
+            lookup.clone()
+        ),
+        Err(Error::Denied)
+    ));
+    let mut foreign = actor;
+    foreign.actor = "another-operator".into();
+    assert!(matches!(
+        submit(&store, &foreign, &api::WorkingContext::default(), lookup),
+        Err(Error::Denied)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// Receipt remains usable after an earlier unit was installed, without completing
+// the next step or changing the identity and placement of the installed unit.
+#[test]
+fn partial_plan_receives_next_device_without_repeating_completed_work() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let rack = create(&store, &actor, K::Rack, "Partial installation rack")?;
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(define(rack.clone())),
+        }),
+    )?;
+    let mut first = volume();
+    first.y.as_mut().ok_or(Error::Invalid)?.length_um = 1_000_000;
+    let mut second = first;
+    second.y.as_mut().ok_or(Error::Invalid)?.start_um = 1_000_000;
+    let plan = physical(
+        &store,
+        &actor,
+        api::physical::Action::Save(api::PhysicalSave {
+            plan: Some(api::PhysicalPlan {
+                name: "Partial receiving".into(),
+                materials: vec![api::PhysicalMaterial {
+                    name: "Two future servers".into(),
+                    quantity: 2,
+                    kind: K::Device as i32,
+                    specifications: vec![
+                        equipment_quantity("width", 500_000, "mm", 3),
+                        equipment_quantity("height", 1_000_000, "mm", 3),
+                        equipment_quantity("depth", 1_000_000, "mm", 3),
+                    ],
+                    physical: Some(Box::new(api::PhysicalDefinition {
+                        basis: "Selected chassis envelope".into(),
+                        clearance: Some(Box::default()),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                }],
+                steps: [first, second]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(unit, volume)| api::PhysicalStep {
+                        action: Some(api::physical_step::Action::Placement(
+                            api::PhysicalPlacement {
+                                item: None,
+                                enclosure: Some(rack.clone()),
+                                volume: Some(volume),
+                                material: Some(api::PhysicalMaterialUnit {
+                                    material: 0,
+                                    unit: unit as u32,
+                                }),
+                            },
+                        )),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            }),
+        }),
+    )?
+    .plan
+    .ok_or(Error::Missing)?;
+    let reserved = reserve(&store, &actor, plan)?.plan.ok_or(Error::Missing)?;
+    let base = store.usage()?.revision;
+    let mut working = api::WorkingContext {
+        roots: vec![rack],
+        expected: Some(base),
+        ..Default::default()
+    };
+    let mut input = request(&reserved)?;
+    input.unit = 0;
+    input.changes.extend([
+        equipment_quantity("width", 500_000, "mm", 3),
+        equipment_quantity("height", 1_000_000, "mm", 3),
+        equipment_quantity("depth", 1_000_000, "mm", 3),
+    ]);
+    let received = submit(
+        &store,
+        &actor,
+        &working,
+        api::physical::Action::ReceiveDevice(input),
+    )?
+    .receipt
+    .ok_or(Error::Missing)?;
+    let target = received.item.ok_or(Error::Missing)?;
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(api::PhysicalDefinition {
+                target: Some(target.clone()),
+                basis: "Inspected chassis service clearance".into(),
+                clearance: Some(Box::default()),
+                ..Default::default()
+            }),
+        }),
+    )?;
+    working.expected = Some(store.usage()?.revision);
+    let partial = submit(
+        &store,
+        &actor,
+        &working,
+        api::physical::Action::Complete(api::PhysicalCompletion {
+            plan: received.plan,
+            completed_steps: vec![0],
+            ..Default::default()
+        }),
+    )?
+    .plan
+    .ok_or(Error::Missing)?;
+    assert_eq!(partial.state, api::PhysicalPlanState::Partial as i32);
+    working.expected = Some(store.usage()?.revision);
+    let next = submit(
+        &store,
+        &actor,
+        &working,
+        api::physical::Action::ReceiveDevice(request(&partial)?),
+    )?
+    .receipt
+    .ok_or(Error::Missing)?;
+    assert_ne!(next.item, Some(target.clone()));
+    let loaded = submit(
+        &store,
+        &actor,
+        &working,
+        api::physical::Action::Load(api::PhysicalPlanKey {
+            id: partial.id.ok_or(Error::Missing)?,
+            revision: 0,
+        }),
+    )?
+    .plan
+    .ok_or(Error::Missing)?;
+    assert_eq!(loaded.state, api::PhysicalPlanState::Partial as i32);
+    assert_eq!(
+        loaded.steps[0].state,
+        api::PhysicalStepState::Recorded as i32
+    );
+    assert_eq!(
+        loaded.steps[1].state,
+        api::PhysicalStepState::Reserved as i32
+    );
+    assert_eq!(loaded.materials[0].allocations[0].item, Some(target));
+    assert_eq!(loaded.materials[0].allocations.len(), 2);
     Ok(())
 }

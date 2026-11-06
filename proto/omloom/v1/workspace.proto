@@ -2220,6 +2220,7 @@ message PhysicalDeviceReceipt {
   uint32 unit = 3;
   // Explicit permitted inventory context for a new, unplaced Device. Required;
   // empty roots deliberately select permitted installation inventory, not the rack.
+  // Omit expected here; the enclosing request supplies the shared reviewed revision.
   WorkingContext inventory = 4;
   // Actual user-entered fields, using ordinary Device validation and authority.
   // Planned specifications are not copied. Unknown serials may be omitted.

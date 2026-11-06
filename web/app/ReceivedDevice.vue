@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import {ref} from 'vue';
-import {useRouter} from 'vue-router';
 import AssetEditor from './AssetEditor.vue';
 import {call,model,AssetKind,type Field} from './api';
-const props=defineProps<{plan:model.PhysicalPlan;material:number;unit:number;working:model.WorkingContext;definitions:model.Definition[]}>();
-const emit=defineEmits<{recorded:[outcome:model.PhysicalReceiptOutcome,next:boolean];close:[]}>();
-const router=useRouter();
+const props=defineProps<{plan:model.PhysicalPlan;material:number;unit:number;working:model.WorkingContext;definitions:model.Definition[];sharedReference?:string}>();
+const emit=defineEmits<{recorded:[outcome:model.PhysicalReceiptOutcome,next:boolean,sharedReference?:string];close:[];open:[item:import('./api').AssetRef]}>();
 const reviewedPlan=model.PhysicalPlan.clone(props.plan);
-const explanation=ref(''),error=ref(''),pending=ref(false),recovered=ref<model.PhysicalReceiptOutcome>();
+const explanation=ref(props.sharedReference===undefined?'':props.sharedReference),shareReference=ref(props.sharedReference!==undefined),error=ref(''),pending=ref(false),recovered=ref<model.PhysicalReceiptOutcome>();
 const storageKey='omloom.pending-device-receipt';
 type Reference={plan:string;revision:string};
 function reference():Reference|undefined {
@@ -42,11 +40,11 @@ async function submit(changes:Field[],creation:model.WorkingContext,next:boolean
   try{
     const response=await call({oneofKind:'physical',physical:{action:{oneofKind:'receiveDevice',receiveDevice:{
       plan:{id:reviewedPlan.id,revision:reviewedPlan.revision},material:props.material,unit:props.unit,
-      inventory:creation,changes,explanation:explanation.value.trim()?explanation.value:undefined,
+      inventory:model.WorkingContext.create({...creation,expected:undefined}),changes,explanation:explanation.value.trim()?explanation.value:undefined,
     }}}},working);
     if(response.oneofKind!=='physical'||!response.physical.receipt)throw Error('The receipt response is unavailable.');
     recovered.value=response.physical.receipt;localStorage.removeItem(storageKey);pending.value=false;
-    emit('recorded',response.physical.receipt,next);
+    emit('recorded',response.physical.receipt,next,shareReference.value?explanation.value:undefined);
   }catch(e){
     const meta=e instanceof Error&&'meta'in e?e.meta:undefined;
     if(meta&&typeof meta==='object'&&'omloom-mutation-outcome'in meta&&meta['omloom-mutation-outcome']==='not-committed'){
@@ -58,20 +56,20 @@ async function submit(changes:Field[],creation:model.WorkingContext,next:boolean
 }
 function openCard(){
   const item=recovered.value?.item;if(!item)return;
-  void router.push({path:'/',query:{asset:item.assetId,incarnation:item.incarnation}});
+  emit('open',item);
 }
 </script>
 <template><section aria-label="Create received device" class="received-device">
 <h4>Create received device</h4>
 <p v-if="!recovered">{{plan.name}} · {{plan.materials[material]?.name}} · Unit {{unit+1}}</p>
-<p v-else>Original receipt: material {{recovered.material+1}}, unit {{recovered.unit+1}} in plan {{recovered.plan?.id}}.</p>
-<p>Creation context: permitted installation inventory. Physical placement: not recorded. Planned specifications are not actual facts.</p>
-<p>Recording attests that this item was received. It does not install it, verify fit or complete work. Actor and recording time come from the server.</p>
+<p v-else>Original receipt: material {{recovered.material+1}}, unit {{recovered.unit+1}}.</p>
+<p v-if="!recovered">Unplaced device in permitted installation inventory. Recording confirms receipt, not installation. Planned specifications are not actual facts.</p>
 <p v-if="error" role="alert">{{error}}</p>
 <template v-if="pending"><p role="status">An earlier receipt needs its original result. No creation will be repeated.</p><button type="button" @click="recover">Recover receipt result</button><button type="button" @click="emit('close')">Close, keep recovery reference</button></template>
-<template v-else-if="recovered"><p role="status">Receipt accepted at revision {{String(recovered.revision)}}. Current allocation and hold are shown by the reloaded plan, separately from this original result.</p><button type="button" @click="openCard">Open received device</button><button type="button" @click="emit('close')">Close receiving</button></template>
+<template v-else-if="recovered"><p role="status">Receipt accepted at revision {{String(recovered.revision)}}. Not installed. Current assignment and hold are shown in the plan.</p><button type="button" @click="openCard">Open received device</button><button type="button" @click="emit('close')">Close receiving</button></template>
 <div v-show="!pending&&!recovered">
 <label>Optional delivery reference or explanation<input v-model="explanation" maxlength="160"/></label>
+<label v-if="explanation.trim()"><input v-model="shareReference" type="checkbox"/>Use this reference for the next received device</label>
 <AssetEditor inline :definitions="definitions" :initial-kind="AssetKind.DEVICE" :working="inventory" :view="model.View.HARDWARE" :receipt="{name:plan.materials[material]!.name,submit}" @close="emit('close')"/>
 </div>
 </section></template>

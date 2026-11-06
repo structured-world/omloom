@@ -39,6 +39,7 @@ for(const width of [1440,390])test(`received devices remain unplaced and record-
     await expect(editor.getByLabel('Serial number',{exact:true})).toHaveValue('');
     await expect(editor.getByLabel('Serial number change',{exact:true})).toHaveValue('preserve');
     await editor.getByLabel('Name',{exact:true}).fill('Unpacked node one');
+    await expect(editor.getByLabel('Name',{exact:true})).toHaveValue('Unpacked node one');
     await editor.getByRole('button',{name:'Record received device',exact:true}).click();
     await expect(planner).toContainText('2 allocated of 3 requested');
     await expect(editor.getByRole('status')).toContainText('Receipt accepted');
@@ -68,15 +69,18 @@ test('a lost receipt reply is recovered after reload without another device',asy
     await planner.getByRole('button',{name:'Create received device',exact:true}).click();
     const editor=planner.getByRole('region',{name:'Create received device',exact:true});
     await editor.getByLabel('Name',{exact:true}).fill('Reply lost node');
+    let lossFinished;
+    const loss=new Promise(resolve=>{lossFinished=resolve;});
     const lose=async route=>{
       const request=f.m.Request.fromBinary(route.request().postDataBuffer().subarray(5));
       if(request.command.oneofKind==='physical'&&request.command.physical.action.oneofKind==='receiveDevice'){
-        await route.fetch();await route.abort('failed');
+        await route.fetch();await route.abort('failed');lossFinished();
       }else await route.continue();
     };
     await page.route('**/omloom.workspace.v1.Workspace/Call',lose);
     await editor.getByRole('button',{name:'Record received device',exact:true}).click();
     await expect(editor.getByRole('button',{name:'Recover receipt result',exact:true})).toBeVisible();
+    await loss;
     const reference=await page.evaluate(()=>JSON.parse(localStorage.getItem('omloom.pending-device-receipt')));
     expect(Object.keys(reference).sort()).toEqual(['plan','revision']);
     await page.unroute('**/omloom.workspace.v1.Workspace/Call',lose);

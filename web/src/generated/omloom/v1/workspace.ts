@@ -5144,6 +5144,7 @@ export interface PhysicalDeviceReceipt {
     /**
      * Explicit permitted inventory context for a new, unplaced Device. Required;
      * empty roots deliberately select permitted installation inventory, not the rack.
+     * Omit expected here; the enclosing request supplies the shared reviewed revision.
      *
      * @generated from protobuf field: omloom.workspace.v1.WorkingContext inventory = 4
      */

@@ -105,9 +105,7 @@ impl Tx<'_> {
         let base = working.expected.ok_or(Error::Conflict)?;
         let key = request.plan.as_ref().ok_or(Error::Invalid)?;
         let inventory = request.inventory.as_ref().ok_or(Error::Invalid)?;
-        if inventory.expected != Some(base)
-            || inventory.focus.is_some()
-            || !inventory.roots.is_empty()
+        if inventory.expected.is_some() || inventory.focus.is_some() || !inventory.roots.is_empty()
         {
             return Err(Error::Invalid);
         }
@@ -158,6 +156,8 @@ impl Tx<'_> {
             {
                 return Err(Error::Limit);
             }
+            let mut creation = inventory.clone();
+            creation.expected = Some(base);
             let item = self.context_write(
                 context,
                 api::Write {
@@ -165,7 +165,7 @@ impl Tx<'_> {
                     changes: request.changes.clone(),
                     ..Default::default()
                 },
-                inventory,
+                &creation,
                 now,
             )?;
             let mut selected = plan_working;

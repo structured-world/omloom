@@ -82,20 +82,20 @@ function place(){error.value='';try{
 <summary>Required materials and receiving ({{materials.length}} lines)</summary>
 <template v-if="opened">
 <p>Requested quantities stay in this plan. They create no inventory, stock promise, order or payment. Select an existing actual resource or record a received device; receipt does not install it.</p>
-<p v-if="editable">Material edits and allocations remain unsaved until you save the installation plan.</p>
+<p v-if="editable">Requirement edits and existing-card selections need Save installation plan. Recorded new-device receipts are already saved.</p>
 <p v-if="error" role="alert">{{error}}</p>
 <fieldset :disabled="busy||loading">
 <button v-if="editable&&!editing" type="button" :disabled="materials.length>=64" @click="start()">Add material requirement</button>
 <ol :start="page*25+1"><li v-for="(material,offset) in rows" :key="page*25+offset">
 <strong>{{material.name}}</strong> · {{K[material.kind]?.toLowerCase().replaceAll('_',' ')}} · {{material.allocations.length}} allocated of {{material.quantity}} requested
 <dl><template v-for="f in material.specifications" :key="f.name"><dt>{{f.name.replaceAll('_',' ')}}</dt><dd>{{input(f)}}</dd></template></dl>
-<ul><li v-for="a in material.allocations" :key="a.unit">Unit {{a.unit+1}}: <template v-if="resource(a.item)">{{resource(a.item)}}</template><template v-else>Resource name unavailable</template> · {{a.basis}}</li></ul>
+<ul><li v-for="a in material.allocations" :key="a.unit">Unit {{a.unit+1}}: <template v-if="resource(a.item)">{{resource(a.item)}}</template><template v-else>Resource name unavailable</template><details><summary>Receipt or reuse basis</summary>{{a.basis}}</details></li></ul>
 <button v-if="editable" type="button" @click="start(page*25+offset)">Edit requirement {{page*25+offset+1}}</button>
 <button v-if="editable" type="button" @click="emit('remove',page*25+offset)">Remove requirement {{page*25+offset+1}}</button>
 <button v-if="editable&&canPlace&&material.kind===K.DEVICE" type="button" @click="placing=page*25+offset;placementUnit='';editing=false;receiving=undefined">Place a unit from requirement {{page*25+offset+1}}</button>
 <button v-if="receivable" type="button" @click="startReceiving(page*25+offset)">Receive or reuse a unit for requirement {{page*25+offset+1}}</button>
 </li></ol>
-<div><button type="button" :disabled="page===0" @click="page--">Previous materials</button><button type="button" :disabled="(page+1)*25>=materials.length" @click="page++">Next materials</button></div>
+<div v-if="materials.length>25"><button type="button" :disabled="page===0" @click="page--">Previous materials</button><button type="button" :disabled="(page+1)*25>=materials.length" @click="page++">Next materials</button></div>
 <form v-if="placing!==undefined&&editable" aria-label="Place requested material" @submit.prevent="place">
 <label>Unit to place<input v-model="placementUnit" required inputmode="numeric"/></label>
 <button type="submit">Select requested unit for placement</button><button type="button" @click="placing=undefined">Close requested placement</button>
