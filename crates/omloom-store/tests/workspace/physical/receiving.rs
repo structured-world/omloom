@@ -78,6 +78,9 @@ fn received_device_is_atomic_unplaced_and_recoverable_after_reopen() -> TestResu
         ..Default::default()
     };
     let receipt = request(&plan)?;
+    let usage_before = store.usage()?;
+    store.diagnostic_database().query_registry().reset();
+    let started = std::time::Instant::now();
     let outcome = submit(
         &store,
         &actor,
@@ -86,6 +89,25 @@ fn received_device_is_atomic_unplaced_and_recoverable_after_reopen() -> TestResu
     )?
     .receipt
     .ok_or(Error::Missing)?;
+    let elapsed = started.elapsed();
+    let usage_after = store.usage()?;
+    eprintln!(
+        "device receipt: elapsed={elapsed:?}, logical bytes {} -> {}, rows {:?} -> {:?}",
+        usage_before.bytes.iter().sum::<u64>(),
+        usage_after.bytes.iter().sum::<u64>(),
+        usage_before.rows,
+        usage_after.rows
+    );
+    for query in store
+        .diagnostic_database()
+        .query_registry()
+        .top_by_impact(32)
+    {
+        eprintln!(
+            "receipt query: count={} time_us={} statement={} plan={:?}",
+            query.count, query.total_time_us, query.canonical_query, query.last_plan
+        );
+    }
     let item = outcome.item.clone().ok_or(Error::Missing)?;
     let asset = store.asset(AssetRef::try_from(&item).map_err(|_| Error::Invalid)?)?;
     assert_eq!(asset.kind, K::Device as i32);

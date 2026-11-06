@@ -15,6 +15,7 @@ const props = defineProps<{ item?: model.Item; definitions: model.Definition[]; 
 const emit = defineEmits<{ close: []; saved: [target?: AssetRef]; recheck: [] }>();
 const focused = computed(() => props.fieldMask !== undefined);
 const form = ref<HTMLFormElement>();
+const entryFocus=document.activeElement;
 const reviewedItem = ref(props.item);
 const outcome = ref<'' | 'conflict' | 'uncertain' | 'reviewed' | 'denied'>('');
 const uncertain = ref(false);
@@ -57,6 +58,16 @@ function addEquipment(){if(equipmentFields.value.includes(equipmentToAdd.value)&
 const modes = reactive<Record<string, string>>({});
 const submittedMask = computed(() => modes.prefix_length !== 'clear' && values.prefix_length !== undefined && values.prefix_length !== '' ? Number(values.prefix_length) : undefined);
 const error = ref(''); const busy = ref(false); const preparing = ref(true); const more = ref(false);
+watch(()=>props.receipt,async(value,previous)=>{
+  if(value||!previous)return;
+  preparing.value=true;error.value='';
+  try{
+    const response=await call({oneofKind:'prepare',prepare:model.Prepare.create({view:props.view})},model.WorkingContext.create({...props.working,expected:undefined}));
+    if(!mounted)return;
+    if(response.oneofKind!=='actions')throw Error('Inventory creation could not be prepared.');
+    actions.value=response.actions;
+  }catch(e){error.value=String(e);}finally{preparing.value=false;}
+});
 type EditorField = { id: string; name: string; type: model.FieldType; choices: string[]; advanced: boolean };
 const parents = computed(() => [...new Map(actions.value?.creations.flatMap(c => c.parent?.target ? [[key(c.parent.target), c.parent] as const] : [])).values()]);
 const choices = computed(() => actions.value?.creations.filter(c => key(c.parent?.target) === selectedParent.value) ?? []);
@@ -168,7 +179,11 @@ onMounted(async () => {
     if (!props.item && parents.value.length === 1) selectedParent.value = key(parents.value[0]!.target);
   } catch (e) { error.value = String(e); } finally {
     preparing.value = false;
-    if ((focused.value || props.receipt) && mounted) { await nextTick(); (form.value?.querySelector<HTMLElement>('[data-fact-value]') ?? form.value?.querySelector<HTMLElement>('#value-name,textarea,input'))?.focus(); }
+    if ((focused.value || props.receipt) && mounted) {
+      await nextTick();
+      // Preparation may finish after the user starts entering another receipt field.
+      if(document.activeElement===entryFocus||document.activeElement===document.body)(form.value?.querySelector<HTMLElement>('[data-fact-value]') ?? form.value?.querySelector<HTMLElement>('#value-name,textarea,input'))?.focus();
+    }
   }
 });
 function reviewedChanges() {

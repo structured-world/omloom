@@ -481,7 +481,7 @@ impl Store {
     ) -> Result<api::Reply> {
         use api::physical::Action;
         let action = request.action.ok_or(Error::Invalid)?;
-        let original = working.ok_or(Error::Invalid)?;
+        let original = working;
         let mut tx = self.begin()?;
         let plan_id = match &action {
             Action::Load(key) | Action::Cancel(key) => Some(key.id.as_str()),
@@ -494,10 +494,9 @@ impl Store {
             _ => None,
         };
         let selected = plan_id
-            .map(|id| tx.plan_context(context, id, original))
+            .map(|id| tx.plan_context(context, id, original.ok_or(Error::Invalid)?))
             .transpose()?;
-        let working =
-            || -> Result<&api::WorkingContext> { Ok(selected.as_ref().unwrap_or(original)) };
+        let working = || selected.as_ref().or(original).ok_or(Error::Invalid);
         let mut view = api::PhysicalView {
             revision: number(&tx.root, "revision")?,
             state: api::RequirementState::Unknown as i32,
@@ -506,7 +505,12 @@ impl Store {
         };
         match action {
             Action::ReceiveDevice(value) => {
-                view.receipt = Some(Box::new(tx.receive_device(context, value, original, now)?));
+                view.receipt = Some(Box::new(tx.receive_device(
+                    context,
+                    value,
+                    working()?,
+                    now,
+                )?));
             }
             Action::ReceiptOutcome(value) => {
                 view.receipt = Some(Box::new(tx.receipt_outcome(
