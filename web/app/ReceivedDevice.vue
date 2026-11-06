@@ -2,23 +2,15 @@
 import {onBeforeUnmount,ref} from 'vue';
 import AssetEditor from './AssetEditor.vue';
 import {call,model,AssetKind,type Field} from './api';
+import {readReceiptReference,claimReceiptReference,clearReceiptReference} from './receipt-reference';
 const props=defineProps<{plan:model.PhysicalPlan;material:number;unit:number;working:model.WorkingContext;definitions:model.Definition[];sharedReference?:string;inactive?:boolean;recorded:(outcome:model.PhysicalReceiptOutcome,reviewed:model.PhysicalPlan)=>Promise<void>}>();
 const emit=defineEmits<{inventoryChanged:[];close:[];open:[item:import('./api').AssetRef];advance:[outcome:model.PhysicalReceiptOutcome,sharedReference?:string]}>();
 const reviewedPlan=ref(model.PhysicalPlan.clone(props.plan));
-const explanation=ref(props.sharedReference===undefined?'':props.sharedReference),shareReference=ref(props.sharedReference!==undefined),error=ref(''),pending=ref(false),recovered=ref<model.PhysicalReceiptOutcome>();
-const storageKey='omloom.pending-device-receipt';
-type Reference={plan:string;revision:string};
-function reference():Reference|undefined {
-  const raw=localStorage.getItem(storageKey);
-  if(raw===null)return undefined;
-  if(raw.length>256)throw Error('The saved receipt reference is invalid. Do not submit another receipt until it is resolved.');
-  const value:unknown=JSON.parse(raw);
-  if(typeof value!=='object'||value===null||!('plan'in value)||!('revision'in value)||typeof value.plan!=='string'||typeof value.revision!=='string'||!/^[0-9a-f-]{36}$/.test(value.plan)||!/^\d{1,20}$/.test(value.revision))throw Error('The saved receipt reference is invalid.');
-  return {plan:value.plan,revision:value.revision};
-}
-try{pending.value=reference()!==undefined;}catch(e){pending.value=true;error.value=String(e);}
+const explanation=ref(props.sharedReference===undefined?'':props.sharedReference),shareReference=ref(props.sharedReference!==undefined),error=ref(''),pending=ref(true),recovered=ref<model.PhysicalReceiptOutcome>();
+async function checkReference(){try{pending.value=await readReceiptReference()!==undefined;}catch(e){error.value=String(e);}}
+void checkReference();
 const inventory=model.WorkingContext.create();
-const editor=ref<InstanceType<typeof AssetEditor>>(),reviewing=ref(false);
+const editor=ref<InstanceType<typeof AssetEditor>>(),reviewing=ref(false),recovering=ref(false);
 const rejected=ref(false),inventoryOnly=ref(false),inventoryCreated=ref<import('./api').AssetRef>();
 async function review(){
   if(pending.value||reviewing.value)return;
@@ -38,23 +30,25 @@ function warnDraft(event:BeforeUnloadEvent){if(touched.value&&!pending.value&&!r
 window.addEventListener('beforeunload',warnDraft);
 onBeforeUnmount(()=>window.removeEventListener('beforeunload',warnDraft));
 async function recover(){
+  if(recovering.value)return;
+  recovering.value=true;
   error.value='';
   try{
-    const saved=reference();if(!saved)throw Error('No saved receipt reference is available.');
+    const saved=await readReceiptReference();if(!saved)throw Error('No saved receipt reference is available.');
     const response=await call({oneofKind:'physical',physical:{action:{oneofKind:'receiptOutcome',receiptOutcome:{revision:BigInt(saved.revision),plan:saved.plan}}}},model.WorkingContext.create());
     if(response.oneofKind!=='physical'||!response.physical.receipt)throw Error('The original receipt result is unavailable.');
     recovered.value=response.physical.receipt;
     await props.recorded(response.physical.receipt,reviewedPlan.value);
-    localStorage.removeItem(storageKey);pending.value=false;
-  }catch(e){error.value=String(e)+' The original outcome remains unresolved; no new device was submitted.';}
+    await clearReceiptReference(saved);pending.value=false;
+  }catch(e){error.value=String(e)+' The original outcome remains unresolved; no new device was submitted.';}finally{recovering.value=false;}
 }
 async function submit(changes:Field[],creation:model.WorkingContext,next:boolean){
-  if(reference())throw Error('Resolve the earlier receipt before creating another device.');
   if(!reviewedPlan.value.id||creation.expected===undefined)throw Error('Save and review this plan first.');
   if(changes.length>32)throw Error('Record at most 32 actual fields in one device creation.');
   if(new TextEncoder().encode(explanation.value).length>160||/[\u0000-\u001f\u007f-\u009f]/.test(explanation.value))throw Error('The optional reference must use at most 160 UTF-8 bytes, without control characters.');
   // Store only a non-authorizing lookup reference before the request can leave this tab.
-  localStorage.setItem(storageKey,JSON.stringify({plan:reviewedPlan.value.id,revision:String(creation.expected)}));
+  const saved=await claimReceiptReference({plan:reviewedPlan.value.id,revision:String(creation.expected)});
+  if(!saved){pending.value=true;const failure=Error('Resolve the earlier receipt before creating another device.');error.value=String(failure);throw failure;}
   pending.value=true;
   const working=model.WorkingContext.create({...props.working,expected:creation.expected});
   try{
@@ -65,12 +59,12 @@ async function submit(changes:Field[],creation:model.WorkingContext,next:boolean
     if(response.oneofKind!=='physical'||!response.physical.receipt)throw Error('The receipt response is unavailable.');
     recovered.value=response.physical.receipt;
     await props.recorded(response.physical.receipt,reviewedPlan.value);
-    localStorage.removeItem(storageKey);pending.value=false;
+    await clearReceiptReference(saved);pending.value=false;
     if(next)emit('advance',response.physical.receipt,shareReference.value?explanation.value:undefined);
   }catch(e){
     const meta=e instanceof Error&&'meta'in e?e.meta:undefined;
     if(meta&&typeof meta==='object'&&'omloom-mutation-outcome'in meta&&meta['omloom-mutation-outcome']==='not-committed'){
-      localStorage.removeItem(storageKey);pending.value=false;
+      await clearReceiptReference(saved);pending.value=false;
       rejected.value=true;
       error.value='Nothing was created by this rejected receipt. Input is retained. Review the plan or explicitly create inventory separately.';
     }
@@ -91,7 +85,7 @@ function inventorySaved(target:import('./api').AssetRef|undefined){if(!target)re
 <p v-if="error" role="alert">{{error}}</p>
 <button v-if="rejected&&!pending&&!inventoryOnly&&!recovered" type="button" @click="inventoryOnly=true;error=''">Create in inventory only instead</button>
 <button v-if="rejected&&!pending&&!inventoryOnly&&!recovered" type="button" :disabled="reviewing" @click="review">Review current receipt</button>
-<template v-if="pending"><p role="status">{{recovered?'Receipt accepted. Refreshing the plan.':'An earlier receipt needs its original result. No creation will be repeated.'}}</p><button type="button" @click="recover">Recover receipt result</button><button type="button" @click="emit('close')">Close, keep recovery reference</button></template>
+<template v-if="pending"><p role="status">{{recovered?'Receipt accepted. Refreshing the plan.':'An earlier receipt needs its original result. No creation will be repeated.'}}</p><button type="button" :disabled="recovering" @click="recover">Recover receipt result</button><button type="button" @click="emit('close')">Close, keep recovery reference</button></template>
 <template v-else-if="recovered"><p role="status">Receipt accepted at revision {{String(recovered.revision)}}. Not installed. Current assignment and hold are shown in the plan.</p><button type="button" @click="openCard">Open received device</button><button type="button" @click="emit('close')">Close receiving</button></template>
 <p v-if="inventoryOnly&&!inventoryCreated">This separate action creates inventory only. It does not assign or receive a unit in this plan.</p>
 <template v-if="inventoryCreated"><p role="status">Device created in inventory only. The plan was not changed.</p><button type="button" @click="openCard">Open inventory device</button><button type="button" @click="emit('close')">Close receiving</button></template>

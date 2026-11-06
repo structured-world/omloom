@@ -1136,7 +1136,11 @@ not an invented delivery or inspection date.
 **Record and next** independently confirms each item and clears its serial and
 actual characteristics. A conflict leaves earlier successes intact. Before
 submission the browser keeps only a non-authorizing plan/revision reference for
-recovering the original result after a lost reply or reopening. Recovery and
+recovering the original result after a lost reply or reopening. A transactional
+browser-storage slot admits one unresolved receipt across tabs. Its generated
+key prevents delayed cleanup from removing another attempt's reference; no actual
+fields or request payload are stored. Storage failure prevents dispatch.
+Recovery and
 exact repeated requests write nothing; changed arguments cannot reuse the
 attempt. Expired outcomes do not admit the old attempt as fresh creation, and
 restored stores retain their existing mutation fence. An unavailable result
@@ -1144,7 +1148,11 @@ remains unresolved, never an automatic inventory-only fallback. Original accepte
 revision and current plan allocation/hold state are separate meanings.
 After a definitive rejection, the form retains actual input and offers a separate
 **Create in inventory only instead** action. That action does not receive or assign
-a plan unit. A delivery reference carries to the next item only when explicitly
+a plan unit. **Review current receipt** explicitly refreshes the saved material
+unit and inventory creation context without clearing entered actual fields.
+Receipt application preserves unrelated draft edits rather than saving them.
+Changed material lines require explicit reconciliation against the saved plan.
+A delivery reference carries to the next item only when explicitly
 selected; serials and measured facts never carry over.
 
 Receipt may be partial and can continue after reservation. It neither installs

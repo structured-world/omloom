@@ -100,7 +100,11 @@ test('a lost receipt reply is recovered after reload without another device',asy
     await expect(editor.getByRole('button',{name:'Recover receipt result',exact:true})).toBeVisible();
     await expect(editor.getByRole('button',{name:'Create in inventory only instead',exact:true})).toHaveCount(0);
     await loss;
-    const reference=await page.evaluate(()=>JSON.parse(localStorage.getItem('omloom.pending-device-receipt')));
+    const reference=await page.evaluate(()=>new Promise((resolve,reject)=>{
+      const request=indexedDB.open('omloom-receipt-recovery',1);
+      request.onerror=()=>reject(request.error);
+      request.onsuccess=()=>{const db=request.result,tx=db.transaction('pending');const read=tx.objectStore('pending').openCursor();read.onsuccess=()=>resolve(read.result.value);tx.oncomplete=()=>db.close();};
+    }));
     expect(Object.keys(reference).sort()).toEqual(['plan','revision']);
     await page.unroute('**/omloom.workspace.v1.Workspace/Call',lose);
     await page.reload();const reopened=await openPlan(page,url,f);
@@ -350,6 +354,72 @@ test('explicit receipt review refreshes a changed saved plan and retains input',
     await expect(editor).toContainText('Reviewed receiving plan');
     await editor.getByRole('button',{name:'Record received device',exact:true}).click();
     await expect(planner).toContainText('Unit 1: Retain through plan review');
+  });
+});
+
+test('another tab cannot erase an unresolved accepted receipt',async({page,context})=>{
+  // Force the allowed Web Storage interleaving: both admission reads observe
+  // the empty slot before either writes. Transactional admission must not rely on it.
+  await context.addInitScript(()=>{
+    const get=Storage.prototype.getItem;
+    Storage.prototype.getItem=function(key){return key==='omloom.pending-device-receipt'?null:get.call(this,key);};
+  });
+  await withFieldHost(async url=>{
+    const f=await fixture(url),other=await context.newPage();
+    const a=await openPlan(page,url,f),b=await openPlan(other,url,f);
+    for(const planner of [a,b])await planner.getByRole('button',{name:'Create received device',exact:true}).click();
+    const accepted=a.getByRole('region',{name:'Create received device',exact:true}),loser=b.getByRole('region',{name:'Create received device',exact:true});
+    await accepted.getByLabel('Name',{exact:true}).fill('Cross-tab accepted device');
+    await loser.getByLabel('Name',{exact:true}).fill('Must not create');
+    let finish;const lost=new Promise(resolve=>{finish=resolve;});let submissions=0;
+    const intercept=async route=>{
+      const command=f.m.Request.fromBinary(route.request().postDataBuffer().subarray(5)).command;
+      if(command.oneofKind==='physical'&&command.physical.action.oneofKind==='receiveDevice'){
+        submissions++;const response=await route.fetch();
+        if(route.request().frame().page()===page){await route.abort('failed');finish();}
+        else await route.fulfill({response});
+      }else await route.continue();
+    };
+    await context.route('**/omloom.workspace.v1.Workspace/Call',intercept);
+    try{
+      await accepted.getByRole('button',{name:'Record received device',exact:true}).click();await lost;
+      await loser.getByRole('button',{name:'Record received device',exact:true}).click();
+      await expect(loser.getByRole('alert').filter({hasText:/Error/})).toBeVisible();
+      expect(submissions).toBe(1);
+      await loser.getByRole('button',{name:'Recover receipt result',exact:true}).click();
+      await expect(b).toContainText('Unit 1: Cross-tab accepted device');
+      const devices=(await f.rpc({oneofKind:'query',query:f.m.Query.create({kinds:[f.m.AssetKind.DEVICE],columns:['name'],limit:25})})).page;
+      expect(devices.total).toBe(1n);
+    }finally{await context.unroute('**/omloom.workspace.v1.Workspace/Call',intercept);await other.close();}
+  });
+});
+
+test('simultaneous receipt tabs admit only one unresolved command',async({page,context})=>{
+  // The winner retains admission through response delivery, so a second tab
+  // cannot dispatch even when both editors were prepared at the same revision.
+  await withFieldHost(async url=>{
+    const f=await fixture(url),other=await context.newPage();
+    const planners=[await openPlan(page,url,f),await openPlan(other,url,f)];
+    for(const planner of planners){
+      await planner.getByRole('button',{name:'Create received device',exact:true}).click();
+      await expect(planner.getByRole('button',{name:'Record received device',exact:true})).toBeEnabled();
+    }
+    let release,accepted;const gate=new Promise(resolve=>{release=resolve;}),committed=new Promise(resolve=>{accepted=resolve;});let submissions=0;
+    const hold=async route=>{
+      const command=f.m.Request.fromBinary(route.request().postDataBuffer().subarray(5)).command;
+      if(command.oneofKind==='physical'&&command.physical.action.oneofKind==='receiveDevice'){
+        submissions++;const response=await route.fetch();accepted();await gate;await route.fulfill({response});
+      }else await route.continue();
+    };
+    await context.route('**/omloom.workspace.v1.Workspace/Call',hold);
+    try{
+      await Promise.all(planners.map(p=>p.getByRole('button',{name:'Record received device',exact:true}).click()));
+      await committed;
+      await expect.poll(async()=>Promise.all(planners.map(p=>p.getByRole('alert').filter({hasText:'Resolve the earlier receipt'}).count())).then(counts=>counts.reduce((a,b)=>a+b,0))).toBe(1);
+      expect(submissions).toBe(1);release();
+      const devices=(await f.rpc({oneofKind:'query',query:f.m.Query.create({kinds:[f.m.AssetKind.DEVICE],columns:['name'],limit:25})})).page;
+      expect(devices.total).toBe(1n);
+    }finally{release();await context.unroute('**/omloom.workspace.v1.Workspace/Call',hold);await other.close();}
   });
 });
 
