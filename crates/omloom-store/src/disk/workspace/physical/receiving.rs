@@ -1,6 +1,8 @@
 //! One accepted inventory creation and sparse allocation share the existing commit/outcome.
 use super::*;
 use addresses::knowledge::Outcome;
+#[cfg(test)]
+mod tests;
 
 impl Store {
     pub(super) fn commit_receipt(
@@ -18,7 +20,7 @@ impl Store {
                 // Only reread the winner; never execute this mutation again.
                 let fresh = self.begin()?;
                 let key = request.plan.as_ref().ok_or(Error::Invalid)?;
-                fresh
+                let winner = fresh
                     .creation_outcome(
                         context,
                         working,
@@ -32,8 +34,18 @@ impl Store {
                     .map_err(|error| match error {
                         Error::Conflict => Error::Rejected(Box::new(Error::Conflict)),
                         error => error,
-                    })?
-                    .ok_or(Error::Conflict)?;
+                    })?;
+                if winner.is_none() {
+                    let base = working.expected.ok_or(Error::Conflict)?;
+                    // One intervening commit cannot both accept and expire an outcome.
+                    // A larger revision gap can contain an accepted, reclaimed result.
+                    if number(&fresh.root, "revision")?
+                        == base.checked_add(1).ok_or(Error::Limit)?
+                    {
+                        return Err(Error::Rejected(Box::new(Error::Conflict)));
+                    }
+                    return Err(Error::Conflict);
+                }
                 let receipt = fresh.receipt_outcome(
                     context,
                     working.expected.ok_or(Error::Conflict)?,
