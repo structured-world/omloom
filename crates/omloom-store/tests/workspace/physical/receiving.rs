@@ -108,6 +108,54 @@ fn outcome_collision_is_a_definitive_receipt_refusal() -> TestResult {
     Ok(())
 }
 
+// Unsupported control characters are a refusal, not an uncertain mutation.
+#[test]
+fn invalid_receipt_preflight_is_definitive_without_losing_prior_outcomes() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let plan = saved(&store, &actor)?;
+    let working = api::WorkingContext {
+        expected: Some(store.usage()?.revision),
+        ..Default::default()
+    };
+    let valid = request(&plan)?;
+    let mut invalid = valid.clone();
+    invalid.explanation = Some("delivery\u{009c}".into());
+    let before = store.usage()?;
+    let result = store.workspace(
+        &actor,
+        api::Request {
+            working: Some(working.clone()),
+            command: Some(Command::Physical(api::Physical {
+                action: Some(api::physical::Action::ReceiveDevice(invalid)),
+            })),
+        },
+        100,
+    );
+    assert!(matches!(result, Err(Error::Rejected(cause)) if matches!(*cause, Error::Invalid)));
+    assert_eq!(store.usage()?, before);
+    let accepted = submit(
+        &store,
+        &actor,
+        &working,
+        api::physical::Action::ReceiveDevice(valid.clone()),
+    )?;
+    let before = store.usage()?;
+    assert_eq!(
+        submit(
+            &store,
+            &actor,
+            &working,
+            api::physical::Action::ReceiveDevice(valid)
+        )?
+        .receipt,
+        accepted.receipt
+    );
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // A lost reply and later edits never create another item or replay the old field values.
 #[test]
 fn received_device_is_atomic_unplaced_and_recoverable_after_reopen() -> TestResult {

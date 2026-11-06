@@ -193,6 +193,26 @@ test('removing the selected material closes receiving without a render error',as
   });
 });
 
+test('a C1 control in a delivery reference never dispatches a receipt',async({page})=>{
+  // Client validation must cover the same control range as the server, before
+  // persisting an unresolved reference or sending a mutation.
+  await withFieldHost(async url=>{
+    const f=await fixture(url);const planner=await openPlan(page,url,f);const sent=[];
+    page.on('request',request=>{if(request.url().endsWith('/omloom.workspace.v1.Workspace/Call')){
+      const command=f.m.Request.fromBinary(request.postDataBuffer().subarray(5)).command;
+      if(command.oneofKind==='physical'&&command.physical.action.oneofKind==='receiveDevice')sent.push(command);
+    }});
+    await planner.getByRole('button',{name:'Create received device',exact:true}).click();
+    const editor=planner.getByRole('region',{name:'Create received device',exact:true});
+    await editor.getByLabel('Name',{exact:true}).fill('Received device');
+    await editor.getByLabel('Optional delivery reference or explanation',{exact:true}).fill('delivery\u009c');
+    await editor.getByRole('button',{name:'Record received device',exact:true}).click();
+    await expect(editor.getByRole('alert')).toContainText('without control characters');
+    expect(sent).toEqual([]);
+    await expect(editor.getByRole('button',{name:'Recover receipt result',exact:true})).toHaveCount(0);
+  });
+});
+
 test('late creation preparation does not steal receipt input focus',async({page})=>{
   // The optional reference is usable before ordinary creation choices arrive.
   // Late autofocus must not redirect typing into the suggested device name.

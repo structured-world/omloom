@@ -38,7 +38,7 @@ async function submit(changes:Field[],creation:model.WorkingContext,next:boolean
   if(reference())throw Error('Resolve the earlier receipt before creating another device.');
   if(!reviewedPlan.id||creation.expected===undefined)throw Error('Save and review this plan first.');
   if(changes.length>32)throw Error('Record at most 32 actual fields in one device creation.');
-  if(new TextEncoder().encode(explanation.value).length>160||/[\u0000-\u001f\u007f]/.test(explanation.value))throw Error('The optional reference must use at most 160 UTF-8 bytes, without control characters.');
+  if(new TextEncoder().encode(explanation.value).length>160||/[\u0000-\u001f\u007f-\u009f]/.test(explanation.value))throw Error('The optional reference must use at most 160 UTF-8 bytes, without control characters.');
   // Store only a non-authorizing lookup reference before the request can leave this tab.
   localStorage.setItem(storageKey,JSON.stringify({plan:reviewedPlan.id,revision:String(creation.expected)}));
   pending.value=true;

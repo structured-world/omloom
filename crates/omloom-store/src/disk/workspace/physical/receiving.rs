@@ -154,22 +154,30 @@ impl Tx<'_> {
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<api::PhysicalReceiptOutcome> {
-        let base = working.expected.ok_or(Error::Conflict)?;
-        let key = request.plan.as_ref().ok_or(Error::Invalid)?;
-        let inventory = request.inventory.as_ref().ok_or(Error::Invalid)?;
+        // These malformed inputs cannot have been accepted under this command contract.
+        let reject = |cause| Error::Rejected(Box::new(cause));
+        let base = working.expected.ok_or_else(|| reject(Error::Conflict))?;
+        let key = request
+            .plan
+            .as_ref()
+            .ok_or_else(|| reject(Error::Invalid))?;
+        let inventory = request
+            .inventory
+            .as_ref()
+            .ok_or_else(|| reject(Error::Invalid))?;
         if inventory.expected.is_some() || inventory.focus.is_some() || !inventory.roots.is_empty()
         {
-            return Err(Error::Invalid);
+            return Err(reject(Error::Invalid));
         }
         if request.changes.len() > MAX_FIELDS {
-            return Err(Error::Limit);
+            return Err(reject(Error::Limit));
         }
         if request
             .explanation
             .as_ref()
             .is_some_and(|v| v.len() > 160 || v.chars().any(char::is_control))
         {
-            return Err(Error::Invalid);
+            return Err(reject(Error::Invalid));
         }
         let input = request.encode_to_vec();
         let outcome = || Outcome::Receipt {
