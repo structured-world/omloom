@@ -59,6 +59,7 @@ impl Tx<'_> {
         base: u64,
         expected_plan: &str,
     ) -> Result<api::PhysicalReceiptOutcome> {
+        PlanId::parse(expected_plan).map_err(|_| Error::Invalid)?;
         let row = self
             .get(&format!("mutation-outcome/{base}"))?
             .ok_or(Error::Expired)?;
@@ -133,68 +134,72 @@ impl Tx<'_> {
         {
             return self.receipt_outcome(context, base, &key.id);
         }
-        self.selection(context, working, true)?;
-        let plan_working = self.plan_context(context, &key.id, working)?;
-        let plan = self.load_physical_plan(context, key, &plan_working, true)?;
-        let material = plan
-            .materials
-            .get(request.material as usize)
-            .ok_or(Error::Invalid)?;
-        if material.kind != wire::AssetKind::Device as i32 || request.unit >= material.quantity {
-            return Err(Error::Invalid);
-        }
-        if material.allocations.iter().any(|a| a.unit == request.unit) {
-            return Err(Error::Conflict);
-        }
-        if plan
-            .materials
-            .iter()
-            .map(|m| m.allocations.len())
-            .sum::<usize>()
-            >= 64
-        {
-            return Err(Error::Limit);
-        }
-        let item = self.context_write(
-            context,
-            api::Write {
-                kind: wire::AssetKind::Device as i32,
-                changes: request.changes.clone(),
-                ..Default::default()
-            },
-            inventory,
-            now,
-        )?;
-        let mut selected = plan_working;
-        if !selected.roots.is_empty() {
-            selected.roots.push(target_wire(item));
-        }
-        let basis = match request.explanation.as_deref() {
-            Some(value) if !value.trim().is_empty() => format!("Receipt asserted: {value}"),
-            _ => "Receipt asserted".into(),
-        };
-        self.receive_material(
-            context,
-            api::PhysicalMaterialReceipt {
-                plan: Some(key.clone()),
-                material: request.material,
-                allocation: Some(api::PhysicalMaterialAllocation {
-                    unit: request.unit,
-                    item: Some(target_wire(item)),
-                    basis,
-                }),
-            },
-            &selected,
-            now,
-        )?;
-        self.save_creation_outcome(
-            context,
-            working,
-            &input,
-            &[target_wire(item)],
-            now,
-            outcome(),
-        )?;
-        self.receipt_outcome(context, base, &key.id)
+        (|| {
+            self.selection(context, working, true)?;
+            let plan_working = self.plan_context(context, &key.id, working)?;
+            let plan = self.load_physical_plan(context, key, &plan_working, true)?;
+            let material = plan
+                .materials
+                .get(request.material as usize)
+                .ok_or(Error::Invalid)?;
+            if material.kind != wire::AssetKind::Device as i32 || request.unit >= material.quantity
+            {
+                return Err(Error::Invalid);
+            }
+            if material.allocations.iter().any(|a| a.unit == request.unit) {
+                return Err(Error::Conflict);
+            }
+            if plan
+                .materials
+                .iter()
+                .map(|m| m.allocations.len())
+                .sum::<usize>()
+                >= 64
+            {
+                return Err(Error::Limit);
+            }
+            let item = self.context_write(
+                context,
+                api::Write {
+                    kind: wire::AssetKind::Device as i32,
+                    changes: request.changes.clone(),
+                    ..Default::default()
+                },
+                inventory,
+                now,
+            )?;
+            let mut selected = plan_working;
+            if !selected.roots.is_empty() {
+                selected.roots.push(target_wire(item));
+            }
+            let basis = match request.explanation.as_deref() {
+                Some(value) if !value.trim().is_empty() => format!("Receipt asserted: {value}"),
+                _ => "Receipt asserted".into(),
+            };
+            self.receive_material(
+                context,
+                api::PhysicalMaterialReceipt {
+                    plan: Some(key.clone()),
+                    material: request.material,
+                    allocation: Some(api::PhysicalMaterialAllocation {
+                        unit: request.unit,
+                        item: Some(target_wire(item)),
+                        basis,
+                    }),
+                },
+                &selected,
+                now,
+            )?;
+            self.save_creation_outcome(
+                context,
+                working,
+                &input,
+                &[target_wire(item)],
+                now,
+                outcome(),
+            )?;
+            self.receipt_outcome(context, base, &key.id)
+        })()
+        .map_err(|error| Error::Rejected(Box::new(error)))
     }
 }

@@ -496,7 +496,8 @@ impl Store {
         let selected = plan_id
             .map(|id| tx.plan_context(context, id, original))
             .transpose()?;
-        let working = || Ok(selected.as_ref().unwrap_or(original));
+        let working =
+            || -> Result<&api::WorkingContext> { Ok(selected.as_ref().unwrap_or(original)) };
         let mut view = api::PhysicalView {
             revision: number(&tx.root, "revision")?,
             state: api::RequirementState::Unknown as i32,

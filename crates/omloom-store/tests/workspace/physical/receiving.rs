@@ -53,7 +53,11 @@ fn submit(
                 })),
             },
             100,
-        )?
+        )
+        .map_err(|error| match error {
+            Error::Rejected(error) => *error,
+            error => error,
+        })?
         .result
         .ok_or(Error::Missing)?;
     match result {

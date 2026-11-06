@@ -47,8 +47,8 @@ async function submit(changes:Field[],creation:model.WorkingContext,next:boolean
     recovered.value=response.physical.receipt;localStorage.removeItem(storageKey);pending.value=false;
     emit('recorded',response.physical.receipt,next);
   }catch(e){
-    const code=e instanceof Error&&'code'in e?String(e.code):'';
-    if(['INVALID_ARGUMENT','ABORTED','PERMISSION_DENIED','NOT_FOUND','RESOURCE_EXHAUSTED','FAILED_PRECONDITION'].includes(code)){
+    const meta=e instanceof Error&&'meta'in e?e.meta:undefined;
+    if(meta&&typeof meta==='object'&&'omloom-mutation-outcome'in meta&&meta['omloom-mutation-outcome']==='not-committed'){
       localStorage.removeItem(storageKey);pending.value=false;
       error.value='Nothing was created by this rejected receipt. Input is retained. Review the plan or explicitly create inventory separately.';
     }
