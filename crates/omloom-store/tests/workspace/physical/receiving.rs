@@ -670,6 +670,43 @@ fn receipt_recovery_rechecks_resource_rights_and_both_contexts() -> TestResult {
     Ok(())
 }
 
+// Reordering requirements invalidates the reviewed line even at a fresh inventory revision.
+#[test]
+fn reordered_material_cannot_receive_an_old_reviewed_unit() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let mut plan = saved(&store, &actor)?;
+    let input = request(&plan)?;
+    plan.materials.push(api::PhysicalMaterial {
+        name: "Different chassis".into(),
+        quantity: 2,
+        kind: K::Device as i32,
+        ..Default::default()
+    });
+    plan.materials.swap(0, 1);
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Save(api::PhysicalSave { plan: Some(plan) }),
+    )?;
+    let before = store.usage()?;
+    assert!(matches!(
+        submit(
+            &store,
+            &actor,
+            &api::WorkingContext {
+                expected: Some(before.revision),
+                ..Default::default()
+            },
+            api::physical::Action::ReceiveDevice(input)
+        ),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // Receipt remains usable after an earlier unit was installed, without completing
 // the next step or changing the identity and placement of the installed unit.
 #[test]
@@ -749,6 +786,8 @@ fn partial_plan_receives_next_device_without_repeating_completed_work() -> TestR
         equipment_quantity("height", 1_000_000, "mm", 3),
         equipment_quantity("depth", 1_000_000, "mm", 3),
     ]);
+    let original_input = input.clone();
+    let original_working = working.clone();
     let received = submit(
         &store,
         &actor,
@@ -757,7 +796,7 @@ fn partial_plan_receives_next_device_without_repeating_completed_work() -> TestR
     )?
     .receipt
     .ok_or(Error::Missing)?;
-    let target = received.item.ok_or(Error::Missing)?;
+    let target = received.item.clone().ok_or(Error::Missing)?;
     physical(
         &store,
         &actor,
@@ -776,7 +815,7 @@ fn partial_plan_receives_next_device_without_repeating_completed_work() -> TestR
         &actor,
         &working,
         api::physical::Action::Complete(api::PhysicalCompletion {
-            plan: received.plan,
+            plan: received.plan.clone(),
             completed_steps: vec![0],
             ..Default::default()
         }),
@@ -785,11 +824,15 @@ fn partial_plan_receives_next_device_without_repeating_completed_work() -> TestR
     .ok_or(Error::Missing)?;
     assert_eq!(partial.state, api::PhysicalPlanState::Partial as i32);
     working.expected = Some(store.usage()?.revision);
+    let mut next_input = request(&partial)?;
+    next_input
+        .changes
+        .extend(original_input.changes.iter().skip(1).cloned());
     let next = submit(
         &store,
         &actor,
         &working,
-        api::physical::Action::ReceiveDevice(request(&partial)?),
+        api::physical::Action::ReceiveDevice(next_input),
     )?
     .receipt
     .ok_or(Error::Missing)?;
@@ -816,5 +859,44 @@ fn partial_plan_receives_next_device_without_repeating_completed_work() -> TestR
     );
     assert_eq!(loaded.materials[0].allocations[0].item, Some(target));
     assert_eq!(loaded.materials[0].allocations.len(), 2);
+    physical(
+        &store,
+        &actor,
+        api::physical::Action::Define(api::PhysicalDefinitionEdit {
+            definition: Some(api::PhysicalDefinition {
+                target: next.item,
+                basis: "Second chassis clearance inspected".into(),
+                clearance: Some(Box::default()),
+                ..Default::default()
+            }),
+        }),
+    )?;
+    working.expected = Some(store.usage()?.revision);
+    let completed = submit(
+        &store,
+        &actor,
+        &working,
+        api::physical::Action::Complete(api::PhysicalCompletion {
+            plan: next.plan,
+            completed_steps: vec![1],
+            ..Default::default()
+        }),
+    )?
+    .plan
+    .ok_or(Error::Missing)?;
+    assert_eq!(completed.state, api::PhysicalPlanState::Completed as i32);
+    let before = store.usage()?;
+    let replay = submit(
+        &store,
+        &actor,
+        &original_working,
+        api::physical::Action::ReceiveDevice(original_input),
+    )?;
+    assert_eq!(replay.receipt, Some(received));
+    assert_eq!(
+        store.usage()?,
+        before,
+        "Completed work must not be replayed"
+    );
     Ok(())
 }
