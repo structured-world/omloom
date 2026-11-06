@@ -18,6 +18,28 @@ async function openPlan(page,url,f){
   return planner;
 }
 
+test('record-and-next validates required input before dispatch',async({page})=>{
+  // The secondary submit action must use the same browser constraints as the
+  // main action, without claiming recovery storage or sending invalid input.
+  await withFieldHost(async url=>{
+    const f=await fixture(url),planner=await openPlan(page,url,f);let submissions=0;
+    page.on('request',request=>{
+      const bytes=request.postDataBuffer();if(!bytes||!request.url().endsWith('/omloom.workspace.v1.Workspace/Call'))return;
+      const command=f.m.Request.fromBinary(bytes.subarray(5)).command;
+      if(command.oneofKind==='physical'&&command.physical.action.oneofKind==='receiveDevice')submissions++;
+    });
+    await planner.getByRole('button',{name:'Create received device',exact:true}).click();
+    const editor=planner.getByRole('region',{name:'Create received device',exact:true}),name=editor.getByLabel('Name',{exact:true});
+    await name.fill('');
+    await editor.getByRole('button',{name:'Record and next',exact:true}).click();
+    await expect(name).toBeFocused();expect(submissions).toBe(0);
+    await name.fill('Valid received device');
+    await editor.getByRole('button',{name:'Record and next',exact:true}).click();
+    await expect(planner).toContainText('Unit 1: Valid received device');
+    await expect(editor).toContainText('Unit 2');expect(submissions).toBe(1);
+  });
+});
+
 for(const line of [0,1])test(`unapplied requirement ${line+1} input survives receipt completion`,async({page})=>{
   // A receipt updates its own allocation, not an unrelated open requirement's
   // unsaved input. Applying that input afterward must preserve the receipt too.

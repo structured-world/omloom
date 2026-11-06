@@ -222,6 +222,7 @@ async function reviewCurrent() {
   finally { preparing.value = false; }
 }
 async function save(next = false) {
+  if(next&&!form.value?.reportValidity())return;
   let dispatched = false;
   busy.value = true; error.value = '';
   try {
