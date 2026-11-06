@@ -4058,6 +4058,14 @@ export interface RequirementEvidence {
      * @generated from protobuf field: optional string scan_id = 5
      */
     scanId?: string;
+    /**
+     * Server-projected current value of this permitted field from this exact source.
+     * Its claim basis and uncertainty are preserved. A stale observation may be
+     * displayed but does not satisfy the condition. Absent when no value is supplied.
+     *
+     * @generated from protobuf field: optional omloom.v1.Field value = 6
+     */
+    value?: Field;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.RequirementResult
@@ -9606,7 +9614,8 @@ class RequirementEvidence$Type extends MessageType<RequirementEvidence> {
             { no: 2, name: "revision", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 3, name: "observed_at_ms", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 4, name: "valid_until_ms", kind: "scalar", opt: true, T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
-            { no: 5, name: "scan_id", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 5, name: "scan_id", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 6, name: "value", kind: "message", T: () => Field }
         ]);
     }
 }

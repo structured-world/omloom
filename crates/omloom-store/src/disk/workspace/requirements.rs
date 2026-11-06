@@ -2,6 +2,7 @@
 use super::*;
 use crate::requirements::{self as core, knowledge as k};
 mod binding;
+mod fields;
 mod power;
 
 impl k::Alternatives for wire::EquipmentAlternatives {
@@ -509,6 +510,11 @@ impl Tx<'_> {
                     *mode = group_mode(group)?;
                 }
             }
+            let inputs = if phase.is_some() {
+                fields::Inputs::load(tx, context, &request, &results)?
+            } else {
+                fields::Inputs::default()
+            };
             for (index, node) in nodes.iter_mut().enumerate() {
                 if results[index].reason == core::Reason::NotSelected {
                     continue;
@@ -517,7 +523,14 @@ impl Tx<'_> {
                     request.nodes[index].expression.as_ref()
                 {
                     let decision = if let Some(phase) = phase {
-                        tx.requirement_field(context, condition, &mut responses[index], now, phase)?
+                        tx.requirement_field(
+                            context,
+                            condition,
+                            &inputs,
+                            &mut responses[index],
+                            now,
+                            phase,
+                        )?
                     } else {
                         validate_field_condition(condition)?;
                         core::Decision::unknown(core::Reason::Missing)
@@ -610,6 +623,7 @@ impl Tx<'_> {
         &self,
         context: &Context,
         condition: &api::FieldRequirement,
+        inputs: &fields::Inputs,
         response: &mut api::RequirementResult,
         now: u64,
         phase: core::Phase,
@@ -617,19 +631,18 @@ impl Tx<'_> {
         let target = parse_target(condition.target.as_ref())?;
         let expected = condition.expected.as_ref().ok_or(Error::Invalid)?;
         validate_field_condition(condition)?;
-        let row = match self.asset(target) {
-            Ok(row) => row,
-            // A stale incarnation must not reveal that a protected asset ID exists.
-            Err(Error::Missing | Error::Conflict) => {
-                return Ok(core::Decision::unknown(core::Reason::Restricted));
-            }
-            Err(error) => return Err(error),
+        let parent = asset_key(target);
+        let Some(row) = inputs.assets.get(&parent) else {
+            return Ok(core::Decision::unknown(core::Reason::Restricted));
         };
-        let kind = number(&row, "kind")? as i32;
-        let asset_revision = number(&row, "revision")?;
+        if crate::disk::target(row)? != target {
+            return Ok(core::Decision::unknown(core::Reason::Restricted));
+        }
+        let kind = number(row, "kind")? as i32;
+        let asset_revision = number(row, "revision")?;
         if !context.readable(target, kind)
             || !context.field(target, kind, &expected.name, false)
-            || number(&row, "adoption")? != wire::Adoption::Adopted as u64
+            || number(row, "adoption")? != wire::Adoption::Adopted as u64
         {
             return Ok(core::Decision::unknown(core::Reason::Restricted));
         }
@@ -667,6 +680,7 @@ impl Tx<'_> {
             response.evidence.push(api::RequirementEvidence {
                 source: target.asset.to_string(),
                 revision: Some(asset_revision.to_string()),
+                value: Some(actual),
                 ..Default::default()
             });
             if delegation == api::AccountDelegation::OwnerOnly
@@ -684,43 +698,21 @@ impl Tx<'_> {
             }
             return Ok(decision);
         }
-        let rows = if layer == "intent" {
-            self.get(&format!("{}/intent/{}", asset_key(target), expected.name))?
-                .into_iter()
-                .collect::<Vec<_>>()
+        let accepted = inputs
+            .accepted
+            .get(&format!("{parent}/intent/{}", expected.name));
+        let rows: &[Properties] = if layer == "intent" {
+            accepted.map_or(&[], std::slice::from_ref)
         } else {
-            self.query("MATCH (n:OmRow {parent:$parent}) WHERE n.layer='observed' AND n.field=$field RETURN properties(n) AS p LIMIT 33", params([("parent", text(asset_key(target))), ("field", text(&expected.name))]))?
+            inputs
+                .observed
+                .get(&(parent, expected.name.clone()))
+                .map_or(&[], Vec::as_slice)
         };
-        if rows.len() > 32 {
-            return Err(Error::Limit);
-        }
-        let freshness = if layer == "observed" && !rows.is_empty() {
-            let keys = rows
-                .iter()
-                .map(|row| row.get("key").cloned().ok_or(Error::Corrupt))
-                .collect::<Result<Vec<_>>>()?;
-            self.query("MATCH (n:OmRow {parent:$parent}) WHERE n.layer='freshness' AND n.claim IN $keys RETURN properties(n) AS p LIMIT 33", params([("parent", text(asset_key(target))), ("keys", Value::Array(keys))]))?
-        } else {
-            Vec::new()
-        };
-        if freshness.len() > 32 {
-            return Err(Error::Limit);
-        }
-        let freshness: BTreeMap<_, _> = freshness
-            .iter()
-            .map(|row| {
-                Ok((
-                    row.get("claim")
-                        .and_then(Value::as_str)
-                        .ok_or(Error::Corrupt)?,
-                    row,
-                ))
-            })
-            .collect::<Result<_>>()?;
         let mut result = core::Decision::unknown(core::Reason::Missing);
         let mut known = None;
         let mut current_fields = Vec::with_capacity(rows.len());
-        for row in &rows {
+        for row in rows {
             let (source, revision, at, until, scan_id) = if layer == "intent" {
                 (
                     string(row, "authority")?,
@@ -734,7 +726,7 @@ impl Tx<'_> {
                     .get("key")
                     .and_then(Value::as_str)
                     .ok_or(Error::Corrupt)?;
-                let fresh = freshness.get(key).ok_or(Error::Corrupt)?;
+                let fresh = inputs.freshness.get(key).ok_or(Error::Corrupt)?;
                 (
                     string(row, "source")?,
                     fresh
@@ -746,12 +738,14 @@ impl Tx<'_> {
                     fresh.get("scan").and_then(Value::as_str).map(str::to_owned),
                 )
             };
+            let actual = inventory::read_field(row)?;
             response.evidence.push(api::RequirementEvidence {
                 source,
                 revision,
                 observed_at_ms: at,
                 valid_until_ms: until,
                 scan_id,
+                value: Some(actual.clone()),
             });
             let required = core::Requirement {
                 subject: subject(condition.target.as_ref().ok_or(Error::Invalid)?),
@@ -796,7 +790,6 @@ impl Tx<'_> {
                 }
                 continue;
             }
-            let actual = inventory::read_field(row)?;
             let current = compare(&actual, expected, condition.comparison)?;
             current_fields.push(actual);
             if current.state != core::State::Unknown {

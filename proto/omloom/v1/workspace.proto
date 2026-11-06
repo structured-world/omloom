@@ -1726,6 +1726,10 @@ message RequirementEvidence {
   optional uint64 valid_until_ms = 4;
   // Original source scan identity when no comparable source revision is supplied.
   optional string scan_id = 5;
+  // Server-projected current value of this permitted field from this exact source.
+  // Its claim basis and uncertainty are preserved. A stale observation may be
+  // displayed but does not satisfy the condition. Absent when no value is supplied.
+  optional omloom.v1.Field value = 6;
 }
 message RequirementResult {
   // Original requested node index; no hidden dependency identities are added.

@@ -139,6 +139,24 @@ account explains the need for owner intervention and, when permitted, points to
 the existing owner-action request. Checking does not submit that request, reveal
 a secret or grant account access.
 
+From an explicit selection of devices, **Check selected devices** asks the same
+question once and shows each current fact beside its own result. The reviewed
+population stays fixed when the surrounding list refreshes. Up to 63 field
+conditions fit in a review, with a shared group node within the evaluator's
+64-node limit. **Add another condition** can check the same fact differently;
+these conditions share one correction editor without merging their answers or
+source evidence. An existing device finding can enter the same review through
+**Review these findings**.
+
+**Save and next** records only the selected accepted field, rechecks affected
+conditions and opens the next eligible row. Confirmed corrections survive
+another row's conflict. **Defer this row and continue** retains unfinished input
+within the open review. Rechecking a conflicting or uncertain write does not
+discard its draft, claim success or advance automatically. **Import CSV and
+return** uses the ordinary source mappings and reviewed importer, then rechecks
+the original selected conditions. It does not match arbitrary CSV names to
+selected devices or extend the selection with newly imported records.
+
 The `evaluate_requirements` workspace query supports a selected root in a bounded
 flat graph of field predicates and `all`, `any` or fixed-threshold groups. It
 reads exact resource incarnations under the current storage session. Thresholds
@@ -150,7 +168,10 @@ of returning a partially successful check. Unselected branches do not read facts
 or require completed group semantics. Global wire, reference and work bounds still apply.
 
 Results include stable condition keys, current inventory revision, permitted
-source revisions/scans and validity windows. Protected and unavailable subjects
+source revisions/scans, their typed current field values and validity windows.
+Selected field metadata and accepted values use bounded indexed batches. Source
+values remain attributed separately; stale observations may be displayed but
+cannot satisfy a condition. Protected and unavailable subjects
 share the same non-disclosing response. Reads do not create plans, requests,
 snapshots, history or access timestamps. A satisfied condition is neither an
 authorization grant nor an operation admission, live reachability test or

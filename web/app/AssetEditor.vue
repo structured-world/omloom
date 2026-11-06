@@ -11,8 +11,8 @@ import { equipmentFields as equipmentNames } from './equipment-fields';
 import { softwareFields, softwareChoiceLabel } from './software-fields';
 import { call, typedField, input, display, label, key, model, AssetKind, type AssetRef } from './api';
 
-const props = defineProps<{ item?: model.Item; definitions: model.Definition[]; initialKind?: AssetKind; initialHypervisor?: boolean; working: model.WorkingContext; view: model.View; fieldMask?: readonly string[]; question?: string; receipt?: {name:string;submit:(changes:import('./api').Field[],working:model.WorkingContext,next:boolean)=>Promise<void>}; inline?:boolean; inactive?:boolean }>();
-const emit = defineEmits<{ close: []; saved: [target?: AssetRef]; recheck: [] }>();
+const props = defineProps<{ item?: model.Item; definitions: model.Definition[]; initialKind?: AssetKind; initialHypervisor?: boolean; working: model.WorkingContext; view: model.View; fieldMask?: readonly string[]; question?: string; saveNext?:boolean; receipt?: {name:string;submit:(changes:import('./api').Field[],working:model.WorkingContext,next:boolean)=>Promise<void>}; inline?:boolean; inactive?:boolean }>();
+const emit = defineEmits<{ close: []; saved: [target?: AssetRef]; recheck: [unresolved:boolean]; pending: [value:boolean] }>();
 const focused = computed(() => props.fieldMask !== undefined);
 const form = ref<HTMLFormElement>();
 let entryFocus:Element|null=null;
@@ -59,6 +59,7 @@ function addEquipment(){if(equipmentFields.value.includes(equipmentToAdd.value)&
 const modes = reactive<Record<string, string>>({});
 const submittedMask = computed(() => modes.prefix_length !== 'clear' && values.prefix_length !== undefined && values.prefix_length !== '' ? Number(values.prefix_length) : undefined);
 const error = ref(''); const busy = ref(false); const preparing = ref(true); const more = ref(false);
+watch(busy, value => emit('pending', value), { flush: 'sync' });
 watch([preparing,()=>props.inactive],async()=>{
   if(preparing.value||props.inactive||!focusPending||(!focused.value&&!props.receipt))return;
   await nextTick();
@@ -236,7 +237,7 @@ async function save(next = false) {
     if (focused.value && ['conflict', 'uncertain', 'denied'].includes(outcome.value)) throw Error('Read and review the current fact before another save.');
     const changes = reviewedChanges();
     if (placementKind.value && !placementReady.value) throw Error('Choose a listed placement or clear the search to leave it unknown');
-    if (props.item && !changes.length && !known.value) { if (focused.value) emit('recheck'); else emit('saved'); return; }
+    if (props.item && !changes.length && !known.value) { if (focused.value) emit('recheck', uncertain.value); else emit('saved'); return; }
     const working = model.WorkingContext.create({ ...(focused.value ? editWorking : props.working), focus: props.working.focus && placement.value?.target ? placement.value.target : props.working.focus, expected: placementActions.value?.revision ?? actions.value.revision });
     if (props.receipt) {
       if (kind.value !== AssetKind.DEVICE || choice.value?.parent) throw Error('Choose the permitted unplaced device context.');
@@ -362,7 +363,7 @@ async function save(next = false) {
 <p v-if="addressReview && derivedBroadcast" class="hint">Calculated subnet broadcast: {{ derivedBroadcast }}. This is a display calculation, not a recorded endpoint setting.</p>
 <p v-else-if="addressReview?.address?.includes(':')" class="hint">IPv6 has no broadcast address.</p>
 <p v-else-if="addressReview?.prefixLength === 31 || addressReview?.prefixLength === 32" class="hint">This mask has no directed broadcast. A /31 may describe a point-to-point link.</p>
-<p v-if="error" role="alert">{{ error }}</p><footer><button type="button" :disabled="busy" @click="emit('close')">Cancel</button><button v-if="focused" type="button" :disabled="busy || preparing" @click="emit('recheck')">Recheck without saving</button><button class="primary" :disabled="busy || preparing || placementBusy || (!!placementKind && !placementReady) || (!item && !choice) || (focused && ['conflict','uncertain','denied'].includes(outcome))">{{ busy ? known && !addressReview ? 'Preparing review…' : 'Saving…' : receipt ? 'Record received device' : focused ? 'Save and recheck' : known ? addressReview ? 'Save known address' : 'Review known address' : 'Save resource' }}</button><button v-if="receipt" type="button" :disabled="busy || preparing || !choice" @click="save(true)">Record and next</button></footer>
+<p v-if="error" role="alert">{{ error }}</p><footer><button type="button" :disabled="busy" @click="emit('close')">Cancel</button><button v-if="focused" type="button" :disabled="busy || preparing" @click="emit('recheck', uncertain || outcome === 'conflict')">Recheck without saving</button><button class="primary" :disabled="busy || preparing || placementBusy || (!!placementKind && !placementReady) || (!item && !choice) || (focused && ['conflict','uncertain','denied'].includes(outcome))">{{ busy ? known && !addressReview ? 'Preparing review…' : 'Saving…' : receipt ? 'Record received device' : focused ? saveNext ? 'Save and next' : 'Save and recheck' : known ? addressReview ? 'Save known address' : 'Review known address' : 'Save resource' }}</button><button v-if="receipt" type="button" :disabled="busy || preparing || !choice" @click="save(true)">Record and next</button></footer>
 </form></component></template>
 <style scoped>
 .field-edit > .hint, .field-edit > .role-selector, .field-edit > textarea { grid-column:1/-1; }

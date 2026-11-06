@@ -2,6 +2,191 @@ use super::*;
 use api::{reply::Result as Reply, request::Command};
 
 #[test]
+fn selected_facts_share_bounded_indexed_reads() -> TestResult {
+    // Ten devices and two predicates per fact must not issue one database read per row.
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static QUERIES: AtomicUsize = AtomicUsize::new(0);
+    let dir = tempfile::tempdir()?;
+    let mut store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let mut targets = Vec::new();
+    let mut nodes = Vec::new();
+    for i in 0..10 {
+        let target = create(&store, &actor, K::Device, &format!("Selected {i}"))?;
+        nodes.push(condition(
+            &target,
+            "name",
+            wire::field::Value::Text(format!("Selected {i}")),
+        ));
+        nodes.push(condition(
+            &target,
+            "name",
+            wire::field::Value::Text("Other".into()),
+        ));
+        targets.push(target);
+    }
+    nodes.push(api::RequirementNode {
+        expression: Some(api::requirement_node::Expression::Group(
+            api::RequirementGroup {
+                kind: api::RequirementGroupKind::All as i32,
+                members: (0..20).collect(),
+                minimum: 0,
+            },
+        )),
+    });
+    store.set_diagnostic_query_check(|db, statement| {
+        QUERIES.fetch_add(1, Ordering::Relaxed);
+        if statement.contains("UNWIND") {
+            let plan = db
+                .explain_plan(statement, None)
+                .expect("selected fact plan")
+                .explain();
+            assert!(plan.contains("IndexScan("), "{plan}");
+            assert!(!plan.contains("NodeScan("), "{plan}");
+        }
+    });
+    let before = store.usage()?;
+    let start = std::time::Instant::now();
+    let result = evaluate(&store, &actor, &targets[0], nodes.clone(), 20)?;
+    assert_eq!(result.results.len(), 21);
+    for (i, row) in result.results[..20].iter().enumerate() {
+        assert_eq!(
+            row.state,
+            if i % 2 == 0 {
+                api::RequirementState::Satisfied
+            } else {
+                api::RequirementState::Failed
+            } as i32
+        );
+        assert_eq!(row.evidence.len(), 1);
+        assert_eq!(
+            row.evidence[0].value,
+            Some(text_field("name", &format!("Selected {}", i / 2)))
+        );
+    }
+    let queries = QUERIES.load(Ordering::Relaxed);
+    eprintln!(
+        "Ten selected devices, twenty conditions: {queries} queries, {:?}",
+        start.elapsed()
+    );
+    assert!(
+        queries <= 6,
+        "selected facts require bounded batches, got {queries}"
+    );
+    assert_eq!(store.usage()?, before);
+    QUERIES.store(0, Ordering::Relaxed);
+    let start = std::time::Instant::now();
+    let selected = store
+        .workspace(
+            &actor,
+            api::Request {
+                working: Some(api::WorkingContext {
+                    roots: targets.clone(),
+                    ..Default::default()
+                }),
+                command: Some(Command::EvaluateRequirements(api::EvaluateRequirements {
+                    anchor: Some(targets[0].clone()),
+                    nodes,
+                    root: 20,
+                })),
+            },
+            100,
+        )?
+        .result
+        .ok_or("selected evaluation")?;
+    let Reply::RequirementEvaluation(selected) = selected else {
+        return Err("selected result".into());
+    };
+    assert_eq!(selected, result);
+    let queries = QUERIES.load(Ordering::Relaxed);
+    eprintln!(
+        "Including ten explicit context roots: {queries} queries, {:?}",
+        start.elapsed()
+    );
+    assert!(
+        queries <= 6,
+        "context admission repeated point reads: {queries}"
+    );
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+#[test]
+fn selected_facts_do_not_decode_denied_values() -> TestResult {
+    // A denied field must not be read or decoded as collateral to another allowed condition.
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let target = create(&store, &actor, K::Device, "Allowed label")?;
+    let old = store.asset(AssetRef::try_from(&target)?)?;
+    call(
+        &store,
+        &actor,
+        Command::Write(api::Write {
+            target: Some(target.clone()),
+            kind: K::Device as i32,
+            expected: Some(old.revision),
+            changes: vec![text_field("manufacturer", "Protected")],
+            ..Default::default()
+        }),
+    )?;
+    store.diagnostic_database().execute_cypher_shared(
+        "MATCH (n:OmRow {key:$key}) SET n.vtype=999 RETURN n.key",
+        Some(std::collections::HashMap::from([(
+            "key".into(),
+            coordinode_core::graph::types::Value::String(format!(
+                "asset/{}/intent/manufacturer",
+                target.asset_id
+            )),
+        )])),
+        None,
+        None,
+        None,
+    )?;
+    let mut limited = actor;
+    limited.grants[0].read = Fields::Selected(vec!["name".into()]);
+    let before = store.usage()?;
+    let nodes = vec![
+        condition(
+            &target,
+            "name",
+            wire::field::Value::Text("Allowed label".into()),
+        ),
+        condition(
+            &target,
+            "manufacturer",
+            wire::field::Value::Text("Protected".into()),
+        ),
+        api::RequirementNode {
+            expression: Some(api::requirement_node::Expression::Group(
+                api::RequirementGroup {
+                    kind: api::RequirementGroupKind::All as i32,
+                    members: vec![0, 1],
+                    minimum: 0,
+                },
+            )),
+        },
+    ];
+    let result = evaluate(&store, &limited, &target, nodes, 2)?;
+    assert_eq!(
+        result.results[0].state,
+        api::RequirementState::Satisfied as i32
+    );
+    assert_eq!(
+        result.results[0].evidence[0].value,
+        Some(text_field("name", "Allowed label"))
+    );
+    assert_eq!(
+        result.results[1].reason,
+        api::RequirementReason::Restricted as i32
+    );
+    assert!(result.results[1].evidence.is_empty());
+    assert!(result.results[1].target.is_none());
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+#[test]
 fn focused_fact_read_is_selective_authorized_and_read_only() -> TestResult {
     // One correction must not expand sources/relations or confuse a denied field with unknown.
     let dir = tempfile::tempdir()?;
@@ -421,6 +606,26 @@ fn requirements_conflicting_sources_cannot_pass_the_same_allowed_set() -> TestRe
     let before = store.usage()?;
     let result = evaluate(&store, &actor, &target, vec![node.clone()], 0)?;
     assert_eq!(result.reason, api::RequirementReason::Conflict as i32);
+    assert_eq!(result.results[0].evidence.len(), 2);
+    assert_ne!(
+        result.results[0].evidence[0].source,
+        result.results[0].evidence[1].source
+    );
+    let values = result.results[0]
+        .evidence
+        .iter()
+        .map(|evidence| {
+            evidence
+                .value
+                .as_ref()
+                .ok_or("source value")
+                .and_then(|field| match field.value.as_ref() {
+                    Some(wire::field::Value::Text(value)) => Ok(value.as_str()),
+                    _ => Err("source text"),
+                })
+        })
+        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+    assert_eq!(values, std::collections::BTreeSet::from(["A", "B"]));
     let Some(api::requirement_node::Expression::Field(field)) = &mut node.expression else {
         panic!("field")
     };
@@ -556,6 +761,10 @@ fn requirements_observation_expiry_and_field_rights_preserve_unknown() -> TestRe
     );
     assert_eq!(result.results[0].evidence[0].scan_id, scan);
     assert_eq!(result.results[0].evidence[0].valid_until_ms, Some(99));
+    assert_eq!(
+        result.results[0].evidence[0].value,
+        Some(text_field("model", "A"))
+    );
     let mut limited = actor;
     limited.grants[0].read = Fields::Selected(vec!["name".into()]);
     limited.grants[0].write = Fields::Selected(vec!["name".into()]);
