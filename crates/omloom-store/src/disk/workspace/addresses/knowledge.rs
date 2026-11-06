@@ -8,12 +8,17 @@ pub(in crate::disk::workspace) enum PrefixCreation {
 pub(in crate::disk::workspace) enum Outcome<'a> {
     Revision(&'a str),
     Csv(&'a str),
+    Receipt {
+        plan: &'a str,
+        material: u32,
+        unit: u32,
+    },
 }
 
 impl Outcome<'_> {
     fn key(&self, working: &api::WorkingContext) -> Option<String> {
         match self {
-            Self::Revision(_) => working
+            Self::Revision(_) | Self::Receipt { .. } => working
                 .expected
                 .map(|base| format!("mutation-outcome/{base}")),
             Self::Csv(id) => Some(format!("mutation-outcome/preview/{id}")),
@@ -24,6 +29,7 @@ impl Outcome<'_> {
         match self {
             Self::Revision(domain) => domain,
             Self::Csv(_) => "csv",
+            Self::Receipt { .. } => "physical-receipt",
         }
     }
 }
@@ -327,7 +333,11 @@ impl Tx<'_> {
         if values.len() > MAX_IMPORT {
             return Err(Error::Corrupt);
         }
-        let mut selector = working.clone();
+        let mut selector = if matches!(outcome, Outcome::Receipt { .. }) {
+            api::WorkingContext::default()
+        } else {
+            working.clone()
+        };
         selector.expected = None;
         let selection = self.selection(context, &selector, false)?;
         let mut targets = Vec::with_capacity(values.len());
@@ -341,7 +351,7 @@ impl Tx<'_> {
         }
         Ok(Some(api::Mutation {
             revision: match outcome {
-                Outcome::Revision(_) => working
+                Outcome::Revision(_) | Outcome::Receipt { .. } => working
                     .expected
                     .ok_or(Error::Corrupt)?
                     .checked_add(1)
@@ -391,6 +401,17 @@ impl Tx<'_> {
                 "revision".into(),
                 int(base.checked_add(1).ok_or(Error::Limit)?)?,
             );
+        }
+        if let Outcome::Receipt {
+            plan,
+            material,
+            unit,
+        } = outcome
+        {
+            data.insert("action".into(), text("physical-receipt"));
+            data.insert("owner".into(), text(plan));
+            data.insert("count".into(), int(u64::from(material))?);
+            data.insert("generation".into(), int(u64::from(unit))?);
         }
         // Expiry leaves the old creation revision or consumed preview inadmissible.
         self.put(&key, "mutation-outcomes", Class::Detail, data)?;

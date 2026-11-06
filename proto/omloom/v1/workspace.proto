@@ -2211,6 +2211,40 @@ message PhysicalMaterialReceipt {
   // after reservation. Replacing an allocation already used by a step is forbidden.
   PhysicalMaterialAllocation allocation = 3;
 }
+message PhysicalDeviceReceipt {
+  // User-selected saved plan and reviewed revision. Receipt changes no placement.
+  PhysicalPlanKey plan = 1;
+  // Exact zero-based line and unit reviewed by the caller; never chosen on retry.
+  uint32 material = 2;
+  // Zero-based unit less than the selected line's requested quantity.
+  uint32 unit = 3;
+  // Explicit permitted inventory context for a new, unplaced Device. Required;
+  // empty roots deliberately select permitted installation inventory, not the rack.
+  WorkingContext inventory = 4;
+  // Actual user-entered fields, using ordinary Device validation and authority.
+  // Planned specifications are not copied. Unknown serials may be omitted.
+  repeated omloom.v1.Field changes = 5;
+  // Optional receipt explanation/reference, at most 480 UTF-8 bytes, no secrets.
+  // Submission itself attests receipt; the server supplies actor/recording time.
+  optional string explanation = 6;
+}
+message PhysicalReceiptLookup {
+  // Application revision reviewed before submission, identifying this attempt.
+  // Lookup grants no access and never creates or retries a device.
+  uint64 revision = 1;
+}
+message PhysicalReceiptOutcome {
+  // Exact accepted result revision, not the current plan or resource revision.
+  uint64 revision = 1;
+  // Originally created incarnation, disclosed only under current resource rights.
+  omloom.v1.AssetRef item = 2;
+  // Original saved plan and accepted revision, not a claim of current allocation.
+  PhysicalPlanKey plan = 3;
+  // Original zero-based material line, which may since have changed.
+  uint32 material = 4;
+  // Original zero-based unit, not a claim of current reservation or installation.
+  uint32 unit = 5;
+}
 message PhysicalPreview {
   // User-supplied proposed plan; state, revision and deadline are not authority.
   PhysicalPlan plan = 1;
@@ -2356,6 +2390,10 @@ message Physical {
     PhysicalOffers offers = 16;
     // Record one received/reused unit without installing it or completing a step.
     PhysicalMaterialReceipt receive = 17;
+    // Explicitly attest receipt, create one Device and allocate it atomically.
+    PhysicalDeviceReceipt receive_device = 22;
+    // Retrieve an earlier accepted receipt without repeating its mutation.
+    PhysicalReceiptLookup receipt_outcome = 23;
     // Explain or explicitly judge a replacement using current scoped evidence.
     PhysicalReplacementReview review_replacement = 18;
     // Bounded quality buckets for the exact current complete disclosure scope.
@@ -2510,6 +2548,9 @@ message PhysicalOffers {
   optional string after = 2;
 }
 message PhysicalView {
+  // Original accepted receipt, independently of the plan's current assignment,
+  // hold or completion. Absent only for a response unrelated to receipt recovery.
+  optional PhysicalReceiptOutcome receipt = 18;
   // Server-qualified assemblies with exactly two accepted named ends, both
   // currently attached to visible scene ports. Omission conveys no hidden end
   // count or disconnection. Clients cannot derive this from filtered attachments.

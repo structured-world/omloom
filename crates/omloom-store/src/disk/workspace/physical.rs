@@ -15,6 +15,7 @@ mod lifecycle;
 mod materials;
 mod positions;
 mod rack_grid;
+mod receiving;
 mod replacements;
 mod reservations;
 mod reviews;
@@ -479,15 +480,34 @@ impl Store {
         now: u64,
     ) -> Result<api::Reply> {
         use api::physical::Action;
-        let working = || working.ok_or(Error::Invalid);
+        let action = request.action.ok_or(Error::Invalid)?;
+        let original = working.ok_or(Error::Invalid)?;
         let mut tx = self.begin()?;
+        let plan_key = match &action {
+            Action::Load(key) | Action::Cancel(key) => Some(key),
+            Action::Receive(value) => value.plan.as_ref(),
+            Action::Reserve(value) => value.plan.as_ref(),
+            Action::Complete(value) => value.plan.as_ref(),
+            Action::ReviewReplacement(value) => value.plan.as_ref(),
+            _ => None,
+        };
+        let selected = plan_key
+            .map(|key| tx.plan_context(context, &key.id, original))
+            .transpose()?;
+        let working = || Ok(selected.as_ref().unwrap_or(original));
         let mut view = api::PhysicalView {
             revision: number(&tx.root, "revision")?,
             state: api::RequirementState::Unknown as i32,
             reason: api::RequirementReason::Missing as i32,
             ..Default::default()
         };
-        match request.action.ok_or(Error::Invalid)? {
+        match action {
+            Action::ReceiveDevice(value) => {
+                view.receipt = Some(tx.receive_device(context, value, original, now)?);
+            }
+            Action::ReceiptOutcome(value) => {
+                view.receipt = Some(tx.receipt_outcome(context, value.revision)?);
+            }
             Action::Scene(value) => tx.physical_scene(context, value, working()?, &mut view)?,
             Action::PortAnchor(value) => {
                 tx.save_port_anchor(context, value, working()?, now)?;
