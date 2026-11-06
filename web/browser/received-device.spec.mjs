@@ -90,6 +90,7 @@ test('a lost receipt reply is recovered after reload without another device',asy
     const loss=new Promise(resolve=>{lossFinished=resolve;});
     const lose=async route=>{
       const request=f.m.Request.fromBinary(route.request().postDataBuffer().subarray(5));
+      if(request.command.oneofKind==='physical'&&request.command.physical.action.oneofKind==='recoverReceipt'){await route.abort('failed');return;}
       if(request.command.oneofKind==='physical'&&request.command.physical.action.oneofKind==='receiveDevice'){
         expect(request.command.physical.action.receiveDevice.changes.find(v=>v.name==='name').value.text).toBe('Reply lost node');
         await route.fetch();await route.abort('failed');lossFinished();
@@ -101,15 +102,14 @@ test('a lost receipt reply is recovered after reload without another device',asy
     await expect(editor.getByRole('button',{name:'Create in inventory only instead',exact:true})).toHaveCount(0);
     await loss;
     const reference=await page.evaluate(()=>new Promise((resolve,reject)=>{
-      const request=indexedDB.open('omloom-receipt-recovery',1);
+      const request=indexedDB.open('omloom-receipt-recovery');
       request.onerror=()=>reject(request.error);
       request.onsuccess=()=>{const db=request.result,tx=db.transaction('pending');const read=tx.objectStore('pending').openCursor();read.onsuccess=()=>resolve(read.result.value);tx.oncomplete=()=>db.close();};
     }));
-    expect(Object.keys(reference).sort()).toEqual(['plan','revision']);
+    expect(Object.keys(reference).sort()).toEqual(['material','plan','revision','unit']);
     await page.unroute('**/omloom.workspace.v1.Workspace/Call',lose);
     await page.reload();const reopened=await openPlan(page,url,f);
     await reopened.getByRole('button',{name:'Create received device',exact:true}).click();
-    await reopened.getByRole('button',{name:'Recover receipt result',exact:true}).click();
     await expect(reopened).toContainText('Receipt accepted');
     const devices=(await f.rpc({oneofKind:'query',query:f.m.Query.create({kinds:[f.m.AssetKind.DEVICE],columns:['name'],limit:25})})).page;
     expect(devices.total).toBe(3n);
@@ -371,9 +371,10 @@ test('another tab cannot erase an unresolved accepted receipt',async({page,conte
     const accepted=a.getByRole('region',{name:'Create received device',exact:true}),loser=b.getByRole('region',{name:'Create received device',exact:true});
     await accepted.getByLabel('Name',{exact:true}).fill('Cross-tab accepted device');
     await loser.getByLabel('Name',{exact:true}).fill('Must not create');
-    let finish;const lost=new Promise(resolve=>{finish=resolve;});let submissions=0;
+    let finish;const lost=new Promise(resolve=>{finish=resolve;});let submissions=0,allowRecovery=false;
     const intercept=async route=>{
       const command=f.m.Request.fromBinary(route.request().postDataBuffer().subarray(5)).command;
+      if(command.oneofKind==='physical'&&['recoverReceipt','receiptOutcome'].includes(command.physical.action.oneofKind)&&!allowRecovery){await route.abort('failed');return;}
       if(command.oneofKind==='physical'&&command.physical.action.oneofKind==='receiveDevice'){
         submissions++;const response=await route.fetch();
         if(route.request().frame().page()===page){await route.abort('failed');finish();}
@@ -386,6 +387,7 @@ test('another tab cannot erase an unresolved accepted receipt',async({page,conte
       await loser.getByRole('button',{name:'Record received device',exact:true}).click();
       await expect(loser.getByRole('alert').filter({hasText:/Error/})).toBeVisible();
       expect(submissions).toBe(1);
+      allowRecovery=true;
       await loser.getByRole('button',{name:'Recover receipt result',exact:true}).click();
       await expect(b).toContainText('Unit 1: Cross-tab accepted device');
       const devices=(await f.rpc({oneofKind:'query',query:f.m.Query.create({kinds:[f.m.AssetKind.DEVICE],columns:['name'],limit:25})})).page;
@@ -406,6 +408,7 @@ for(const known of [false,true])test(`a reference resolved in another tab releas
     let submitted=false,failRefresh=true;
     const intercept=async route=>{
       const command=f.m.Request.fromBinary(route.request().postDataBuffer().subarray(5)).command;
+      if(failRefresh&&command.oneofKind==='physical'&&command.physical.action.oneofKind==='recoverReceipt'){await route.abort('failed');return;}
       if(command.oneofKind==='physical'&&command.physical.action.oneofKind==='receiveDevice'){
         submitted=true;
         if(!known){await route.fetch();await route.abort('failed');return;}
@@ -419,13 +422,50 @@ for(const known of [false,true])test(`a reference resolved in another tab releas
       await expect(editor.getByRole('button',{name:'Recover receipt result',exact:true})).toBeVisible();
       const b=await openPlan(other,url,f);
       await b.getByRole('button',{name:'Create received device',exact:true}).click();
-      await b.getByRole('button',{name:'Recover receipt result',exact:true}).click();
       await expect(b).toContainText('Receipt accepted');failRefresh=false;
       await editor.getByRole('button',{name:'Recover receipt result',exact:true}).click();
       await expect(editor.getByRole('button',{name:'Recover receipt result',exact:true})).toHaveCount(0);
       if(known)await expect(a).toContainText('Unit 1: Resolved in other tab');
       else await expect(editor.getByLabel('Name',{exact:true})).toHaveValue('Resolved in other tab');
     }finally{await page.unroute('**/omloom.workspace.v1.Workspace/Call',intercept);await other.close();}
+  });
+});
+
+for(const width of [1440,390])test(`an unavailable earlier unit does not block another device and can reuse inventory at ${width}px`,async({page})=>{
+  // An old unknown save belongs to its exact unit. Another unit remains usable,
+  // and resolving the old one selects a real device instead of creating a duplicate.
+  await withFieldHost(async url=>{
+    await page.setViewportSize({width,height:900});
+    const f=await fixture(url);
+    const existing=(await f.rpc({oneofKind:'write',write:f.m.Write.create({kind:f.m.AssetKind.DEVICE,changes:[{name:'name',value:{oneofKind:'text',text:'Found original device'}}]})})).mutation.targets[0];
+    await f.rpc({oneofKind:'physical',physical:f.m.Physical.create({action:{oneofKind:'save',save:{plan:{name:'Unrelated change',materials:[{name:'Other demand',quantity:1,kind:f.m.AssetKind.DEVICE}]}}}})});
+    const planner=await openPlan(page,url,f);
+    await page.evaluate(({plan,revision})=>new Promise((resolve,reject)=>{
+      const request=indexedDB.open('omloom-receipt-recovery',1);
+      request.onupgradeneeded=()=>request.result.createObjectStore('pending',{autoIncrement:true});
+      request.onerror=()=>reject(request.error);
+      request.onsuccess=()=>{const db=request.result,tx=db.transaction('pending','readwrite');tx.objectStore('pending').add({plan,revision,material:0,unit:0});tx.oncomplete=()=>{db.close();resolve();};tx.onabort=()=>reject(tx.error);};
+    }),{plan:f.plan.id,revision:String(f.plan.revision)});
+    await planner.getByLabel('Requested unit number',{exact:true}).fill('2');
+    await planner.getByRole('button',{name:'Create received device',exact:true}).click();
+    const editor=planner.getByRole('region',{name:'Create received device',exact:true});
+    await expect(editor).toContainText('Check the existing device');
+    await editor.getByLabel('Name',{exact:true}).fill('Another received device');
+    await editor.getByRole('button',{name:'Record received device',exact:true}).click();
+    await expect(planner).toContainText('Unit 2: Another received device');
+    await editor.getByRole('button',{name:'Close receiving',exact:true}).click();
+    await planner.getByRole('button',{name:'Receive or reuse a unit for requirement 1',exact:true}).click();
+    await planner.getByLabel('Requested unit number',{exact:true}).fill('1');
+    await planner.getByRole('button',{name:'Create received device',exact:true}).click();
+    await editor.getByRole('button',{name:'Find existing device',exact:true}).click();
+    await editor.getByRole('combobox',{name:'Find material',exact:true}).fill('Found original device');
+    await editor.getByRole('option',{name:'Use material: Found original device',exact:true}).click();
+    await editor.getByRole('button',{name:'Use existing device',exact:true}).click();
+    await expect(planner).toContainText('Unit 1: Found original device');
+    const loaded=(await f.rpc({oneofKind:'physical',physical:f.m.Physical.create({action:{oneofKind:'load',load:{id:f.plan.id}}})})).physical.plan;
+    expect(loaded.materials[0].allocations.find(a=>a.unit===0).item).toEqual(existing);
+    const devices=(await f.rpc({oneofKind:'query',query:f.m.Query.create({kinds:[f.m.AssetKind.DEVICE],columns:['name'],limit:25})})).page;
+    expect(devices.total).toBe(2n);
   });
 });
 
@@ -442,6 +482,7 @@ test('simultaneous receipt tabs admit only one unresolved command',async({page,c
     let release,accepted;const gate=new Promise(resolve=>{release=resolve;}),committed=new Promise(resolve=>{accepted=resolve;});let submissions=0;
     const hold=async route=>{
       const command=f.m.Request.fromBinary(route.request().postDataBuffer().subarray(5)).command;
+      if(command.oneofKind==='physical'&&command.physical.action.oneofKind==='receiptOutcome')await committed;
       if(command.oneofKind==='physical'&&command.physical.action.oneofKind==='receiveDevice'){
         submissions++;const response=await route.fetch();accepted();await gate;await route.fulfill({response});
       }else await route.continue();
@@ -450,11 +491,77 @@ test('simultaneous receipt tabs admit only one unresolved command',async({page,c
     try{
       await Promise.all(planners.map(p=>p.getByRole('button',{name:'Record received device',exact:true}).click()));
       await committed;
-      await expect.poll(async()=>Promise.all(planners.map(p=>p.getByRole('alert').filter({hasText:'Resolve the earlier receipt'}).count())).then(counts=>counts.reduce((a,b)=>a+b,0))).toBe(1);
+      await expect.poll(async()=>Promise.all(planners.map(p=>p.getByRole('status').filter({hasText:/^Receipt accepted at revision/}).count())).then(counts=>counts.reduce((a,b)=>a+b,0))).toBe(1);
       expect(submissions).toBe(1);release();
       const devices=(await f.rpc({oneofKind:'query',query:f.m.Query.create({kinds:[f.m.AssetKind.DEVICE],columns:['name'],limit:25})})).page;
       expect(devices.total).toBe(1n);
-    }finally{release();await context.unroute('**/omloom.workspace.v1.Workspace/Call',hold);await other.close();}
+    }finally{release();await context.unrouteAll({behavior:'wait'});await other.close();}
+  });
+});
+
+for(const accepted of [false,true])test(`a lost save is checked automatically (committed: ${accepted})`,async({page})=>{
+  // The user never coordinates protocol recovery. Only a proven refusal makes
+  // the retained input available for an explicitly reviewed fresh submission.
+  await withFieldHost(async url=>{
+    await page.setViewportSize({width:390,height:900});
+    const f=await fixture(url),planner=await openPlan(page,url,f);
+    await planner.getByRole('button',{name:'Create received device',exact:true}).click();
+    const editor=planner.getByRole('region',{name:'Create received device',exact:true});
+    await editor.getByLabel('Name',{exact:true}).fill('Automatically checked device');
+    let interrupted=false;
+    const lose=async route=>{
+      const command=f.m.Request.fromBinary(route.request().postDataBuffer().subarray(5)).command;
+      if(!interrupted&&command.oneofKind==='physical'&&command.physical.action.oneofKind==='receiveDevice'){
+        interrupted=true;if(accepted)await route.fetch();await route.abort('failed');
+      }else await route.continue();
+    };
+    await page.route('**/omloom.workspace.v1.Workspace/Call',lose);
+    try{
+      await editor.getByRole('button',{name:'Record received device',exact:true}).click();
+      if(!accepted){
+        await expect(editor).toContainText('This device was not saved.');
+        await expect(editor.getByLabel('Name',{exact:true})).toHaveValue('Automatically checked device');
+        const empty=(await f.rpc({oneofKind:'query',query:f.m.Query.create({kinds:[f.m.AssetKind.DEVICE],limit:25})})).page;
+        expect(empty.total).toBe(0n);
+        await editor.getByRole('button',{name:'Review current receipt',exact:true}).click();
+        await editor.getByRole('button',{name:'Record received device',exact:true}).click();
+      }
+      await expect(planner).toContainText('Unit 1: Automatically checked device');
+      await expect(editor.getByRole('button',{name:'Recover receipt result',exact:true})).toHaveCount(0);
+      const devices=(await f.rpc({oneofKind:'query',query:f.m.Query.create({kinds:[f.m.AssetKind.DEVICE],limit:25})})).page;
+      expect(devices.total).toBe(1n);
+    }finally{await page.unroute('**/omloom.workspace.v1.Workspace/Call',lose);}
+  });
+});
+
+test('an earlier recovered unit does not hide review of a rejected next device',async({page})=>{
+  // Recovery of a different unit must not turn the current form into an already
+  // completed receipt or hide its explicit review after an unrelated write.
+  await withFieldHost(async url=>{
+    const f=await fixture(url),base=f.plan.revision;
+    await f.rpc({oneofKind:'physical',physical:f.m.Physical.create({action:{oneofKind:'receiveDevice',receiveDevice:{plan:{id:f.plan.id,revision:f.plan.revision},material:0,unit:0,inventory:{},changes:[{name:'name',value:{oneofKind:'text',text:'Earlier accepted device'}}]}}})});
+    const planner=await openPlan(page,url,f);
+    await page.evaluate(({plan,revision})=>new Promise((resolve,reject)=>{
+      const request=indexedDB.open('omloom-receipt-recovery',1);
+      request.onupgradeneeded=()=>request.result.createObjectStore('pending',{autoIncrement:true});
+      request.onerror=()=>reject(request.error);
+      request.onsuccess=()=>{const db=request.result,tx=db.transaction('pending','readwrite');tx.objectStore('pending').add({plan,revision,material:0,unit:0});tx.oncomplete=()=>{db.close();resolve();};tx.onabort=()=>reject(tx.error);};
+    }),{plan:f.plan.id,revision:String(base)});
+    await planner.getByRole('button',{name:'Create received device',exact:true}).click();
+    const editor=planner.getByRole('region',{name:'Create received device',exact:true});
+    await expect(editor).toContainText('Earlier device saved');
+    await expect(planner).not.toHaveAttribute('inert','');
+    await editor.getByLabel('Name',{exact:true}).fill('Next actual device');
+    await expect(editor.getByLabel('Name',{exact:true})).toHaveValue('Next actual device');
+    await f.rpc({oneofKind:'physical',physical:f.m.Physical.create({action:{oneofKind:'save',save:{plan:{name:'Concurrent write',materials:[{name:'Demand',quantity:1,kind:f.m.AssetKind.DEVICE}]}}}})});
+    await editor.getByRole('button',{name:'Record received device',exact:true}).click();
+    await expect(editor).toContainText('Nothing was created by this rejected receipt');
+    await expect(editor.getByLabel('Name',{exact:true})).toHaveValue('Next actual device');
+    await expect(editor.getByRole('button',{name:'Review current receipt',exact:true})).toBeVisible();
+    await editor.getByRole('button',{name:'Review current receipt',exact:true}).click();
+    await expect(editor.getByLabel('Name',{exact:true})).toHaveValue('Next actual device');
+    await editor.getByRole('button',{name:'Record received device',exact:true}).click();
+    await expect(planner).toContainText('Unit 2: Next actual device');
   });
 });
 

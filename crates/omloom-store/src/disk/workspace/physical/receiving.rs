@@ -66,6 +66,66 @@ impl Store {
 }
 
 impl Tx<'_> {
+    pub(super) fn recover_receipt(
+        &mut self,
+        context: &Context,
+        lookup: &api::PhysicalReceiptLookup,
+        working: &api::WorkingContext,
+        view: &mut api::PhysicalView,
+    ) -> Result<()> {
+        if self.root.get("restored") == Some(&Value::Bool(true)) {
+            return Err(Error::RecoveryRequired);
+        }
+        let current = number(&self.root, "revision")?;
+        if lookup.revision == 0 || lookup.revision > current {
+            return Err(Error::Invalid);
+        }
+        // Loading the current plan establishes its owner and ordinary operand rights.
+        let plan = self.load_physical_plan(
+            context,
+            &api::PhysicalPlanKey {
+                id: lookup.plan.clone(),
+                revision: 0,
+            },
+            working,
+            current == lookup.revision,
+        )?;
+        match self.receipt_outcome(context, lookup.revision, &lookup.plan) {
+            Ok(outcome) => {
+                view.receipt = Some(Box::new(outcome));
+            }
+            Err(Error::Conflict) => {
+                view.receipt_recovery = api::PhysicalReceiptRecovery::NotCommitted as i32;
+            }
+            Err(Error::Denied) => {
+                // A different actor's outcome cannot belong to this plan owner.
+                // Resource-rights loss on our own result must remain restricted.
+                let row = self
+                    .get(&format!("mutation-outcome/{}", lookup.revision))?
+                    .ok_or(Error::Expired)?;
+                if string(&row, "actor")? == context.actor {
+                    return Err(Error::Denied);
+                }
+                view.receipt_recovery = api::PhysicalReceiptRecovery::NotCommitted as i32;
+            }
+            Err(Error::Expired) => {
+                if current == lookup.revision {
+                    // Advancing the existing root CAS fences every in-flight old snapshot.
+                    // No receipt ledger, inventory mutation or retry is needed.
+                    self.changed = true;
+                    view.receipt_recovery = api::PhysicalReceiptRecovery::NotCommitted as i32;
+                } else if current == lookup.revision.checked_add(1).ok_or(Error::Invalid)? {
+                    view.receipt_recovery = api::PhysicalReceiptRecovery::NotCommitted as i32;
+                } else {
+                    view.receipt_recovery = api::PhysicalReceiptRecovery::Unavailable as i32;
+                }
+            }
+            Err(error) => return Err(error),
+        }
+        view.plan = Some(plan);
+        Ok(())
+    }
+
     pub(super) fn plan_context(
         &self,
         context: &Context,

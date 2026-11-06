@@ -77,23 +77,35 @@ async function receiptReady(){
     receiptLifetime.signal.addEventListener('abort',closed,{once:true});
   });
 }
-async function receivedDevice(outcome:model.PhysicalReceiptOutcome,reviewed:model.PhysicalPlan){
+function applyReceiptPlan(fresh:model.PhysicalPlan|undefined,reviewed:model.PhysicalPlan,material:number,acceptedRevision?:bigint){
+  const current=plan.value;
+  if(!fresh||!current||current.id!==fresh.id)throw Error('Reopen the saved plan to inspect the device.');
+  if(savedCurrent.value)acceptPlan(fresh);
+  else{
+    const line=current.materials[material],before=reviewed.materials[material];
+    if(current.revision===reviewed.revision&&fresh.revision===acceptedRevision&&current.state===model.PhysicalPlanState.DRAFT&&line&&before&&model.PhysicalMaterial.equals(line,before)){
+      line.allocations=fresh.materials[material]!.allocations;current.revision=fresh.revision;
+    }else receiptDraftConflict.value=true;
+  }
+}
+async function updatedReceipt(view:model.PhysicalView,reviewed:model.PhysicalPlan,material:number,kind:'checked'|'assigned'){
+  await receiptReady();
+  const applied=await run(async()=>{
+    if(!view.plan||view.plan.id!==plan.value?.id)throw Error('Reopen the original plan to inspect this device.');
+    changed=revision.value!==view.revision;revision.value=view.revision;planItems.value=view.items;
+    applyReceiptPlan(view.plan,reviewed,material,kind==='assigned'?view.plan.revision:undefined);
+    notice.value=kind==='assigned'?'Existing device assigned. Nothing was created or installed.':'Current plan refreshed. No device was created.';
+  });
+  if(!applied)throw Error('The current plan could not be refreshed.');
+}
+async function receivedDevice(outcome:model.PhysicalReceiptOutcome,reviewed:model.PhysicalPlan,view?:model.PhysicalView){
 await receiptReady();
 const applied=await run(async()=>{
   if(outcome.plan?.id!==plan.value?.id){notice.value='The original receipt belongs to a different saved plan. This plan was not changed.';return;}
   changed=true;
-  const response=await invoke({oneofKind:'load',load:{id:plan.value!.id!,revision:0n}});
-  const current=plan.value,fresh=response.plan;
-  if(!fresh||!current||current.id!==outcome.plan?.id)throw Error('The receipt was accepted. Reopen its saved plan to inspect the allocation.');
-  if(savedCurrent.value)acceptPlan(fresh);
-  else{
-    // Rebase only the exact reviewed line. Reordering or replacing it needs explicit review.
-    const line=current.materials[outcome.material],before=reviewed.materials[outcome.material];
-    if(current.revision===reviewed.revision&&fresh.revision===outcome.revision&&current.state===model.PhysicalPlanState.DRAFT&&line&&before&&model.PhysicalMaterial.equals(line,before)){
-      line.allocations=fresh.materials[outcome.material]!.allocations;
-      current.revision=fresh.revision;
-    }else receiptDraftConflict.value=true;
-  }
+  const response=view??await invoke({oneofKind:'load',load:{id:plan.value!.id!,revision:0n}});
+  revision.value=response.revision;planItems.value=response.items;
+  applyReceiptPlan(response.plan,reviewed,outcome.material,outcome.revision);
   notice.value=`Device receipt accepted at revision ${outcome.revision}. Nothing was installed.`;
 });
 if(!applied)throw Error('Receipt accepted, but the plan could not be refreshed. Recover its result to refresh again.');
@@ -496,7 +508,7 @@ async function exportPlan(){await run(async()=>{
 <section aria-label="Installation plan editor">
 <p v-if="receiptDraftConflict" role="alert">Receipt accepted; draft input is retained. The changed material lines cannot be reconciled automatically. Reopen the saved plan to review the confirmed allocation before saving.</p>
 <PhysicalMaterials :materials="plan?.materials??emptyMaterials" :uses="materialUses" :items="planItems" :working="working()" :editable="editable" :receivable="receivable" :can-place="kind===K.RACK" :busy="busy" @update="updateMaterials" @receive="receiveMaterial" @create="startReceipt" @selected="selectedMaterial" @place="chooseFuture" @remove="removeMaterial"/>
-<ReceivedDevice v-if="receiptUnit&&plan&&plan.materials[receiptUnit.material]" :key="plan.id+'/'+receiptUnit.material+'/'+receiptUnit.unit" :plan="plan" :material="receiptUnit.material" :unit="receiptUnit.unit" :shared-reference="receiptUnit.sharedReference" :working="working()" :definitions="definitions" :inactive="busy||inactive" :recorded="receivedDevice" @advance="advanceReceived" @inventory-changed="emit('changed')" @open="openReceived" @close="receiptUnit=undefined"/>
+<ReceivedDevice v-if="receiptUnit&&plan&&plan.materials[receiptUnit.material]" :key="plan.id+'/'+receiptUnit.material+'/'+receiptUnit.unit" :plan="plan" :material="receiptUnit.material" :unit="receiptUnit.unit" :shared-reference="receiptUnit.sharedReference" :working="working()" :definitions="definitions" :inactive="busy||inactive" :recorded="receivedDevice" :updated="updatedReceipt" @advance="advanceReceived" @inventory-changed="emit('changed')" @open="openReceived" @close="receiptUnit=undefined"/>
 <form v-if="editable" @submit.prevent="save"><fieldset :disabled="busy">
 <label>Installation plan name<input v-model="name" required maxlength="160" /></label>
 <div class="placement-controls"><button v-if="kind===K.RACK" type="button" :aria-pressed="mode==='placement'" @click="mode='placement'">Plan rack placement</button><button v-if="kind!==K.CABLE" type="button" :aria-pressed="mode==='replacement'" @click="mode='replacement'">Replace, remove or move a part</button></div>

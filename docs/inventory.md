@@ -1135,16 +1135,23 @@ not an invented delivery or inspection date.
 
 **Record and next** independently confirms each item and clears its serial and
 actual characteristics. A conflict leaves earlier successes intact. Before
-submission the browser keeps only a non-authorizing plan/revision reference for
-recovering the original result after a lost reply or reopening. A transactional
-browser-storage slot admits one unresolved receipt across tabs. Its generated
-key prevents delayed cleanup from removing another attempt's reference; no actual
-fields or request payload are stored. Storage failure prevents dispatch.
-Recovery and
-exact repeated requests write nothing; changed arguments cannot reuse the
-attempt. Expired outcomes do not admit the old attempt as fresh creation, and
+submission the browser keeps a non-authorizing plan, material, unit and revision
+reference. Lost replies and reopening trigger automatic recovery. Transactional
+browser storage admits one unresolved save per exact material unit across tabs,
+with at most 128 unresolved references. Other units and plans remain usable.
+Generated keys prevent delayed cleanup from removing another attempt's reference;
+no actual fields or request payload are stored. Storage failure prevents dispatch.
+Lookup and exact replay write nothing. The recovery command can close an unused
+admission revision through the existing root CAS, without creating a device or
+another outcome ledger. Changed arguments cannot reuse the attempt.
+Expired outcomes do not admit the old attempt as fresh creation, and
 restored stores retain their existing mutation fence. An unavailable result
-remains unresolved, never an automatic inventory-only fallback. Original accepted
+remains unresolved for that unit, never an automatic inventory-only fallback.
+**Find existing device** uses the ordinary inventory picker and assignment command
+to resolve the physical item without creating it again. There is no separate
+manual approval process. The browser removes that unit's reference only after
+known recovery, definitive non-acceptance or confirmed existing-device assignment.
+Original accepted
 revision and current plan allocation/hold state are separate meanings.
 After a definitive rejection, the form retains actual input and offers a separate
 **Create in inventory only instead** action. That action does not receive or assign

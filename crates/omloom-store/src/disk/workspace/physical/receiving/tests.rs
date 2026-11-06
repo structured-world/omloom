@@ -133,3 +133,183 @@ fn expired_concurrent_winner_remains_unresolved()
     assert_eq!(store.usage()?, before);
     Ok(())
 }
+
+fn recover(
+    store: &Store,
+    actor: &Context,
+    lookup: api::PhysicalReceiptLookup,
+) -> Result<api::PhysicalView> {
+    match store
+        .workspace_physical(
+            actor,
+            api::Physical {
+                action: Some(api::physical::Action::RecoverReceipt(lookup)),
+            },
+            Some(&api::WorkingContext::default()),
+            2000,
+        )?
+        .result
+    {
+        Some(api::reply::Result::Physical(view)) => Ok(view),
+        _ => Err(Error::Corrupt),
+    }
+}
+
+// Recovery fences a request that has not committed, including one whose old
+// transaction is still open. Repeated recovery neither creates data nor writes.
+#[test]
+fn recovery_fences_inflight_creation_without_an_extra_ledger()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = actor();
+    let plan = save(&store, &actor, "Receiving")?;
+    let lookup = api::PhysicalReceiptLookup {
+        revision: store.usage()?.revision,
+        plan: plan.id.clone().ok_or(Error::Missing)?,
+    };
+    let working = api::WorkingContext {
+        expected: Some(lookup.revision),
+        ..Default::default()
+    };
+    let old = store.begin()?;
+    let before = store.usage()?;
+    let view = recover(&store, &actor, lookup.clone())?;
+    assert_eq!(
+        view.receipt_recovery,
+        api::PhysicalReceiptRecovery::NotCommitted as i32
+    );
+    let fenced = store.usage()?;
+    assert_eq!(fenced.revision, before.revision + 1);
+    assert_eq!(fenced.rows, before.rows);
+    assert_eq!(fenced.bytes, before.bytes);
+    assert!(
+        matches!(store.commit_receipt(old,&actor,&request(plan)?,&working,100),Err(Error::Rejected(cause)) if matches!(*cause,Error::Conflict))
+    );
+    assert_eq!(
+        recover(&store, &actor, lookup)?.receipt_recovery,
+        api::PhysicalReceiptRecovery::NotCommitted as i32
+    );
+    assert_eq!(store.usage()?, fenced);
+    Ok(())
+}
+
+// Expiry removes detail, not the real inventory. Recovery returns current
+// authorized facts without claiming that a missing outcome means non-acceptance.
+#[test]
+fn automatic_recovery_preserves_expired_and_restored_meanings()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = actor();
+    let plan = save(&store, &actor, "Receiving")?;
+    let lookup = api::PhysicalReceiptLookup {
+        revision: store.usage()?.revision,
+        plan: plan.id.clone().ok_or(Error::Missing)?,
+    };
+    store.commit_receipt(
+        store.begin()?,
+        &actor,
+        &request(plan)?,
+        &api::WorkingContext {
+            expected: Some(lookup.revision),
+            ..Default::default()
+        },
+        100,
+    )?;
+    let before = store.usage()?;
+    let accepted = recover(&store, &actor, lookup.clone())?
+        .receipt
+        .ok_or(Error::Missing)?;
+    assert_eq!(
+        accepted.plan.as_ref().ok_or(Error::Missing)?.id,
+        lookup.plan
+    );
+    assert_eq!(store.usage()?, before);
+    let mut read_only = actor.clone();
+    read_only.grants[0].writable = false;
+    assert_eq!(
+        recover(&store, &read_only, lookup.clone())?.receipt,
+        Some(accepted)
+    );
+    assert_eq!(store.usage()?, before);
+    let mut foreign = actor.clone();
+    foreign.actor = "another-operator".into();
+    assert!(matches!(
+        recover(&store, &foreign, lookup.clone()),
+        Err(Error::Denied)
+    ));
+    assert_eq!(store.usage()?, before);
+    store.cleanup(2000, None)?;
+    let before = store.usage()?;
+    let view = recover(&store, &actor, lookup.clone())?;
+    assert_eq!(
+        view.receipt_recovery,
+        api::PhysicalReceiptRecovery::Unavailable as i32
+    );
+    assert!(view.receipt.is_none());
+    assert_eq!(
+        view.plan.ok_or(Error::Missing)?.materials[0]
+            .allocations
+            .len(),
+        1
+    );
+    assert_eq!(store.usage()?, before);
+    let mut image = Vec::new();
+    store.export(&mut image)?;
+    let restored_dir = tempfile::tempdir()?;
+    let restored = Store::restore(restored_dir.path(), &image, policy(), image.len() as u64)?;
+    let before = restored.usage()?;
+    assert!(matches!(
+        recover(&restored, &actor, lookup),
+        Err(Error::RecoveryRequired)
+    ));
+    assert_eq!(restored.usage()?, before);
+    Ok(())
+}
+
+// A concurrent actor's successful receipt cannot be this plan owner's result.
+// Classify the refusal without disclosing that actor's plan or created identity.
+#[test]
+fn recovery_does_not_confuse_another_actors_outcome()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let first = actor();
+    let mut second = first.clone();
+    second.actor = "other-operator".into();
+    let first_plan = save(&store, &first, "First plan")?;
+    let second_plan = save(&store, &second, "Second plan")?;
+    let base = store.usage()?.revision;
+    store.commit_receipt(
+        store.begin()?,
+        &first,
+        &request(first_plan)?,
+        &api::WorkingContext {
+            expected: Some(base),
+            ..Default::default()
+        },
+        100,
+    )?;
+    let before = store.usage()?;
+    let view = recover(
+        &store,
+        &second,
+        api::PhysicalReceiptLookup {
+            revision: base,
+            plan: second_plan.id.ok_or(Error::Missing)?,
+        },
+    )?;
+    assert_eq!(
+        view.receipt_recovery,
+        api::PhysicalReceiptRecovery::NotCommitted as i32
+    );
+    assert!(view.receipt.is_none());
+    assert!(
+        view.plan.ok_or(Error::Missing)?.materials[0]
+            .allocations
+            .is_empty()
+    );
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}

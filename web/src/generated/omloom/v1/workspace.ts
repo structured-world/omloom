@@ -5656,6 +5656,16 @@ export interface Physical {
          */
         receiptOutcome: PhysicalReceiptLookup;
     } | {
+        oneofKind: "recoverReceipt";
+        /**
+         * Resolve an uncertain save without repeating creation. May atomically close
+         * an unused application revision; plan ownership and current operand rights
+         * are checked. Recovery does not grant authority to create or assign a device.
+         *
+         * @generated from protobuf field: omloom.workspace.v1.PhysicalReceiptLookup recover_receipt = 24
+         */
+        recoverReceipt: PhysicalReceiptLookup;
+    } | {
         oneofKind: "reviewReplacement";
         /**
          * Explain or explicitly judge a replacement using current scoped evidence.
@@ -6061,8 +6071,16 @@ export interface PhysicalOffers {
  */
 export interface PhysicalView {
     /**
+     * Server-established missing-result classification for recover_receipt.
+     * Unspecified when receipt contains the accepted outcome or for unrelated
+     * commands. Unavailable preserves uncertainty about past creation.
+     *
+     * @generated from protobuf field: omloom.workspace.v1.PhysicalReceiptRecovery receipt_recovery = 19
+     */
+    receiptRecovery: PhysicalReceiptRecovery;
+    /**
      * Original accepted receipt, independently of the plan's current assignment,
-     * hold or completion. Absent only for a response unrelated to receipt recovery.
+     * hold or completion. Absent when recovery cannot return the original result.
      *
      * @generated from protobuf field: optional omloom.workspace.v1.PhysicalReceiptOutcome receipt = 18
      */
@@ -7739,6 +7757,28 @@ export enum PhysicalPlanState {
      * @generated from protobuf enum value: PHYSICAL_PLAN_STATE_CANCELLED = 5;
      */
     CANCELLED = 5
+}
+/**
+ * @generated from protobuf enum omloom.workspace.v1.PhysicalReceiptRecovery
+ */
+export enum PhysicalReceiptRecovery {
+    /**
+     * @generated from protobuf enum value: PHYSICAL_RECEIPT_RECOVERY_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * The server proved non-acceptance and closed the old admission revision.
+     *
+     * @generated from protobuf enum value: PHYSICAL_RECEIPT_RECOVERY_NOT_COMMITTED = 1;
+     */
+    NOT_COMMITTED = 1,
+    /**
+     * Old admission is closed, but retained data cannot establish its past result.
+     * Inspect current inventory; do not repeat creation for this physical item.
+     *
+     * @generated from protobuf enum value: PHYSICAL_RECEIPT_RECOVERY_UNAVAILABLE = 2;
+     */
+    UNAVAILABLE = 2
 }
 /**
  * @generated from protobuf enum omloom.workspace.v1.PhysicalWiringIntent
@@ -10277,6 +10317,7 @@ class Physical$Type extends MessageType<Physical> {
             { no: 17, name: "receive", kind: "message", oneof: "action", T: () => PhysicalMaterialReceipt },
             { no: 22, name: "receive_device", kind: "message", oneof: "action", T: () => PhysicalDeviceReceipt },
             { no: 23, name: "receipt_outcome", kind: "message", oneof: "action", T: () => PhysicalReceiptLookup },
+            { no: 24, name: "recover_receipt", kind: "message", oneof: "action", T: () => PhysicalReceiptLookup },
             { no: 18, name: "review_replacement", kind: "message", oneof: "action", T: () => PhysicalReplacementReview },
             { no: 19, name: "replacement_quality", kind: "message", oneof: "action", T: () => PhysicalReplacementQualityQuery },
             { no: 20, name: "scene", kind: "message", oneof: "action", T: () => PhysicalSceneQuery },
@@ -10434,6 +10475,7 @@ export const PhysicalOffers = new PhysicalOffers$Type();
 class PhysicalView$Type extends MessageType<PhysicalView> {
     constructor() {
         super("omloom.workspace.v1.PhysicalView", [
+            { no: 19, name: "receipt_recovery", kind: "enum", T: () => ["omloom.workspace.v1.PhysicalReceiptRecovery", PhysicalReceiptRecovery, "PHYSICAL_RECEIPT_RECOVERY_"] },
             { no: 18, name: "receipt", kind: "message", T: () => PhysicalReceiptOutcome },
             { no: 17, name: "two_end_cables", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AssetRef },
             { no: 16, name: "scene_connections", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => PhysicalSceneConnection },

@@ -486,6 +486,7 @@ impl Store {
         let plan_id = match &action {
             Action::Load(key) | Action::Cancel(key) => Some(key.id.as_str()),
             Action::Receive(value) => value.plan.as_ref().map(|key| key.id.as_str()),
+            Action::RecoverReceipt(value) => Some(value.plan.as_str()),
             Action::Reserve(value) => value.plan.as_ref().map(|key| key.id.as_str()),
             Action::Complete(value) => value.plan.as_ref().map(|key| key.id.as_str()),
             Action::ReviewReplacement(value) => value.plan.as_ref().map(|key| key.id.as_str()),
@@ -513,6 +514,9 @@ impl Store {
                     value.revision,
                     &value.plan,
                 )?));
+            }
+            Action::RecoverReceipt(value) => {
+                tx.recover_receipt(context, &value, working()?, &mut view)?;
             }
             Action::Scene(value) => tx.physical_scene(context, value, working()?, &mut view)?,
             Action::PortAnchor(value) => {

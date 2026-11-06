@@ -2249,6 +2249,14 @@ message PhysicalReceiptOutcome {
   // Original zero-based unit, not a claim of current reservation or installation.
   uint32 unit = 5;
 }
+enum PhysicalReceiptRecovery {
+  PHYSICAL_RECEIPT_RECOVERY_UNSPECIFIED = 0;
+  // The server proved non-acceptance and closed the old admission revision.
+  PHYSICAL_RECEIPT_RECOVERY_NOT_COMMITTED = 1;
+  // Old admission is closed, but retained data cannot establish its past result.
+  // Inspect current inventory; do not repeat creation for this physical item.
+  PHYSICAL_RECEIPT_RECOVERY_UNAVAILABLE = 2;
+}
 message PhysicalPreview {
   // User-supplied proposed plan; state, revision and deadline are not authority.
   PhysicalPlan plan = 1;
@@ -2398,6 +2406,10 @@ message Physical {
     PhysicalDeviceReceipt receive_device = 22;
     // Retrieve an earlier accepted receipt without repeating its mutation.
     PhysicalReceiptLookup receipt_outcome = 23;
+    // Resolve an uncertain save without repeating creation. May atomically close
+    // an unused application revision; plan ownership and current operand rights
+    // are checked. Recovery does not grant authority to create or assign a device.
+    PhysicalReceiptLookup recover_receipt = 24;
     // Explain or explicitly judge a replacement using current scoped evidence.
     PhysicalReplacementReview review_replacement = 18;
     // Bounded quality buckets for the exact current complete disclosure scope.
@@ -2552,8 +2564,12 @@ message PhysicalOffers {
   optional string after = 2;
 }
 message PhysicalView {
+  // Server-established missing-result classification for recover_receipt.
+  // Unspecified when receipt contains the accepted outcome or for unrelated
+  // commands. Unavailable preserves uncertainty about past creation.
+  PhysicalReceiptRecovery receipt_recovery = 19;
   // Original accepted receipt, independently of the plan's current assignment,
-  // hold or completion. Absent only for a response unrelated to receipt recovery.
+  // hold or completion. Absent when recovery cannot return the original result.
   optional PhysicalReceiptOutcome receipt = 18;
   // Server-qualified assemblies with exactly two accepted named ends, both
   // currently attached to visible scene ports. Omission conveys no hidden end
