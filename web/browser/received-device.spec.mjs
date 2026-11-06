@@ -213,6 +213,26 @@ test('a C1 control in a delivery reference never dispatches a receipt',async({pa
   });
 });
 
+test('explicit review prepares a rejected receipt without losing actual input',async({page})=>{
+  // A fresh application revision needs explicit preparation, not an automatic retry.
+  await withFieldHost(async url=>{
+    const f=await fixture(url);const planner=await openPlan(page,url,f);
+    await planner.getByRole('button',{name:'Create received device',exact:true}).click();
+    const editor=planner.getByRole('region',{name:'Create received device',exact:true});
+    await editor.getByLabel('Name',{exact:true}).fill('Retained actual name');
+    await editor.getByLabel('Serial number change',{exact:true}).selectOption('set');
+    await editor.getByLabel('Serial number',{exact:true}).fill('REVIEWED-SERIAL');
+    await f.rpc({oneofKind:'write',write:f.m.Write.create({kind:f.m.AssetKind.DEVICE,changes:[{name:'name',value:{oneofKind:'text',text:'Concurrent edit'}}]})});
+    await editor.getByRole('button',{name:'Record received device',exact:true}).click();
+    await expect(editor).toContainText('Nothing was created by this rejected receipt');
+    await editor.getByRole('button',{name:'Review current receipt',exact:true}).click();
+    await expect(editor.getByLabel('Name',{exact:true})).toHaveValue('Retained actual name');
+    await expect(editor.getByLabel('Serial number',{exact:true})).toHaveValue('REVIEWED-SERIAL');
+    await editor.getByRole('button',{name:'Record received device',exact:true}).click();
+    await expect(planner).toContainText('Unit 1: Retained actual name');
+  });
+});
+
 test('late creation preparation does not steal receipt input focus',async({page})=>{
   // The optional reference is usable before ordinary creation choices arrive.
   // Late autofocus must not redirect typing into the suggested device name.

@@ -67,15 +67,20 @@ watch([preparing,()=>props.inactive],async()=>{
   // Never steal input begun while preparation or the enclosing refresh was pending.
   if(document.activeElement===entryFocus||document.activeElement===document.body)(form.value?.querySelector<HTMLElement>('[data-fact-value]')??form.value?.querySelector<HTMLElement>('#value-name,textarea,input'))?.focus();
 });
-watch(()=>props.receipt,async(value,previous)=>{
-  if(value||!previous)return;
+async function reprepareCreation(){
   preparing.value=true;error.value='';
   try{
     const response=await call({oneofKind:'prepare',prepare:model.Prepare.create({view:props.view})},model.WorkingContext.create({...props.working,expected:undefined}));
-    if(!mounted)return;
+    if(!mounted)return false;
     if(response.oneofKind!=='actions')throw Error('Inventory creation could not be prepared.');
+    if(props.receipt&&!response.actions.creations.some(choice=>choice.kind===AssetKind.DEVICE&&!choice.parent))throw Error('Device creation is not permitted in this inventory context.');
     actions.value=response.actions;
-  }catch(e){error.value=String(e);}finally{preparing.value=false;}
+    return true;
+  }catch(e){error.value=String(e);return false;}finally{preparing.value=false;}
+}
+defineExpose({reprepareCreation});
+watch(()=>props.receipt,async(value,previous)=>{
+  if(!value&&previous)await reprepareCreation();
 });
 type EditorField = { id: string; name: string; type: model.FieldType; choices: string[]; advanced: boolean };
 const parents = computed(() => [...new Map(actions.value?.creations.flatMap(c => c.parent?.target ? [[key(c.parent.target), c.parent] as const] : [])).values()]);

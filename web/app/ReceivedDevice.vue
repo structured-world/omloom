@@ -18,7 +18,16 @@ function reference():Reference|undefined {
 }
 try{pending.value=reference()!==undefined;}catch(e){pending.value=true;error.value=String(e);}
 const inventory=model.WorkingContext.create();
+const editor=ref<InstanceType<typeof AssetEditor>>(),reviewing=ref(false);
 const rejected=ref(false),inventoryOnly=ref(false),inventoryCreated=ref<import('./api').AssetRef>();
+async function review(){
+  if(pending.value||reviewing.value)return;
+  reviewing.value=true;error.value='';
+  try{
+    if(!await editor.value?.reprepareCreation())throw Error('Current creation context could not be reviewed.');
+    rejected.value=false;
+  }catch(e){error.value=String(e);}finally{reviewing.value=false;}
+}
 const touched=ref(false);
 function warnDraft(event:BeforeUnloadEvent){if(touched.value&&!pending.value&&!recovered.value&&!inventoryCreated.value){event.preventDefault();event.returnValue='';}}
 window.addEventListener('beforeunload',warnDraft);
@@ -74,6 +83,7 @@ function inventorySaved(target:import('./api').AssetRef|undefined){if(!target)re
 <p v-if="!recovered&&!inventoryOnly">Unplaced device in permitted installation inventory. Recording confirms receipt, not installation. Planned specifications are not actual facts.</p>
 <p v-if="error" role="alert">{{error}}</p>
 <button v-if="rejected&&!pending&&!inventoryOnly&&!recovered" type="button" @click="inventoryOnly=true;error=''">Create in inventory only instead</button>
+<button v-if="rejected&&!pending&&!inventoryOnly&&!recovered" type="button" :disabled="reviewing" @click="review">Review current receipt</button>
 <template v-if="pending"><p role="status">An earlier receipt needs its original result. No creation will be repeated.</p><button type="button" @click="recover">Recover receipt result</button><button type="button" @click="emit('close')">Close, keep recovery reference</button></template>
 <template v-else-if="recovered"><p role="status">Receipt accepted at revision {{String(recovered.revision)}}. Not installed. Current assignment and hold are shown in the plan.</p><button type="button" @click="openCard">Open received device</button><button type="button" @click="emit('close')">Close receiving</button></template>
 <p v-if="inventoryOnly&&!inventoryCreated">This separate action creates inventory only. It does not assign or receive a unit in this plan.</p>
@@ -81,6 +91,6 @@ function inventorySaved(target:import('./api').AssetRef|undefined){if(!target)re
 <div v-show="!pending&&!recovered&&!inventoryCreated">
 <label v-if="!inventoryOnly">Optional delivery reference or explanation<input v-model="explanation" maxlength="160"/></label>
 <label v-if="!inventoryOnly&&explanation.trim()"><input v-model="shareReference" type="checkbox"/>Use this reference for the next received device</label>
-<AssetEditor inline :inactive="inactive" :definitions="definitions" :initial-kind="AssetKind.DEVICE" :working="inventory" :view="model.View.HARDWARE" :receipt="inventoryOnly?undefined:{name:plan.materials[material]!.name,submit}" @saved="inventorySaved" @close="emit('close')"/>
+<AssetEditor ref="editor" inline :inactive="inactive" :definitions="definitions" :initial-kind="AssetKind.DEVICE" :working="inventory" :view="model.View.HARDWARE" :receipt="inventoryOnly?undefined:{name:plan.materials[material]!.name,submit}" @saved="inventorySaved" @close="emit('close')"/>
 </div>
 </section></template>
