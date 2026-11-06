@@ -33,7 +33,8 @@ async function fill(editor, value) {
 for (const width of [1440, 390]) test(`selected devices retain distinct questions and advance with one fact edit at ${width}px`, async ({ page }) => {
   // The real evaluator returns two separate answers for one edit, without per-row reads or threshold input.
   await withFieldHost(async url => {
-    const { m, dialog, rpc, targets } = await setup(page, url, width);
+    const { m, dialog, rpc, targets, revision: readRevision } = await setup(page, url, width);
+    const originalRevision = await readRevision();
     const requests = [];
     await page.route('**/omloom.workspace.v1.Workspace/Call', async route => { requests.push(decode(m, route).command); await route.continue(); });
     await question(dialog, m);
@@ -45,6 +46,7 @@ for (const width of [1440, 390]) test(`selected devices retain distinct question
     await question(dialog, m, 'drive_bays', '6');
     await expect(dialog.locator('.fact-review-row')).toHaveCount(10);
     await expect(row(dialog, 1).locator('.fact-conditions li')).toHaveCount(2);
+    await page.screenshot({ path: test.info().outputPath(`selected-device-list-${width}.png`) });
     await row(dialog, 1).getByRole('button', { name: 'Clarify this fact', exact: true }).click();
     const editor = dialog.getByRole('region', { name: 'Selected fact editor' });
     await expect(editor.getByLabel('Exact drive bays', { exact: true })).toBeFocused();
@@ -56,6 +58,8 @@ for (const width of [1440, 390]) test(`selected devices retain distinct question
     await expect(row(dialog, 1).locator('.fact-conditions li').nth(0)).toContainText('failed');
     await expect(row(dialog, 1).locator('.fact-conditions li').nth(1)).toContainText('satisfied');
     await expect(row(dialog, 1).locator('.fact-current')).toContainText('8');
+    await expect(row(dialog, 1).locator('.fact-conditions small').first()).toContainText(`revision ${await readRevision()}`);
+    await expect(row(dialog, 2).locator('.fact-conditions small').first()).toContainText(`revision ${originalRevision}`);
     await expect(editor.getByRole('region', { name: 'Review fact change' })).toContainText('Review 02');
     await expect(editor.getByLabel('Exact drive bays', { exact: true })).toBeFocused();
     const affected = requests.filter(r => r.oneofKind === 'evaluateRequirements').at(-1).evaluateRequirements;
@@ -103,6 +107,13 @@ test('a conflicting row retains input while independent devices continue', async
       const actual = item.fields.find(f => f.name === 'drive_bays').value;
       expect(actual.oneofKind === 'integer' ? actual.integer : actual.equipment.assertion.quantity.lower).toBe(value);
     }
+    const resumed = dialog.getByRole('region', { name: 'Selected fact editor' });
+    await resumed.getByRole('button', { name: 'Read and review current fact', exact: true }).click();
+    await expect(resumed.getByRole('region', { name: 'Review fact change' })).toContainText('Currently recorded drive bays: 9');
+    await expect(resumed.getByLabel('Exact drive bays', { exact: true })).toHaveValue('12');
+    await expect(resumed.getByRole('button', { name: 'Save and next', exact: true })).toBeEnabled();
+    await resumed.getByRole('button', { name: 'Save and next', exact: true }).click();
+    await expect(row(dialog, 2).locator('.fact-conditions')).toContainText('satisfied');
   });
 });
 
@@ -130,11 +141,11 @@ test('a supported CSV update returns to the same selected questions', async ({ p
   });
 });
 
-test('rechecking an uncertain row retains its input and never advances or writes again', async ({ page }) => {
+for (const minimum of [6, 10]) test(`rechecking an uncertain row retains input without another write (minimum: ${minimum})`, async ({ page }) => {
   // A read cannot establish authorship of a lost write response or discard its unresolved draft.
   await withFieldHost(async url => {
     const { m, dialog } = await setup(page, url, 390, 2);
-    await question(dialog, m);
+    await question(dialog, m, 'drive_bays', String(minimum));
     let writes = 0;
     await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
       const request = decode(m, route);
@@ -151,6 +162,9 @@ test('rechecking an uncertain row retains its input and never advances or writes
     expect(writes).toBe(1);
     await editor.getByRole('button', { name: 'Defer this row and continue', exact: true }).click();
     await expect(dialog.getByRole('region', { name: 'Selected fact editor' }).getByRole('region', { name: 'Review fact change' })).toContainText('Review 02');
+    await dialog.getByRole('region', { name: 'Selected fact editor' }).getByRole('button', { name: 'Cancel', exact: true }).click();
+    await row(dialog, 1).getByRole('button', { name: 'Resume saved input', exact: true }).click();
+    await expect(dialog.getByRole('region', { name: 'Selected fact editor' }).getByLabel('Exact drive bays', { exact: true })).toHaveValue('8');
   });
 });
 
@@ -215,5 +229,40 @@ test('list changes and newly discovered devices cannot expand the reviewed selec
     expect(queries[0].nodes.slice(0, 3).map(node => node.expression.field.target)).toEqual(targets);
     await expect(dialog).not.toContainText('New discovery');
     await expect(dialog.locator('.fact-conditions li').first()).toContainText('10');
+  });
+});
+
+test('selected review measures question entry and navigation against individual cards', async ({ page }) => {
+  // Compare the same ten-device read-only question on the actual individual and selected journeys.
+  await withFieldHost(async url => {
+    const { m, dialog, targets } = await setup(page, url, 1440);
+    await dialog.getByRole('button', { name: 'Close dialog', exact: true }).click();
+    const evaluated = [];
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      const command = decode(m, route).command;
+      if (command.oneofKind === 'evaluateRequirements') evaluated.push(command.evaluateRequirements);
+      await route.continue();
+    });
+    const individualStart = Date.now();
+    for (const target of targets) {
+      await page.goto(`${url}/#/?view=2&asset=${target.assetId}&incarnation=${target.incarnation}`);
+      const panel = page.locator('.requirements-panel');
+      await panel.getByText('Check recorded requirements', { exact: true }).click();
+      await question(panel, m);
+      await expect(panel.getByRole('heading', { name: 'Requirement not established', exact: true })).toBeVisible();
+    }
+    const individualMs = Date.now() - individualStart;
+    expect(evaluated).toHaveLength(10);
+    expect(evaluated.every(query => query.nodes.length === 1)).toBe(true);
+    const selectedStart = Date.now();
+    await page.goto(url + '/#/?view=2');
+    await page.getByRole('checkbox', { name: 'Select visible page', exact: true }).check();
+    await page.getByRole('button', { name: 'Check selected devices', exact: true }).click();
+    const review = page.getByRole('dialog', { name: 'Check selected devices', exact: true });
+    await question(review, m);
+    await expect(review.locator('.fact-conditions strong')).toHaveText(Array(10).fill('unknown'));
+    expect(evaluated).toHaveLength(11);
+    expect(evaluated[10].nodes).toHaveLength(11);
+    console.log(JSON.stringify({ individual: { devices: 10, cardVisits: 10, questionEntries: 10, elapsedMs: individualMs }, selected: { devices: 10, cardVisits: 0, questionEntries: 1, elapsedMs: Date.now() - selectedStart } }));
   });
 });

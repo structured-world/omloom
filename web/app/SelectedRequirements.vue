@@ -11,7 +11,8 @@ const emit = defineEmits<{ close: []; saved: [] }>();
 const items = props.items.map(item => model.Item.create(item));
 const working = model.WorkingContext.create({ ...props.working, expected: undefined });
 const conditions = ref<model.FieldRequirement[]>([]);
-const answers = ref(new Map<string, model.RequirementResult>());
+type Answer = { result: model.RequirementResult; revision: bigint; evaluatedAtMs: bigint };
+const answers = ref(new Map<string, Answer>());
 const labels = ref(new Map<string, string>());
 const error = ref(''); const busy = ref(false); const importing = ref(false); const adding = ref(true);
 const notice = ref(''); const revision = ref<bigint>();
@@ -39,9 +40,13 @@ const rows = computed(() => {
   }
   return [...result.values()];
 });
-function result(condition: model.FieldRequirement) { return answers.value.get(identity(condition)); }
+function result(condition: model.FieldRequirement) { return answers.value.get(identity(condition))?.result; }
+function checkedAt(condition: model.FieldRequirement) {
+  const answer = answers.value.get(identity(condition));
+  if (answer) return `revision ${answer.revision}, ${new Date(Number(answer.evaluatedAtMs)).toLocaleString()}`;
+}
 function editable(row: typeof rows.value[number]) {
-  return row.conditions.some(c => result(c)?.resolutions.includes(model.RequirementResolution.RECORD_FACT));
+  return !restricted(row) && (drafts.value.some(draft => draft.id === row.id) || row.conditions.some(c => result(c)?.resolutions.includes(model.RequirementResolution.RECORD_FACT)));
 }
 function current(row: typeof rows.value[number]) { return result(row.conditions[0]!)?.evidence ?? []; }
 function restricted(row: typeof rows.value[number]) { return row.conditions.some(c => result(c)?.reason === model.RequirementReason.RESTRICTED); }
@@ -62,7 +67,7 @@ async function evaluate(selected: model.FieldRequirement[]) {
     if (reply.oneofKind !== 'requirementEvaluation') throw Error('The selected checks are unavailable.');
     const updated = new Map(answers.value);
     for (const entry of reply.requirementEvaluation.results) {
-      const condition = selected[entry.node]; if (condition) updated.set(identity(condition), entry);
+      const condition = selected[entry.node]; if (condition) updated.set(identity(condition), { result: entry, revision: reply.requirementEvaluation.revision, evaluatedAtMs: reply.requirementEvaluation.evaluatedAtMs });
     }
     answers.value = updated; revision.value = reply.requirementEvaluation.revision;
     // Revocation removes protected values and retained drafts, not just their edit buttons.
@@ -140,14 +145,14 @@ onMounted(async () => {
 <RequirementQuestion v-if="adding" :kind="AssetKind.DEVICE" :busy="busy" :disabled="writing || !!active" @check="check" />
 <div class="row"><button v-if="conditions.length && !adding" :disabled="busy || writing || !!active" @click="adding = true">Add another condition</button><button v-if="conditions.length" :disabled="busy || writing" @click="evaluate(conditions)">Refresh checks</button><button :disabled="busy || writing || !!active" @click="importing = true">Import CSV and return</button></div>
 <p v-if="notice" role="status">{{ notice }}</p><p v-if="error" role="alert">{{ error }}</p><p v-if="busy" role="status">Checking selected facts…</p>
-<p v-if="revision !== undefined">Checked inventory revision {{ revision.toString() }}. Results are not saved.</p>
+<p v-if="revision !== undefined">Last check used inventory revision {{ revision.toString() }}. Results are not saved.</p>
 <ol class="fact-review-list">
 <li v-for="row in rows" :key="row.id" class="fact-review-row" :class="{ 'is-current': active === row.id }">
 <h4>{{ restricted(row) ? 'Unavailable device fact' : name(row) }} <small v-if="!restricted(row)">{{ row.field.replaceAll('_', ' ') }}</small></h4>
 <template v-if="restricted(row)"><p>This fact is unavailable.</p></template>
 <template v-else>
 <div class="fact-current"><strong>Currently recorded:</strong><span v-if="!current(row).length">{{ result(row.conditions[0]!) ? 'Unknown' : 'Not checked' }}</span><p v-for="(evidence, i) in current(row)" :key="i">{{ evidence.value ? display(evidence.value) : 'Value unavailable' }}<small>{{ evidence.observedAtMs === undefined ? 'Accepted authority' : 'Observation source' }}: {{ evidence.source }}<template v-if="evidence.validUntilMs !== undefined"> · valid until {{ new Date(Number(evidence.validUntilMs)).toLocaleString() }}</template></small></p></div>
-<ul class="fact-conditions"><li v-for="condition in row.conditions" :key="identity(condition)"><span>{{ labels.get(identity(condition)) ?? questionLabel(condition) }}</span><strong>{{ result(condition) ? enumLabel(model.RequirementState, result(condition)!.state).toLowerCase() : 'Not checked' }}</strong><small v-if="result(condition)">{{ enumLabel(model.RequirementReason, result(condition)!.reason).toLowerCase() }}</small></li></ul>
+<ul class="fact-conditions"><li v-for="condition in row.conditions" :key="identity(condition)"><span>{{ labels.get(identity(condition)) ?? questionLabel(condition) }}</span><strong>{{ result(condition) ? enumLabel(model.RequirementState, result(condition)!.state).toLowerCase() : 'Not checked' }}</strong><small v-if="result(condition)">{{ enumLabel(model.RequirementReason, result(condition)!.reason).toLowerCase() }} · {{ checkedAt(condition) }}</small></li></ul>
 <button v-if="editable(row)" :id="`fact-${row.id}`" :disabled="busy || writing || (!!active && active !== row.id)" @click="edit(row)">{{ drafts.some(d => d.id === row.id) ? 'Resume saved input' : mismatch(row) ? 'Correct recorded fact' : 'Clarify this fact' }}</button>
 <p v-if="deferred.has(row.id)">Deferred, input retained.</p>
 </template>
@@ -155,7 +160,7 @@ onMounted(async () => {
 </ol>
 <template v-for="draft in drafts" :key="draft.id">
 <section v-show="active === draft.id" class="fact-review-editor" aria-label="Selected fact editor">
-<AssetEditor inline :inactive="active !== draft.id" :item="draft.item" :definitions="definitions" :field-mask="[draft.field]" :question="draft.question" :working="working" :view="model.View.HARDWARE" save-next @pending="writing = $event" @saved="finish(draft.id, true)" @recheck="recheck(draft.id, $event)" @close="closeEditor(draft.id)" />
+<AssetEditor inline :inactive="active !== draft.id" :item="draft.item" :definitions="definitions" :field-mask="[draft.field]" :question="draft.question" :working="{ ...working, focus: draft.item.target }" :view="model.View.HARDWARE" save-next @pending="writing = $event" @saved="finish(draft.id, true)" @recheck="recheck(draft.id, $event)" @close="closeEditor(draft.id)" />
 <button type="button" :disabled="writing || busy" @click="defer">Defer this row and continue</button>
 </section>
 </template>

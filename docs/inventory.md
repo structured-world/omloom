@@ -149,7 +149,8 @@ source evidence. An existing device finding can enter the same review through
 **Review these findings**.
 
 **Save and next** records only the selected accepted field, rechecks affected
-conditions and opens the next eligible row. Confirmed corrections survive
+conditions and opens the next eligible row. Each answer retains its own checked
+revision and time; refreshing one row does not relabel older answers. Confirmed corrections survive
 another row's conflict. **Defer this row and continue** retains unfinished input
 within the open review. Rechecking a conflicting or uncertain write does not
 discard its draft, claim success or advance automatically. **Import CSV and
