@@ -126,12 +126,12 @@ impl Tx<'_> {
         Ok(())
     }
 
-    pub(super) fn plan_context(
-        &self,
+    pub(super) fn admit_plan_operands(
+        &mut self,
         context: &Context,
         id: &str,
         working: &api::WorkingContext,
-    ) -> Result<api::WorkingContext> {
+    ) -> Result<()> {
         self.selection(context, working, false)?;
         PlanId::parse(id).map_err(|_| Error::Invalid)?;
         let row = self.get(&format!("plan/{id}"))?.ok_or(Error::Missing)?;
@@ -141,9 +141,8 @@ impl Tx<'_> {
         if string(&row, "action")? != "physical" {
             return Err(Error::Invalid);
         }
-        let mut selected = working.clone();
         if working.roots.is_empty() && working.focus.is_none() {
-            return Ok(selected);
+            return Ok(());
         }
         let count = row
             .get("material_count")
@@ -155,21 +154,11 @@ impl Tx<'_> {
             usize::try_from(count).map_err(|_| Error::Corrupt)?,
             number(&row, "class")? == Class::Detail as u64,
         )?;
-        let mut roots = BTreeSet::new();
-        if let Some(focus) = &working.focus {
-            // Focus narrows browsing roots; allocations are separate exact operands.
-            roots.insert(parse_target(Some(focus))?);
-        } else {
-            for root in &working.roots {
-                roots.insert(parse_target(Some(root))?);
-            }
-        }
         let mut allocations = BTreeSet::new();
         for allocation in materials.iter().flat_map(|m| &m.allocations) {
             let target = parse_target(allocation.item.as_ref())?;
             allocations.insert(target);
-            roots.insert(target);
-            if roots.len() > MAX_BULK {
+            if allocations.len() > MAX_BULK {
                 return Err(Error::Limit);
             }
         }
@@ -183,17 +172,16 @@ impl Tx<'_> {
                 .into_iter()
                 .map(|row| Ok((target(&row)?, row)))
                 .collect::<Result<BTreeMap<_, _>>>()?;
-            for target in allocations {
+            for target in &allocations {
                 self.require_visible_asset(
                     context,
-                    target,
-                    metadata.get(&target).ok_or(Error::Missing)?,
+                    *target,
+                    metadata.get(target).ok_or(Error::Missing)?,
                 )?;
             }
         }
-        selected.roots = roots.into_iter().map(target_wire).collect();
-        selected.focus = None;
-        Ok(selected)
+        self.physical_operands.extend(allocations);
+        Ok(())
     }
 
     pub(super) fn receipt_outcome(
@@ -294,8 +282,8 @@ impl Tx<'_> {
         }
         (|| {
             self.selection(context, working, true)?;
-            let plan_working = self.plan_context(context, &key.id, working)?;
-            let plan = self.load_physical_plan(context, key, &plan_working, true)?;
+            self.admit_plan_operands(context, &key.id, working)?;
+            let plan = self.load_physical_plan(context, key, working, true)?;
             let material = plan
                 .materials
                 .get(request.material as usize)
@@ -328,10 +316,7 @@ impl Tx<'_> {
                 &creation,
                 now,
             )?;
-            let mut selected = plan_working;
-            if !selected.roots.is_empty() {
-                selected.roots.push(target_wire(item));
-            }
+            self.physical_operands.insert(item);
             let mut basis = format!(
                 "Receipt asserted by {} at {now} ms UTC (recording time)",
                 context.actor
@@ -353,7 +338,7 @@ impl Tx<'_> {
                         basis,
                     }),
                 },
-                &selected,
+                working,
                 now,
             )?;
             self.save_creation_outcome(

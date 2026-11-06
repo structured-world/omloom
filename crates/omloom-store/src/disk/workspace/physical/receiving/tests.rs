@@ -76,11 +76,12 @@ fn scoped_plan_context_batches_allocation_visibility()
     for _ in 0..5 {
         QUERIES.store(0, Ordering::Relaxed);
         let started = std::time::Instant::now();
-        let tx = store.begin()?;
-        let selected = tx.plan_context(&actor, &id, &scoped)?;
+        let mut tx = store.begin()?;
+        tx.admit_plan_operands(&actor, &id, &scoped)?;
         elapsed.push(started.elapsed());
         queries = QUERIES.load(Ordering::Relaxed);
-        assert_eq!(selected.roots.len(), 64);
+        assert_eq!(tx.physical_operands.len(), 64);
+        assert_eq!(scoped.roots.len(), 1);
     }
     elapsed.sort_unstable();
     eprintln!(
@@ -97,7 +98,9 @@ fn scoped_plan_context_batches_allocation_visibility()
     let mut restricted = actor.clone();
     restricted.grants[0].scope = Scope::Targets(vec![parse_target(scoped.roots.first())?]);
     assert!(matches!(
-        store.begin()?.plan_context(&restricted, &id, &scoped),
+        store
+            .begin()?
+            .admit_plan_operands(&restricted, &id, &scoped),
         Err(Error::Denied)
     ));
     Ok(())

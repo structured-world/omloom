@@ -137,7 +137,6 @@ function removeMaterial(index:number){
 function selectedMaterial(item:model.Item){const index=planItems.value.findIndex(old=>key(old.target)===key(item.target));if(index===-1)planItems.value.push(item);else planItems.value[index]=item;}
 async function receiveMaterial(material:number,allocation:model.PhysicalMaterialAllocation){await run(async()=>{
   const selection=working();
-  if(selection.roots.length&&allocation.item&&!selection.roots.some(r=>key(r)===key(allocation.item)))selection.roots.push(allocation.item);
   const response=await call({oneofKind:'physical',physical:{action:{oneofKind:'receive',receive:{plan:planKey('current'),material,allocation}}}},selection);
   if(response.oneofKind!=='physical')throw Error('The allocation result is unavailable.');
   const reply=response.physical;revision.value=reply.revision;planItems.value=reply.items;changed=true;
@@ -162,11 +161,7 @@ const coordinatesOpen=ref(false);
 const coordinateRows=computed(()=>view.value.occupancy);
 function coordinate(value:model.PhysicalExtent|undefined){return value===undefined?'Unavailable':`${millimetres(value.startUm)} + ${millimetres(value.lengthUm)}`;}
 const working=()=>{
-  const roots=props.working.roots.slice();
-  if(roots.length)for(const allocation of plan.value?.materials.flatMap(m=>m.allocations)??[]){
-    if(allocation.item&&!roots.some(root=>key(root)===key(allocation.item)))roots.push(allocation.item);
-  }
-  return model.WorkingContext.create({roots,expected:revision.value});
+  return model.WorkingContext.create({...props.working,expected:revision.value});
 };
 const editable=computed(()=>plan.value===undefined||plan.value.state===model.PhysicalPlanState.DRAFT);
 const receivable=computed(()=>plan.value!==undefined&&[model.PhysicalPlanState.DRAFT,model.PhysicalPlanState.RESERVED,model.PhysicalPlanState.PARTIAL].includes(plan.value.state));

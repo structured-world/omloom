@@ -1134,7 +1134,10 @@ implied. The recorded assertion includes the server actor and recording time,
 not an invented delivery or inspection date.
 
 **Record and next** independently confirms each item and clears its serial and
-actual characteristics. A conflict leaves earlier successes intact. Before
+actual characteristics. A conflict leaves earlier successes intact. Allocated
+resources are exact action operands, not additional
+recursive browsing roots. An allocated enclosure does not admit its siblings
+or descendants outside the selected viewing context. Before
 submission the browser keeps a non-authorizing plan, material, unit and revision
 reference. Lost replies and reopening trigger automatic recovery. Transactional
 browser storage admits one unresolved save per exact material unit across tabs,

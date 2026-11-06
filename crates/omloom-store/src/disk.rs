@@ -14,7 +14,7 @@ use omloom_contracts::{
 };
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::Path,
     time::Duration,
 };
@@ -892,6 +892,7 @@ impl Store {
                 root,
                 changed: false,
                 inverse: None,
+                physical_operands: BTreeSet::new(),
             })
         })();
         if result.is_err() {
@@ -949,6 +950,8 @@ struct Tx<'a> {
     root: Properties,
     changed: bool,
     inverse: Option<deltas::Capture>,
+    // Exact resources named by this physical action, never recursive browse roots.
+    physical_operands: BTreeSet<AssetRef>,
 }
 impl Tx<'_> {
     fn query(&self, q: &str, p: Option<HashMap<String, Value>>) -> Result<Vec<Properties>> {

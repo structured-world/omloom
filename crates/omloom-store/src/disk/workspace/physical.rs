@@ -494,10 +494,10 @@ impl Store {
             Action::Preview(value) => value.plan.as_ref().and_then(|plan| plan.id.as_deref()),
             _ => None,
         };
-        let selected = plan_id
-            .map(|id| tx.plan_context(context, id, original.ok_or(Error::Invalid)?))
-            .transpose()?;
-        let working = || selected.as_ref().or(original).ok_or(Error::Invalid);
+        if let Some(id) = plan_id {
+            tx.admit_plan_operands(context, id, original.ok_or(Error::Invalid)?)?;
+        }
+        let working = || original.ok_or(Error::Invalid);
         let mut view = api::PhysicalView {
             revision: number(&tx.root, "revision")?,
             state: api::RequirementState::Unknown as i32,
@@ -668,6 +668,10 @@ impl Store {
             Action::Save(save) => {
                 let mut plan = save.plan.ok_or(Error::Invalid)?;
                 materials::normalize(&mut plan)?;
+                for allocation in plan.materials.iter().flat_map(|m| &m.allocations) {
+                    tx.physical_operands
+                        .insert(parse_target(allocation.item.as_ref())?);
+                }
                 tx.prepare_wiring_plan(context, &mut plan, working()?)?;
                 let materials = tx.validate_physical_draft(context, &plan, working()?, true)?;
                 tx.refresh_plan_control(context, &mut plan, working()?, now)?;
@@ -770,6 +774,9 @@ impl Store {
                 view.plan = Some(tx.load_physical_plan(context, &key, working()?, false)?);
             }
             Action::Receive(receipt) => {
+                let allocation = receipt.allocation.as_ref().ok_or(Error::Invalid)?;
+                tx.physical_operands
+                    .insert(parse_target(allocation.item.as_ref())?);
                 view.plan = Some(tx.receive_material(context, receipt, working()?, now)?);
             }
             Action::Reserve(value) => {

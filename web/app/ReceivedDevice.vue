@@ -2,7 +2,7 @@
 import {computed,onBeforeUnmount,onMounted,ref,shallowRef} from 'vue';
 import AssetEditor from './AssetEditor.vue';
 import PlacementSearch from './PlacementSearch.vue';
-import {call,key,model,AssetKind,type Field} from './api';
+import {call,model,AssetKind,type Field} from './api';
 import {readReceiptReferences,claimReceiptReference,clearReceiptReference,matchesReceipt,type ReceiptReference} from './receipt-reference';
 const props=defineProps<{plan:model.PhysicalPlan;material:number;unit:number;working:model.WorkingContext;definitions:model.Definition[];sharedReference?:string;inactive?:boolean;recorded:(outcome:model.PhysicalReceiptOutcome,reviewed:model.PhysicalPlan,view?:model.PhysicalView)=>Promise<void>;updated:(view:model.PhysicalView,reviewed:model.PhysicalPlan,material:number,kind:'checked'|'assigned')=>Promise<void>}>();
 const emit=defineEmits<{inventoryChanged:[];close:[];open:[item:import('./api').AssetRef];advance:[outcome:model.PhysicalReceiptOutcome,sharedReference?:string]}>();
@@ -87,7 +87,6 @@ async function useExisting(){
   recovering.value=true;error.value='';
   try{
     const working=model.WorkingContext.create({...props.working,expected:recoveryRevision.value});
-    if(working.roots.length&&!working.roots.some(root=>key(root)===key(target)))working.roots.push(target);
     const response=await call({oneofKind:'physical',physical:{action:{oneofKind:'receive',receive:{plan:{id:plan.id,revision:plan.revision},material:saved.material,allocation:{unit:saved.unit,item:target,basis:'Existing device selected after checking an unavailable save result'}}}}},working);
     if(response.oneofKind!=='physical')throw Error('The existing device could not be assigned.');
     await props.updated(response.physical,plan,saved.material,'assigned');

@@ -91,6 +91,12 @@ fn writable_fields(
 }
 impl Selection<'_> {
     pub fn contains(&self, target: AssetRef, tx: &Tx<'_>) -> Result<()> {
+        if tx.physical_operands.contains(&target) {
+            return Ok(());
+        }
+        self.contains_navigation(target, tx)
+    }
+    fn contains_navigation(&self, target: AssetRef, tx: &Tx<'_>) -> Result<()> {
         if let Some(focus) = self.focus {
             if target == focus || tx.direct_child(self.context, focus, target)? {
                 return Ok(());
@@ -529,7 +535,7 @@ impl Tx<'_> {
         if let Some(focus) = focus {
             self.visible_asset(context, focus)?;
             selection.focus = None;
-            match selection.contains(focus, self) {
+            match selection.contains_navigation(focus, self) {
                 Ok(()) => {}
                 Err(Error::Denied) => self.verify_owned_focus(context, &working.roots, focus)?,
                 Err(error) => return Err(error),

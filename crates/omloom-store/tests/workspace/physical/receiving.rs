@@ -624,6 +624,17 @@ fn identical_concurrent_receipts_return_the_same_outcome() -> TestResult {
 // Resolving saved allocations cannot turn a focused position into its whole rack.
 #[test]
 fn saved_plan_cannot_edit_a_sibling_of_the_focused_position() -> TestResult {
+    scoped_sibling(false)
+}
+
+// An allocated enclosing rack is an exact plan operand, not permission to
+// browse or mutate its other positions from a focused position.
+#[test]
+fn allocated_rack_does_not_expand_the_focused_position() -> TestResult {
+    scoped_sibling(true)
+}
+
+fn scoped_sibling(allocated_rack: bool) -> TestResult {
     let dir = tempfile::tempdir()?;
     let store = Store::open(dir.path(), policy())?;
     let actor = operator();
@@ -644,6 +655,19 @@ fn saved_plan_cannot_edit_a_sibling_of_the_focused_position() -> TestResult {
         positions.push(result.positions[0].target.clone().ok_or(Error::Missing)?);
     }
     let mut plan = saved(&store, &actor)?;
+    if allocated_rack {
+        plan.materials.push(api::PhysicalMaterial {
+            name: "Existing enclosing rack".into(),
+            kind: K::Rack as i32,
+            quantity: 1,
+            allocations: vec![api::PhysicalMaterialAllocation {
+                unit: 0,
+                item: Some(rack.clone()),
+                basis: "Reuse the actual enclosure".into(),
+            }],
+            ..Default::default()
+        });
+    }
     plan.steps.push(api::PhysicalStep {
         action: Some(api::physical_step::Action::Placement(
             api::PhysicalPlacement {
