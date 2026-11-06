@@ -237,11 +237,17 @@ function addWiring(){
 async function open() {
   if(opened.value)return;
   await run(async()=>{await refresh();await summaries();
-    if(typeof route.query.physicalPlan==='string'){
-      const reply=await invoke({oneofKind:'load',load:{id:route.query.physicalPlan,revision:0n}});
-      acceptPlan(reply.plan);
-    }
     opened.value=true;
+    if(typeof route.query.physicalPlan==='string'){
+      const requested=route.query.physicalPlan;
+      try{
+        const reply=await invoke({oneofKind:'load',load:{id:requested,revision:0n}});
+        acceptPlan(reply.plan);
+      }catch(e){
+        if(route.query.physicalPlan===requested)await router.replace({path:'/',query:{...route.query,physicalPlan:undefined}});
+        throw e;
+      }
+    }
   });
 }
 watch(()=>props.inactive,inactive=>{if(!inactive&&!opened.value&&typeof route.query.physicalPlan==='string')void open();},{immediate:true});

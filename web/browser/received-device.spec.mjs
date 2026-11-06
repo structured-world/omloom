@@ -18,6 +18,30 @@ async function openPlan(page,url,f){
   return planner;
 }
 
+test('an unavailable URL plan leaves other saved plans usable',async({page})=>{
+  // A failed optional restoration must not lock the whole planner or repeat
+  // the same failed load whenever the details control is opened.
+  await withFieldHost(async url=>{
+    const f=await fixture(url),missing=crypto.randomUUID();let attempts=0;
+    page.on('request',request=>{
+      const bytes=request.postDataBuffer();if(!bytes||!request.url().endsWith('/omloom.workspace.v1.Workspace/Call'))return;
+      const command=f.m.Request.fromBinary(bytes.subarray(5)).command;
+      if(command.oneofKind==='physical'&&command.physical.action.oneofKind==='load'&&command.physical.action.load.id===missing)attempts++;
+    });
+    await page.goto(`${url}/#/?view=2&asset=${f.rack.assetId}&incarnation=${f.rack.incarnation}&scope=${f.rack.assetId}&scopeInc=${f.rack.incarnation}&physicalPlan=${missing}`);
+    const planner=page.locator('.physical-planner');
+    await expect(page.getByText('Plan installation from enclosing scope',{exact:true})).toBeVisible();
+    await expect(planner.getByRole('alert')).toBeVisible();
+    await expect(planner.getByRole('button',{name:'New installation plan',exact:true})).toBeEnabled();
+    await planner.getByRole('button',{name:'Unpack three nodes · draft',exact:true}).click();
+    await expect(planner.getByLabel('Installation plan name',{exact:true})).toHaveValue('Unpack three nodes');
+    await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
+    await page.getByText('Plan installation from enclosing scope',{exact:true}).click();
+    expect(attempts).toBe(1);
+    expect(page.url()).not.toContain(`physicalPlan=${missing}`);
+  });
+});
+
 for(const width of [1440,390])test(`received devices remain unplaced and record-next clears serial at ${width}px`,async({page})=>{
   // The existing inventory editor creates actual fields and allocation in one commit,
   // without a create/search detour, copied serial, or fabricated rack attachment.
