@@ -78,11 +78,13 @@ async function receivedDevice(outcome:model.PhysicalReceiptOutcome,next:boolean,
 const emptyMaterials:model.PhysicalMaterial[]=[];
 const future=ref<model.PhysicalMaterialUnit>();
 const materialUses=computed(()=>{const units:model.PhysicalMaterialUnit[]=[];for(const step of plan.value?.steps??[])if(step.action.oneofKind==='placement'&&step.action.placement.material)units.push(step.action.placement.material);return units;});
-watch(()=>plan.value?.id,()=>{future.value=undefined;selected.value=[];notPerformed.value=[];});
+watch(()=>plan.value?.id,()=>{receiptUnit.value=undefined;future.value=undefined;selected.value=[];notPerformed.value=[];},{flush:'sync'});
 function updateMaterials(materials:model.PhysicalMaterial[]){future.value=undefined;plan.value=model.PhysicalPlan.create({...plan.value,name:name.value,state:model.PhysicalPlanState.DRAFT,materials});}
 function removeMaterial(index:number){
   if(!plan.value)return;
   if(materialUses.value.some(u=>u.material===index)){error.value='Remove the material’s planned placements before removing its requirement.';return;}
+  // A removed or shifted index cannot silently retarget a reviewed receipt.
+  if(receiptUnit.value&&index<=receiptUnit.value.material)receiptUnit.value=undefined;
   plan.value.materials=plan.value.materials.filter((_,i)=>i!==index);
   for(const unit of materialUses.value)if(unit.material>index)unit.material--;
   future.value=undefined;
@@ -459,7 +461,7 @@ async function exportPlan(){await run(async()=>{
 </section>
 <section aria-label="Installation plan editor">
 <PhysicalMaterials :materials="plan?.materials??emptyMaterials" :uses="materialUses" :items="planItems" :working="working()" :editable="editable" :receivable="editable||plan?.state===model.PhysicalPlanState.RESERVED||plan?.state===model.PhysicalPlanState.PARTIAL" :can-place="kind===K.RACK" :busy="busy" @update="updateMaterials" @receive="receiveMaterial" @create="startReceipt" @selected="selectedMaterial" @place="chooseFuture" @remove="removeMaterial"/>
-<ReceivedDevice v-if="receiptUnit&&plan" :key="plan.id+'/'+receiptUnit.material+'/'+receiptUnit.unit" :plan="plan" :material="receiptUnit.material" :unit="receiptUnit.unit" :shared-reference="receiptUnit.sharedReference" :working="working()" :definitions="definitions" :inactive="busy||inactive" @recorded="receivedDevice" @inventory-changed="emit('changed')" @open="openReceived" @close="receiptUnit=undefined"/>
+<ReceivedDevice v-if="receiptUnit&&plan&&plan.materials[receiptUnit.material]" :key="plan.id+'/'+receiptUnit.material+'/'+receiptUnit.unit" :plan="plan" :material="receiptUnit.material" :unit="receiptUnit.unit" :shared-reference="receiptUnit.sharedReference" :working="working()" :definitions="definitions" :inactive="busy||inactive" @recorded="receivedDevice" @inventory-changed="emit('changed')" @open="openReceived" @close="receiptUnit=undefined"/>
 <form v-if="editable" @submit.prevent="save"><fieldset :disabled="busy">
 <label>Installation plan name<input v-model="name" required maxlength="160" /></label>
 <div class="placement-controls"><button v-if="kind===K.RACK" type="button" :aria-pressed="mode==='placement'" @click="mode='placement'">Plan rack placement</button><button v-if="kind!==K.CABLE" type="button" :aria-pressed="mode==='replacement'" @click="mode='replacement'">Replace, remove or move a part</button></div>

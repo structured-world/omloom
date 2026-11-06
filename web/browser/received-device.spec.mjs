@@ -175,6 +175,24 @@ test('a rejected receipt retains input for an explicit inventory-only action',as
   });
 });
 
+test('removing the selected material closes receiving without a render error',async({page})=>{
+  // A draft removal must not leave the editor rendering an absent material.
+  await withFieldHost(async url=>{
+    const f=await fixture(url);const errors=[];page.on('pageerror',error=>errors.push(error.message));
+    page.on('console',message=>{if(message.type()==='error')errors.push(message.text());});
+    const planner=await openPlan(page,url,f);
+    await planner.getByRole('button',{name:'Create received device',exact:true}).click();
+    await planner.getByRole('region',{name:'Create received device',exact:true}).getByLabel('Name',{exact:true}).fill('Unsubmitted item');
+    await planner.getByRole('button',{name:'Remove requirement 1',exact:true}).click();
+    await expect(planner.getByRole('region',{name:'Create received device',exact:true})).toHaveCount(0);
+    await expect(planner).toContainText('Required materials and receiving (0 lines)');
+    await planner.getByRole('button',{name:'Add material requirement',exact:true}).click();
+    await expect(planner.getByRole('form',{name:'Material requirement editor',exact:true})).toBeVisible();
+    await page.evaluate(()=>new Promise(requestAnimationFrame));
+    expect(errors).toEqual([]);
+  });
+});
+
 test('late creation preparation does not steal receipt input focus',async({page})=>{
   // The optional reference is usable before ordinary creation choices arrive.
   // Late autofocus must not redirect typing into the suggested device name.
