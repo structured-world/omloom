@@ -335,6 +335,63 @@ fn receiving_refusal_leaves_no_orphan_inventory() -> TestResult {
     Ok(())
 }
 
+// Cancellation is rejected after inventory staging; rollback must remove even
+// those staged identity/field/audit rows, not merely reject an early preflight.
+#[test]
+fn cancelled_receipt_rolls_back_staged_device_creation() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let plan = saved(&store, &actor)?;
+    let cancelled = physical(
+        &store,
+        &actor,
+        api::physical::Action::Cancel(api::PhysicalPlanKey {
+            id: plan.id.ok_or(Error::Missing)?,
+            revision: plan.revision,
+        }),
+    )?
+    .plan
+    .ok_or(Error::Missing)?;
+    store.diagnostic_database().query_registry().reset();
+    let before = store.usage()?;
+    assert!(matches!(
+        submit(
+            &store,
+            &actor,
+            &api::WorkingContext {
+                expected: Some(before.revision),
+                ..Default::default()
+            },
+            api::physical::Action::ReceiveDevice(request(&cancelled)?)
+        ),
+        Err(Error::UnsafeTransition)
+    ));
+    assert!(
+        store
+            .diagnostic_database()
+            .query_registry()
+            .top_by_impact(64)
+            .iter()
+            .any(|query| query.canonical_query.starts_with("CREATE (n:OmRow") && query.count > 0),
+        "Device rows must have been staged before the refusal"
+    );
+    assert_eq!(store.usage()?, before);
+    let Reply::Page(devices) = call(
+        &store,
+        &actor,
+        Command::Query(api::Query {
+            kinds: vec![K::Device as i32],
+            ..query()
+        }),
+    )?
+    else {
+        return Err(Error::Corrupt.into());
+    };
+    assert_eq!(devices.total, 0);
+    Ok(())
+}
+
 // Expiring bounded result detail closes recovery; restoring an older image cannot
 // turn the same previously submitted request into a new device.
 #[test]
