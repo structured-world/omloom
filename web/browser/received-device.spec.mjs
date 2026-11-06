@@ -394,6 +394,41 @@ test('another tab cannot erase an unresolved accepted receipt',async({page,conte
   });
 });
 
+for(const known of [false,true])test(`a reference resolved in another tab releases this editor (known outcome: ${known})`,async({page,context})=>{
+  // Clearing a resolved reference elsewhere must not leave a stale editor hidden.
+  // A locally known result still needs its failed parent refresh applied.
+  await withFieldHost(async url=>{
+    const f=await fixture(url),other=await context.newPage();
+    const a=await openPlan(page,url,f);
+    await a.getByRole('button',{name:'Create received device',exact:true}).click();
+    const editor=a.getByRole('region',{name:'Create received device',exact:true});
+    await editor.getByLabel('Name',{exact:true}).fill('Resolved in other tab');
+    let submitted=false,failRefresh=true;
+    const intercept=async route=>{
+      const command=f.m.Request.fromBinary(route.request().postDataBuffer().subarray(5)).command;
+      if(command.oneofKind==='physical'&&command.physical.action.oneofKind==='receiveDevice'){
+        submitted=true;
+        if(!known){await route.fetch();await route.abort('failed');return;}
+      }
+      if(known&&submitted&&failRefresh&&command.oneofKind==='physical'&&command.physical.action.oneofKind==='load'){await route.abort('failed');return;}
+      await route.continue();
+    };
+    await page.route('**/omloom.workspace.v1.Workspace/Call',intercept);
+    try{
+      await editor.getByRole('button',{name:'Record received device',exact:true}).click();
+      await expect(editor.getByRole('button',{name:'Recover receipt result',exact:true})).toBeVisible();
+      const b=await openPlan(other,url,f);
+      await b.getByRole('button',{name:'Create received device',exact:true}).click();
+      await b.getByRole('button',{name:'Recover receipt result',exact:true}).click();
+      await expect(b).toContainText('Receipt accepted');failRefresh=false;
+      await editor.getByRole('button',{name:'Recover receipt result',exact:true}).click();
+      await expect(editor.getByRole('button',{name:'Recover receipt result',exact:true})).toHaveCount(0);
+      if(known)await expect(a).toContainText('Unit 1: Resolved in other tab');
+      else await expect(editor.getByLabel('Name',{exact:true})).toHaveValue('Resolved in other tab');
+    }finally{await page.unroute('**/omloom.workspace.v1.Workspace/Call',intercept);await other.close();}
+  });
+});
+
 test('simultaneous receipt tabs admit only one unresolved command',async({page,context})=>{
   // The winner retains admission through response delivery, so a second tab
   // cannot dispatch even when both editors were prepared at the same revision.

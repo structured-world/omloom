@@ -34,7 +34,11 @@ async function recover(){
   recovering.value=true;
   error.value='';
   try{
-    const saved=await readReceiptReference();if(!saved)throw Error('No saved receipt reference is available.');
+    const saved=await readReceiptReference();
+    if(!saved){
+      if(recovered.value)await props.recorded(recovered.value,reviewedPlan.value);
+      pending.value=false;return;
+    }
     const response=await call({oneofKind:'physical',physical:{action:{oneofKind:'receiptOutcome',receiptOutcome:{revision:BigInt(saved.revision),plan:saved.plan}}}},model.WorkingContext.create());
     if(response.oneofKind!=='physical'||!response.physical.receipt)throw Error('The original receipt result is unavailable.');
     recovered.value=response.physical.receipt;
