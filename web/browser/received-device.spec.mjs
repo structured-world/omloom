@@ -266,6 +266,59 @@ test('an accepted receipt is applied after an overlapping planner read',async({p
   });
 });
 
+test('receipt acceptance preserves in-flight plan edits without saving them',async({page})=>{
+  // Receipt commits only the reviewed allocation, never unrelated draft input.
+  await withFieldHost(async url=>{
+    const f=await fixture(url);const planner=await openPlan(page,url,f);
+    await planner.getByRole('button',{name:'Create received device',exact:true}).click();
+    const editor=planner.getByRole('region',{name:'Create received device',exact:true});
+    await editor.getByLabel('Name',{exact:true}).fill('Received alongside draft');
+    let release,accepted;
+    const gate=new Promise(resolve=>{release=resolve;}),committed=new Promise(resolve=>{accepted=resolve;});
+    const hold=async route=>{
+      const command=f.m.Request.fromBinary(route.request().postDataBuffer().subarray(5)).command;
+      if(command.oneofKind==='physical'&&command.physical.action.oneofKind==='receiveDevice'){
+        const response=await route.fetch();accepted();await gate;await route.fulfill({response});
+      }else await route.continue();
+    };
+    await page.route('**/omloom.workspace.v1.Workspace/Call',hold);
+    try{
+      await editor.getByRole('button',{name:'Record received device',exact:true}).click();await committed;
+      await planner.getByLabel('Installation plan name',{exact:true}).fill('Keep my draft name');
+      release();await expect(planner).toContainText('Unit 1: Received alongside draft');
+      await expect(planner.getByLabel('Installation plan name',{exact:true})).toHaveValue('Keep my draft name');
+      const saved=()=>f.rpc({oneofKind:'physical',physical:f.m.Physical.create({action:{oneofKind:'load',load:{id:f.plan.id}}})});
+      expect((await saved()).physical.plan.name).toBe('Unpack three nodes');
+      await planner.getByRole('button',{name:'Save installation plan',exact:true}).click();
+      await expect(planner.getByRole('status').filter({hasText:'Plan saved.'})).toHaveText('Plan saved. Nothing is reserved or installed.');
+      const result=(await saved()).physical.plan;
+      expect(result.name).toBe('Keep my draft name');expect(result.materials[0].allocations).toHaveLength(1);
+    }finally{release();await page.unroute('**/omloom.workspace.v1.Workspace/Call',hold);}
+  });
+});
+
+test('receipt acceptance never retargets a changed draft requirement',async({page})=>{
+  // A changed line has no inferred identity. Keep the draft, surface the accepted
+  // result, and prevent an unaware save from removing its confirmed allocation.
+  await withFieldHost(async url=>{
+    const f=await fixture(url);const planner=await openPlan(page,url,f);
+    await planner.getByRole('button',{name:'Create received device',exact:true}).click();
+    const editor=planner.getByRole('region',{name:'Create received device',exact:true});
+    await editor.getByLabel('Name',{exact:true}).fill('Confirmed old requirement');
+    await planner.getByRole('button',{name:'Edit requirement 1',exact:true}).click();
+    await planner.getByLabel('Material requirement name',{exact:true}).fill('Changed draft requirement');
+    await planner.getByRole('button',{name:'Apply material requirement',exact:true}).click();
+    await editor.getByRole('button',{name:'Record received device',exact:true}).click();
+    await expect(editor).toContainText('Receipt accepted');
+    await expect(planner.getByRole('alert')).toContainText('cannot be reconciled automatically');
+    await expect(planner).toContainText('Changed draft requirement');
+    await planner.getByRole('button',{name:'Save installation plan',exact:true}).click();
+    await expect(planner.getByRole('alert').filter({hasText:'Reopen the saved plan before'})).toBeVisible();
+    const loaded=(await f.rpc({oneofKind:'physical',physical:f.m.Physical.create({action:{oneofKind:'load',load:{id:f.plan.id}}})})).physical.plan;
+    expect(loaded.materials[0].name).toBe('Ordered compute node');expect(loaded.materials[0].allocations).toHaveLength(1);
+  });
+});
+
 test('late creation preparation does not steal receipt input focus',async({page})=>{
   // The optional reference is usable before ordinary creation choices arrive.
   // Late autofocus must not redirect typing into the suggested device name.

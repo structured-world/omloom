@@ -2,7 +2,7 @@
 import {onBeforeUnmount,ref} from 'vue';
 import AssetEditor from './AssetEditor.vue';
 import {call,model,AssetKind,type Field} from './api';
-const props=defineProps<{plan:model.PhysicalPlan;material:number;unit:number;working:model.WorkingContext;definitions:model.Definition[];sharedReference?:string;inactive?:boolean;recorded:(outcome:model.PhysicalReceiptOutcome)=>Promise<void>}>();
+const props=defineProps<{plan:model.PhysicalPlan;material:number;unit:number;working:model.WorkingContext;definitions:model.Definition[];sharedReference?:string;inactive?:boolean;recorded:(outcome:model.PhysicalReceiptOutcome,reviewed:model.PhysicalPlan)=>Promise<void>}>();
 const emit=defineEmits<{inventoryChanged:[];close:[];open:[item:import('./api').AssetRef];advance:[outcome:model.PhysicalReceiptOutcome,sharedReference?:string]}>();
 const reviewedPlan=model.PhysicalPlan.clone(props.plan);
 const explanation=ref(props.sharedReference===undefined?'':props.sharedReference),shareReference=ref(props.sharedReference!==undefined),error=ref(''),pending=ref(false),recovered=ref<model.PhysicalReceiptOutcome>();
@@ -39,7 +39,7 @@ async function recover(){
     const response=await call({oneofKind:'physical',physical:{action:{oneofKind:'receiptOutcome',receiptOutcome:{revision:BigInt(saved.revision),plan:saved.plan}}}},model.WorkingContext.create());
     if(response.oneofKind!=='physical'||!response.physical.receipt)throw Error('The original receipt result is unavailable.');
     recovered.value=response.physical.receipt;
-    await props.recorded(response.physical.receipt);
+    await props.recorded(response.physical.receipt,reviewedPlan);
     localStorage.removeItem(storageKey);pending.value=false;
   }catch(e){error.value=String(e)+' The original outcome remains unresolved; no new device was submitted.';}
 }
@@ -59,7 +59,7 @@ async function submit(changes:Field[],creation:model.WorkingContext,next:boolean
     }}}},working);
     if(response.oneofKind!=='physical'||!response.physical.receipt)throw Error('The receipt response is unavailable.');
     recovered.value=response.physical.receipt;
-    await props.recorded(response.physical.receipt);
+    await props.recorded(response.physical.receipt,reviewedPlan);
     localStorage.removeItem(storageKey);pending.value=false;
     if(next)emit('advance',response.physical.receipt,shareReference.value?explanation.value:undefined);
   }catch(e){

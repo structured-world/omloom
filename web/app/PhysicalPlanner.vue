@@ -29,7 +29,8 @@ const requiredPostconditions=computed(()=>{
   return indexes;
 });
 const savedCurrent=ref(false);
-function acceptPlan(value:model.PhysicalPlan|undefined){if(!value)throw Error('The saved plan was not returned. Reload before continuing.');plan.value=value;name.value=value.name;savedCurrent.value=true;}
+const receiptDraftConflict=ref(false);
+function acceptPlan(value:model.PhysicalPlan|undefined){if(!value)throw Error('The saved plan was not returned. Reload before continuing.');plan.value=value;name.value=value.name;savedCurrent.value=true;receiptDraftConflict.value=false;}
 const assessment=ref<{state:number;reason:number;revision:bigint}>();
 const reviewHypotheses=ref(new Map<number,model.PhysicalReplacementHypothesis>());
 const quality=ref<model.PhysicalReplacementQuality[]>(),qualityNext=ref<string>();
@@ -76,20 +77,30 @@ async function receiptReady(){
     receiptLifetime.signal.addEventListener('abort',closed,{once:true});
   });
 }
-async function receivedDevice(outcome:model.PhysicalReceiptOutcome){
+async function receivedDevice(outcome:model.PhysicalReceiptOutcome,reviewed:model.PhysicalPlan){
 await receiptReady();
 const applied=await run(async()=>{
   if(outcome.plan?.id!==plan.value?.id){notice.value='The original receipt belongs to a different saved plan. This plan was not changed.';return;}
   changed=true;
   const response=await invoke({oneofKind:'load',load:{id:plan.value!.id!,revision:0n}});
-  acceptPlan(response.plan);
+  const current=plan.value,fresh=response.plan;
+  if(!fresh||!current||current.id!==outcome.plan?.id)throw Error('The receipt was accepted. Reopen its saved plan to inspect the allocation.');
+  if(savedCurrent.value)acceptPlan(fresh);
+  else{
+    // Rebase only the exact reviewed line. Reordering or replacing it needs explicit review.
+    const line=current.materials[outcome.material],before=reviewed.materials[outcome.material];
+    if(current.revision===reviewed.revision&&fresh.revision===outcome.revision&&current.state===model.PhysicalPlanState.DRAFT&&line&&before&&model.PhysicalMaterial.equals(line,before)){
+      line.allocations=fresh.materials[outcome.material]!.allocations;
+      current.revision=fresh.revision;
+    }else receiptDraftConflict.value=true;
+  }
   notice.value=`Device receipt accepted at revision ${outcome.revision}. Nothing was installed.`;
 });
 if(!applied)throw Error('Receipt accepted, but the plan could not be refreshed. Recover its result to refresh again.');
 }
 function advanceReceived(outcome:model.PhysicalReceiptOutcome,sharedReference?:string){
   // The previous editor clears its recovery reference before mounting the next one.
-  if(outcome.plan?.id===plan.value?.id&&receiptUnit.value&&plan.value!.revision===outcome.revision){
+  if(savedCurrent.value&&outcome.plan?.id===plan.value?.id&&receiptUnit.value&&plan.value!.revision===outcome.revision){
     const material=receiptUnit.value.material;
     const current=plan.value!.materials[material];
     if(current){const unit=firstFreeUnit(current);if(unit!==undefined){receiptUnit.value={material,unit,sharedReference};return;}}
@@ -132,7 +143,7 @@ const oldOccupancy=computed(()=>sourceView.value?.occupancy??view.value.occupanc
 const actualReport=ref(false),notPerformed=ref<number[]>([]);
 const unit=ref('1'),side=ref<Face>('front'),lane=ref('left'),selected=ref<number[]>([]);
 function resetReport(){actualReport.value=false;selected.value=[];notPerformed.value=[];discrepancy.value='';}
-function newPlan(){receiptUnit.value=undefined;plan.value=undefined;name.value='';resetReport();}
+function newPlan(){receiptUnit.value=undefined;receiptDraftConflict.value=false;plan.value=undefined;name.value='';resetReport();}
 const elevation=ref<SVGSVGElement>();
 const coordinatesOpen=ref(false);
 const coordinateRows=computed(()=>view.value.occupancy);
@@ -328,6 +339,7 @@ function addAtCoordinates(){if(mode.value==='placement')add();else if(mode.value
 async function save() {
   await run(async()=>{
     if(!plan.value)throw Error('Add a physical step or material requirement.');
+    if(receiptDraftConflict.value)throw Error('Receipt accepted; draft input is retained. Reopen the saved plan before reconciling these changed material lines.');
     const reply=await invoke({oneofKind:'save',save:{plan:{...plan.value,name:name.value}}});
     acceptPlan(reply.plan);notice.value='Plan saved. Nothing is reserved or installed.';await summaries();
   });
@@ -481,6 +493,7 @@ async function exportPlan(){await run(async()=>{
 </details>
 </section>
 <section aria-label="Installation plan editor">
+<p v-if="receiptDraftConflict" role="alert">Receipt accepted; draft input is retained. The changed material lines cannot be reconciled automatically. Reopen the saved plan to review the confirmed allocation before saving.</p>
 <PhysicalMaterials :materials="plan?.materials??emptyMaterials" :uses="materialUses" :items="planItems" :working="working()" :editable="editable" :receivable="editable||plan?.state===model.PhysicalPlanState.RESERVED||plan?.state===model.PhysicalPlanState.PARTIAL" :can-place="kind===K.RACK" :busy="busy" @update="updateMaterials" @receive="receiveMaterial" @create="startReceipt" @selected="selectedMaterial" @place="chooseFuture" @remove="removeMaterial"/>
 <ReceivedDevice v-if="receiptUnit&&plan&&plan.materials[receiptUnit.material]" :key="plan.id+'/'+receiptUnit.material+'/'+receiptUnit.unit" :plan="plan" :material="receiptUnit.material" :unit="receiptUnit.unit" :shared-reference="receiptUnit.sharedReference" :working="working()" :definitions="definitions" :inactive="busy||inactive" :recorded="receivedDevice" @advance="advanceReceived" @inventory-changed="emit('changed')" @open="openReceived" @close="receiptUnit=undefined"/>
 <form v-if="editable" @submit.prevent="save"><fieldset :disabled="busy">
