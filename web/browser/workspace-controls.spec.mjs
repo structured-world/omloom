@@ -16,6 +16,25 @@ test('Escape returns tablet actions focus to More',async({page})=>{
   });
 });
 
+for(const width of [390,820])test(`opening More enters its keyboard actions at ${width}px`,async({page})=>{
+  // Opening the disclosure must enter its visible actions, so forward Tab
+  // cannot skip the group merely because it precedes the trigger in the DOM.
+  await withFieldHost(async url=>{
+    await page.setViewportSize({width,height:900});await page.goto(url);
+    const more=page.getByRole('button',{name:'More',exact:true});
+    await more.focus();await page.keyboard.press('Enter');
+    const first=page.getByRole('button',{name:'3D scene',exact:true});
+    await expect(first).toBeFocused();
+    const next=page.getByRole('button',{name:width===390?'Refresh inventory':'Export CSV',exact:true});
+    await expect(next).toBeEnabled();
+    await page.keyboard.press('Tab');
+    await expect(next).toBeFocused();
+    await page.keyboard.press('Shift+Tab');await expect(first).toBeFocused();
+    await page.keyboard.press('Escape');await expect(more).toBeFocused();
+    await expect(more).toHaveAttribute('aria-expanded','false');
+  });
+});
+
 for(const width of [390,820])test(`3D toggle returns responsive focus to More at ${width}px`,async({page})=>{
   // Activating the secondary action must not leave focus on a hidden button.
   await withFieldHost(async url=>{
