@@ -130,6 +130,7 @@ test('an explicit empty description differs from clear and another value', async
     }
     await question(dialog, m, 'description', '');
     const rows = dialog.locator('.fact-review-row');
+    await expect(rows.nth(0).locator('.fact-conditions span')).toHaveText('description equals (empty) (accepted configuration)');
     await expect(rows.nth(0).locator('.fact-current')).toContainText('(empty)');
     await expect(rows.nth(0).locator('.fact-conditions')).toContainText('satisfied');
     await expect(rows.nth(1).locator('.fact-conditions')).toContainText('unknown');

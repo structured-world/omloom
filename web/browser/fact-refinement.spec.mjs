@@ -165,6 +165,34 @@ test('terminal recheck denial removes an uncertain single-fact editor', async ({
   });
 });
 
+test('a restricted result removes an uncertain single-fact editor without a transport error', async ({ page }) => {
+  // A mismatched incarnation returns the same non-disclosing result as denied field access.
+  // Store tests separately narrow field grants; this checks successful-result handling in the browser.
+  await withFieldHost(async url => {
+    const { m, rpc, panel } = await setup(page, url, 390);
+    const other = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Other incarnation' } }] }) })).mutation.targets[0];
+    await panel.getByRole('button', { name: 'Clarify this fact', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Clarify recorded fact', exact: true });
+    await fillExact(dialog, '8'); let writes = 0;
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      const value = request(m, route);
+      if (value.command.oneofKind === 'write') { writes++; await route.fetch(); return route.abort('connectionreset'); }
+      if (value.command.oneofKind !== 'evaluateRequirements') return route.continue();
+      value.command.evaluateRequirements.nodes[0].expression.field.target.incarnation = other.incarnation;
+      const bytes = m.Request.toBinary(value); const frame = Buffer.alloc(bytes.length + 5);
+      frame.writeUInt32BE(bytes.length, 1); frame.set(bytes, 5);
+      await route.continue({ postData: frame });
+    });
+    await dialog.getByRole('button', { name: 'Save and recheck', exact: true }).click();
+    await expect(dialog).toContainText('The write outcome is unknown.');
+    await dialog.getByRole('button', { name: 'Recheck without saving', exact: true }).click();
+    await expect(panel.getByRole('region', { name: 'Requirement result' })).toContainText('restricted');
+    await expect(dialog).toHaveCount(0);
+    await expect(panel.getByRole('alert')).toHaveCount(0);
+    expect(writes).toBe(1);
+  });
+});
+
 test('a pending save keeps its reviewed input and cannot pretend to cancel', async ({ page }) => {
   // Delay an actual committed response, not execution, so Escape cannot undo the effect.
   await withFieldHost(async url => {
@@ -247,51 +275,50 @@ test('an obsolete answer cannot finish or replace a newer question', async ({ pa
     const { m, rpc, target, panel } = await setup(page, url);
     const item = (await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail.item;
     await rpc({ oneofKind: 'write', write: m.Write.create({ target, expected: item.revision, kind: m.AssetKind.DEVICE, changes: [{ name: 'drive_bays', value: { oneofKind: 'integer', integer: 8n } }] }) });
-    let releaseOld, releaseNew, oldReady, newReady; let evaluations = 0;
-    const oldGate = new Promise(resolve => { releaseOld = resolve; });
-    const newGate = new Promise(resolve => { releaseNew = resolve; });
-    const oldPending = new Promise(resolve => { oldReady = resolve; });
-    const newPending = new Promise(resolve => { newReady = resolve; });
-    let oldRequest, oldBody, onFinished, onFailed;
-    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
-      if (request(m, route).command.oneofKind !== 'evaluateRequirements') return route.continue();
-      const index = ++evaluations; const response = await route.fetch();
-      const body = await response.body(); const headers = response.headers();
-      // The fetched body is already dechunked. Replay its bytes with a measured
-      // length instead of advertising the upstream streaming framing.
-      delete headers['transfer-encoding']; delete headers['content-length'];
-      if (index === 1) { oldRequest = route.request(); oldBody = body; oldReady(); await oldGate; }
-      else { newReady(); await newGate; }
-      await route.fulfill({ response, body, headers });
+    await page.exposeFunction('isRequirementRequest', body => m.Request.fromBinary(Uint8Array.from(body).subarray(5)).command.oneofKind === 'evaluateRequirements');
+    await page.evaluate(() => {
+      const nativeFetch = window.fetch;
+      window.heldFactReplies = [];
+      window.restoreFactFetch = () => { window.fetch = nativeFetch; };
+      window.fetch = async (input, init) => {
+        const response = await nativeFetch(input, init);
+        if (!init?.body || !await window.isRequirementRequest(Array.from(init.body))) return response;
+        // Finish the real HTTP transfer before holding the application response.
+        // Protocol interception must not turn deliberate answer ordering into an aborted transfer.
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        let release; const gate = new Promise(resolve => { release = resolve; });
+        const entry = { release, consumed: false, bytes: Array.from(bytes) };
+        window.heldFactReplies.push(entry);
+        await gate;
+        let sent = false;
+        const body = new ReadableStream({ pull(controller) {
+          if (!sent) { sent = true; controller.enqueue(bytes); }
+          else { controller.close(); entry.consumed = true; }
+        } });
+        return new Response(body, { status: response.status, headers: response.headers });
+      };
     });
     try {
-      await panel.getByRole('button', { name: 'Check requirement', exact: true }).click(); await oldPending;
+      await panel.getByRole('button', { name: 'Check requirement', exact: true }).click();
+      await expect.poll(() => page.evaluate(() => window.heldFactReplies.length)).toBe(1);
       await page.getByRole('button', { name: '↻ Refresh', exact: true }).click();
       await expect(panel.getByRole('button', { name: 'Check requirement', exact: true })).toBeEnabled();
       await panel.getByRole('combobox', { name: 'Required comparison', exact: true }).selectOption(String(m.RequirementComparison.MAXIMUM));
       await panel.getByRole('textbox', { name: 'Required value (count)', exact: true }).fill('12');
-      await panel.getByRole('button', { name: 'Check requirement', exact: true }).click(); await newPending;
-      const delivered = page.waitForResponse(response => response.request() === oldRequest);
-      // Response.finished() does not reject on requestfailed in this Playwright
-      // version. A failed delivery must fail the test, not wait for its timeout.
-      const completed = new Promise((resolve, reject) => {
-        onFinished = value => { if (value === oldRequest) resolve(); };
-        onFailed = value => { if (value === oldRequest) reject(Error(`Old answer delivery failed: ${value.failure()?.errorText}`)); };
-        page.on('requestfinished', onFinished); page.on('requestfailed', onFailed);
-      });
-      releaseOld();
-      const [response] = await Promise.all([delivered, completed]);
-      expect(await response.body()).toEqual(oldBody);
-      expect(await response.headerValue('content-length')).toBe(String(oldBody.length));
+      await panel.getByRole('button', { name: 'Check requirement', exact: true }).click();
+      await expect.poll(() => page.evaluate(() => window.heldFactReplies.length)).toBe(2);
+      const oldBody = Buffer.from(await page.evaluate(() => window.heldFactReplies[0].bytes));
+      expect(m.Reply.fromBinary(oldBody.subarray(5, 5 + oldBody.readUInt32BE(1))).result.requirementEvaluation.state).toBe(m.RequirementState.FAILED);
+      await page.evaluate(() => window.heldFactReplies[0].release());
+      await expect.poll(() => page.evaluate(() => window.heldFactReplies[0].consumed)).toBe(true);
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      await expect(panel.getByRole('region', { name: 'Requirement result' })).toHaveCount(0);
       await expect(panel.getByRole('button', { name: 'Checking…', exact: true })).toBeDisabled();
-      releaseNew();
+      await page.evaluate(() => window.heldFactReplies[1].release());
       await expect(panel.getByRole('heading', { name: 'Recorded evidence matches', exact: true })).toBeVisible();
       await expect(panel.getByRole('textbox', { name: 'Required value (count)', exact: true })).toHaveValue('12');
     } finally {
-      if (onFinished) page.off('requestfinished', onFinished);
-      if (onFailed) page.off('requestfailed', onFailed);
-      releaseOld(); releaseNew();
+      await page.evaluate(() => { for (const reply of window.heldFactReplies) reply.release(); window.restoreFactFetch(); });
     }
   });
 });

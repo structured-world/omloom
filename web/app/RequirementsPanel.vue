@@ -33,6 +33,8 @@ async function evaluate(query:model.EvaluateRequirements,restoreFocus=false){
     if(disposed||turn!==generation)return;
     if(response.oneofKind!=='requirementEvaluation')throw Error('Requirement result unavailable.');
     result.value=response.requirementEvaluation;
+    // A successful query can restrict a field without returning a transport error.
+    if(result.value.results.some(entry=>entry.reason===model.RequirementReason.RESTRICTED))refinement.value=undefined;
     if(restoreFocus){await nextTick();resultHeading.value?.focus();}
   }catch(e){if(!disposed&&turn===generation){
     error.value=String(e);

@@ -35,7 +35,8 @@ function check() {
         expected = { oneofKind: 'equipment', equipment: { basis: 'Requested constraint', assertion: { oneofKind: 'quantity', quantity: { lower: fixed, upper: fixed, unit: units[field.value]!, scale } } } };
       }
     } else expected = { oneofKind: 'text', text: value.value };
-    const label = `${field.value.replaceAll('_', ' ')} ${comparison.value === model.RequirementComparison.MINIMUM ? 'at least' : comparison.value === model.RequirementComparison.MAXIMUM ? 'at most' : 'equals'} ${value.value}${numeric.value ? ' ' + units[field.value] : ''} (${layer.value === model.RequirementLayer.ACCEPTED ? 'accepted configuration' : 'dated observations'})`;
+    const shownValue = value.value === '' ? '(empty)' : value.value;
+    const label = `${field.value.replaceAll('_', ' ')} ${comparison.value === model.RequirementComparison.MINIMUM ? 'at least' : comparison.value === model.RequirementComparison.MAXIMUM ? 'at most' : 'equals'} ${shownValue}${numeric.value ? ' ' + units[field.value] : ''} (${layer.value === model.RequirementLayer.ACCEPTED ? 'accepted configuration' : 'dated observations'})`;
     emit('check', { expected: { name: field.value, value: expected }, comparison: comparison.value, layer: layer.value }, label);
   } catch (e) { error.value = String(e); }
 }
