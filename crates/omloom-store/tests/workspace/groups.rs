@@ -377,6 +377,7 @@ fn archival_rejects_address_group_link_reference() -> TestResult {
             expected: store.usage()?.revision,
             remove: true,
             changes: Vec::new(),
+            ..Default::default()
         }),
     )?;
     let target = AssetRef::try_from(&link)?;
@@ -1090,6 +1091,7 @@ fn address_group_removal_releases_only_owned_protocol_namespace() -> TestResult 
             expected: store.usage()?.revision,
             remove: true,
             changes: Vec::new(),
+            ..Default::default()
         }),
     );
     assert!(matches!(removal, Err(Error::Conflict)), "{removal:?}");
@@ -1101,6 +1103,7 @@ fn address_group_removal_releases_only_owned_protocol_namespace() -> TestResult 
             expected: store.usage()?.revision,
             remove: true,
             changes: Vec::new(),
+            ..Default::default()
         }),
     )?;
     assert!(store.asset(AssetRef::try_from(&group)?).is_ok());
@@ -1112,6 +1115,7 @@ fn address_group_removal_releases_only_owned_protocol_namespace() -> TestResult 
             expected: store.usage()?.revision,
             remove: true,
             changes: Vec::new(),
+            ..Default::default()
         }),
     )?;
     assert!(matches!(

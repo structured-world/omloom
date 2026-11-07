@@ -166,6 +166,20 @@ return** uses the ordinary source mappings and reviewed importer, then rechecks
 the original selected conditions. It does not match arbitrary CSV names to
 selected devices or extend the selection with newly imported records.
 
+When several checked devices genuinely share one accepted value, choose
+**Apply shared** for that field. Include the exact devices, enter the value
+and its applicable basis once, then review each current and proposed value.
+Changing the value or membership requires another review. Empty description,
+zero quantity, and **Clear explicitly** are distinct. A stale revision or an
+unavailable or incompatible member rejects the whole batch. Exclude a member
+explicitly and review the remaining group to proceed. Earlier independent
+saves and observation sources are unaffected.
+
+If the save response is lost, **Review current values** reads the selected
+facts even with an incomplete draft and without resending the change. Matching
+values do not establish who wrote them. Applying again requires a new review
+and confirmation.
+
 The `evaluate_requirements` workspace query supports a selected root in a bounded
 flat graph of field predicates and `all`, `any` or fixed-threshold groups. It
 reads exact resource incarnations under the current storage session. Thresholds

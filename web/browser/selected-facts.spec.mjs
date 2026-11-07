@@ -168,6 +168,235 @@ test('an explicit empty description differs from clear and another value', async
   });
 });
 
+for (const width of [1440, 390]) test(`review one shared fact and apply only the included devices at ${width}px`, async ({ page }) => {
+  // The shared editor uses one value, one bounded preview and one atomic bulk command.
+  await withFieldHost(async url => {
+    const { m, rpc, targets, dialog } = await setup(page, url, width, 3);
+    await question(dialog, m);
+    const entry = dialog.getByRole('button', { name: 'Apply shared drive bays', exact: true });
+    await entry.focus(); await page.keyboard.press('Enter');
+    const shared = dialog.getByRole('region', { name: 'Shared fact' });
+    await expect(shared.getByRole('heading', { name: 'Apply one value for drive bays' })).toBeFocused();
+    await shared.getByRole('checkbox', { name: /Review 02/ }).uncheck();
+    await fill(shared, '0');
+    const evaluations = []; const writes = [];
+    await page.route('**/omloom.workspace.v1.Workspace/Call', route => {
+      const command = decode(m, route).command;
+      if (command.oneofKind === 'evaluateRequirements') evaluations.push(command.evaluateRequirements.nodes.length - 1);
+      if (command.oneofKind === 'bulk') writes.push(command.bulk);
+      return route.continue();
+    });
+    await shared.getByRole('button', { name: 'Review shared change' }).click();
+    await expect(shared.getByRole('heading', { name: 'Review 2 included devices' })).toBeFocused();
+    await expect(shared.getByText('Before: Unknown', { exact: true })).toHaveCount(2);
+    await expect(shared.getByText(/After:.*0 bays.*Counted bays/)).toHaveCount(2);
+    const apply = shared.getByRole('button', { name: 'Apply to reviewed devices' });
+    await apply.focus(); await page.keyboard.press('Enter');
+    await expect(dialog.getByRole('heading', { name: '3 selected devices', exact: true })).toBeFocused();
+    expect(writes).toHaveLength(1);
+    expect(writes[0].sharedFact).toBe(true);
+    expect(writes[0].targets).toEqual([targets[0], targets[2]]);
+    expect(evaluations).toEqual([2, 2]);
+    for (const index of [0, 1, 2]) {
+      const current = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: targets[index], acceptedField: 'drive_bays' }) })).detail.item;
+      const field = current.fields.find(field => field.name === 'drive_bays');
+      if (index === 1) expect(field).toBeUndefined();
+      else expect(field.value.equipment.assertion.quantity.lower).toBe(0n);
+    }
+  });
+});
+
+test('a stale shared review keeps input and requires an explicit narrowed review', async ({ page }) => {
+  // An intervening individual save changes the reviewed revision and must survive rejection.
+  await withFieldHost(async url => {
+    const { m, rpc, targets, dialog } = await setup(page, url, 390, 3);
+    await question(dialog, m);
+    await dialog.getByRole('button', { name: 'Apply shared drive bays', exact: true }).click();
+    const shared = dialog.getByRole('region', { name: 'Shared fact' });
+    await fill(shared, '14');
+    await shared.getByRole('button', { name: 'Review shared change' }).click();
+    const apply = shared.getByRole('button', { name: 'Apply to reviewed devices' });
+    await expect(apply).toBeEnabled();
+    const read = async index => (await rpc({ oneofKind: 'read', read: m.Read.create({ target: targets[index], acceptedField: 'drive_bays' }) })).detail.item;
+    await rpc({ oneofKind: 'write', write: m.Write.create({ target: targets[1], kind: m.AssetKind.DEVICE,
+      expected: (await read(1)).revision, changes: [{ name: 'drive_bays', value: { oneofKind: 'integer', integer: 7n } }],
+    }) });
+    await apply.click();
+    await expect(shared.getByRole('alert')).toBeVisible();
+    await expect(shared.getByLabel('Exact drive bays')).toHaveValue('14');
+    expect((await read(0)).fields.find(field => field.name === 'drive_bays')).toBeUndefined();
+    await shared.getByRole('checkbox', { name: /Review 02/ }).uncheck();
+    await expect(apply).toHaveCount(0);
+    await shared.getByRole('button', { name: 'Review shared change' }).click();
+    await apply.click();
+    await expect(shared).toHaveCount(0);
+    expect((await read(1)).fields.find(field => field.name === 'drive_bays').value.integer).toBe(7n);
+    expect((await read(0)).fields.find(field => field.name === 'drive_bays').value.equipment.assertion.quantity.lower).toBe(14n);
+  });
+});
+
+test('a newly restricted member remains selected until explicitly excluded', async ({ page }) => {
+  // Use the restricted leaf shape returned by the store when field access is lost.
+  await withFieldHost(async url => {
+    const { m, targets, dialog } = await setup(page, url, 390, 3);
+    await question(dialog, m);
+    await dialog.getByRole('button', { name: 'Apply shared drive bays', exact: true }).click();
+    const shared = dialog.getByRole('region', { name: 'Shared fact' });
+    await fill(shared, '11');
+    const writes = [];
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      const command = decode(m, route).command;
+      if (command.oneofKind === 'bulk') writes.push(command.bulk.targets);
+      if (command.oneofKind !== 'evaluateRequirements') return route.continue();
+      const index = command.evaluateRequirements.nodes.findIndex(node => node.expression.oneofKind === 'field'
+        && node.expression.field.target.assetId === targets[1].assetId);
+      if (index < 0) return route.continue();
+      const response = await route.fetch();
+      const body = await response.body(); const length = body.readUInt32BE(1);
+      const reply = m.Reply.fromBinary(body.subarray(5, 5 + length));
+      const denied = reply.result.requirementEvaluation.results.find(result => result.node === index);
+      denied.reason = m.RequirementReason.RESTRICTED;
+      denied.target = undefined; denied.field = undefined; denied.fieldWritable = false;
+      denied.evidence = []; denied.resolutions = [];
+      const output = m.Reply.toBinary(reply); const frame = Buffer.alloc(output.length + 5);
+      frame.writeUInt32BE(output.length, 1); frame.set(output, 5);
+      await route.fulfill({ response, body: Buffer.concat([frame, body.subarray(5 + length)]) });
+    });
+    await shared.getByRole('button', { name: 'Review shared change' }).click();
+    const apply = shared.getByRole('button', { name: 'Apply to reviewed devices' });
+    const member = shared.getByRole('checkbox', { name: 'Device 2 (unavailable)' });
+    await expect(member).toBeChecked();
+    await expect(apply).toBeDisabled();
+    await expect(shared).not.toContainText('Review 02');
+    await member.uncheck();
+    await expect(apply).toHaveCount(0);
+    await shared.getByRole('button', { name: 'Review shared change' }).click();
+    await apply.click();
+    await expect(dialog.getByRole('heading', { name: 'Unavailable device fact', exact: true })).toHaveCount(1);
+    expect(writes).toEqual([[targets[0], targets[2]]]);
+  });
+});
+
+test('shared review recovers when its first included device was removed', async ({ page }) => {
+  // The surviving devices remain visible, but the original batch cannot be applied.
+  await withFieldHost(async url => {
+    const { m, rpc, revision, targets, dialog } = await setup(page, url, 390, 3);
+    await question(dialog, m);
+    await dialog.getByRole('button', { name: 'Apply shared drive bays', exact: true }).click();
+    const shared = dialog.getByRole('region', { name: 'Shared fact' });
+    await fill(shared, '11');
+    const removed = await rpc({ oneofKind: 'bulk', bulk: m.Bulk.create({ targets: [targets[0]], expected: await revision(), remove: true }) });
+    expect(removed.oneofKind).toBe('mutation');
+    await shared.getByRole('button', { name: 'Review shared change' }).click();
+    const missing = shared.getByRole('checkbox', { name: 'Device 1 (unavailable)' });
+    await expect(missing).toBeChecked();
+    await expect(shared.getByRole('heading', { name: 'Review 3 included devices' })).toBeVisible();
+    await expect(shared.getByText('Before: Unknown', { exact: true })).toHaveCount(2);
+    await expect(shared.getByRole('button', { name: 'Apply to reviewed devices' })).toBeDisabled();
+    await missing.uncheck();
+    await shared.getByRole('button', { name: 'Review shared change' }).click();
+    await expect(shared.getByRole('button', { name: 'Apply to reviewed devices' })).toBeEnabled();
+  });
+});
+
+for (const invalid of ['quantity', 'basis']) test(`an unconfirmed shared save can read back facts with invalid ${invalid}`, async ({ page }) => {
+  // Drop the reply only after the real disk-backed mutation completed.
+  await withFieldHost(async url => {
+    const { m, dialog } = await setup(page, url, 390, 2);
+    await question(dialog, m);
+    await dialog.getByRole('button', { name: 'Apply shared drive bays', exact: true }).click();
+    const shared = dialog.getByRole('region', { name: 'Shared fact' });
+    await fill(shared, '14');
+    await shared.getByRole('button', { name: 'Review shared change' }).click();
+    let writes = 0;
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      if (decode(m, route).command.oneofKind !== 'bulk') return route.continue();
+      writes++;
+      const response = await route.fetch();
+      const bytes = await response.body();
+      expect(m.Reply.fromBinary(bytes.subarray(5, 5 + bytes.readUInt32BE(1))).result.oneofKind).toBe('mutation');
+      await route.fulfill({ status: 503, body: 'Response lost' });
+    });
+    await shared.getByRole('button', { name: 'Apply to reviewed devices' }).click();
+    await expect(shared.getByRole('alert')).toContainText('Save not confirmed');
+    await expect(shared.getByLabel('Exact drive bays')).toHaveValue('14');
+    if (invalid === 'quantity') await shared.getByLabel('Exact drive bays', { exact: true }).fill('-1');
+    else await shared.getByLabel('Evidence basis for drive bays', { exact: true }).fill('');
+    await shared.getByRole('button', { name: 'Review current values' }).click();
+    await expect(shared.getByText(/Before:.*14 bays/)).toHaveCount(2);
+    await expect(shared.getByRole('status')).toContainText('cannot confirm who made');
+    await expect(shared.getByRole('button', { name: 'Apply to reviewed devices' })).toBeDisabled();
+    await fill(shared, '15');
+    await expect(shared.getByRole('button', { name: 'Apply to reviewed devices' })).toHaveCount(0);
+    await shared.getByRole('button', { name: 'Back to checks' }).click();
+    await expect(row(dialog, 1).locator('.fact-conditions')).toContainText('satisfied');
+    expect(writes).toBe(1);
+  });
+});
+
+test('a shared empty description is an accepted value distinct from explicit clear', async ({ page }) => {
+  // The shared form never turns blank input into an implicit clear.
+  await withFieldHost(async url => {
+    const { m, rpc, targets, dialog } = await setup(page, url, 1440, 2);
+    await question(dialog, m, 'description', '');
+    const shared = dialog.getByRole('region', { name: 'Shared fact' });
+    for (const [mode, label, kind] of [['set', '(empty)', 'text'], ['clear', '(cleared)', 'clear']]) {
+      await dialog.getByRole('button', { name: 'Apply shared description', exact: true }).click();
+      const review = shared.getByRole('button', { name: 'Review shared change' });
+      await expect(review).toBeDisabled();
+      await shared.getByRole('combobox', { name: 'Change' }).selectOption(mode);
+      await review.click();
+      await expect(shared.getByText(`After: ${label}`, { exact: true })).toHaveCount(2);
+      await shared.getByRole('button', { name: 'Apply to reviewed devices' }).click();
+      await expect(dialog.getByRole('heading', { name: '2 selected devices', exact: true })).toBeFocused();
+      for (const target of targets) {
+        const item = (await rpc({ oneofKind: 'read', read: m.Read.create({ target, acceptedField: 'description' }) })).detail.item;
+        const value = item.fields.find(field => field.name === 'description').value;
+        expect(value.oneofKind).toBe(kind);
+        if (kind === 'text') expect(value.text).toBe('');
+      }
+    }
+  });
+});
+
+test('shared assignment enters one value and uses one write for three devices', async ({ page }) => {
+  // Compare the same confirmed result through individual and shared editing.
+  const measurements = {};
+  for (const shared of [false, true]) await withFieldHost(async url => {
+    const { m, dialog } = await setup(page, url, 1440, 3);
+    await question(dialog, m);
+    const calls = [];
+    const endpoint = '**/omloom.workspace.v1.Workspace/Call';
+    const count = route => { calls.push(decode(m, route).command.oneofKind); return route.continue(); };
+    await page.route(endpoint, count);
+    let entries = 0;
+    const start = performance.now();
+    if (shared) {
+      await dialog.getByRole('button', { name: 'Apply shared drive bays', exact: true }).click();
+      const editor = dialog.getByRole('region', { name: 'Shared fact' });
+      await fill(editor, '12'); entries++;
+      await editor.getByRole('button', { name: 'Review shared change' }).click();
+      await editor.getByRole('button', { name: 'Apply to reviewed devices' }).click();
+    } else {
+      await row(dialog, 1).getByRole('button', { name: 'Clarify this fact', exact: true }).click();
+      const editor = dialog.getByRole('region', { name: 'Selected fact editor' });
+      for (const index of [1, 2, 3]) {
+        await expect(editor.getByRole('region', { name: 'Review fact change' })).toContainText(`Review 0${index}`);
+        await fill(editor, '12'); entries++;
+        await editor.getByRole('button', { name: 'Save and next', exact: true }).click();
+      }
+    }
+    for (const index of [1, 2, 3]) await expect(row(dialog, index).locator('.fact-conditions')).toContainText('satisfied');
+    measurements[shared ? 'shared' : 'individual'] = { entries, writes: calls.filter(call => call === 'write' || call === 'bulk').length,
+      acceptedReads: calls.filter(call => call === 'read').length,
+      evaluations: calls.filter(call => call === 'evaluateRequirements').length, elapsedMs: Math.round(performance.now() - start) };
+    await page.unroute(endpoint, count);
+  });
+  expect(measurements.individual).toMatchObject({ entries: 3, writes: 3, acceptedReads: 3, evaluations: 3 });
+  expect(measurements.shared).toMatchObject({ entries: 1, writes: 1, acceptedReads: 0, evaluations: 2 });
+  console.log(JSON.stringify(measurements));
+});
+
 for (const failure of ['scope', 'evidence-change', 'unavailable', 'partial-scope', 'partial-recovered', 'partial-unavailable', 'anchor']) test(`refresh handles ${failure} without confusing revocation and retry`, async ({ page }) => {
   // Actual scope/continuation failures and a transport outage have different draft consequences.
   await withFieldHost(async url => {

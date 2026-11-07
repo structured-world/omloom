@@ -2,6 +2,187 @@ use super::*;
 use api::{reply::Result as Reply, request::Command};
 
 #[test]
+fn shared_fact_bulk_is_atomic_and_writes_only_changed_fields() -> TestResult {
+    // A read denial, a stale review and an incompatible member each reject the entire batch.
+    let dir = tempfile::tempdir()?;
+    let mut store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let targets = (0..10)
+        .map(|i| create(&store, &actor, K::Device, &format!("Shared {i}")))
+        .collect::<Result<Vec<_>, _>>()?;
+    let vm = create(&store, &actor, K::VirtualMachine, "Not a device")?;
+    let field = |value| wire::Field {
+        name: "drive_bays".into(),
+        value: Some(value),
+    };
+    let batch = |targets: Vec<wire::AssetRef>, expected, value| api::Request {
+        working: Some(api::WorkingContext {
+            roots: targets.clone(),
+            expected: Some(expected),
+            ..Default::default()
+        }),
+        command: Some(Command::Bulk(api::Bulk {
+            targets,
+            expected,
+            changes: vec![field(value)],
+            shared_fact: true,
+            ..Default::default()
+        })),
+    };
+    let before = store.usage()?;
+    let mut limited = operator();
+    limited.grants[0].scope = Scope::Targets(
+        targets[..9]
+            .iter()
+            .map(AssetRef::try_from)
+            .collect::<Result<_, _>>()?,
+    );
+    limited.grants.push(Grant {
+        scope: Scope::Targets(vec![AssetRef::try_from(&targets[9])?]),
+        read: Fields::Selected(vec!["name".into()]),
+        write: Fields::All,
+        writable: true,
+    });
+    let zero = wire::field::Value::Integer(0);
+    assert!(matches!(
+        store.workspace(
+            &limited,
+            batch(targets.clone(), before.revision, zero.clone()),
+            101
+        ),
+        Err(Error::Denied)
+    ));
+    limited.grants[1].read = Fields::All;
+    limited.grants[1].write = Fields::Selected(vec!["name".into()]);
+    assert!(matches!(
+        store.workspace(
+            &limited,
+            batch(targets.clone(), before.revision, zero.clone()),
+            101
+        ),
+        Err(Error::Denied)
+    ));
+    for target in &targets {
+        let asset = store.asset(AssetRef::try_from(target)?)?;
+        assert!(asset.intended.iter().all(|fact| {
+            fact.field
+                .as_ref()
+                .is_none_or(|field| field.name != "drive_bays")
+        }));
+    }
+    let mut incompatible = targets.clone();
+    incompatible[9] = vm;
+    assert!(matches!(
+        store.workspace(
+            &actor,
+            batch(incompatible, before.revision, zero.clone()),
+            101
+        ),
+        Err(Error::Invalid)
+    ));
+    assert!(matches!(
+        store.workspace(
+            &actor,
+            batch(
+                targets.clone(),
+                before.revision,
+                wire::field::Value::Integer(-1)
+            ),
+            101
+        ),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before);
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static ROOT_READS: AtomicUsize = AtomicUsize::new(0);
+    store.set_diagnostic_query_check(|_, statement| {
+        if statement.contains("n.adoption} AS p LIMIT") {
+            ROOT_READS.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+    let start = std::time::Instant::now();
+    let changed = store.workspace(
+        &actor,
+        batch(targets.clone(), before.revision, zero.clone()),
+        102,
+    )?;
+    let Reply::Mutation(changed) = changed.result.ok_or("bulk result")? else {
+        return Err("bulk mutation".into());
+    };
+    let elapsed = start.elapsed();
+    assert_eq!(changed.targets, targets);
+    assert_eq!(changed.revision, before.revision + 1);
+    assert_eq!(ROOT_READS.load(Ordering::Relaxed), 1);
+    eprintln!("Ten reviewed device writes, one context lookup, {elapsed:?}");
+    for (i, target) in targets.iter().enumerate() {
+        let asset = store.asset(AssetRef::try_from(target)?)?;
+        assert!(
+            asset
+                .intended
+                .iter()
+                .any(|f| f.field.as_ref() == Some(&field(zero.clone())))
+        );
+        assert!(
+            asset
+                .intended
+                .iter()
+                .any(|f| f.field.as_ref() == Some(&text_field("name", &format!("Shared {i}"))))
+        );
+    }
+    let saved = store.usage()?;
+    assert!(matches!(
+        store.workspace(
+            &actor,
+            batch(targets.clone(), before.revision, zero.clone()),
+            103
+        ),
+        Err(Error::Conflict)
+    ));
+    store.workspace(&actor, batch(targets.clone(), saved.revision, zero), 103)?;
+    assert_eq!(store.usage()?, saved);
+    let clear = wire::field::Value::Clear(wire::NullValue::NullValue as i32);
+    store.workspace(
+        &actor,
+        batch(targets.clone(), saved.revision, clear.clone()),
+        104,
+    )?;
+    let asset = store.asset(AssetRef::try_from(&targets[0])?)?;
+    assert!(
+        asset
+            .intended
+            .iter()
+            .any(|f| f.field.as_ref() == Some(&field(clear.clone())))
+    );
+    // Use distinct members so duplicate validation cannot hide a missing count guard.
+    let mut boundary = targets;
+    for i in boundary.len()..64 {
+        boundary.push(create(&store, &actor, K::Device, &format!("Shared {i}"))?);
+    }
+    let before_limit = store.usage()?;
+    assert!(matches!(
+        store.workspace(
+            &actor,
+            batch(boundary.clone(), before_limit.revision, clear.clone()),
+            105
+        ),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before_limit);
+    let reply = store.workspace(
+        &actor,
+        batch(boundary[..63].to_vec(), before_limit.revision, clear),
+        106,
+    )?;
+    let Reply::Mutation(accepted) = reply.result.ok_or("bulk limit result")? else {
+        return Err("bulk limit mutation".into());
+    };
+    assert_eq!(accepted.targets, boundary[..63]);
+    assert_eq!(accepted.revision, before_limit.revision + 1);
+    Ok(())
+}
+
+#[test]
 fn selected_facts_share_bounded_indexed_reads() -> TestResult {
     // Ten devices and two predicates per fact must not issue one database read per row.
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -59,6 +240,7 @@ fn selected_facts_share_bounded_indexed_reads() -> TestResult {
             } as i32
         );
         assert_eq!(row.evidence.len(), 1);
+        assert!(row.field_writable);
         assert_eq!(
             row.evidence[0].value,
             Some(text_field("name", &format!("Selected {}", i / 2)))
@@ -203,6 +385,7 @@ fn selected_facts_do_not_decode_denied_values() -> TestResult {
     );
     assert!(result.results[1].evidence.is_empty());
     assert!(result.results[1].target.is_none());
+    assert!(!result.results[1].field_writable);
     assert!(FIELD_FETCH.load(Ordering::Relaxed));
     assert_eq!(store.usage()?, before);
     Ok(())

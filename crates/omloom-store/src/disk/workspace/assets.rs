@@ -1794,12 +1794,34 @@ impl Store {
         {
             return Err(Error::Invalid);
         }
+        let shared_field = if bulk.shared_fact {
+            let [field] = bulk.changes.as_slice() else {
+                return Err(Error::Invalid);
+            };
+            if bulk.remove
+                || bulk.targets.len() >= crate::requirements::MAX_NODES
+                || (field.name != "description"
+                    && !omloom_contracts::equipment::FIELDS.contains(&field.name.as_str()))
+            {
+                return Err(Error::Invalid);
+            }
+            Some(field)
+        } else {
+            None
+        };
         let mut tx = self.begin()?;
         let selection = tx.selection(context, working, true)?;
         if number(&tx.root, "revision")? != bulk.expected {
             return Err(Error::Conflict);
         }
+        if let Some(field) = shared_field {
+            tx.validate_field(wire::AssetKind::Device as i32, field)?;
+        }
         let mut seen = BTreeSet::new();
+        let mut write = api::Write {
+            changes: bulk.changes,
+            ..Default::default()
+        };
         for target in &bulk.targets {
             let target = parse_target(Some(target))?;
             selection.contains(target, &tx)?;
@@ -1810,18 +1832,23 @@ impl Store {
             if bulk.remove {
                 tx.workspace_remove(context, target, &row, now)?;
             } else {
-                tx.context_write(
-                    context,
-                    api::Write {
-                        target: Some(target_wire(target)),
-                        expected: Some(number(&row, "revision")?),
-                        kind: number(&row, "kind")? as i32,
-                        changes: bulk.changes.clone(),
-                        parent: None,
-                    },
-                    working,
-                    now,
-                )?;
+                let kind = number(&row, "kind")? as i32;
+                write.target = Some(target_wire(target));
+                write.expected = Some(number(&row, "revision")?);
+                write.kind = kind;
+                if bulk.shared_fact {
+                    if kind != wire::AssetKind::Device as i32 {
+                        return Err(Error::Invalid);
+                    }
+                    if !context.field(target, kind, &write.changes[0].name, false) {
+                        return Err(Error::Denied);
+                    }
+                    // Selection was admitted above. Device facts use the ordinary write
+                    // owner without re-resolving the same working roots for each row.
+                    tx.workspace_write_inner(context, &write, now, false)?;
+                } else {
+                    tx.context_write(context, write.clone(), working, now)?;
+                }
             }
         }
         Ok(mutation(tx.commit()?, bulk.targets))
@@ -2052,7 +2079,7 @@ impl Tx<'_> {
         write: api::Write,
         now: u64,
     ) -> Result<AssetRef> {
-        self.workspace_write_inner(context, write, now, false)
+        self.workspace_write_inner(context, &write, now, false)
     }
     pub(super) fn workspace_network_write(
         &mut self,
@@ -2060,12 +2087,12 @@ impl Tx<'_> {
         write: api::Write,
         now: u64,
     ) -> Result<AssetRef> {
-        self.workspace_write_inner(context, write, now, true)
+        self.workspace_write_inner(context, &write, now, true)
     }
     fn workspace_write_inner(
         &mut self,
         context: &Context,
-        write: api::Write,
+        write: &api::Write,
         now: u64,
         network: bool,
     ) -> Result<AssetRef> {

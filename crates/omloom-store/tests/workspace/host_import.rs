@@ -877,6 +877,7 @@ fn removing_an_imported_resource_retires_its_source_mapping() -> TestResult {
             expected: store.usage()?.revision,
             remove: true,
             changes: Vec::new(),
+            ..Default::default()
         }),
     )?;
     let second = accept(&store, &preview(&store, request)?)?;

@@ -11,7 +11,7 @@ async function apply(remove = false) {
   try {
     if (!field.value) throw Error('Select an applicable field');
     const changes = remove || mode.value === 'preserve' ? [] : [typedField(name.value, field.value.type, value.value, mode.value === 'clear')];
-    await call({ oneofKind: 'bulk', bulk: { targets: props.items.flatMap(i => i.target ? [i.target] : []), expected: props.revision, remove, changes } }, props.working); emit('saved');
+    await call({ oneofKind: 'bulk', bulk: model.Bulk.create({ targets: props.items.flatMap(i => i.target ? [i.target] : []), expected: props.revision, remove, changes }) }, props.working); emit('saved');
   } catch (e) { error.value = String(e); }
 }
 </script>

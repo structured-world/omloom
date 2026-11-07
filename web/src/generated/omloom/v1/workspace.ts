@@ -1944,6 +1944,14 @@ export interface Bulk {
      * @generated from protobuf field: bool remove = 4
      */
     remove: boolean;
+    /**
+     * Client selects the reviewed device-fact profile: at most 63 exact Devices,
+     * one accepted description or equipment field, and current read and write rights.
+     * False uses ordinary bulk editing or removal.
+     *
+     * @generated from protobuf field: bool shared_fact = 5
+     */
+    sharedFact: boolean;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.Definition
@@ -4127,6 +4135,13 @@ export interface RequirementResult {
      * @generated from protobuf field: repeated omloom.workspace.v1.RequirementEvidence evidence = 8
      */
     evidence: RequirementEvidence[];
+    /**
+     * Server reports the current write grant for this disclosed accepted field,
+     * even when the condition is satisfied. A proposed value still needs admission.
+     *
+     * @generated from protobuf field: bool field_writable = 9
+     */
+    fieldWritable: boolean;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.RequirementEvaluation
@@ -8617,7 +8632,8 @@ class Bulk$Type extends MessageType<Bulk> {
             { no: 1, name: "targets", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AssetRef },
             { no: 2, name: "expected", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 3, name: "changes", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => Field },
-            { no: 4, name: "remove", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+            { no: 4, name: "remove", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 5, name: "shared_fact", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
         ]);
     }
 }
@@ -9651,7 +9667,8 @@ class RequirementResult$Type extends MessageType<RequirementResult> {
             { no: 5, name: "target", kind: "message", T: () => AssetRef },
             { no: 6, name: "field", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 7, name: "resolutions", kind: "enum", repeat: 1 /*RepeatType.PACKED*/, T: () => ["omloom.workspace.v1.RequirementResolution", RequirementResolution, "REQUIREMENT_RESOLUTION_"] },
-            { no: 8, name: "evidence", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => RequirementEvidence }
+            { no: 8, name: "evidence", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => RequirementEvidence },
+            { no: 9, name: "field_writable", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
         ]);
     }
 }

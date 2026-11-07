@@ -390,6 +390,7 @@ fn removed_import_mapping_does_not_poison_reimport() -> TestResult {
             expected: store.usage()?.revision,
             remove: true,
             changes: Vec::new(),
+            ..Default::default()
         }),
     )?;
     let retained_before = store.asset(AssetRef::try_from(&retained)?)?;
@@ -1214,7 +1215,8 @@ fn exact_identity_search_and_pending_removal_guard() -> TestResult {
                 }],
                 expected: store.usage()?.revision,
                 remove: true,
-                changes: Vec::new()
+                changes: Vec::new(),
+                ..Default::default()
             })
         ),
         Err(Error::UnsafeTransition)
@@ -1437,6 +1439,7 @@ fn removal_preserves_the_last_edit_audit() -> TestResult {
             expected: store.usage()?.revision,
             remove: true,
             changes: Vec::new(),
+            ..Default::default()
         }),
     )?;
     let after = store.activity(&owner, 10)?;
@@ -1469,6 +1472,7 @@ fn removal_blocks_replay_and_releases_only_its_allocation() -> TestResult {
             expected: store.usage()?.revision,
             remove: true,
             changes: Vec::new(),
+            ..Default::default()
         }),
     )?;
     assert!(matches!(
