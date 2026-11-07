@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
-import { call, model, key, display, resourceName, enumLabel, AssetKind, type AssetRef } from './api';
+import { call, model, key, display, fieldGroup, resourceName, enumLabel, AssetKind, type AssetRef } from './api';
 import Dialog from './Dialog.vue';
 import RequirementQuestion from './RequirementQuestion.vue';
 import AssetEditor from './AssetEditor.vue';
 import ImportEditor from './ImportEditor.vue';
+import CommonFactEditor from './CommonFactEditor.vue';
 const props = defineProps<{ items: model.Item[]; working: model.WorkingContext; definitions: model.Definition[]; findings?: model.FieldRequirement[] }>();
 const emit = defineEmits<{ close: []; saved: [] }>();
 // The reviewed population belongs to this view, independently of the list's filters and refreshes.
@@ -22,6 +23,10 @@ const draftIds = computed(() => new Set(drafts.value.map(draft => draft.id)));
 const deniedFields = ref(new Set<string>());
 const suspended = ref(false);
 const heading = ref<HTMLElement>();
+const sharedField = ref<string>();
+const sharedBusy = ref(false);
+let sharedAccessChanged = false;
+const sharedUnconfirmed = new Set<string>();
 let generation = 0; let disposed = false; let reviewAnchor: string | undefined;
 onBeforeUnmount(() => { disposed = true; generation++; });
 function identity(condition: model.FieldRequirement) { return model.FieldRequirement.toJsonString(condition); }
@@ -42,6 +47,17 @@ const rows = computed(() => {
     row.conditions.push(condition);
   }
   return [...result.values()];
+});
+const sharedGroups = computed(() => {
+  const groups = new Map<string, { condition: model.FieldRequirement; label: string }[]>();
+  for (const row of rows.value) {
+    const condition = row.conditions.find(c => c.layer === model.RequirementLayer.ACCEPTED);
+    if (!condition) continue;
+    let members = groups.get(row.field);
+    if (!members) { members = []; groups.set(row.field, members); }
+    members.push({ condition, label: restricted(row) ? `Device ${members.length + 1} (unavailable)` : `${name(row)} · ${row.target.assetId.slice(-8)}` });
+  }
+  return groups;
 });
 function result(condition: model.FieldRequirement) { return answers.value.get(identity(condition))?.result; }
 function checkedAt(condition: model.FieldRequirement) {
@@ -100,10 +116,7 @@ async function evaluate(selected: model.FieldRequirement[]) {
   // Invalidate affected answers first, so an old success cannot survive an unsuccessful refresh.
   const next = new Map(answers.value); for (const condition of selected) next.delete(identity(condition)); answers.value = next;
   try {
-    const query = model.EvaluateRequirements.create({ anchor: selected[0]!.target, root: selected.length, nodes: [
-      ...selected.map(field => ({ expression: { oneofKind: 'field' as const, field } })),
-      { expression: { oneofKind: 'group', group: { kind: model.RequirementGroupKind.ALL, minimum: 0, members: selected.map((_, i) => i) } } },
-    ] });
+    const query = fieldGroup(selected);
     const reply = await evaluateFromSelection(query, selected, fullReview, turn);
     if (disposed || turn !== generation) return;
     if (reply?.oneofKind !== 'requirementEvaluation') throw Error('The selected checks are unavailable.');
@@ -196,6 +209,27 @@ async function recheck(id: string, unresolved: boolean) {
   else await finish(id, false);
 }
 async function imported() { importing.value = false; emit('saved'); notice.value = 'Import accepted. Rechecking the original selection and conditions.'; await evaluate(conditions.value); await focusRow(); }
+async function closeShared() {
+  const field = sharedField.value;
+  sharedField.value = undefined;
+  if (sharedAccessChanged) { sharedAccessChanged = false; suspendReview(); await evaluate(conditions.value); }
+  else if (sharedUnconfirmed.size) await evaluate(conditions.value.filter(condition =>
+    condition.expected?.name === field && sharedUnconfirmed.has(key(condition.target))));
+  sharedUnconfirmed.clear();
+  await focusRow();
+}
+async function sharedSaved(targets: AssetRef[]) {
+  const field = sharedField.value;
+  const affected = new Set([...sharedUnconfirmed, ...targets.map(key)]);
+  sharedUnconfirmed.clear();
+  sharedField.value = undefined;
+  notice.value = 'Shared value accepted. Checking the original conditions.';
+  emit('saved');
+  if (sharedAccessChanged) { sharedAccessChanged = false; suspendReview(); }
+  await evaluate(conditions.value.filter(condition => condition.expected?.name === field && affected.has(key(condition.target))));
+  notice.value = 'Shared value accepted.';
+  await focusRow();
+}
 onMounted(async () => {
   if (!items.length || items.length > 63 || items.some(item => item.kind !== AssetKind.DEVICE || !item.target)) { error.value = 'Select between one and 63 devices.'; return; }
   if (props.findings) {
@@ -206,12 +240,18 @@ onMounted(async () => {
 });
 </script>
 <template>
-<Dialog title="Check selected devices" :dismissible="!writing" @close="emit('close')">
-<section class="selected-requirements">
+<Dialog title="Check selected devices" :dismissible="!writing && !sharedBusy" @close="sharedField ? closeShared() : emit('close')">
+<CommonFactEditor v-if="sharedField" :key="sharedField" :field="sharedField" :members="sharedGroups.get(sharedField)!" :working="working" @busy="sharedBusy = $event" @access-changed="sharedAccessChanged = true" @unconfirmed="$event.forEach(target => sharedUnconfirmed.add(key(target)))" @close="closeShared" @saved="sharedSaved" />
+<section v-show="!sharedField" class="selected-requirements">
 <h3 ref="heading" tabindex="-1">{{ items.length }} selected devices</h3>
 <p>The selection stays fixed in this review. Missing facts may remain unresolved. Correct a value only when the recorded fact is wrong.</p>
 <RequirementQuestion v-if="adding" :kind="AssetKind.DEVICE" :busy="busy" :disabled="suspended || writing || !!active" @check="check" />
 <div class="row"><button v-if="conditions.length && !adding" :disabled="suspended || busy || writing || !!active" @click="adding = true">Add another condition</button><button v-if="conditions.length" :disabled="busy || writing" @click="evaluate(conditions)">Refresh checks</button><button :disabled="suspended || busy || writing || !!active" @click="importing = true">Import CSV and return</button></div>
+<div v-if="!suspended" class="row">
+  <template v-for="[field, members] in sharedGroups" :key="field">
+    <button v-if="members.length > 1" :disabled="busy || writing || !!active" @click="sharedField = field">Apply shared {{ field.replaceAll('_', ' ') }}</button>
+  </template>
+</div>
 <p v-if="notice" role="status">{{ notice }}</p><p v-if="error" role="alert">{{ error }}</p><p v-if="busy" role="status">Checking selected facts…</p>
 <p v-if="revision !== undefined">Last check used inventory revision {{ revision.toString() }}. Results are not saved.</p>
 <p v-if="suspended && !busy" role="status">Access to this review could not be verified. Refresh checks to continue.</p>

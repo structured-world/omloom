@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref,onMounted } from 'vue';
 import { EquipmentClaim, EquipmentReference, EquipmentAlternatives, QuantityRange, NullValue, type Field } from '../src/generated/omloom/v1/contracts';
-const props=defineProps<{ name:string; value?:Field; claimsOnly?:boolean; focused?:boolean }>();
+const props=defineProps<{ name:string; value?:Field; claimsOnly?:boolean; focused?:boolean; allowClear?:boolean }>();
 const title=props.name.replaceAll('_',' ');
 const emit=defineEmits<{change:[value:Field|undefined];valid:[value:boolean]}>();
 const current=props.value?.value;
@@ -86,7 +86,7 @@ function changed(){
 <fieldset class="equipment-field" @input="changed" @change="changed">
 <legend>{{ title }}</legend>
 <label>Knowledge for {{ title }}<select v-model="mode" :aria-label="`Knowledge for ${title}`">
-<option value="unknown">{{claimsOnly?'Not specified in this requirement':'Preserve / leave unknown'}}</option><option v-if="!claimsOnly&&(!unit||name==='drive_bays')" value="known">Known value</option><option v-if="unit" value="quantity">Quantity or range</option><option v-if="!unit" value="alternatives">Possible / excluded values</option><option v-if="name==='model'||name==='variant'" value="model">Reviewed model reference</option><option v-if="value&&!claimsOnly" value="clear">Clear explicitly</option>
+<option value="unknown">{{claimsOnly?'Not specified in this requirement':'Preserve / leave unknown'}}</option><option v-if="!claimsOnly&&(!unit||name==='drive_bays')" value="known">Known value</option><option v-if="unit" value="quantity">Quantity or range</option><option v-if="!unit" value="alternatives">Possible / excluded values</option><option v-if="name==='model'||name==='variant'" value="model">Reviewed model reference</option><option v-if="(value||allowClear)&&!claimsOnly" value="clear">Clear explicitly</option>
 </select></label>
 <label v-if="mode==='known'">Known {{ title }}<input v-model="known" data-fact-value :maxlength="name==='model'?512:160" :required="mode==='known'" /></label>
 <template v-if="!['known','unknown','clear'].includes(mode)">

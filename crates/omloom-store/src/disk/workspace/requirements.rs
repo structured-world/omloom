@@ -662,7 +662,9 @@ impl Tx<'_> {
                 api::RequirementLayer::Observed => "observed",
                 _ => return Err(Error::Invalid),
             };
-        if layer == "intent" && context.field(target, kind, &expected.name, true) {
+        response.field_writable =
+            layer == "intent" && context.field(target, kind, &expected.name, true);
+        if response.field_writable {
             response
                 .resolutions
                 .push(api::RequirementResolution::RecordFact as i32);

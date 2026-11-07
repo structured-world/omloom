@@ -321,6 +321,7 @@ fn bulk_removal_reclaims_current_network_and_address_facts() -> TestResult {
                 expected: store.usage()?.revision,
                 remove: true,
                 changes: vec![],
+                ..Default::default()
             }),
         )?;
         let after = store.usage()?;

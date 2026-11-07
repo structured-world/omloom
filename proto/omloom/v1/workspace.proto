@@ -848,6 +848,10 @@ message Bulk {
   repeated omloom.v1.Field changes = 3;
   // Explicit removal request, incompatible with field changes.
   bool remove = 4;
+  // Client selects the reviewed device-fact profile: at most 63 exact Devices,
+  // one accepted description or equipment field, and current read and write rights.
+  // False uses ordinary bulk editing or removal.
+  bool shared_fact = 5;
 }
 message Definition {
   // Server-generated local definition UUID, stable across rename and migration.
@@ -1752,6 +1756,9 @@ message RequirementResult {
   repeated RequirementResolution resolutions = 7;
   // At most 32 permitted current source bases, without raw source payloads.
   repeated RequirementEvidence evidence = 8;
+  // Server reports the current write grant for this disclosed accepted field,
+  // even when the condition is satisfied. A proposed value still needs admission.
+  bool field_writable = 9;
 }
 message RequirementEvaluation {
   // Current consistent inventory basis. Evaluations are transient and are not saved.

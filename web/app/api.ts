@@ -1,5 +1,5 @@
 import { GrpcWebFetchTransport } from '@protobuf-ts/grpcweb-transport';
-import { Request, Workspace, FieldType, type Item, type Reply, type WorkingContext } from '../src/generated/omloom/v1/workspace';
+import { Request, Workspace, FieldType, EvaluateRequirements, RequirementGroupKind, type FieldRequirement, type Item, type Reply, type WorkingContext } from '../src/generated/omloom/v1/workspace';
 import { AssetKind, NullValue, type Field, type AssetRef, type EquipmentAlternative, type EquipmentExclusion, type EquipmentReference } from '../src/generated/omloom/v1/contracts';
 import { softwareChoiceLabel } from './software-fields';
 export * as model from '../src/generated/omloom/v1/workspace';
@@ -30,6 +30,12 @@ export async function call(command: Request['command'], working?: WorkingContext
     evaluation.next = reply.requirementEvaluation.next;
   }
   return response;
+}
+export function fieldGroup(fields: FieldRequirement[]) {
+  return EvaluateRequirements.create({ anchor: fields[0]?.target, root: fields.length, nodes: [
+    ...fields.map(field => ({ expression: { oneofKind: 'field' as const, field } })),
+    { expression: { oneofKind: 'group', group: { kind: RequirementGroupKind.ALL, minimum: 0, members: fields.map((_, index) => index) } } },
+  ] });
 }
 export function requestMessage(error:unknown):string {
   if(!(error instanceof Error))return 'The request could not be completed.';

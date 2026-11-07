@@ -26,6 +26,11 @@
     strong { text-transform: capitalize; }
   }
   .fact-review-editor { border-top: 1px solid var(--line); padding-top: t.$space * 4; }
+  &.shared-fact-review {
+    form { display: grid; justify-items: start; gap: t.$space * 3; }
+    fieldset, .fact-review-list { width: 100%; min-width: 0; box-sizing: border-box; }
+    .shared-fact-members label { display: flex; align-items: baseline; gap: t.$space * 2; overflow-wrap: anywhere; }
+  }
   @media (min-width: 900px) {
     .requirement-question fieldset { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .fact-review-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: t.$space * 3; }
