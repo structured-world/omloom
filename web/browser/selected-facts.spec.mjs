@@ -332,6 +332,44 @@ test('a shared empty description is an accepted value distinct from explicit cle
   });
 });
 
+test('shared assignment enters one value and uses one write for three devices', async ({ page }) => {
+  // Compare the same confirmed result through individual and shared editing.
+  const measurements = {};
+  for (const shared of [false, true]) await withFieldHost(async url => {
+    const { m, dialog } = await setup(page, url, 1440, 3);
+    await question(dialog, m);
+    const calls = [];
+    const endpoint = '**/omloom.workspace.v1.Workspace/Call';
+    const count = route => { calls.push(decode(m, route).command.oneofKind); return route.continue(); };
+    await page.route(endpoint, count);
+    let entries = 0;
+    const start = performance.now();
+    if (shared) {
+      await dialog.getByRole('button', { name: 'Apply shared drive bays', exact: true }).click();
+      const editor = dialog.getByRole('region', { name: 'Shared fact' });
+      await fill(editor, '12'); entries++;
+      await editor.getByRole('button', { name: 'Review shared change' }).click();
+      await editor.getByRole('button', { name: 'Apply to reviewed devices' }).click();
+    } else {
+      await row(dialog, 1).getByRole('button', { name: 'Clarify this fact', exact: true }).click();
+      const editor = dialog.getByRole('region', { name: 'Selected fact editor' });
+      for (const index of [1, 2, 3]) {
+        await expect(editor.getByRole('region', { name: 'Review fact change' })).toContainText(`Review 0${index}`);
+        await fill(editor, '12'); entries++;
+        await editor.getByRole('button', { name: 'Save and next', exact: true }).click();
+      }
+    }
+    for (const index of [1, 2, 3]) await expect(row(dialog, index).locator('.fact-conditions')).toContainText('satisfied');
+    measurements[shared ? 'shared' : 'individual'] = { entries, writes: calls.filter(call => call === 'write' || call === 'bulk').length,
+      acceptedReads: calls.filter(call => call === 'read').length,
+      evaluations: calls.filter(call => call === 'evaluateRequirements').length, elapsedMs: Math.round(performance.now() - start) };
+    await page.unroute(endpoint, count);
+  });
+  expect(measurements.individual).toMatchObject({ entries: 3, writes: 3, acceptedReads: 3, evaluations: 3 });
+  expect(measurements.shared).toMatchObject({ entries: 1, writes: 1, acceptedReads: 0, evaluations: 2 });
+  console.log(JSON.stringify(measurements));
+});
+
 for (const failure of ['scope', 'evidence-change', 'unavailable', 'partial-scope', 'partial-recovered', 'partial-unavailable', 'anchor']) test(`refresh handles ${failure} without confusing revocation and retry`, async ({ page }) => {
   // Actual scope/continuation failures and a transport outage have different draft consequences.
   await withFieldHost(async url => {
