@@ -1683,6 +1683,10 @@ message EvaluateRequirements {
   repeated RequirementNode nodes = 2;
   // Selected method/root index. Unselected alternatives do not affect this result.
   uint32 root = 3;
+  // Opaque continuation from RequirementEvaluation.next, with the identical
+  // question and working context. Not an authority token. Absent on first read
+  // and in stored plan checks. Changed evidence or rights invalidate continuation.
+  optional string cursor = 4;
 }
 enum RequirementState {
   REQUIREMENT_STATE_UNSPECIFIED = 0;
@@ -1726,6 +1730,10 @@ message RequirementEvidence {
   optional uint64 valid_until_ms = 4;
   // Original source scan identity when no comparable source revision is supplied.
   optional string scan_id = 5;
+  // Server-projected current value of this permitted field from this exact source.
+  // Its claim basis and uncertainty are preserved. A stale observation may be
+  // displayed but does not satisfy the condition. Absent when no value is supplied.
+  optional omloom.v1.Field value = 6;
 }
 message RequirementResult {
   // Original requested node index; no hidden dependency identities are added.
@@ -1756,6 +1764,10 @@ message RequirementEvaluation {
   RequirementReason reason = 4;
   // Only nodes reached from the selected root; no facts for unselected methods.
   repeated RequirementResult results = 5;
+  // Server continuation for remaining evidence, absent when complete. Every
+  // page repeats the same node decisions; combine evidence only after all pages
+  // succeed. A stale continuation requires a fresh evaluation, not partial display.
+  optional string next = 6;
 }
 
 // Half-open physical extent in integer micrometres in its owner's coordinates.
