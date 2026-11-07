@@ -899,10 +899,10 @@ fn account_card_sharing_requires_its_own_capability() -> TestResult {
     let publish = api::SaveView {
         view: Some(api::SavedView {
             name: "Selected account".into(),
-            query: Some(api::Query {
+            query: Some(Box::new(api::Query {
                 focus: Some(account),
                 ..query()
-            }),
+            })),
             audiences: vec!["operations".into()],
             ..Default::default()
         }),

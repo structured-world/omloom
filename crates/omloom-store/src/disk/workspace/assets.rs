@@ -512,6 +512,16 @@ impl Store {
             return Err(Error::Invalid);
         }
         let view = api::View::try_from(query.view).map_err(|_| Error::Invalid)?;
+        let include_topology = query
+            .network
+            .as_ref()
+            .is_some_and(|network| network.include_topology);
+        if include_topology && view != api::View::Network {
+            return Err(Error::Invalid);
+        }
+        if let Some(network) = &mut query.network {
+            network.layout = None;
+        }
         if let Some(filter) = &query.responsibility {
             super::responsibility::validate_filter(filter)?;
         }
@@ -542,6 +552,26 @@ impl Store {
             "a.parent='assets'".to_owned(),
             visible_clause(context, None, &mut values),
         ];
+        let mut site_entry = None;
+        if let Some(network) = &query.network
+            && (!network.sites.is_empty() || network.unplaced)
+        {
+            let members = tx.located_selection(context, network)?;
+            let sites = parameter(
+                &mut values,
+                Value::Array(
+                    members
+                        .into_iter()
+                        .map(|target| text(asset_key(target)))
+                        .collect(),
+                ),
+            );
+            let negate = if network.unplaced { "NOT " } else { "" };
+            clauses.push(format!("{negate}a.key IN {sites}"));
+            if !network.unplaced {
+                site_entry = Some(sites);
+            }
+        }
         if query.require_physical_read {
             clauses.push(visible_clause(context, Some("physical"), &mut values));
         }
@@ -1204,6 +1234,11 @@ impl Store {
                 clauses.push(format!("a.key IN {keys}"));
             }
         }
+        if let Some(keys) = site_entry
+            && entry == "MATCH (a:OmRow {parent:'assets'})"
+        {
+            entry = format!("UNWIND {keys} AS site_key MATCH (a:OmRow {{key:site_key}})");
+        }
         clauses.retain(|clause| clause != "true");
         let tail = format!(
             "{} WITH {} WHERE {}",
@@ -1399,7 +1434,8 @@ impl Store {
         // Reserve both cohort positions when a page merges disjoint sources.
         let cursor_bytes = 2 * 20 + 3 + fingerprint.len() + selected.position.max_bytes();
         bytes += 1 + prost::length_delimiter_len(cursor_bytes) + cursor_bytes;
-        let envelope = 1 + prost::length_delimiter_len(MAX_REPLY_BYTES);
+        let envelope =
+            1 + prost::length_delimiter_len(MAX_REPLY_BYTES) + if include_topology { 8 } else { 0 };
         let mut emitted = 0;
         for (index, item) in items.iter().enumerate() {
             let size = item.encoded_len();
@@ -1421,6 +1457,11 @@ impl Store {
         if query.include_context {
             contexts.truncate(emitted);
         }
+        let topology = if include_topology {
+            Some(tx.network_topology(context, &items, MAX_REPLY_BYTES - envelope - bytes)?)
+        } else {
+            None
+        };
         tx.commit()?;
         if self.usage()?.revision != revision {
             return Err(Error::Expired);
@@ -1429,6 +1470,7 @@ impl Store {
         Ok(api::Page {
             items,
             contexts,
+            topology,
             total,
             revision,
             next: if next_position.rank()? < total {

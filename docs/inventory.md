@@ -392,6 +392,32 @@ IPAM selection uses its namespace and address-range semantics independently
 of physical ownership. Hidden ownership does not conceal otherwise permitted
 resources or grant access to their containers.
 
+### Network topology
+
+Network opens a diagram of known current resources. Switch to **Table** for the
+same selection with columns, bulk actions and ordinary list navigation. **Site**
+and **Project / selection** are independent. Choose one or more permitted sites,
+or **No known site**, and intersect that choice with a saved resource selection.
+An empty result keeps both filters in place.
+
+The diagram draws relationships whose two endpoints are on the current page.
+Open a resource to see additional authorized relationship pages and use the
+ordinary inventory editor. The recorded link type describes the evidence.
+Missing links, partial observations and disconnected cards do not establish
+network reachability. On a phone, opening a card leads to the full detail
+screen with a return action.
+
+**Arrange** enables dragging or arrow-key movement of cards. **Save view**
+stores only explicitly arranged positions and the chosen presentation.
+Refreshing, zooming and rearranging before saving leave inventory untouched.
+Shared definitions use their existing audience and editor rules, and the store
+rechecks access to pinned resource incarnations when loading them.
+
+The browser requests 25 nodes per page. A network projection returns at most
+128 recorded links and uses the existing response byte limit. Site selection
+accepts up to 16 explicit sites, and location traversal uses the common
+1,024-resource scope ceiling. Larger location scopes must be narrowed.
+
 List context is limited to authorized owner labels and address hints for the
 displayed services/interfaces. It does not load host routing tables, firewall
 rules or the address sets of ancestor hosts and sibling services. Network

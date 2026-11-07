@@ -42,6 +42,8 @@ mod responsibility;
 mod segments;
 #[path = "workspace/software.rs"]
 mod software;
+#[path = "workspace/topology.rs"]
+mod topology;
 #[path = "workspace/typed_values.rs"]
 mod typed_values;
 #[path = "workspace/views.rs"]

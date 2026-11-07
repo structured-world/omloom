@@ -15,21 +15,95 @@ fn decode(row: &Properties) -> Result<api::SavedView> {
         name: string(row, "label")?,
         owner: string(row, "owner")?,
         revision: number(row, "revision")?,
-        query: Some(api::Query::decode(binary(row, "query")?).map_err(|_| Error::Corrupt)?),
+        query: Some(Box::new(
+            api::Query::decode(binary(row, "query")?).map_err(|_| Error::Corrupt)?,
+        )),
         audiences: read_strings(row, "audiences")?,
         editors: read_strings(row, "editors")?,
     })
 }
+fn visible_layouts<'a>(
+    tx: &Tx<'_>,
+    context: &Context,
+    queries: impl IntoIterator<Item = &'a mut api::Query>,
+) -> Result<()> {
+    let mut keys = BTreeSet::new();
+    let mut layouts = Vec::new();
+    for query in queries {
+        let Some(layout) = query
+            .network
+            .as_mut()
+            .and_then(|network| network.layout.as_mut())
+        else {
+            continue;
+        };
+        if query.view != api::View::Network as i32 || layout.pins.len() > 64 {
+            return Err(Error::Limit);
+        }
+        let mut targets = Vec::with_capacity(layout.pins.len());
+        for pin in &layout.pins {
+            let target = parse_target(pin.target.as_ref())?;
+            if targets.contains(&target)
+                || !(-4096..=4096).contains(&pin.x)
+                || !(-4096..=4096).contains(&pin.y)
+            {
+                return Err(Error::Invalid);
+            }
+            keys.insert(asset_key(target));
+            targets.push(target);
+        }
+        layouts.push((layout, targets));
+    }
+    let mut permitted = BTreeSet::new();
+    let mut keys = keys.into_iter();
+    loop {
+        let batch: Vec<_> = keys.by_ref().take(128).map(text).collect();
+        if batch.is_empty() {
+            break;
+        }
+        let rows = tx.query(
+            "UNWIND $keys AS key MATCH (a:OmRow {key:key}) WHERE a.adoption=$adopted RETURN {asset:a.asset,incarnation:a.incarnation,kind:a.kind} AS p LIMIT 128",
+            params([
+                ("keys", Value::Array(batch)),
+                ("adopted", Value::Int(wire::Adoption::Adopted as i64)),
+            ]),
+        )?;
+        for row in rows {
+            let reference = target(&row)?;
+            if context.readable(reference, number(&row, "kind")? as i32) {
+                permitted.insert(reference);
+            }
+        }
+    }
+    for (layout, targets) in layouts {
+        let mut targets = targets.into_iter();
+        layout.pins.retain(|_| {
+            targets
+                .next()
+                .is_some_and(|target| permitted.contains(&target))
+        });
+    }
+    Ok(())
+}
 impl Store {
     pub(super) fn workspace_views(&self, context: &Context) -> Result<Vec<api::SavedView>> {
-        self.workspace_rows("views", 256)?
-            .iter()
-            .map(decode)
-            .filter(|r| match r {
-                Err(_) => true,
-                Ok(v) => visible(v, context),
-            })
-            .collect()
+        let tx = self.begin()?;
+        let mut views = Vec::new();
+        for row in tx.workspace_rows("views", 256)? {
+            let view = decode(&row)?;
+            if visible(&view, context) {
+                views.push(view);
+            }
+        }
+        visible_layouts(
+            &tx,
+            context,
+            views
+                .iter_mut()
+                .filter_map(|view| view.query.as_deref_mut()),
+        )?;
+        tx.commit()?;
+        Ok(views)
     }
     pub(super) fn workspace_save_view(
         &self,
@@ -47,6 +121,12 @@ impl Store {
         }
         let query = view.query.as_mut().ok_or(Error::Invalid)?;
         query.cursor = None;
+        if let Some(network) = &mut query.network {
+            network.include_topology = false;
+            if network.sites.is_empty() && !network.unplaced && network.layout.is_none() {
+                query.network = None;
+            }
+        }
         if query.encoded_len() > 8192
             || query.predicates.len() > 8
             || query.columns.len() > MAX_FIELDS
@@ -66,6 +146,15 @@ impl Store {
             super::responsibility::validate_filter(filter)?;
         }
         let mut tx = self.begin()?;
+        if let Some(network) = &query.network
+            && !network.sites.is_empty()
+        {
+            if network.unplaced {
+                return Err(Error::Invalid);
+            }
+            tx.validate_sites(context, &network.sites)?;
+        }
+        visible_layouts(&tx, context, [query.as_mut()])?;
         let old = if view.id.is_empty() {
             if view.revision != 0 || (!view.owner.is_empty() && view.owner != context.actor) {
                 return Err(Error::Denied);

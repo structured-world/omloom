@@ -301,6 +301,7 @@ test('prefix correction reviews domain changes and allocation ownership before a
       const page = await browser.newPage({ viewport: { width, height: 900 } }); page.setDefaultTimeout(5000);
       try {
         await page.goto(`${server.url}/#/?view=1&kind=${m.AssetKind.PREFIX}`);
+        await page.getByRole('button', { name: 'Table', exact: true }).click();
         if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
         for (const name of [`Allocated subnet ${width}`, `Unresolved subnet ${width}`]) await page.getByRole('checkbox', { name: `Select ${name}`, exact: true }).check();
         await page.getByRole('button', { name: 'Compare identity', exact: true }).click();
@@ -355,6 +356,7 @@ for (const width of [1440, 390]) test(`prefix correction opens and accepts with 
       const page = await browser.newPage({ viewport: { width, height: 900 } }); page.setDefaultTimeout(5000);
       try {
         await page.goto(`${server.url}/#/?view=1&kind=${m.AssetKind.PREFIX}`);
+        await page.getByRole('button', { name: 'Table', exact: true }).click();
         if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
         for (const name of [`Retained ${width}`, `Duplicate ${width}`]) await page.getByRole('checkbox', { name: `Select ${name}`, exact: true }).check();
         await page.getByRole('button', { name: 'Compare identity', exact: true }).click();
@@ -738,6 +740,7 @@ for (const width of [1440, 390]) test(`known prefix refinement, contextual creat
     expect(retained.target).toEqual(prefix);
     await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) });
     await page.goto(`${server.url}/#/?view=1`);
+    await page.getByRole('button', { name: 'Table', exact: true }).click();
     if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
     await page.getByRole('checkbox', { name: 'Select Workshop subnet', exact: true }).check();
     await page.getByRole('checkbox', { name: /^Select 192\.0\.2\.0\/24 \([0-9a-f]{8}\)$/ }).check();
@@ -842,6 +845,7 @@ test('known IP/CIDR review preserves drafts and atomically creates an unresolved
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         await page.screenshot({ path: `test-results/known-prefix-${width}.png`, fullPage: true });
         await page.goto(`${server.url}/#/?view=1`);
+        await page.getByRole('button', { name: 'Table', exact: true }).click();
         if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
         await expect(page.getByRole('checkbox', { name: /^Select 192\.0\.2\.0\/24 \([0-9a-f]{8}\)$/ })).toHaveCount(width === 1440 ? 1 : 2);
       } finally { await page.close(); }
@@ -4419,6 +4423,7 @@ test('local network evidence keeps service ownership, coverage and phone navigat
     await object(m.AssetKind.INTERFACE,'unaddressed sibling',os);
     await rpc({oneofKind:'interfaceAddresses',interfaceAddresses:m.InterfaceAddresses.create({interface:osInterface,source:'Fixture collector',observedAt:1000n,complete:true,addresses:[{address:'192.0.2.99',stability:m.AddressStability.STABLE,state:m.AddressState.PREFERRED}]})},osInterface);
     await page.goto(`${server.url}/#/?view=1&search=unaddressed`);
+    await page.getByRole('button', { name: 'Table', exact: true }).click();
     const unaddressed=page.locator('tbody tr').filter({has:page.getByRole('button',{name:'unaddressed sibling',exact:true})});
     await expect(unaddressed).toContainText('Address not known');
     await expect(unaddressed).not.toContainText('192.0.2.99');

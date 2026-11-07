@@ -418,24 +418,36 @@ impl Tx<'_> {
             return Err(Error::Limit);
         }
         let mut selected = BTreeSet::new();
-        let mut pending = Vec::new();
+        let mut frontier = BTreeSet::new();
         for root in roots {
             let target = parse_target(Some(root))?;
             self.visible_asset(context, target)?;
             if selected.insert(target) {
-                pending.push(target);
+                frontier.insert(asset_key(target));
             }
         }
-        while let Some(parent) = pending.pop() {
-            for child in self.local_children(context, parent)? {
-                if !selected.contains(&child) {
+        while !frontier.is_empty() {
+            let mut next = BTreeSet::new();
+            for (parent, child, relation) in self.context_edges(context, &frontier, true)? {
+                let child_ref = crate::disk::target(&child)?;
+                let parent_ref = crate::disk::target(&parent)?;
+                let parent_kind = wire::AssetKind::try_from(number(&parent, "kind")? as i32)
+                    .map_err(|_| Error::Corrupt)?;
+                let child_kind = wire::AssetKind::try_from(number(&child, "kind")? as i32)
+                    .map_err(|_| Error::Corrupt)?;
+                let from = parse_target(relation.from.as_ref())?;
+                let to = parse_target(relation.to.as_ref())?;
+                if refines(parent_ref, parent_kind, child_kind, relation.kind, from, to)
+                    && !selected.contains(&child_ref)
+                {
                     if selected.len() >= 1024 {
                         return Err(Error::Limit);
                     }
-                    selected.insert(child);
-                    pending.push(child);
+                    selected.insert(child_ref);
+                    next.insert(asset_key(child_ref));
                 }
             }
+            frontier = next;
         }
         Ok(selected)
     }

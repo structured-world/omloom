@@ -455,6 +455,9 @@ impl Store {
     ) -> Result<api::Reply> {
         let mut query = export.query.ok_or(Error::Invalid)?;
         query.cursor = None;
+        if let Some(network) = &mut query.network {
+            network.include_topology = false;
+        }
         query.limit = MAX_PAGE as u32;
         let mut columns = query.columns.clone();
         if columns.is_empty() {

@@ -6,14 +6,14 @@ export * as model from '../src/generated/omloom/v1/workspace';
 export { AssetKind, RelationKind, NullValue, OperationState, EffectOutcome } from '../src/generated/omloom/v1/contracts';
 export type { Field, AssetRef, Relation } from '../src/generated/omloom/v1/contracts';
 const transport = new GrpcWebFetchTransport({ baseUrl: location.origin, format: 'binary' });
-async function page(command: Request['command'], working?: WorkingContext): Promise<Reply['result']> {
+async function page(command: Request['command'], working?: WorkingContext, abort?: AbortSignal): Promise<Reply['result']> {
   const method = Workspace.methods[0];
   if (!method) throw Error('Workspace service metadata is missing');
-  const { response } = await transport.unary<Request, Reply>(method, Request.create({ command, working }), transport.mergeOptions({ timeout: 15_000 }));
+  const { response } = await transport.unary<Request, Reply>(method, Request.create({ command, working }), transport.mergeOptions({ timeout: 15_000, abort }));
   return response.result;
 }
-export async function call(command: Request['command'], working?: WorkingContext): Promise<Reply['result']> {
-  const response = await page(command, working);
+export async function call(command: Request['command'], working?: WorkingContext, abort?: AbortSignal): Promise<Reply['result']> {
+  const response = await page(command, working, abort);
   if (command.oneofKind !== 'evaluateRequirements' || command.evaluateRequirements.cursor !== undefined || response.oneofKind !== 'requirementEvaluation') return response;
   const evaluation = response.requirementEvaluation;
   // Publish only complete evidence. The server rejects continuations when

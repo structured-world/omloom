@@ -91,6 +91,19 @@ message Query {
   // Exact issuer-qualified effective responsibility filter, applied before totals
   // and pagination. Only a permitted facet can contribute a matching resource.
   optional ResponsibilityFilter responsibility = 16;
+  // Independent location selector and optional current Network projection.
+  optional NetworkSelection network = 18;
+}
+message NetworkSelection {
+  // Explicit permitted site roots, intersected with the independent resource
+  // selection. Empty includes every location, including unknown location.
+  repeated omloom.v1.AssetRef sites = 1;
+  // Request typed edges within this page of the Network view.
+  bool include_topology = 2;
+  // Explicit Network presentation preferences. Used only by saved definitions.
+  optional NetworkLayout layout = 3;
+  // Select resources without a known permitted site. Mutually exclusive with sites.
+  bool unplaced = 4;
 }
 message ResponsibilityFilter {
   // Independent owner/operator facet selected by the user; never a permission selector.
@@ -504,6 +517,24 @@ message Page {
   uint64 revision = 4;
   // Bounded authorized owner/address hints for this page only, absent unless requested.
   repeated ItemContext contexts = 5;
+  // Current authorized edges between emitted nodes, present only when requested.
+  optional NetworkTopology topology = 6;
+}
+message NetworkTopology {
+  // Permitted typed links, with independent identities for parallel links.
+  repeated NetworkLink edges = 1;
+  // True when the page has more permitted internal edges than the drawing limit.
+  bool more_edges = 2;
+}
+message NetworkLink {
+  // Stable identity of the recorded relation, used to distinguish parallel links.
+  string relation_id = 1;
+  // Permitted source incarnation on this page, as recorded by the relationship.
+  omloom.v1.AssetRef from = 2;
+  // Permitted destination incarnation on this page, as recorded by the relationship.
+  omloom.v1.AssetRef to = 3;
+  // Type of recorded evidence, which does not imply packet reachability.
+  omloom.v1.RelationKind kind = 4;
 }
 message OwnerContext {
   // Current authorized owner identity; never a fabricated unknown resource.
@@ -933,6 +964,20 @@ message SavedView {
   repeated string audiences = 6;
   // Explicit team editors, constrained to the publication audience.
   repeated string editors = 7;
+}
+message NetworkLayout {
+  // Explicit table preference. Omission uses the topology default.
+  bool table = 1;
+  // User-arranged positions, at most 64, for exact permitted incarnations.
+  repeated NetworkPin pins = 2;
+}
+message NetworkPin {
+  // Exact resource positioned by the user, reauthorized when opening a view.
+  omloom.v1.AssetRef target = 1;
+  // Horizontal offset from automatic placement, in diagram units, ±4096.
+  sint32 x = 2;
+  // Vertical offset from automatic placement, in diagram units, ±4096.
+  sint32 y = 3;
 }
 message SaveView {
   // Definition the user edited; server ignores/rejects caller-supplied owner changes.
