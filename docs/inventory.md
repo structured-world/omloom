@@ -155,7 +155,11 @@ conditions and opens the next eligible row. Each answer retains its own checked
 revision and time; refreshing one row does not relabel older answers. Confirmed corrections survive
 another row's conflict. **Defer this row and continue** retains unfinished input
 within the open review. Rechecking a conflicting or uncertain write does not
-discard its draft, claim success or advance automatically. **Import CSV and
+discard its draft, claim success or advance automatically. If a partial check
+loses access, the review hides cached results and checks the same selection again.
+It removes drafts for unavailable rows and restores allowed rows with their
+input. If the full check cannot complete, **Refresh checks** retries it.
+**Import CSV and
 return** uses the ordinary source mappings and reviewed importer, then rechecks
 the original selected conditions. It does not match arbitrary CSV names to
 selected devices or extend the selection with newly imported records.

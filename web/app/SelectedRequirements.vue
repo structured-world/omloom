@@ -20,6 +20,7 @@ type Draft = { id: string; item: model.Item; field: string; question: string };
 const drafts = ref<Draft[]>([]); const active = ref<string>(); const writing = ref(false);
 const deferred = ref(new Set<string>());
 const unavailable = ref(new Set<string>());
+const suspended = ref(false);
 const heading = ref<HTMLElement>();
 let generation = 0; let disposed = false;
 onBeforeUnmount(() => { disposed = true; generation++; });
@@ -47,7 +48,7 @@ function checkedAt(condition: model.FieldRequirement) {
   if (answer) return `revision ${answer.revision}, ${new Date(Number(answer.evaluatedAtMs)).toLocaleString()}`;
 }
 function editable(row: typeof rows.value[number]) {
-  return !restricted(row) && (drafts.value.some(draft => draft.id === row.id) || row.conditions.some(c => result(c)?.resolutions.includes(model.RequirementResolution.RECORD_FACT)));
+  return !suspended.value && !restricted(row) && (drafts.value.some(draft => draft.id === row.id) || row.conditions.some(c => result(c)?.resolutions.includes(model.RequirementResolution.RECORD_FACT)));
 }
 function current(row: typeof rows.value[number]) { return result(row.conditions[0]!)?.evidence ?? []; }
 function restricted(row: typeof rows.value[number]) { return row.conditions.some(c => (unavailable.value.size > 0 && unavailable.value.has(identity(c))) || result(c)?.reason === model.RequirementReason.RESTRICTED); }
@@ -61,7 +62,9 @@ function discardRestrictedDrafts() {
 function mismatch(row: typeof rows.value[number]) { return row.conditions.some(c => result(c)?.reason === model.RequirementReason.MISMATCH); }
 function name(row: typeof rows.value[number]) { return resourceName(row.item) || `Device (${row.target.assetId.slice(-8)})`; }
 async function evaluate(selected: model.FieldRequirement[]) {
+  if (suspended.value) selected = conditions.value;
   if (!selected.length) return;
+  const fullReview = selected.length === conditions.value.length;
   const turn = ++generation; busy.value = true; error.value = '';
   // Invalidate affected answers first, so an old success cannot survive an unsuccessful refresh.
   const next = new Map(answers.value); for (const condition of selected) next.delete(identity(condition)); answers.value = next;
@@ -83,12 +86,24 @@ async function evaluate(selected: model.FieldRequirement[]) {
     }
     // Revocation removes protected values and retained drafts, not just their edit buttons.
     discardRestrictedDrafts();
+    suspended.value = false;
   } catch (e) { if (!disposed && turn === generation) {
     error.value = String(e);
     const code = e instanceof Error && 'code' in e ? e.code : undefined;
     if (code === 'PERMISSION_DENIED' || code === 'NOT_FOUND') {
+      if (!fullReview) {
+        // A denied root can invalidate the whole context before any leaf result arrives.
+        // Keep drafts out of view until the original selection is checked again.
+        suspended.value = true;
+        answers.value = new Map();
+        notice.value = '';
+        revision.value = undefined;
+        await evaluate(conditions.value);
+        return;
+      }
       unavailable.value = new Set([...unavailable.value, ...selected.map(identity)]);
       discardRestrictedDrafts();
+      suspended.value = false;
     }
   } }
   finally { if (!disposed && turn === generation) busy.value = false; }
@@ -158,11 +173,12 @@ onMounted(async () => {
 <section class="selected-requirements">
 <h3 ref="heading" tabindex="-1">{{ items.length }} selected devices</h3>
 <p>The selection stays fixed in this review. Missing facts may remain unresolved. Correct a value only when the recorded fact is wrong.</p>
-<RequirementQuestion v-if="adding" :kind="AssetKind.DEVICE" :busy="busy" :disabled="writing || !!active" @check="check" />
-<div class="row"><button v-if="conditions.length && !adding" :disabled="busy || writing || !!active" @click="adding = true">Add another condition</button><button v-if="conditions.length" :disabled="busy || writing" @click="evaluate(conditions)">Refresh checks</button><button :disabled="busy || writing || !!active" @click="importing = true">Import CSV and return</button></div>
+<RequirementQuestion v-if="adding" :kind="AssetKind.DEVICE" :busy="busy" :disabled="suspended || writing || !!active" @check="check" />
+<div class="row"><button v-if="conditions.length && !adding" :disabled="suspended || busy || writing || !!active" @click="adding = true">Add another condition</button><button v-if="conditions.length" :disabled="busy || writing" @click="evaluate(conditions)">Refresh checks</button><button :disabled="suspended || busy || writing || !!active" @click="importing = true">Import CSV and return</button></div>
 <p v-if="notice" role="status">{{ notice }}</p><p v-if="error" role="alert">{{ error }}</p><p v-if="busy" role="status">Checking selected facts…</p>
 <p v-if="revision !== undefined">Last check used inventory revision {{ revision.toString() }}. Results are not saved.</p>
-<ol class="fact-review-list">
+<p v-if="suspended && !busy" role="status">Access to this review could not be verified. Refresh checks to continue.</p>
+<ol v-if="!suspended" class="fact-review-list">
 <li v-for="row in rows" :key="row.id" class="fact-review-row" :class="{ 'is-current': active === row.id }">
 <h4>{{ restricted(row) ? 'Unavailable device fact' : name(row) }} <small v-if="!restricted(row)">{{ row.field.replaceAll('_', ' ') }}</small></h4>
 <template v-if="restricted(row)"><p>This fact is unavailable.</p></template>
@@ -175,8 +191,8 @@ onMounted(async () => {
 </li>
 </ol>
 <template v-for="draft in drafts" :key="draft.id">
-<section v-show="active === draft.id" class="fact-review-editor" aria-label="Selected fact editor">
-<AssetEditor inline :inactive="active !== draft.id" :item="draft.item" :definitions="definitions" :field-mask="[draft.field]" :question="draft.question" :working="{ ...working, focus: draft.item.target }" :view="model.View.HARDWARE" save-next @pending="writing = $event" @saved="finish(draft.id, true)" @recheck="recheck(draft.id, $event)" @close="closeEditor(draft.id)" />
+<section v-show="!suspended && active === draft.id" class="fact-review-editor" aria-label="Selected fact editor">
+<AssetEditor inline :inactive="suspended || active !== draft.id" :item="draft.item" :definitions="definitions" :field-mask="[draft.field]" :question="draft.question" :working="{ ...working, focus: draft.item.target }" :view="model.View.HARDWARE" save-next @pending="writing = $event" @saved="finish(draft.id, true)" @recheck="recheck(draft.id, $event)" @close="closeEditor(draft.id)" />
 <button type="button" :disabled="writing || busy" @click="defer">Defer this row and continue</button>
 </section>
 </template>

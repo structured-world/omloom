@@ -138,10 +138,11 @@ test('an explicit empty description differs from clear and another value', async
   });
 });
 
-for (const failure of ['scope', 'evidence-change', 'unavailable']) test(`refresh handles ${failure} without confusing revocation and retry`, async ({ page }) => {
+for (const failure of ['scope', 'evidence-change', 'unavailable', 'partial-scope', 'partial-recovered', 'partial-unavailable']) test(`refresh handles ${failure} without confusing revocation and retry`, async ({ page }) => {
   // Actual scope/continuation failures and a transport outage have different draft consequences.
   await withFieldHost(async url => {
     const { m, rpc, dialog } = await setup(page, url, 390, 3);
+    const other = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Outside context' } }] }) })).mutation.targets[0];
     await question(dialog, m);
     await row(dialog, 1).getByRole('button', { name: 'Clarify this fact', exact: true }).click();
     await fill(dialog.getByRole('region', { name: 'Selected fact editor' }), '16');
@@ -150,20 +151,50 @@ for (const failure of ['scope', 'evidence-change', 'unavailable']) test(`refresh
     await fill(dialog.getByRole('region', { name: 'Selected fact editor' }), '8');
     await dialog.getByRole('button', { name: 'Defer this row and continue', exact: true }).click();
     await fill(dialog.getByRole('region', { name: 'Selected fact editor' }), '12');
-    const other = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Outside context' } }] }) })).mutation.targets[0];
+    const partial = failure.startsWith('partial-');
+    const checks = [];
     await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
       const request = decode(m, route);
       if (request.command.oneofKind !== 'evaluateRequirements') return route.continue();
+      const query = request.command.evaluateRequirements;
+      checks.push(query.nodes.length - 1);
       if (failure === 'unavailable') return route.abort('connectionreset');
-      if (failure === 'scope') request.working = m.WorkingContext.create({ roots: [other], focus: other });
-      else request.command.evaluateRequirements.cursor = '0'.repeat(64) + ':1';
+      if (failure === 'partial-unavailable' && checks.length === 2) return route.abort('connectionreset');
+      if (failure === 'scope' || failure === 'partial-scope' || (partial && checks.length === 1)) {
+        request.working = m.WorkingContext.create({ roots: [other], focus: other });
+      } else if (failure === 'partial-recovered') {
+        query.nodes[2].expression.field.target.incarnation = other.incarnation;
+      } else if (failure === 'evidence-change') {
+        query.cursor = '0'.repeat(64) + ':1';
+      }
       const bytes = m.Request.toBinary(request); const frame = Buffer.alloc(bytes.length + 5);
       frame.writeUInt32BE(bytes.length, 1); frame.set(bytes, 5);
       await route.continue({ postData: frame });
     });
-    await dialog.getByRole('button', { name: 'Refresh checks', exact: true }).click();
+    if (partial) await dialog.getByRole('button', { name: 'Save and next', exact: true }).click();
+    else await dialog.getByRole('button', { name: 'Refresh checks', exact: true }).click();
+    if (partial) {
+      await expect.poll(() => checks).toEqual([1, 3]);
+      await expect(dialog.getByText('Checking selected facts…', { exact: true })).toBeHidden();
+    }
+    if (failure === 'partial-recovered' || failure === 'partial-unavailable') {
+      if (failure === 'partial-unavailable') {
+        await expect(dialog.getByRole('alert')).toBeVisible();
+        await expect(dialog.locator('.fact-review-row')).toHaveCount(0);
+        await expect(dialog.getByText('Access to this review could not be verified. Refresh checks to continue.', { exact: true })).toBeVisible();
+        await expect(dialog.getByRole('region', { name: 'Selected fact editor' })).toHaveCount(0);
+        await expect(dialog.getByRole('button', { name: 'Resume saved input', exact: true })).toHaveCount(0);
+        await dialog.getByRole('button', { name: 'Refresh checks', exact: true }).click();
+      } else {
+        await expect(dialog.getByRole('heading', { name: 'Unavailable device fact', exact: true })).toHaveCount(1);
+      }
+      await expect(row(dialog, 1).locator('.fact-current')).toContainText('16');
+      await row(dialog, 2).getByRole('button', { name: 'Resume saved input', exact: true }).click();
+      await expect(dialog.getByRole('region', { name: 'Selected fact editor' }).getByLabel('Exact drive bays', { exact: true })).toHaveValue('8');
+      return;
+    }
     await expect(dialog.getByRole('alert')).toBeVisible();
-    if (failure === 'scope') {
+    if (failure === 'scope' || failure === 'partial-scope') {
       await expect(dialog.getByRole('region', { name: 'Selected fact editor', includeHidden: true })).toHaveCount(0);
       await expect(dialog.getByRole('heading', { name: 'Unavailable device fact', exact: true })).toHaveCount(3);
       await expect(dialog.getByRole('button', { name: 'Resume saved input', exact: true })).toHaveCount(0);
