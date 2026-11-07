@@ -34,7 +34,11 @@ async function evaluate(query:model.EvaluateRequirements,restoreFocus=false){
     if(response.oneofKind!=='requirementEvaluation')throw Error('Requirement result unavailable.');
     result.value=response.requirementEvaluation;
     if(restoreFocus){await nextTick();resultHeading.value?.focus();}
-  }catch(e){if(!disposed&&turn===generation)error.value=String(e);}
+  }catch(e){if(!disposed&&turn===generation){
+    error.value=String(e);
+    const code=e instanceof Error&&'code' in e?e.code:undefined;
+    if(code==='PERMISSION_DENIED'||code==='NOT_FOUND')refinement.value=undefined;
+  }}
   finally{if(!disposed&&turn===generation)busy.value=false;}
 }
 async function clarify(entry:model.RequirementResult){
@@ -56,9 +60,9 @@ async function clarify(entry:model.RequirementResult){
   finally{if(!disposed&&turn===generation)busy.value=false;}
 }
 async function closeRefinement(){refinement.value=undefined;await nextTick();if(returnFocus?.isConnected)returnFocus.focus();else checkButton.value?.focusCheck();}
-async function recheck(saved=false){
+async function recheck(saved=false,retainInput=false){
   const query=question.value;const context=contextKey.value;
-  refinement.value=undefined;
+  if(!retainInput)refinement.value=undefined;
   if(saved)saveNotice.value='Fact saved. The separate check below uses current recorded evidence.';
   if(!query)return;
   if(saved&&props.refresh){
@@ -104,6 +108,6 @@ async function check(condition:Omit<model.FieldRequirement,'target'>,label:strin
 <ul v-if="entry.evidence.length"><li v-for="evidence in entry.evidence" :key="evidence.source">{{evidence.observedAtMs===undefined?'Accepted authority':'Observation source'}}: <span class="mono">{{evidence.source}}</span><template v-if="evidence.observedAtMs!==undefined"> · {{new Date(Number(evidence.observedAtMs)).toLocaleString()}}</template><template v-if="evidence.validUntilMs!==undefined"> · valid until {{new Date(Number(evidence.validUntilMs)).toLocaleString()}}</template></li></ul>
 </template>
 </section>
-<AssetEditor v-if="refinement" :item="refinement.item" :definitions="[]" :field-mask="[refinement.field]" :question="refinement.question" :working="working" :view="view ?? model.View.OVERVIEW" @close="closeRefinement" @saved="recheck(true)" @recheck="recheck()" />
+<AssetEditor v-if="refinement" :item="refinement.item" :definitions="[]" :field-mask="[refinement.field]" :question="refinement.question" :working="working" :view="view ?? model.View.OVERVIEW" @close="closeRefinement" @saved="recheck(true)" @recheck="recheck(false,$event)" />
 </details>
 </template>

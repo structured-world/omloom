@@ -3,6 +3,7 @@ use super::*;
 use crate::requirements::{self as core, knowledge as k};
 mod binding;
 mod fields;
+mod pages;
 mod power;
 
 impl k::Alternatives for wire::EquipmentAlternatives {
@@ -305,12 +306,17 @@ impl Store {
     pub(super) fn workspace_requirements(
         &self,
         context: &Context,
-        request: api::EvaluateRequirements,
+        mut request: api::EvaluateRequirements,
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<api::Reply> {
         let tx = self.begin()?;
-        let evaluation = tx.evaluate_requirements(context, request, working, now)?;
+        let cursor = request.cursor.take();
+        if cursor.as_ref().is_some_and(|c| c.len() > 70) {
+            return Err(Error::Invalid);
+        }
+        let evaluation = tx.evaluate_requirements(context, &request, working, now)?;
+        let evaluation = pages::page(evaluation, &request, working, cursor.as_deref())?;
         tx.commit()?;
         Ok(reply(api::reply::Result::RequirementEvaluation(evaluation)))
     }
@@ -320,11 +326,11 @@ impl Tx<'_> {
     pub(super) fn evaluate_requirements(
         &self,
         context: &Context,
-        request: api::EvaluateRequirements,
+        request: &api::EvaluateRequirements,
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<api::RequirementEvaluation> {
-        self.evaluate_requirements_in_phase(context, request, working, now, core::Phase::Current)
+        self.requirement_evaluation(context, request, working, now, Some(core::Phase::Current))
     }
     pub(super) fn evaluate_requirements_in_phase(
         &self,
@@ -334,7 +340,7 @@ impl Tx<'_> {
         now: u64,
         phase: core::Phase,
     ) -> Result<api::RequirementEvaluation> {
-        self.requirement_evaluation(context, request, working, now, Some(phase))
+        self.requirement_evaluation(context, &request, working, now, Some(phase))
     }
     pub(super) fn validate_requirement_graph(
         &self,
@@ -342,7 +348,7 @@ impl Tx<'_> {
         request: api::EvaluateRequirements,
         working: &api::WorkingContext,
     ) -> Result<()> {
-        let result = self.requirement_evaluation(context, request, working, 0, None)?;
+        let result = self.requirement_evaluation(context, &request, working, 0, None)?;
         if result.reason == api::RequirementReason::Cycle as i32 {
             return Err(Error::Invalid);
         }
@@ -351,12 +357,13 @@ impl Tx<'_> {
     fn requirement_evaluation(
         &self,
         context: &Context,
-        request: api::EvaluateRequirements,
+        request: &api::EvaluateRequirements,
         working: &api::WorkingContext,
         now: u64,
         phase: Option<core::Phase>,
     ) -> Result<api::RequirementEvaluation> {
-        if request.nodes.is_empty()
+        if request.cursor.is_some()
+            || request.nodes.is_empty()
             || request.nodes.len() > core::MAX_NODES
             || request.root as usize >= request.nodes.len()
         {
@@ -511,7 +518,7 @@ impl Tx<'_> {
                 }
             }
             let inputs = if phase.is_some() {
-                fields::Inputs::load(tx, context, &request, &results)?
+                fields::Inputs::load(tx, context, request, &results)?
             } else {
                 fields::Inputs::default()
             };
@@ -587,6 +594,7 @@ impl Tx<'_> {
             state,
             reason,
             results: output,
+            next: None,
         };
         Ok(evaluation)
     }
@@ -711,7 +719,8 @@ impl Tx<'_> {
         };
         let mut result = core::Decision::unknown(core::Reason::Missing);
         let mut known = None;
-        let mut current_fields = Vec::with_capacity(rows.len());
+        let mut conflict = false;
+        let mut current_sources = Vec::with_capacity(rows.len());
         for row in rows {
             let (source, revision, at, until, scan_id) = if layer == "intent" {
                 (
@@ -739,14 +748,19 @@ impl Tx<'_> {
                 )
             };
             let actual = inventory::read_field(row)?;
+            let source_index = response.evidence.len();
             response.evidence.push(api::RequirementEvidence {
                 source,
                 revision,
                 observed_at_ms: at,
                 valid_until_ms: until,
                 scan_id,
-                value: Some(actual.clone()),
+                value: Some(actual),
             });
+            // Later sources cannot clear a conflict, but their permitted values still belong in the review.
+            if conflict {
+                continue;
+            }
             let required = core::Requirement {
                 subject: subject(condition.target.as_ref().ok_or(Error::Invalid)?),
                 semantic: &expected.name,
@@ -790,11 +804,15 @@ impl Tx<'_> {
                 }
                 continue;
             }
-            let current = compare(&actual, expected, condition.comparison)?;
-            current_fields.push(actual);
+            let actual = response.evidence[source_index]
+                .value
+                .as_ref()
+                .expect("source value was just appended");
+            let current = compare(actual, expected, condition.comparison)?;
+            current_sources.push(source_index);
             if current.state != core::State::Unknown {
                 if known.is_some_and(|old| old != current.state) {
-                    return Ok(core::Decision::unknown(core::Reason::Conflict));
+                    conflict = true;
                 }
                 known = Some(current.state);
                 result = current;
@@ -802,10 +820,23 @@ impl Tx<'_> {
                 result = current;
             }
             if current.reason == core::Reason::Conflict {
-                return Ok(current);
+                conflict = true;
             }
         }
-        let claims: Vec<_> = current_fields.iter().map(claim).collect();
+        if conflict {
+            return Ok(core::Decision::unknown(core::Reason::Conflict));
+        }
+        let claims: Vec<_> = current_sources
+            .iter()
+            .map(|&i| {
+                claim(
+                    response.evidence[i]
+                        .value
+                        .as_ref()
+                        .expect("current source has a value"),
+                )
+            })
+            .collect();
         let consistency = k::consistent(&claims);
         if consistency.state != core::State::Satisfied {
             return Ok(consistency);

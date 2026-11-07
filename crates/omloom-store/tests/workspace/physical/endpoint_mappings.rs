@@ -234,6 +234,7 @@ fn endpoint_mapping_is_bounded_persistent_and_does_not_rewire() -> TestResult {
     install_component(&store, &actor, position.clone(), old.clone())?;
     let previous = binding(&store, &old)?;
     let check = api::EvaluateRequirements {
+        cursor: None,
         anchor: Some(old.clone()),
         nodes: vec![api::RequirementNode {
             expression: Some(api::requirement_node::Expression::Binding(

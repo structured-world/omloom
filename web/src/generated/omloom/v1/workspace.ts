@@ -4023,6 +4023,14 @@ export interface EvaluateRequirements {
      * @generated from protobuf field: uint32 root = 3
      */
     root: number;
+    /**
+     * Opaque continuation from RequirementEvaluation.next, with the identical
+     * question and working context. Not an authority token. Absent on first read
+     * and in stored plan checks. Changed evidence or rights invalidate continuation.
+     *
+     * @generated from protobuf field: optional string cursor = 4
+     */
+    cursor?: string;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.RequirementEvidence
@@ -4154,6 +4162,14 @@ export interface RequirementEvaluation {
      * @generated from protobuf field: repeated omloom.workspace.v1.RequirementResult results = 5
      */
     results: RequirementResult[];
+    /**
+     * Server continuation for remaining evidence, absent when complete. Every
+     * page repeats the same node decisions; combine evidence only after all pages
+     * succeed. A stale continuation requires a fresh evaluation, not partial display.
+     *
+     * @generated from protobuf field: optional string next = 6
+     */
+    next?: string;
 }
 /**
  * Half-open physical extent in integer micrometres in its owner's coordinates.
@@ -9598,7 +9614,8 @@ class EvaluateRequirements$Type extends MessageType<EvaluateRequirements> {
         super("omloom.workspace.v1.EvaluateRequirements", [
             { no: 1, name: "anchor", kind: "message", T: () => AssetRef },
             { no: 2, name: "nodes", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => RequirementNode },
-            { no: 3, name: "root", kind: "scalar", T: 13 /*ScalarType.UINT32*/ }
+            { no: 3, name: "root", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 4, name: "cursor", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
         ]);
     }
 }
@@ -9650,7 +9667,8 @@ class RequirementEvaluation$Type extends MessageType<RequirementEvaluation> {
             { no: 2, name: "evaluated_at_ms", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 3, name: "state", kind: "enum", T: () => ["omloom.workspace.v1.RequirementState", RequirementState, "REQUIREMENT_STATE_"] },
             { no: 4, name: "reason", kind: "enum", T: () => ["omloom.workspace.v1.RequirementReason", RequirementReason, "REQUIREMENT_REASON_"] },
-            { no: 5, name: "results", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => RequirementResult }
+            { no: 5, name: "results", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => RequirementResult },
+            { no: 6, name: "next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
         ]);
     }
 }

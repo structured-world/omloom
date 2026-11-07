@@ -79,6 +79,7 @@ fn evaluate(
         store,
         actor,
         Command::EvaluateRequirements(api::EvaluateRequirements {
+            cursor: None,
             anchor: sources.first().cloned(),
             nodes: vec![api::RequirementNode {
                 expression: Some(api::requirement_node::Expression::PowerPaths(
@@ -293,6 +294,7 @@ fn assert_recorded_power_postcondition(shared_supply: bool) -> TestResult {
     let mut plan = draft(&store, &actor, item, rack.clone())?;
     plan.steps[0].control = Some(api::PlanControl {
         check: Some(api::EvaluateRequirements {
+            cursor: None,
             anchor: Some(rack),
             nodes: vec![api::RequirementNode {
                 expression: Some(api::requirement_node::Expression::PowerPaths(
@@ -362,6 +364,7 @@ fn power_postcondition_uses_the_common_persisted_plan() -> TestResult {
     let b = create(&store, &actor, K::PowerFeed, "Unqualified feed B")?;
     let mut plan = draft(&store, &actor, item, rack.clone())?;
     let check = api::EvaluateRequirements {
+        cursor: None,
         anchor: Some(rack),
         nodes: vec![api::RequirementNode {
             expression: Some(api::requirement_node::Expression::PowerPaths(

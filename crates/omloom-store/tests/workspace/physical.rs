@@ -1345,6 +1345,7 @@ fn plan_steps_recheck_shared_requirements_before_advancing() -> TestResult {
     plan.steps[0].control = Some(api::PlanControl {
         after: vec![],
         check: Some(api::EvaluateRequirements {
+            cursor: None,
             anchor: Some(a.clone()),
             root: 0,
             nodes: vec![api::RequirementNode {
@@ -1491,6 +1492,7 @@ fn postcondition_does_not_relabel_an_old_observation_as_verification() -> TestRe
     )?;
     let mut plan = draft(&store, &actor, item.clone(), rack)?;
     let request = api::EvaluateRequirements {
+        cursor: None,
         anchor: Some(item.clone()),
         nodes: vec![api::RequirementNode {
             expression: Some(api::requirement_node::Expression::Field(
@@ -1549,6 +1551,7 @@ fn unavailable_postcondition_does_not_discard_reported_work() -> TestResult {
     plan.steps[0].control = Some(api::PlanControl {
         after: vec![],
         check: Some(api::EvaluateRequirements {
+            cursor: None,
             anchor: Some(item.clone()),
             root: 0,
             nodes: vec![api::RequirementNode {

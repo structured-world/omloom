@@ -112,8 +112,107 @@ test('a conflicting row retains input while independent devices continue', async
     await expect(resumed.getByRole('region', { name: 'Review fact change' })).toContainText('Currently recorded drive bays: 9');
     await expect(resumed.getByLabel('Exact drive bays', { exact: true })).toHaveValue('12');
     await expect(resumed.getByRole('button', { name: 'Save and next', exact: true })).toBeEnabled();
+    await resumed.getByRole('button', { name: 'Recheck without saving', exact: true }).click();
+    await expect(resumed.getByLabel('Exact drive bays', { exact: true })).toHaveValue('12');
+    await expect(resumed.getByRole('region', { name: 'Review fact change' })).toContainText('Review 02');
     await resumed.getByRole('button', { name: 'Save and next', exact: true }).click();
     await expect(row(dialog, 2).locator('.fact-conditions')).toContainText('satisfied');
+  });
+});
+
+test('an explicit empty description differs from clear and another value', async ({ page }) => {
+  // Empty is a real text condition; missing/cleared evidence cannot satisfy it.
+  await withFieldHost(async url => {
+    const { m, rpc, targets, dialog } = await setup(page, url, 390, 3);
+    for (const [i, value] of [[0, { oneofKind: 'text', text: '' }], [1, { oneofKind: 'clear', clear: m.NullValue.NULL_VALUE }]]) {
+      const item = (await rpc({ oneofKind: 'read', read: m.Read.create({ target: targets[i], acceptedField: 'description' }) })).detail.item;
+      await rpc({ oneofKind: 'write', write: m.Write.create({ target: targets[i], kind: m.AssetKind.DEVICE, expected: item.revision, changes: [{ name: 'description', value }] }) });
+    }
+    await question(dialog, m, 'description', '');
+    const rows = dialog.locator('.fact-review-row');
+    await expect(rows.nth(0).locator('.fact-current')).toContainText('(empty)');
+    await expect(rows.nth(0).locator('.fact-conditions')).toContainText('satisfied');
+    await expect(rows.nth(1).locator('.fact-conditions')).toContainText('unknown');
+    await expect(rows.nth(2).locator('.fact-conditions')).toContainText('failed');
+  });
+});
+
+for (const failure of ['scope', 'evidence-change', 'unavailable']) test(`refresh handles ${failure} without confusing revocation and retry`, async ({ page }) => {
+  // Actual scope/continuation failures and a transport outage have different draft consequences.
+  await withFieldHost(async url => {
+    const { m, rpc, dialog } = await setup(page, url, 390, 3);
+    await question(dialog, m);
+    await row(dialog, 1).getByRole('button', { name: 'Clarify this fact', exact: true }).click();
+    await fill(dialog.getByRole('region', { name: 'Selected fact editor' }), '16');
+    await dialog.getByRole('button', { name: 'Save and next', exact: true }).click();
+    await expect(dialog.getByText('Saved drive bays for Review 01. Checking the original conditions.', { exact: true })).toBeVisible();
+    await fill(dialog.getByRole('region', { name: 'Selected fact editor' }), '8');
+    await dialog.getByRole('button', { name: 'Defer this row and continue', exact: true }).click();
+    await fill(dialog.getByRole('region', { name: 'Selected fact editor' }), '12');
+    const other = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Outside context' } }] }) })).mutation.targets[0];
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      const request = decode(m, route);
+      if (request.command.oneofKind !== 'evaluateRequirements') return route.continue();
+      if (failure === 'unavailable') return route.abort('connectionreset');
+      if (failure === 'scope') request.working = m.WorkingContext.create({ roots: [other], focus: other });
+      else request.command.evaluateRequirements.cursor = '0'.repeat(64) + ':1';
+      const bytes = m.Request.toBinary(request); const frame = Buffer.alloc(bytes.length + 5);
+      frame.writeUInt32BE(bytes.length, 1); frame.set(bytes, 5);
+      await route.continue({ postData: frame });
+    });
+    await dialog.getByRole('button', { name: 'Refresh checks', exact: true }).click();
+    await expect(dialog.getByRole('alert')).toBeVisible();
+    if (failure === 'scope') {
+      await expect(dialog.getByRole('region', { name: 'Selected fact editor', includeHidden: true })).toHaveCount(0);
+      await expect(dialog.getByRole('heading', { name: 'Unavailable device fact', exact: true })).toHaveCount(3);
+      await expect(dialog.getByRole('button', { name: 'Resume saved input', exact: true })).toHaveCount(0);
+      await expect(dialog).not.toContainText('Review 01');
+    } else {
+      await expect(dialog.getByRole('region', { name: 'Selected fact editor' }).getByLabel('Exact drive bays', { exact: true })).toHaveValue('12');
+      await dialog.getByRole('region', { name: 'Selected fact editor' }).getByRole('button', { name: 'Cancel', exact: true }).click();
+      await row(dialog, 2).getByRole('button', { name: 'Resume saved input', exact: true }).click();
+      await expect(dialog.getByRole('region', { name: 'Selected fact editor' }).getByLabel('Exact drive bays', { exact: true })).toHaveValue('8');
+    }
+  });
+});
+
+for (const outcome of ['complete', 'lost']) test(`evidence pages are assembled atomically when ${outcome}`, async ({ page }) => {
+  // Exercise the browser's binary transport with split real evaluator replies.
+  // An incomplete second page must not publish the first page as a complete answer.
+  await withFieldHost(async url => {
+    const { m, dialog } = await setup(page, url, outcome === 'complete' ? 1440 : 390, 2);
+    const cursors = [];
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      const request = decode(m, route);
+      if (request.command.oneofKind !== 'evaluateRequirements') return route.continue();
+      const query = request.command.evaluateRequirements;
+      const cursor = query.cursor; cursors.push(cursor);
+      if (cursor && outcome === 'lost') return route.fulfill({ status: 500, body: 'Remaining evidence unavailable' });
+      query.cursor = undefined;
+      const input = m.Request.toBinary(request); const frame = Buffer.alloc(input.length + 5);
+      frame.writeUInt32BE(input.length, 1); frame.set(input, 5);
+      const response = await route.fetch({ postData: frame });
+      const body = await response.body(); const length = body.readUInt32BE(1);
+      const reply = m.Reply.fromBinary(body.subarray(5, 5 + length));
+      const evaluation = reply.result.requirementEvaluation;
+      evaluation.next = cursor ? undefined : 'next-source-page';
+      for (const node of evaluation.results) for (const evidence of node.evidence) evidence.source = cursor ? 'second-page' : 'first-page';
+      const output = m.Reply.toBinary(reply); const first = Buffer.alloc(output.length + 5);
+      first.writeUInt32BE(output.length, 1); first.set(output, 5);
+      await route.fulfill({ response, body: Buffer.concat([first, body.subarray(5 + length)]) });
+    });
+    await question(dialog, m, 'description', 'Ready');
+    expect(cursors).toEqual([undefined, 'next-source-page']);
+    if (outcome === 'complete') {
+      for (const row of await dialog.locator('.fact-review-row').all()) {
+        await expect(row.locator('.fact-current p')).toHaveCount(2);
+        await expect(row).toContainText('first-page'); await expect(row).toContainText('second-page');
+      }
+    } else {
+      await expect(dialog.getByRole('alert')).toBeVisible();
+      await expect(dialog.locator('.fact-current p')).toHaveCount(0);
+      await expect(dialog).not.toContainText('first-page');
+    }
   });
 });
 

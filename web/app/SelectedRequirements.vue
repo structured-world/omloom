@@ -19,6 +19,7 @@ const notice = ref(''); const revision = ref<bigint>();
 type Draft = { id: string; item: model.Item; field: string; question: string };
 const drafts = ref<Draft[]>([]); const active = ref<string>(); const writing = ref(false);
 const deferred = ref(new Set<string>());
+const unavailable = ref(new Set<string>());
 const heading = ref<HTMLElement>();
 let generation = 0; let disposed = false;
 onBeforeUnmount(() => { disposed = true; generation++; });
@@ -49,7 +50,14 @@ function editable(row: typeof rows.value[number]) {
   return !restricted(row) && (drafts.value.some(draft => draft.id === row.id) || row.conditions.some(c => result(c)?.resolutions.includes(model.RequirementResolution.RECORD_FACT)));
 }
 function current(row: typeof rows.value[number]) { return result(row.conditions[0]!)?.evidence ?? []; }
-function restricted(row: typeof rows.value[number]) { return row.conditions.some(c => result(c)?.reason === model.RequirementReason.RESTRICTED); }
+function restricted(row: typeof rows.value[number]) { return row.conditions.some(c => (unavailable.value.size > 0 && unavailable.value.has(identity(c))) || result(c)?.reason === model.RequirementReason.RESTRICTED); }
+function discardRestrictedDrafts() {
+  const denied = new Set(rows.value.filter(restricted).map(row => row.id));
+  if (denied.size) notice.value = '';
+  drafts.value = drafts.value.filter(draft => !denied.has(draft.id));
+  deferred.value = new Set([...deferred.value].filter(id => !denied.has(id)));
+  if (active.value && denied.has(active.value)) active.value = undefined;
+}
 function mismatch(row: typeof rows.value[number]) { return row.conditions.some(c => result(c)?.reason === model.RequirementReason.MISMATCH); }
 function name(row: typeof rows.value[number]) { return resourceName(row.item) || `Device (${row.target.assetId.slice(-8)})`; }
 async function evaluate(selected: model.FieldRequirement[]) {
@@ -70,11 +78,19 @@ async function evaluate(selected: model.FieldRequirement[]) {
       const condition = selected[entry.node]; if (condition) updated.set(identity(condition), { result: entry, revision: reply.requirementEvaluation.revision, evaluatedAtMs: reply.requirementEvaluation.evaluatedAtMs });
     }
     answers.value = updated; revision.value = reply.requirementEvaluation.revision;
+    if (unavailable.value.size) {
+      const available = new Set(unavailable.value); for (const condition of selected) available.delete(identity(condition)); unavailable.value = available;
+    }
     // Revocation removes protected values and retained drafts, not just their edit buttons.
-    const denied = new Set(rows.value.filter(row => row.conditions.some(c => result(c)?.reason === model.RequirementReason.RESTRICTED)).map(row => row.id));
-    drafts.value = drafts.value.filter(draft => !denied.has(draft.id));
-    if (active.value && denied.has(active.value)) active.value = undefined;
-  } catch (e) { if (!disposed && turn === generation) error.value = String(e); }
+    discardRestrictedDrafts();
+  } catch (e) { if (!disposed && turn === generation) {
+    error.value = String(e);
+    const code = e instanceof Error && 'code' in e ? e.code : undefined;
+    if (code === 'PERMISSION_DENIED' || code === 'NOT_FOUND') {
+      unavailable.value = new Set([...unavailable.value, ...selected.map(identity)]);
+      discardRestrictedDrafts();
+    }
+  } }
   finally { if (!disposed && turn === generation) busy.value = false; }
 }
 async function check(condition: Omit<model.FieldRequirement, 'target'>, label: string) {

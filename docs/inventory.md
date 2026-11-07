@@ -147,6 +147,8 @@ conditions fit in a review, with a shared group node within the evaluator's
 these conditions share one correction editor without merging their answers or
 source evidence. An existing device finding can enter the same review through
 **Review these findings**.
+An explicitly empty description is a text condition, distinct from missing or
+cleared evidence. Measurements and delegation choices still require a value.
 
 **Save and next** records only the selected accepted field, rechecks affected
 conditions and opens the next eligible row. Each answer retains its own checked
@@ -178,6 +180,15 @@ snapshots, history or access timestamps. A satisfied condition is neither an
 authorization grant nor an operation admission, live reachability test or
 physical-fit certificate. Production authentication and provider qualification
 remain separate from this fixture-based workspace.
+
+Large evaluations paginate their evidence within the 512 KiB reply ceiling.
+Follow `RequirementEvaluation.next` as `EvaluateRequirements.cursor` with the
+same question and working context. Every page rechecks current authority and
+content, including source values and freshness decisions. Changed evidence,
+permissions or context invalidate continuation. Combine evidence only after
+all pages succeed; the browser does this automatically and otherwise offers a
+fresh check. No stored snapshot or evaluation history is created. Ordinary
+responses that fit the ceiling need no continuation.
 
 ### Ownership and responsibility
 

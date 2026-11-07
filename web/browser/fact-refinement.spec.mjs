@@ -105,12 +105,14 @@ test('a lost Write response reads current fact without inventing a receipt or re
     await expect(dialog.getByRole('region', { name: 'Review fact change' })).toContainText('Known: 8 bays');
     await expect(dialog).toContainText('does not establish whether this attempt saved it');
     await dialog.getByRole('button', { name: 'Recheck without saving', exact: true }).click();
-    await expect(dialog).toBeHidden();
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByLabel('Exact drive bays', { exact: true })).toHaveValue('8');
     await expect(panel.getByRole('heading', { name: 'Requirement not satisfied', exact: true })).toBeVisible();
     expect(writes).toBe(1);
     const item = (await rpc({ oneofKind: 'read', read: m.Read.create({ target }) })).detail.item;
     expect(item.fields.find(f => f.name === 'drive_bays').value.equipment.assertion.quantity.lower).toBe(8n);
     await expect(panel).not.toContainText('Fact saved.');
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
   });
 });
 
@@ -133,6 +135,32 @@ test('a confirmed fact survives unavailable evaluation and retries only the chec
     fail = false;
     await panel.getByRole('button', { name: 'Retry check', exact: true }).click();
     await expect(panel.getByRole('heading', { name: 'Requirement not satisfied', exact: true })).toBeVisible();
+    expect(writes).toBe(1);
+  });
+});
+
+test('terminal recheck denial removes an uncertain single-fact editor', async ({ page }) => {
+  // Retention after a lost reply cannot preserve protected input after current context admission fails.
+  await withFieldHost(async url => {
+    const { m, rpc, panel } = await setup(page, url);
+    const other = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Outside context' } }] }) })).mutation.targets[0];
+    await panel.getByRole('button', { name: 'Clarify this fact', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Clarify recorded fact', exact: true });
+    await fillExact(dialog, '8'); let writes = 0;
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      const value = request(m, route);
+      if (value.command.oneofKind === 'write') { writes++; await route.fetch(); return route.abort('connectionreset'); }
+      if (value.command.oneofKind !== 'evaluateRequirements') return route.continue();
+      value.working = m.WorkingContext.create({ roots: [other], focus: other });
+      const bytes = m.Request.toBinary(value); const frame = Buffer.alloc(bytes.length + 5);
+      frame.writeUInt32BE(bytes.length, 1); frame.set(bytes, 5);
+      await route.continue({ postData: frame });
+    });
+    await dialog.getByRole('button', { name: 'Save and recheck', exact: true }).click();
+    await expect(dialog).toContainText('The write outcome is unknown.');
+    await dialog.getByRole('button', { name: 'Recheck without saving', exact: true }).click();
+    await expect(panel.getByRole('alert')).toBeVisible();
+    await expect(dialog).toHaveCount(0);
     expect(writes).toBe(1);
   });
 });

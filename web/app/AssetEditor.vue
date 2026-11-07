@@ -19,7 +19,8 @@ let entryFocus:Element|null=null;
 let focusPending=true;
 const reviewedItem = ref(props.item);
 const outcome = ref<'' | 'conflict' | 'uncertain' | 'reviewed' | 'denied'>('');
-const uncertain = ref(false);
+const unresolvedWrite = ref<'conflict' | 'uncertain'>();
+const uncertain = computed(() => unresolvedWrite.value === 'uncertain');
 let mounted = true;
 onBeforeUnmount(() => { mounted = false; });
 const editWorking = model.WorkingContext.create(props.working);
@@ -290,9 +291,9 @@ async function save(next = false) {
     error.value = String(e);
     if (focused.value && dispatched) {
       const code = e instanceof Error && 'code' in e ? e.code : undefined;
-      if (code === 'ABORTED' || code === 'FAILED_PRECONDITION') outcome.value = 'conflict';
+      if (code === 'ABORTED' || code === 'FAILED_PRECONDITION') { outcome.value = 'conflict'; if (!uncertain.value) unresolvedWrite.value = 'conflict'; }
       else if (code === 'PERMISSION_DENIED' || code === 'NOT_FOUND') { outcome.value = 'denied'; reviewedItem.value = undefined; actions.value = undefined; }
-      else if (!['INVALID_ARGUMENT', 'RESOURCE_EXHAUSTED'].includes(String(code))) { outcome.value = 'uncertain'; uncertain.value = true; }
+      else if (!['INVALID_ARGUMENT', 'RESOURCE_EXHAUSTED'].includes(String(code))) { outcome.value = 'uncertain'; unresolvedWrite.value = 'uncertain'; }
     }
   } finally { busy.value = false; }
 }
@@ -363,7 +364,7 @@ async function save(next = false) {
 <p v-if="addressReview && derivedBroadcast" class="hint">Calculated subnet broadcast: {{ derivedBroadcast }}. This is a display calculation, not a recorded endpoint setting.</p>
 <p v-else-if="addressReview?.address?.includes(':')" class="hint">IPv6 has no broadcast address.</p>
 <p v-else-if="addressReview?.prefixLength === 31 || addressReview?.prefixLength === 32" class="hint">This mask has no directed broadcast. A /31 may describe a point-to-point link.</p>
-<p v-if="error" role="alert">{{ error }}</p><footer><button type="button" :disabled="busy" @click="emit('close')">Cancel</button><button v-if="focused" type="button" :disabled="busy || preparing" @click="emit('recheck', uncertain || outcome === 'conflict')">Recheck without saving</button><button class="primary" :disabled="busy || preparing || placementBusy || (!!placementKind && !placementReady) || (!item && !choice) || (focused && ['conflict','uncertain','denied'].includes(outcome))">{{ busy ? known && !addressReview ? 'Preparing review…' : 'Saving…' : receipt ? 'Record received device' : focused ? saveNext ? 'Save and next' : 'Save and recheck' : known ? addressReview ? 'Save known address' : 'Review known address' : 'Save resource' }}</button><button v-if="receipt" type="button" :disabled="busy || preparing || !choice" @click="save(true)">Record and next</button></footer>
+<p v-if="error" role="alert">{{ error }}</p><footer><button type="button" :disabled="busy" @click="emit('close')">Cancel</button><button v-if="focused" type="button" :disabled="busy || preparing" @click="emit('recheck', unresolvedWrite !== undefined)">Recheck without saving</button><button class="primary" :disabled="busy || preparing || placementBusy || (!!placementKind && !placementReady) || (!item && !choice) || (focused && ['conflict','uncertain','denied'].includes(outcome))">{{ busy ? known && !addressReview ? 'Preparing review…' : 'Saving…' : receipt ? 'Record received device' : focused ? saveNext ? 'Save and next' : 'Save and recheck' : known ? addressReview ? 'Save known address' : 'Review known address' : 'Save resource' }}</button><button v-if="receipt" type="button" :disabled="busy || preparing || !choice" @click="save(true)">Record and next</button></footer>
 </form></component></template>
 <style scoped>
 .field-edit > .hint, .field-edit > .role-selector, .field-edit > textarea { grid-column:1/-1; }

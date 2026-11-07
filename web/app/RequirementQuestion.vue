@@ -11,6 +11,7 @@ const checkButton = ref<HTMLButtonElement>();
 defineExpose({ focusCheck: () => checkButton.value?.focus() });
 const units: Record<string, string> = { drive_bays: 'count', height: 'mm', width: 'mm', depth: 'mm', weight: 'g', power_rating: 'W' };
 const numeric = computed(() => field.value in units);
+const needsValue = computed(() => field.value !== 'description');
 const fields = computed(() => props.kind === AssetKind.PROVIDER_ACCOUNT ? ['delegation'] : [...equipmentFields, 'description']);
 function changed() {
   error.value = ''; emit('change');
@@ -19,6 +20,7 @@ function changed() {
 }
 function check() {
   error.value = '';
+  if (!field.value || (needsValue.value && !value.value)) return;
   try {
     let expected: Field['value'];
     if (numeric.value) {
@@ -44,8 +46,8 @@ function check() {
 <label>Required fact<select v-model="field" required><option disabled value="">Choose a fact</option><option v-for="name in fields" :key="name" :value="name">{{ name.replaceAll('_', ' ') }}</option></select></label>
 <label>Evidence layer<select v-model="layer"><option :value="model.RequirementLayer.ACCEPTED">Accepted configuration</option><option :value="model.RequirementLayer.OBSERVED">Dated observations</option></select></label>
 <label>Required comparison<select v-model="comparison"><option disabled :value="model.RequirementComparison.UNSPECIFIED">Choose a comparison</option><option v-if="!numeric || field === 'drive_bays'" :value="model.RequirementComparison.EQUAL">Equals</option><option v-if="numeric" :value="model.RequirementComparison.MINIMUM">At least</option><option v-if="numeric" :value="model.RequirementComparison.MAXIMUM">At most</option></select></label>
-<label>Required value<span v-if="numeric"> ({{ units[field] }})</span><select v-if="field === 'delegation'" v-model="value" required><option disabled value="">Select capability</option><option value="ACCOUNT_DELEGATION_SCOPED">Scoped delegation</option><option value="ACCOUNT_DELEGATION_OWNER_ONLY">Owner action</option></select><input v-else v-model="value" :inputmode="numeric ? 'decimal' : 'text'" maxlength="160" required /></label>
-<button ref="checkButton" type="submit" :disabled="!field || !value || comparison === model.RequirementComparison.UNSPECIFIED">{{ busy ? 'Checking…' : plan ? 'Use this postcondition' : 'Check requirement' }}</button>
+<label>Required value<span v-if="numeric"> ({{ units[field] }})</span><select v-if="field === 'delegation'" v-model="value" required><option disabled value="">Select capability</option><option value="ACCOUNT_DELEGATION_SCOPED">Scoped delegation</option><option value="ACCOUNT_DELEGATION_OWNER_ONLY">Owner action</option></select><input v-else v-model="value" :inputmode="numeric ? 'decimal' : 'text'" maxlength="160" :required="needsValue" /></label>
+<button ref="checkButton" type="submit" :disabled="!field || (needsValue && !value) || comparison === model.RequirementComparison.UNSPECIFIED">{{ busy ? 'Checking…' : plan ? 'Use this postcondition' : 'Check requirement' }}</button>
 </fieldset>
 <p v-if="error" role="alert">{{ error }}</p>
 </form>

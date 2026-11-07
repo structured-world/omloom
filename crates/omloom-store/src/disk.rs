@@ -103,7 +103,11 @@ pub struct Store {
     policy: Policy,
     #[cfg(feature = "diagnostics")]
     query_check: Option<fn(&Database, &str)>,
+    #[cfg(feature = "diagnostics")]
+    query_inputs_check: Option<QueryInputsCheck>,
 }
+#[cfg(feature = "diagnostics")]
+type QueryInputsCheck = fn(&str, Option<&HashMap<String, Value>>);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AssetSummary {
@@ -733,6 +737,8 @@ impl Store {
             policy,
             #[cfg(feature = "diagnostics")]
             query_check: None,
+            #[cfg(feature = "diagnostics")]
+            query_inputs_check: None,
         };
         if store.read(ROOT)?.is_none() {
             if previous.is_some() {
@@ -918,6 +924,11 @@ impl Store {
     pub fn set_diagnostic_query_check(&mut self, check: fn(&Database, &str)) {
         self.query_check = Some(check);
     }
+    /// Inspect borrowed bound inputs before execution; never copies or retains payloads.
+    #[cfg(feature = "diagnostics")]
+    pub fn set_diagnostic_query_inputs_check(&mut self, check: QueryInputsCheck) {
+        self.query_inputs_check = Some(check);
+    }
 }
 
 fn usage(root: &Properties) -> Result<Usage> {
@@ -968,6 +979,10 @@ impl Tx<'_> {
         } else {
             None
         };
+        #[cfg(feature = "diagnostics")]
+        if let Some(check) = self.store.query_inputs_check {
+            check(q, p.as_ref());
+        }
         let rows = self
             .store
             .db
