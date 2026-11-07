@@ -138,10 +138,10 @@ test('an explicit empty description differs from clear and another value', async
   });
 });
 
-for (const failure of ['scope', 'evidence-change', 'unavailable', 'partial-scope', 'partial-recovered', 'partial-unavailable']) test(`refresh handles ${failure} without confusing revocation and retry`, async ({ page }) => {
+for (const failure of ['scope', 'evidence-change', 'unavailable', 'partial-scope', 'partial-recovered', 'partial-unavailable', 'anchor']) test(`refresh handles ${failure} without confusing revocation and retry`, async ({ page }) => {
   // Actual scope/continuation failures and a transport outage have different draft consequences.
   await withFieldHost(async url => {
-    const { m, rpc, dialog } = await setup(page, url, 390, 3);
+    const { m, rpc, targets, dialog } = await setup(page, url, 390, 3);
     const other = (await rpc({ oneofKind: 'write', write: m.Write.create({ kind: m.AssetKind.DEVICE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Outside context' } }] }) })).mutation.targets[0];
     await question(dialog, m);
     await row(dialog, 1).getByRole('button', { name: 'Clarify this fact', exact: true }).click();
@@ -162,6 +162,9 @@ for (const failure of ['scope', 'evidence-change', 'unavailable', 'partial-scope
       if (failure === 'partial-unavailable' && checks.length === 2) return route.abort('connectionreset');
       if (failure === 'scope' || failure === 'partial-scope' || (partial && checks.length === 1)) {
         request.working = m.WorkingContext.create({ roots: [other], focus: other });
+      } else if (failure === 'anchor') {
+        if (query.anchor.assetId === targets[0].assetId) query.anchor.assetId = other.incarnation;
+        query.nodes[0].expression.field.target.assetId = other.incarnation;
       } else if (failure === 'partial-recovered') {
         query.nodes[2].expression.field.target.incarnation = other.incarnation;
       } else if (failure === 'evidence-change') {
@@ -174,8 +177,20 @@ for (const failure of ['scope', 'evidence-change', 'unavailable', 'partial-scope
     if (partial) await dialog.getByRole('button', { name: 'Save and next', exact: true }).click();
     else await dialog.getByRole('button', { name: 'Refresh checks', exact: true }).click();
     if (partial) {
-      await expect.poll(() => checks).toEqual([1, 3]);
+      await expect.poll(() => checks).toEqual(failure === 'partial-scope' ? [1, 3, 3, 3] : [1, 3]);
       await expect(dialog.getByText('Checking selected facts…', { exact: true })).toBeHidden();
+    }
+    if (failure === 'anchor') {
+      await expect(dialog.getByRole('heading', { name: 'Unavailable device fact', exact: true })).toHaveCount(1);
+      await expect(dialog.getByRole('region', { name: 'Selected fact editor' }).getByLabel('Exact drive bays', { exact: true })).toHaveValue('12');
+      expect(checks).toEqual([3, 3]);
+      await dialog.getByRole('button', { name: 'Refresh checks', exact: true }).click();
+      await expect(dialog.getByText('Checking selected facts…', { exact: true })).toBeHidden();
+      expect(checks).toEqual([3, 3, 3]);
+      await dialog.getByRole('region', { name: 'Selected fact editor' }).getByRole('button', { name: 'Cancel', exact: true }).click();
+      await row(dialog, 2).getByRole('button', { name: 'Resume saved input', exact: true }).click();
+      await expect(dialog.getByRole('region', { name: 'Selected fact editor' }).getByLabel('Exact drive bays', { exact: true })).toHaveValue('8');
+      return;
     }
     if (failure === 'partial-recovered' || failure === 'partial-unavailable') {
       if (failure === 'partial-unavailable') {
@@ -205,6 +220,44 @@ for (const failure of ['scope', 'evidence-change', 'unavailable', 'partial-scope
       await row(dialog, 2).getByRole('button', { name: 'Resume saved input', exact: true }).click();
       await expect(dialog.getByRole('region', { name: 'Selected fact editor' }).getByLabel('Exact drive bays', { exact: true })).toHaveValue('8');
     }
+  });
+});
+
+test('a restricted observed fact hides accepted evidence and drops its draft', async ({ page }) => {
+  // Both evidence layers share one field-read permission.
+  await withFieldHost(async url => {
+    const { m, rpc, targets, dialog } = await setup(page, url, 1440, 2);
+    const target = targets[1];
+    const item = (await rpc({ oneofKind: 'read', read: m.Read.create({ target, acceptedField: 'drive_bays' }) })).detail.item;
+    await rpc({ oneofKind: 'write', write: m.Write.create({ target, kind: m.AssetKind.DEVICE, expected: item.revision, changes: [{ name: 'drive_bays', value: { oneofKind: 'integer', integer: 7n } }] }) });
+    await question(dialog, m);
+    await expect(row(dialog, 2).locator('.fact-current')).toContainText('7');
+    await row(dialog, 2).getByRole('button', { name: 'Correct recorded fact', exact: true }).click();
+    await dialog.getByRole('region', { name: 'Selected fact editor' }).getByLabel('Known drive bays', { exact: true }).fill('13');
+    await dialog.getByRole('button', { name: 'Defer this row and continue', exact: true }).click();
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      const request = decode(m, route);
+      if (request.command.oneofKind !== 'evaluateRequirements') return route.continue();
+      const response = await route.fetch();
+      const body = await response.body(); const length = body.readUInt32BE(1);
+      const reply = m.Reply.fromBinary(body.subarray(5, 5 + length));
+      const evaluation = reply.result.requirementEvaluation;
+      const index = request.command.evaluateRequirements.nodes.findIndex(node =>
+        node.expression.oneofKind === 'field' && node.expression.field.target.assetId === target.assetId);
+      const denied = evaluation.results.find(entry => entry.node === index);
+      denied.reason = m.RequirementReason.RESTRICTED;
+      denied.evidence = []; denied.resolutions = [];
+      const output = m.Reply.toBinary(reply); const frame = Buffer.alloc(output.length + 5);
+      frame.writeUInt32BE(output.length, 1); frame.set(output, 5);
+      await route.fulfill({ response, body: Buffer.concat([frame, body.subarray(5 + length)]) });
+    });
+    await dialog.getByRole('button', { name: 'Add another condition', exact: true }).click();
+    await dialog.getByRole('combobox', { name: 'Evidence layer' }).selectOption(String(m.RequirementLayer.OBSERVED));
+    await question(dialog, m);
+    await expect(dialog.getByRole('heading', { name: 'Unavailable device fact', exact: true })).toHaveCount(2);
+    await expect(dialog.getByRole('region', { name: 'Selected fact editor', includeHidden: true })).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: 'Resume saved input', exact: true })).toHaveCount(0);
+    await expect(row(dialog, 1)).toHaveCount(2);
   });
 });
 

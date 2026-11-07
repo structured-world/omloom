@@ -19,13 +19,14 @@ const notice = ref(''); const revision = ref<bigint>();
 type Draft = { id: string; item: model.Item; field: string; question: string };
 const drafts = ref<Draft[]>([]); const active = ref<string>(); const writing = ref(false);
 const deferred = ref(new Set<string>());
-const unavailable = ref(new Set<string>());
+const deniedFields = ref(new Set<string>());
 const suspended = ref(false);
 const heading = ref<HTMLElement>();
-let generation = 0; let disposed = false;
+let generation = 0; let disposed = false; let reviewAnchor: string | undefined;
 onBeforeUnmount(() => { disposed = true; generation++; });
 function identity(condition: model.FieldRequirement) { return model.FieldRequirement.toJsonString(condition); }
-function factKey(condition: model.FieldRequirement) { return `${key(condition.target)}:${condition.expected?.name}:${condition.layer}`; }
+function fieldKey(target: AssetRef | undefined, field: string | undefined) { return `${key(target)}:${field}`; }
+function factKey(condition: model.FieldRequirement) { return `${fieldKey(condition.target, condition.expected?.name)}:${condition.layer}`; }
 function questionLabel(condition: model.FieldRequirement) {
   const expected = condition.expected;
   return `${expected?.name.replaceAll('_', ' ')} ${enumLabel(model.RequirementComparison, condition.comparison).toLowerCase()} ${display(expected)} (${enumLabel(model.RequirementLayer, condition.layer).toLowerCase()})`;
@@ -51,7 +52,7 @@ function editable(row: typeof rows.value[number]) {
   return !suspended.value && !restricted(row) && (drafts.value.some(draft => draft.id === row.id) || row.conditions.some(c => result(c)?.resolutions.includes(model.RequirementResolution.RECORD_FACT)));
 }
 function current(row: typeof rows.value[number]) { return result(row.conditions[0]!)?.evidence ?? []; }
-function restricted(row: typeof rows.value[number]) { return row.conditions.some(c => (unavailable.value.size > 0 && unavailable.value.has(identity(c))) || result(c)?.reason === model.RequirementReason.RESTRICTED); }
+function restricted(row: typeof rows.value[number]) { return deniedFields.value.has(fieldKey(row.target, row.field)); }
 function discardRestrictedDrafts() {
   const denied = new Set(rows.value.filter(restricted).map(row => row.id));
   if (denied.size) notice.value = '';
@@ -61,6 +62,37 @@ function discardRestrictedDrafts() {
 }
 function mismatch(row: typeof rows.value[number]) { return row.conditions.some(c => result(c)?.reason === model.RequirementReason.MISMATCH); }
 function name(row: typeof rows.value[number]) { return resourceName(row.item) || `Device (${row.target.assetId.slice(-8)})`; }
+function accessFailure(error: unknown) {
+  return error instanceof Error && 'code' in error && (error.code === 'PERMISSION_DENIED' || error.code === 'NOT_FOUND');
+}
+function suspendReview() {
+  suspended.value = true;
+  answers.value = new Map();
+  notice.value = '';
+  revision.value = undefined;
+}
+async function evaluateFromSelection(query: model.EvaluateRequirements, selected: model.FieldRequirement[], fullReview: boolean, turn: number) {
+  const anchors = fullReview ? new Map(selected.map(condition => [key(condition.target), condition.target])) : new Map();
+  const first = reviewAnchor ? anchors.get(reviewAnchor) ?? query.anchor : query.anchor;
+  anchors.delete(key(first));
+  const candidates = [first, ...anchors.values()];
+  for (const [index, anchor] of candidates.entries()) {
+    query.anchor = anchor;
+    try {
+      const reply = await call({ oneofKind: 'evaluateRequirements', evaluateRequirements: query }, working);
+      if (disposed || turn !== generation) return;
+      if (fullReview && reply.oneofKind === 'requirementEvaluation') reviewAnchor = key(anchor);
+      return reply;
+    } catch (error) {
+      if (disposed || turn !== generation) return;
+      if (!accessFailure(error)) throw error;
+      // An unavailable anchor and an invalid context both fail before leaf
+      // results. Keep evidence hidden and let the server admit each retry.
+      if (!suspended.value) suspendReview();
+      if (index === candidates.length - 1) throw error;
+    }
+  }
+}
 async function evaluate(selected: model.FieldRequirement[]) {
   if (suspended.value) selected = conditions.value;
   if (!selected.length) return;
@@ -73,35 +105,41 @@ async function evaluate(selected: model.FieldRequirement[]) {
       ...selected.map(field => ({ expression: { oneofKind: 'field' as const, field } })),
       { expression: { oneofKind: 'group', group: { kind: model.RequirementGroupKind.ALL, minimum: 0, members: selected.map((_, i) => i) } } },
     ] });
-    const reply = await call({ oneofKind: 'evaluateRequirements', evaluateRequirements: query }, working);
+    const reply = await evaluateFromSelection(query, selected, fullReview, turn);
     if (disposed || turn !== generation) return;
-    if (reply.oneofKind !== 'requirementEvaluation') throw Error('The selected checks are unavailable.');
+    if (reply?.oneofKind !== 'requirementEvaluation') throw Error('The selected checks are unavailable.');
     const updated = new Map(answers.value);
+    const checkedFields = new Set<string>(); const restrictedFields = new Set<string>();
     for (const entry of reply.requirementEvaluation.results) {
-      const condition = selected[entry.node]; if (condition) updated.set(identity(condition), { result: entry, revision: reply.requirementEvaluation.revision, evaluatedAtMs: reply.requirementEvaluation.evaluatedAtMs });
+      const condition = selected[entry.node];
+      if (!condition) continue;
+      const field = fieldKey(condition.target, condition.expected?.name);
+      checkedFields.add(field);
+      if (entry.reason === model.RequirementReason.RESTRICTED) restrictedFields.add(field);
+      else updated.set(identity(condition), { result: entry, revision: reply.requirementEvaluation.revision, evaluatedAtMs: reply.requirementEvaluation.evaluatedAtMs });
     }
+    // Field-read authority is shared by accepted and observed evidence.
+    const denied = new Set(deniedFields.value);
+    for (const field of checkedFields) denied.delete(field);
+    for (const field of restrictedFields) denied.add(field);
+    if (denied.size) {
+      for (const condition of conditions.value) {
+        if (denied.has(fieldKey(condition.target, condition.expected?.name))) updated.delete(identity(condition));
+      }
+    }
+    deniedFields.value = denied;
     answers.value = updated; revision.value = reply.requirementEvaluation.revision;
-    if (unavailable.value.size) {
-      const available = new Set(unavailable.value); for (const condition of selected) available.delete(identity(condition)); unavailable.value = available;
-    }
     // Revocation removes protected values and retained drafts, not just their edit buttons.
     discardRestrictedDrafts();
     suspended.value = false;
   } catch (e) { if (!disposed && turn === generation) {
     error.value = String(e);
-    const code = e instanceof Error && 'code' in e ? e.code : undefined;
-    if (code === 'PERMISSION_DENIED' || code === 'NOT_FOUND') {
+    if (accessFailure(e)) {
       if (!fullReview) {
-        // A denied root can invalidate the whole context before any leaf result arrives.
-        // Keep drafts out of view until the original selection is checked again.
-        suspended.value = true;
-        answers.value = new Map();
-        notice.value = '';
-        revision.value = undefined;
         await evaluate(conditions.value);
         return;
       }
-      unavailable.value = new Set([...unavailable.value, ...selected.map(identity)]);
+      deniedFields.value = new Set(selected.map(condition => fieldKey(condition.target, condition.expected?.name)));
       discardRestrictedDrafts();
       suspended.value = false;
     }
