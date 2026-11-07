@@ -52,6 +52,24 @@ fn shared_fact_bulk_is_atomic_and_writes_only_changed_fields() -> TestResult {
         ),
         Err(Error::Denied)
     ));
+    limited.grants[1].read = Fields::All;
+    limited.grants[1].write = Fields::Selected(vec!["name".into()]);
+    assert!(matches!(
+        store.workspace(
+            &limited,
+            batch(targets.clone(), before.revision, zero.clone()),
+            101
+        ),
+        Err(Error::Denied)
+    ));
+    for target in &targets {
+        let asset = store.asset(AssetRef::try_from(target)?)?;
+        assert!(asset.intended.iter().all(|fact| {
+            fact.field
+                .as_ref()
+                .is_none_or(|field| field.name != "drive_bays")
+        }));
+    }
     let mut incompatible = targets.clone();
     incompatible[9] = vm;
     assert!(matches!(
@@ -70,14 +88,6 @@ fn shared_fact_bulk_is_atomic_and_writes_only_changed_fields() -> TestResult {
                 before.revision,
                 wire::field::Value::Integer(-1)
             ),
-            101
-        ),
-        Err(Error::Invalid)
-    ));
-    assert!(matches!(
-        store.workspace(
-            &actor,
-            batch(vec![targets[0].clone(); 64], before.revision, zero.clone()),
             101
         ),
         Err(Error::Invalid)
@@ -144,6 +154,31 @@ fn shared_fact_bulk_is_atomic_and_writes_only_changed_fields() -> TestResult {
             .iter()
             .any(|f| f.field.as_ref() == Some(&field(clear.clone())))
     );
+    // Use distinct members so duplicate validation cannot hide a missing count guard.
+    let mut boundary = targets;
+    for i in boundary.len()..64 {
+        boundary.push(create(&store, &actor, K::Device, &format!("Shared {i}"))?);
+    }
+    let before_limit = store.usage()?;
+    assert!(matches!(
+        store.workspace(
+            &actor,
+            batch(boundary.clone(), before_limit.revision, clear.clone()),
+            105
+        ),
+        Err(Error::Invalid)
+    ));
+    assert_eq!(store.usage()?, before_limit);
+    let reply = store.workspace(
+        &actor,
+        batch(boundary[..63].to_vec(), before_limit.revision, clear),
+        106,
+    )?;
+    let Reply::Mutation(accepted) = reply.result.ok_or("bulk limit result")? else {
+        return Err("bulk limit mutation".into());
+    };
+    assert_eq!(accepted.targets, boundary[..63]);
+    assert_eq!(accepted.revision, before_limit.revision + 1);
     Ok(())
 }
 

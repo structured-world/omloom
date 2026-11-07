@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue';
-import { call, display, fieldGroup, key, model, requestMessage, typedField, type AssetRef, type Field } from './api';
+import { call, display, evaluateFieldGroup, key, model, requestMessage, typedField, type AssetRef, type Field } from './api';
 import EquipmentField from './EquipmentField.vue';
 
 const props = defineProps<{
@@ -23,11 +23,12 @@ const error = ref('');
 const uncertain = ref(false);
 const inaccessible = ref(new Set<string>());
 type ReviewRow = { id: string; before?: Field; source?: string; allowed: boolean };
-const preview = ref<{ revision: bigint; rows: ReviewRow[] }>();
-const canApply = computed(() => !!preview.value && preview.value.rows.every(row => row.allowed));
+const preview = ref<{ revision: bigint; rows: ReviewRow[]; reviewedDraft: boolean }>();
+const canApply = computed(() => !!preview.value?.reviewedDraft && preview.value.rows.every(row => row.allowed));
 const after = computed(() => display(proposed.value));
 const heading = ref<HTMLElement>();
 const reviewHeading = ref<HTMLElement>();
+let preferredAnchor: string | undefined;
 onMounted(() => heading.value?.focus());
 
 function invalidate() {
@@ -40,14 +41,25 @@ function include(id: string, value: boolean) {
   invalidate();
 }
 function setBusy(value: boolean) { busy.value = value; emit('busy', value); }
-async function review() {
-  if (busy.value || !proposed.value || !selected.value.length) return;
+async function review(event: SubmitEvent) {
+  const reviewedDraft = !!proposed.value && event.currentTarget instanceof HTMLFormElement && event.currentTarget.matches(':valid');
+  if (busy.value || (!uncertain.value && !reviewedDraft) || !selected.value.length) return;
   invalidate();
   const fields = selected.value.map(member => member.condition);
   setBusy(true);
+  let anchorDenied = false;
   try {
-    const reply = await call({ oneofKind: 'evaluateRequirements', evaluateRequirements: fieldGroup(fields) }, props.working);
+    const { reply, anchor } = await evaluateFieldGroup(fields, props.working, {
+      preferredAnchor,
+      onAccessFailure() {
+        if (anchorDenied) return;
+        anchorDenied = true;
+        for (const field of fields) inaccessible.value.add(key(field.target));
+        emit('accessChanged');
+      },
+    });
     if (reply.oneofKind !== 'requirementEvaluation') throw Error('Current facts are unavailable.');
+    preferredAnchor = anchor;
     const { revision, results } = reply.requirementEvaluation;
     const byNode = new Map(results.map(result => [result.node, result]));
     const rows = fields.map((condition, index) => {
@@ -62,14 +74,10 @@ async function review() {
         allowed: !!readable && result.fieldWritable };
     });
     if (rows.some(row => inaccessible.value.has(row.id))) emit('accessChanged');
-    preview.value = { revision, rows };
+    preview.value = { revision, rows, reviewedDraft };
     await nextTick();
     reviewHeading.value?.focus();
   } catch (failure) {
-    if (failure instanceof Error && 'code' in failure && ['NOT_FOUND', 'PERMISSION_DENIED'].includes(String(failure.code))) {
-      for (const field of fields) inaccessible.value.add(key(field.target));
-      emit('accessChanged');
-    }
     error.value = requestMessage(failure);
   } finally { setBusy(false); }
 }
@@ -125,7 +133,7 @@ function before(row: ReviewRow) { return row.before ? display(row.before) : 'Unk
     </fieldset>
     <p v-if="error" role="alert">{{ error }}</p>
     <p v-if="uncertain && preview" role="status">These are the current values. They cannot confirm who made the previous change.</p>
-    <button type="submit" :disabled="busy || !proposed || !selected.length">{{ uncertain ? 'Review current values' : 'Review shared change' }}</button>
+    <button type="submit" :formnovalidate="uncertain" :disabled="busy || (!uncertain && !proposed) || !selected.length">{{ uncertain ? 'Review current values' : 'Review shared change' }}</button>
     <template v-if="preview">
       <h4 ref="reviewHeading" tabindex="-1">Review {{ preview.rows.length }} included devices</h4>
       <ol class="fact-review-list">
@@ -134,7 +142,7 @@ function before(row: ReviewRow) { return row.before ? display(row.before) : 'Unk
           <p v-if="!row.allowed">This device cannot be changed in this batch. Exclude it explicitly to review a narrower batch.</p>
           <template v-else>
             <div class="fact-current"><p>Before: {{ before(row) }}<small v-if="row.source">Accepted authority: {{ row.source }}</small></p></div>
-            <div class="fact-current"><p>After: {{ after }}</p></div>
+            <div v-if="preview.reviewedDraft" class="fact-current"><p>After: {{ after }}</p></div>
           </template>
         </li>
       </ol>

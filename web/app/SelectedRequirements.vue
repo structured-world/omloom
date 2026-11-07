@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
-import { call, model, key, display, fieldGroup, resourceName, enumLabel, AssetKind, type AssetRef } from './api';
+import { call, model, key, display, evaluateFieldGroup, isAccessFailure, resourceName, enumLabel, AssetKind, type AssetRef } from './api';
 import Dialog from './Dialog.vue';
 import RequirementQuestion from './RequirementQuestion.vue';
 import AssetEditor from './AssetEditor.vue';
@@ -77,36 +77,11 @@ function discardRestrictedDrafts() {
 }
 function mismatch(row: typeof rows.value[number]) { return row.conditions.some(c => result(c)?.reason === model.RequirementReason.MISMATCH); }
 function name(row: typeof rows.value[number]) { return resourceName(row.item) || `Device (${row.target.assetId.slice(-8)})`; }
-function accessFailure(error: unknown) {
-  return error instanceof Error && 'code' in error && (error.code === 'PERMISSION_DENIED' || error.code === 'NOT_FOUND');
-}
 function suspendReview() {
   suspended.value = true;
   answers.value = new Map();
   notice.value = '';
   revision.value = undefined;
-}
-async function evaluateFromSelection(query: model.EvaluateRequirements, selected: model.FieldRequirement[], fullReview: boolean, turn: number) {
-  const anchors = fullReview ? new Map(selected.map(condition => [key(condition.target), condition.target])) : new Map();
-  const first = reviewAnchor ? anchors.get(reviewAnchor) ?? query.anchor : query.anchor;
-  anchors.delete(key(first));
-  const candidates = [first, ...anchors.values()];
-  for (const [index, anchor] of candidates.entries()) {
-    query.anchor = anchor;
-    try {
-      const reply = await call({ oneofKind: 'evaluateRequirements', evaluateRequirements: query }, working);
-      if (disposed || turn !== generation) return;
-      if (fullReview && reply.oneofKind === 'requirementEvaluation') reviewAnchor = key(anchor);
-      return reply;
-    } catch (error) {
-      if (disposed || turn !== generation) return;
-      if (!accessFailure(error)) throw error;
-      // An unavailable anchor and an invalid context both fail before leaf
-      // results. Keep evidence hidden and let the server admit each retry.
-      if (!suspended.value) suspendReview();
-      if (index === candidates.length - 1) throw error;
-    }
-  }
 }
 async function evaluate(selected: model.FieldRequirement[]) {
   if (suspended.value) selected = conditions.value;
@@ -116,10 +91,17 @@ async function evaluate(selected: model.FieldRequirement[]) {
   // Invalidate affected answers first, so an old success cannot survive an unsuccessful refresh.
   const next = new Map(answers.value); for (const condition of selected) next.delete(identity(condition)); answers.value = next;
   try {
-    const query = fieldGroup(selected);
-    const reply = await evaluateFromSelection(query, selected, fullReview, turn);
+    const { reply, anchor } = await evaluateFieldGroup(selected, working, {
+      retryAnchors: fullReview,
+      preferredAnchor: fullReview ? reviewAnchor : undefined,
+      onAccessFailure() {
+        if (disposed || turn !== generation) return false;
+        if (!suspended.value) suspendReview();
+      },
+    });
     if (disposed || turn !== generation) return;
-    if (reply?.oneofKind !== 'requirementEvaluation') throw Error('The selected checks are unavailable.');
+    if (reply.oneofKind !== 'requirementEvaluation') throw Error('The selected checks are unavailable.');
+    if (fullReview) reviewAnchor = anchor;
     const updated = new Map(answers.value);
     const checkedFields = new Set<string>(); const restrictedFields = new Set<string>();
     for (const entry of reply.requirementEvaluation.results) {
@@ -146,7 +128,7 @@ async function evaluate(selected: model.FieldRequirement[]) {
     suspended.value = false;
   } catch (e) { if (!disposed && turn === generation) {
     error.value = String(e);
-    if (accessFailure(e)) {
+    if (isAccessFailure(e)) {
       if (!fullReview) {
         await evaluate(conditions.value);
         return;

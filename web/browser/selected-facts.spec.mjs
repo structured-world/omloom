@@ -277,7 +277,29 @@ test('a newly restricted member remains selected until explicitly excluded', asy
   });
 });
 
-test('an unconfirmed shared save can read back facts without another bulk command', async ({ page }) => {
+test('shared review recovers when its first included device was removed', async ({ page }) => {
+  // The surviving devices remain visible, but the original batch cannot be applied.
+  await withFieldHost(async url => {
+    const { m, rpc, revision, targets, dialog } = await setup(page, url, 390, 3);
+    await question(dialog, m);
+    await dialog.getByRole('button', { name: 'Apply shared drive bays', exact: true }).click();
+    const shared = dialog.getByRole('region', { name: 'Shared fact' });
+    await fill(shared, '11');
+    const removed = await rpc({ oneofKind: 'bulk', bulk: m.Bulk.create({ targets: [targets[0]], expected: await revision(), remove: true }) });
+    expect(removed.oneofKind).toBe('mutation');
+    await shared.getByRole('button', { name: 'Review shared change' }).click();
+    const missing = shared.getByRole('checkbox', { name: 'Device 1 (unavailable)' });
+    await expect(missing).toBeChecked();
+    await expect(shared.getByRole('heading', { name: 'Review 3 included devices' })).toBeVisible();
+    await expect(shared.getByText('Before: Unknown', { exact: true })).toHaveCount(2);
+    await expect(shared.getByRole('button', { name: 'Apply to reviewed devices' })).toBeDisabled();
+    await missing.uncheck();
+    await shared.getByRole('button', { name: 'Review shared change' }).click();
+    await expect(shared.getByRole('button', { name: 'Apply to reviewed devices' })).toBeEnabled();
+  });
+});
+
+for (const invalid of ['quantity', 'basis']) test(`an unconfirmed shared save can read back facts with invalid ${invalid}`, async ({ page }) => {
   // Drop the reply only after the real disk-backed mutation completed.
   await withFieldHost(async url => {
     const { m, dialog } = await setup(page, url, 390, 2);
@@ -298,9 +320,14 @@ test('an unconfirmed shared save can read back facts without another bulk comman
     await shared.getByRole('button', { name: 'Apply to reviewed devices' }).click();
     await expect(shared.getByRole('alert')).toContainText('Save not confirmed');
     await expect(shared.getByLabel('Exact drive bays')).toHaveValue('14');
+    if (invalid === 'quantity') await shared.getByLabel('Exact drive bays', { exact: true }).fill('-1');
+    else await shared.getByLabel('Evidence basis for drive bays', { exact: true }).fill('');
     await shared.getByRole('button', { name: 'Review current values' }).click();
     await expect(shared.getByText(/Before:.*14 bays/)).toHaveCount(2);
     await expect(shared.getByRole('status')).toContainText('cannot confirm who made');
+    await expect(shared.getByRole('button', { name: 'Apply to reviewed devices' })).toBeDisabled();
+    await fill(shared, '15');
+    await expect(shared.getByRole('button', { name: 'Apply to reviewed devices' })).toHaveCount(0);
     await shared.getByRole('button', { name: 'Back to checks' }).click();
     await expect(row(dialog, 1).locator('.fact-conditions')).toContainText('satisfied');
     expect(writes).toBe(1);

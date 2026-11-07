@@ -176,8 +176,9 @@ explicitly and review the remaining group to proceed. Earlier independent
 saves and observation sources are unaffected.
 
 If the save response is lost, **Review current values** reads the selected
-facts without resending the change. Matching values do not establish who
-wrote them. A new application requires an explicit review and confirmation.
+facts even with an incomplete draft and without resending the change. Matching
+values do not establish who wrote them. Applying again requires a new review
+and confirmation.
 
 The `evaluate_requirements` workspace query supports a selected root in a bounded
 flat graph of field predicates and `all`, `any` or fixed-threshold groups. It
