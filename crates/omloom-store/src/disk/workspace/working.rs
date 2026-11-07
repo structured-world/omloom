@@ -442,7 +442,15 @@ impl Tx<'_> {
 
     fn network_scope(&self, context: &Context, target: AssetRef) -> Result<Option<NetworkScope>> {
         let root = self.visible_asset(context, target)?;
-        let kind = number(&root, "kind")? as i32;
+        self.network_scope_from_row(context, target, &root)
+    }
+    fn network_scope_from_row(
+        &self,
+        context: &Context,
+        target: AssetRef,
+        root: &Properties,
+    ) -> Result<Option<NetworkScope>> {
+        let kind = number(root, "kind")? as i32;
         if !context.field(target, kind, "relations", false) {
             return Ok(None);
         }
@@ -504,23 +512,33 @@ impl Tx<'_> {
                 _ => {}
             }
         }
+        let mut networks = Vec::new();
         let members = if working.roots.is_empty() {
             None
         } else {
             let mut roots = BTreeSet::new();
             for root in &working.roots {
-                let target = parse_target(Some(root))?;
-                self.visible_asset(context, target)?;
-                roots.insert(target);
+                roots.insert(parse_target(Some(root))?);
+            }
+            let keys = roots.iter().map(|root| text(asset_key(*root))).collect();
+            let rows = self.query("UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN {key:n.key,asset:n.asset,incarnation:n.incarnation,kind:n.kind,adoption:n.adoption} AS p LIMIT $limit",
+                params([("keys", Value::Array(keys)), ("limit", int(MAX_BULK as u64)?)]))?;
+            let rows = rows
+                .into_iter()
+                .map(|row| Ok((string(&row, "key")?, row)))
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            for target in &roots {
+                let row = rows.get(&asset_key(*target)).ok_or(Error::Missing)?;
+                self.require_visible_asset(context, *target, row)?;
+            }
+            for target in &roots {
+                let row = rows.get(&asset_key(*target)).ok_or(Error::Missing)?;
+                if let Some(scope) = self.network_scope_from_row(context, *target, row)? {
+                    networks.push(scope);
+                }
             }
             Some(roots)
         };
-        let mut networks = Vec::new();
-        for root in &working.roots {
-            if let Some(scope) = self.network_scope(context, parse_target(Some(root))?)? {
-                networks.push(scope);
-            }
-        }
         let focus = working
             .focus
             .as_ref()

@@ -52,6 +52,8 @@ fn capacity_increase_resumes_quota_bound_name_migration()
         policy: previous.clone(),
         #[cfg(feature = "diagnostics")]
         query_check: None,
+        #[cfg(feature = "diagnostics")]
+        query_inputs_check: None,
     };
     let mut tx = legacy.begin()?;
     tx.root

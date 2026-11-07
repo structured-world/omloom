@@ -6,11 +6,30 @@ export * as model from '../src/generated/omloom/v1/workspace';
 export { AssetKind, RelationKind, NullValue, OperationState, EffectOutcome } from '../src/generated/omloom/v1/contracts';
 export type { Field, AssetRef, Relation } from '../src/generated/omloom/v1/contracts';
 const transport = new GrpcWebFetchTransport({ baseUrl: location.origin, format: 'binary' });
-export async function call(command: Request['command'], working?: WorkingContext): Promise<Reply['result']> {
+async function page(command: Request['command'], working?: WorkingContext): Promise<Reply['result']> {
   const method = Workspace.methods[0];
   if (!method) throw Error('Workspace service metadata is missing');
   const { response } = await transport.unary<Request, Reply>(method, Request.create({ command, working }), transport.mergeOptions({ timeout: 15_000 }));
   return response.result;
+}
+export async function call(command: Request['command'], working?: WorkingContext): Promise<Reply['result']> {
+  const response = await page(command, working);
+  if (command.oneofKind !== 'evaluateRequirements' || command.evaluateRequirements.cursor !== undefined || response.oneofKind !== 'requirementEvaluation') return response;
+  const evaluation = response.requirementEvaluation;
+  // Publish only complete evidence. The server rejects continuations when
+  // authority, values, freshness decisions or the question's context change.
+  for (let pages = 0; evaluation.next !== undefined; pages++) {
+    if (pages >= 2048) throw Error('The evidence continuation exceeds the supported source count.');
+    const reply = await page({ oneofKind: 'evaluateRequirements', evaluateRequirements: { ...command.evaluateRequirements, cursor: evaluation.next } }, working);
+    if (reply.oneofKind !== 'requirementEvaluation') throw Error('The remaining evidence is unavailable. Retry the check.');
+    for (const node of reply.requirementEvaluation.results) {
+      const original = evaluation.results.find(result => result.node === node.node);
+      if (!original) throw Error('The evidence no longer matches this question. Retry the check.');
+      original.evidence.push(...node.evidence);
+    }
+    evaluation.next = reply.requirementEvaluation.next;
+  }
+  return response;
 }
 export function requestMessage(error:unknown):string {
   if(!(error instanceof Error))return 'The request could not be completed.';

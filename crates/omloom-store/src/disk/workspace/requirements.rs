@@ -2,6 +2,8 @@
 use super::*;
 use crate::requirements::{self as core, knowledge as k};
 mod binding;
+mod fields;
+mod pages;
 mod power;
 
 impl k::Alternatives for wire::EquipmentAlternatives {
@@ -304,12 +306,17 @@ impl Store {
     pub(super) fn workspace_requirements(
         &self,
         context: &Context,
-        request: api::EvaluateRequirements,
+        mut request: api::EvaluateRequirements,
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<api::Reply> {
         let tx = self.begin()?;
-        let evaluation = tx.evaluate_requirements(context, request, working, now)?;
+        let cursor = request.cursor.take();
+        if cursor.as_ref().is_some_and(|c| c.len() > 70) {
+            return Err(Error::Invalid);
+        }
+        let evaluation = tx.evaluate_requirements(context, &request, working, now)?;
+        let evaluation = pages::page(evaluation, &request, working, cursor.as_deref())?;
         tx.commit()?;
         Ok(reply(api::reply::Result::RequirementEvaluation(evaluation)))
     }
@@ -319,11 +326,11 @@ impl Tx<'_> {
     pub(super) fn evaluate_requirements(
         &self,
         context: &Context,
-        request: api::EvaluateRequirements,
+        request: &api::EvaluateRequirements,
         working: &api::WorkingContext,
         now: u64,
     ) -> Result<api::RequirementEvaluation> {
-        self.evaluate_requirements_in_phase(context, request, working, now, core::Phase::Current)
+        self.requirement_evaluation(context, request, working, now, Some(core::Phase::Current))
     }
     pub(super) fn evaluate_requirements_in_phase(
         &self,
@@ -333,7 +340,7 @@ impl Tx<'_> {
         now: u64,
         phase: core::Phase,
     ) -> Result<api::RequirementEvaluation> {
-        self.requirement_evaluation(context, request, working, now, Some(phase))
+        self.requirement_evaluation(context, &request, working, now, Some(phase))
     }
     pub(super) fn validate_requirement_graph(
         &self,
@@ -341,7 +348,7 @@ impl Tx<'_> {
         request: api::EvaluateRequirements,
         working: &api::WorkingContext,
     ) -> Result<()> {
-        let result = self.requirement_evaluation(context, request, working, 0, None)?;
+        let result = self.requirement_evaluation(context, &request, working, 0, None)?;
         if result.reason == api::RequirementReason::Cycle as i32 {
             return Err(Error::Invalid);
         }
@@ -350,12 +357,13 @@ impl Tx<'_> {
     fn requirement_evaluation(
         &self,
         context: &Context,
-        request: api::EvaluateRequirements,
+        request: &api::EvaluateRequirements,
         working: &api::WorkingContext,
         now: u64,
         phase: Option<core::Phase>,
     ) -> Result<api::RequirementEvaluation> {
-        if request.nodes.is_empty()
+        if request.cursor.is_some()
+            || request.nodes.is_empty()
             || request.nodes.len() > core::MAX_NODES
             || request.root as usize >= request.nodes.len()
         {
@@ -509,6 +517,11 @@ impl Tx<'_> {
                     *mode = group_mode(group)?;
                 }
             }
+            let inputs = if phase.is_some() {
+                fields::Inputs::load(tx, context, request, &results)?
+            } else {
+                fields::Inputs::default()
+            };
             for (index, node) in nodes.iter_mut().enumerate() {
                 if results[index].reason == core::Reason::NotSelected {
                     continue;
@@ -517,7 +530,14 @@ impl Tx<'_> {
                     request.nodes[index].expression.as_ref()
                 {
                     let decision = if let Some(phase) = phase {
-                        tx.requirement_field(context, condition, &mut responses[index], now, phase)?
+                        tx.requirement_field(
+                            context,
+                            condition,
+                            &inputs,
+                            &mut responses[index],
+                            now,
+                            phase,
+                        )?
                     } else {
                         validate_field_condition(condition)?;
                         core::Decision::unknown(core::Reason::Missing)
@@ -574,6 +594,7 @@ impl Tx<'_> {
             state,
             reason,
             results: output,
+            next: None,
         };
         Ok(evaluation)
     }
@@ -610,6 +631,7 @@ impl Tx<'_> {
         &self,
         context: &Context,
         condition: &api::FieldRequirement,
+        inputs: &fields::Inputs,
         response: &mut api::RequirementResult,
         now: u64,
         phase: core::Phase,
@@ -617,19 +639,18 @@ impl Tx<'_> {
         let target = parse_target(condition.target.as_ref())?;
         let expected = condition.expected.as_ref().ok_or(Error::Invalid)?;
         validate_field_condition(condition)?;
-        let row = match self.asset(target) {
-            Ok(row) => row,
-            // A stale incarnation must not reveal that a protected asset ID exists.
-            Err(Error::Missing | Error::Conflict) => {
-                return Ok(core::Decision::unknown(core::Reason::Restricted));
-            }
-            Err(error) => return Err(error),
+        let parent = asset_key(target);
+        let Some(row) = inputs.assets.get(&parent) else {
+            return Ok(core::Decision::unknown(core::Reason::Restricted));
         };
-        let kind = number(&row, "kind")? as i32;
-        let asset_revision = number(&row, "revision")?;
+        if crate::disk::target(row)? != target {
+            return Ok(core::Decision::unknown(core::Reason::Restricted));
+        }
+        let kind = number(row, "kind")? as i32;
+        let asset_revision = number(row, "revision")?;
         if !context.readable(target, kind)
             || !context.field(target, kind, &expected.name, false)
-            || number(&row, "adoption")? != wire::Adoption::Adopted as u64
+            || number(row, "adoption")? != wire::Adoption::Adopted as u64
         {
             return Ok(core::Decision::unknown(core::Reason::Restricted));
         }
@@ -667,6 +688,7 @@ impl Tx<'_> {
             response.evidence.push(api::RequirementEvidence {
                 source: target.asset.to_string(),
                 revision: Some(asset_revision.to_string()),
+                value: Some(actual),
                 ..Default::default()
             });
             if delegation == api::AccountDelegation::OwnerOnly
@@ -684,43 +706,22 @@ impl Tx<'_> {
             }
             return Ok(decision);
         }
-        let rows = if layer == "intent" {
-            self.get(&format!("{}/intent/{}", asset_key(target), expected.name))?
-                .into_iter()
-                .collect::<Vec<_>>()
+        let accepted = inputs
+            .accepted
+            .get(&format!("{parent}/intent/{}", expected.name));
+        let rows: &[Properties] = if layer == "intent" {
+            accepted.map_or(&[], std::slice::from_ref)
         } else {
-            self.query("MATCH (n:OmRow {parent:$parent}) WHERE n.layer='observed' AND n.field=$field RETURN properties(n) AS p LIMIT 33", params([("parent", text(asset_key(target))), ("field", text(&expected.name))]))?
+            inputs
+                .observed
+                .get(&(parent, expected.name.clone()))
+                .map_or(&[], Vec::as_slice)
         };
-        if rows.len() > 32 {
-            return Err(Error::Limit);
-        }
-        let freshness = if layer == "observed" && !rows.is_empty() {
-            let keys = rows
-                .iter()
-                .map(|row| row.get("key").cloned().ok_or(Error::Corrupt))
-                .collect::<Result<Vec<_>>>()?;
-            self.query("MATCH (n:OmRow {parent:$parent}) WHERE n.layer='freshness' AND n.claim IN $keys RETURN properties(n) AS p LIMIT 33", params([("parent", text(asset_key(target))), ("keys", Value::Array(keys))]))?
-        } else {
-            Vec::new()
-        };
-        if freshness.len() > 32 {
-            return Err(Error::Limit);
-        }
-        let freshness: BTreeMap<_, _> = freshness
-            .iter()
-            .map(|row| {
-                Ok((
-                    row.get("claim")
-                        .and_then(Value::as_str)
-                        .ok_or(Error::Corrupt)?,
-                    row,
-                ))
-            })
-            .collect::<Result<_>>()?;
         let mut result = core::Decision::unknown(core::Reason::Missing);
         let mut known = None;
-        let mut current_fields = Vec::with_capacity(rows.len());
-        for row in &rows {
+        let mut conflict = false;
+        let mut current_sources = Vec::with_capacity(rows.len());
+        for row in rows {
             let (source, revision, at, until, scan_id) = if layer == "intent" {
                 (
                     string(row, "authority")?,
@@ -734,7 +735,7 @@ impl Tx<'_> {
                     .get("key")
                     .and_then(Value::as_str)
                     .ok_or(Error::Corrupt)?;
-                let fresh = freshness.get(key).ok_or(Error::Corrupt)?;
+                let fresh = inputs.freshness.get(key).ok_or(Error::Corrupt)?;
                 (
                     string(row, "source")?,
                     fresh
@@ -746,13 +747,20 @@ impl Tx<'_> {
                     fresh.get("scan").and_then(Value::as_str).map(str::to_owned),
                 )
             };
+            let actual = inventory::read_field(row)?;
+            let source_index = response.evidence.len();
             response.evidence.push(api::RequirementEvidence {
                 source,
                 revision,
                 observed_at_ms: at,
                 valid_until_ms: until,
                 scan_id,
+                value: Some(actual),
             });
+            // Later sources cannot clear a conflict, but their permitted values still belong in the review.
+            if conflict {
+                continue;
+            }
             let required = core::Requirement {
                 subject: subject(condition.target.as_ref().ok_or(Error::Invalid)?),
                 semantic: &expected.name,
@@ -796,12 +804,15 @@ impl Tx<'_> {
                 }
                 continue;
             }
-            let actual = inventory::read_field(row)?;
-            let current = compare(&actual, expected, condition.comparison)?;
-            current_fields.push(actual);
+            let actual = response.evidence[source_index]
+                .value
+                .as_ref()
+                .expect("source value was just appended");
+            let current = compare(actual, expected, condition.comparison)?;
+            current_sources.push(source_index);
             if current.state != core::State::Unknown {
                 if known.is_some_and(|old| old != current.state) {
-                    return Ok(core::Decision::unknown(core::Reason::Conflict));
+                    conflict = true;
                 }
                 known = Some(current.state);
                 result = current;
@@ -809,10 +820,23 @@ impl Tx<'_> {
                 result = current;
             }
             if current.reason == core::Reason::Conflict {
-                return Ok(current);
+                conflict = true;
             }
         }
-        let claims: Vec<_> = current_fields.iter().map(claim).collect();
+        if conflict {
+            return Ok(core::Decision::unknown(core::Reason::Conflict));
+        }
+        let claims: Vec<_> = current_sources
+            .iter()
+            .map(|&i| {
+                claim(
+                    response.evidence[i]
+                        .value
+                        .as_ref()
+                        .expect("current source has a value"),
+                )
+            })
+            .collect();
         let consistency = k::consistent(&claims);
         if consistency.state != core::State::Satisfied {
             return Ok(consistency);
