@@ -99,6 +99,8 @@ test('a conflicting row retains input while independent devices continue', async
     await expect(editor.getByRole('region', { name: 'Review fact change' })).toContainText('Review 03');
     await fill(editor, '16'); await editor.getByRole('button', { name: 'Save and next', exact: true }).click();
     await expect(dialog.getByRole('region', { name: 'Selected fact editor' })).toHaveCount(0);
+    const deferred = row(dialog, 2).getByText('Deferred, input retained.', { exact: true });
+    await expect(deferred).toBeVisible();
     await row(dialog, 2).getByRole('button', { name: 'Resume saved input', exact: true }).click();
     await expect(dialog.getByRole('region', { name: 'Selected fact editor' }).getByLabel('Exact drive bays', { exact: true })).toHaveValue('12');
     expect(await editors.count()).toBe(1);
@@ -117,6 +119,34 @@ test('a conflicting row retains input while independent devices continue', async
     await expect(resumed.getByRole('region', { name: 'Review fact change' })).toContainText('Review 02');
     await resumed.getByRole('button', { name: 'Save and next', exact: true }).click();
     await expect(row(dialog, 2).locator('.fact-conditions')).toContainText('satisfied');
+    await expect(deferred).toHaveCount(0);
+  });
+});
+
+test('canceling a resumed draft makes its row eligible for save and next', async ({ page }) => {
+  // Only a retained inactive draft can defer a row from automatic advancement.
+  await withFieldHost(async url => {
+    const { m, dialog } = await setup(page, url, 1440, 3);
+    await question(dialog, m);
+    const second = row(dialog, 2);
+    const editor = dialog.getByRole('region', { name: 'Selected fact editor' });
+    const deferred = second.getByText('Deferred, input retained.', { exact: true });
+    await second.getByRole('button', { name: 'Clarify this fact', exact: true }).click();
+    await fill(editor, '13');
+    await editor.getByRole('button', { name: 'Defer this row and continue', exact: true }).click();
+    await expect(editor.getByRole('region', { name: 'Review fact change' })).toContainText('Review 03');
+    await editor.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(deferred).toBeVisible();
+    await second.getByRole('button', { name: 'Resume saved input', exact: true }).click();
+    await expect(editor.getByLabel('Exact drive bays', { exact: true })).toHaveValue('13');
+    await expect(deferred).toHaveCount(0);
+    await editor.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(deferred).toHaveCount(0);
+    await row(dialog, 1).getByRole('button', { name: 'Clarify this fact', exact: true }).click();
+    await fill(editor, '12');
+    await editor.getByRole('button', { name: 'Save and next', exact: true }).click();
+    await expect(editor.getByRole('region', { name: 'Review fact change' })).toContainText('Review 02');
+    await expect(editor.getByLabel('Exact drive bays', { exact: true })).toHaveValue('');
   });
 });
 

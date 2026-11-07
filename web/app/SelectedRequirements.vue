@@ -18,7 +18,7 @@ const error = ref(''); const busy = ref(false); const importing = ref(false); co
 const notice = ref(''); const revision = ref<bigint>();
 type Draft = { id: string; item: model.Item; field: string; question: string };
 const drafts = ref<Draft[]>([]); const active = ref<string>(); const writing = ref(false);
-const deferred = ref(new Set<string>());
+const draftIds = computed(() => new Set(drafts.value.map(draft => draft.id)));
 const deniedFields = ref(new Set<string>());
 const suspended = ref(false);
 const heading = ref<HTMLElement>();
@@ -49,7 +49,7 @@ function checkedAt(condition: model.FieldRequirement) {
   if (answer) return `revision ${answer.revision}, ${new Date(Number(answer.evaluatedAtMs)).toLocaleString()}`;
 }
 function editable(row: typeof rows.value[number]) {
-  return !suspended.value && !restricted(row) && (drafts.value.some(draft => draft.id === row.id) || row.conditions.some(c => result(c)?.resolutions.includes(model.RequirementResolution.RECORD_FACT)));
+  return !suspended.value && !restricted(row) && (draftIds.value.has(row.id) || row.conditions.some(c => result(c)?.resolutions.includes(model.RequirementResolution.RECORD_FACT)));
 }
 function current(row: typeof rows.value[number]) { return result(row.conditions[0]!)?.evidence ?? []; }
 function restricted(row: typeof rows.value[number]) { return deniedFields.value.has(fieldKey(row.target, row.field)); }
@@ -57,7 +57,6 @@ function discardRestrictedDrafts() {
   const denied = new Set(rows.value.filter(restricted).map(row => row.id));
   if (denied.size) notice.value = '';
   drafts.value = drafts.value.filter(draft => !denied.has(draft.id));
-  deferred.value = new Set([...deferred.value].filter(id => !denied.has(id)));
   if (active.value && denied.has(active.value)) active.value = undefined;
 }
 function mismatch(row: typeof rows.value[number]) { return row.conditions.some(c => result(c)?.reason === model.RequirementReason.MISMATCH); }
@@ -155,7 +154,7 @@ async function check(condition: Omit<model.FieldRequirement, 'target'>, label: s
 }
 async function edit(row: typeof rows.value[number]) {
   if (writing.value || busy.value || !editable(row)) return;
-  if (drafts.value.some(d => d.id === row.id)) { active.value = row.id; return; }
+  if (draftIds.value.has(row.id)) { active.value = row.id; return; }
   const turn = ++generation; busy.value = true; error.value = '';
   try {
     const reply = await call({ oneofKind: 'read', read: model.Read.create({ target: row.target, acceptedField: row.field }) }, working);
@@ -177,15 +176,15 @@ async function finish(id: string, saved: boolean) {
   if (saved) { notice.value = `Saved ${row.field.replaceAll('_', ' ')} for ${name(row)}. Checking the original conditions.`; emit('saved'); }
   // The same accepted edit can affect several layers, but cannot refresh source observations.
   await evaluate(conditions.value.filter(c => key(c.target) === key(row.target) && c.expected?.name === row.field));
-  const next = rows.value.slice(index + 1).find(candidate => editable(candidate) && !deferred.value.has(candidate.id));
+  const next = rows.value.slice(index + 1).find(candidate => !draftIds.value.has(candidate.id) && editable(candidate));
   await focusRow(next?.id);
   if (next) await edit(next);
 }
 async function defer() {
   const id = active.value; if (!id || writing.value) return;
-  deferred.value = new Set([...deferred.value, id]); active.value = undefined;
+  active.value = undefined;
   const index = rows.value.findIndex(row => row.id === id);
-  const next = rows.value.slice(index + 1).find(row => editable(row) && !deferred.value.has(row.id));
+  const next = rows.value.slice(index + 1).find(row => !draftIds.value.has(row.id) && editable(row));
   await focusRow(next?.id); if (next) await edit(next);
 }
 async function closeEditor(id: string) {
@@ -223,8 +222,8 @@ onMounted(async () => {
 <template v-else>
 <div class="fact-current"><strong>Currently recorded:</strong><span v-if="!current(row).length">{{ result(row.conditions[0]!) ? 'Unknown' : 'Not checked' }}</span><p v-for="(evidence, i) in current(row)" :key="i">{{ evidence.value ? display(evidence.value) : 'Value unavailable' }}<small>{{ evidence.observedAtMs === undefined ? 'Accepted authority' : 'Observation source' }}: {{ evidence.source }}<template v-if="evidence.validUntilMs !== undefined"> · valid until {{ new Date(Number(evidence.validUntilMs)).toLocaleString() }}</template></small></p></div>
 <ul class="fact-conditions"><li v-for="condition in row.conditions" :key="identity(condition)"><span>{{ labels.get(identity(condition)) ?? questionLabel(condition) }}</span><strong>{{ result(condition) ? enumLabel(model.RequirementState, result(condition)!.state).toLowerCase() : 'Not checked' }}</strong><small v-if="result(condition)">{{ enumLabel(model.RequirementReason, result(condition)!.reason).toLowerCase() }} · {{ checkedAt(condition) }}</small></li></ul>
-<button v-if="editable(row)" :id="`fact-${row.id}`" :disabled="busy || writing || (!!active && active !== row.id)" @click="edit(row)">{{ drafts.some(d => d.id === row.id) ? 'Resume saved input' : mismatch(row) ? 'Correct recorded fact' : 'Clarify this fact' }}</button>
-<p v-if="deferred.has(row.id)">Deferred, input retained.</p>
+<button v-if="editable(row)" :id="`fact-${row.id}`" :disabled="busy || writing || (!!active && active !== row.id)" @click="edit(row)">{{ draftIds.has(row.id) ? 'Resume saved input' : mismatch(row) ? 'Correct recorded fact' : 'Clarify this fact' }}</button>
+<p v-if="draftIds.has(row.id) && active !== row.id">Deferred, input retained.</p>
 </template>
 </li>
 </ol>
