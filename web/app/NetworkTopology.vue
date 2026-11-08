@@ -37,6 +37,7 @@ function place(reset = false) {
 }
 watch(order, () => place(), { immediate: true });
 const pins = computed(() => new Map(props.pins.map(pin => [key(pin.target), pin])));
+const prefixTitles = computed(() => new Map(props.page.contexts.map(context => [key(context.target), context.prefixCidr])));
 const labels = computed(() => {
   const names = props.page.items.map(item => props.name(item) || 'Unnamed resource');
   const counts = new Map<string, number>();
@@ -50,12 +51,12 @@ const labels = computed(() => {
 const nodes = computed(() => props.page.items.map(item => {
   const id = key(item.target);
   const base = networkPosition(position.value.get(id) ?? 0, 4);
-  const offset = pins.value.get(id);
+  const pin = pins.value.get(id);
   const point = {
-    x: Math.max(8, base.x + (offset?.x ?? 0)),
-    y: Math.max(8, base.y + (offset?.y ?? 0)),
+    x: Math.max(8, pin?.x ?? base.x),
+    y: Math.max(8, pin?.y ?? base.y),
   };
-  return { item, id, point, base };
+  return { item, id, point };
 }));
 const paths = computed(() => {
   const points = new Map(nodes.value.map(node => [node.id, node.point]));
@@ -73,17 +74,18 @@ const paths = computed(() => {
 });
 const width = computed(() => Math.max(260, ...nodes.value.map(n => n.point.x + CARD_WIDTH + 40)));
 const height = computed(() => Math.max(152, ...nodes.value.map(n => n.point.y + CARD_HEIGHT + 40)));
+const minimumZoom = computed(() => Math.min(.35, (scroll.value?.clientWidth || width.value) / width.value));
 function fit() {
-  if (!scroll.value) return;
-  zoom.value = Math.max(.35, Math.min(1, scroll.value.clientWidth / width.value));
+  if (!scroll.value?.clientWidth) return;
+  zoom.value = Math.min(1, scroll.value.clientWidth / width.value);
   scroll.value.scrollTo(0, 0);
 }
 function move(node: typeof nodes.value[number], x: number, y: number) {
   if (!node.item.target) return;
   emit('pin', {
     target: node.item.target,
-    x: Math.round(Math.max(8 - node.base.x, Math.min(4096, x - node.base.x))),
-    y: Math.round(Math.max(8 - node.base.y, Math.min(4096, y - node.base.y))),
+    x: Math.round(Math.max(8, Math.min(4096, x))),
+    y: Math.round(Math.max(8, Math.min(4096, y))),
   });
 }
 let drag: { id: string; dx: number; dy: number; pointer: number } | undefined;
@@ -116,8 +118,8 @@ function inspect(target?: AssetRef) {
       <div><h2>Known network</h2><p>Recorded relationships on this page. Missing links do not establish isolation or reachability.</p></div>
       <div v-if="nodes.length" class="actions">
         <button @click="fit">Fit</button>
-        <button aria-label="Zoom out" :disabled="zoom <= .35" @click="zoom = Math.max(.35, zoom - .2)">−</button>
-        <button aria-label="Zoom in" :disabled="zoom >= 1.8" @click="zoom = Math.min(1.8, zoom + .2)">+</button>
+        <button aria-label="Zoom out" :disabled="zoom <= minimumZoom" @click="zoom = Math.max(minimumZoom, zoom / 1.2)">−</button>
+        <button aria-label="Zoom in" :disabled="zoom >= 1.8" @click="zoom = Math.min(1.8, zoom * 1.2)">+</button>
         <button :aria-pressed="arrange" @click="arrange = !arrange">{{ arrange ? 'Done arranging' : 'Arrange' }}</button>
         <button v-if="arrange" @click="place(true); emit('clear')">Reset positions</button>
       </div>
@@ -133,6 +135,7 @@ function inspect(target?: AssetRef) {
               :class="{ membership: [RelationKind.ON, RelationKind.MEMBER_OF].includes(link.edge.kind) }" />
           </svg>
           <button v-for="node in nodes" :key="node.id" class="network-topology-node"
+            :title="prefixTitles.get(node.id)"
             :style="{ left: node.point.x + 'px', top: node.point.y + 'px', width: CARD_WIDTH + 'px', height: CARD_HEIGHT + 'px' }"
             :aria-current="node.id === key(selected) ? 'true' : undefined" @click="inspect(node.item.target)"
             @pointerdown="start($event, node)" @pointermove="update($event, node)" @lostpointercapture="drag = undefined"

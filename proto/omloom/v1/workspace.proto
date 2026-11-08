@@ -974,9 +974,9 @@ message NetworkLayout {
 message NetworkPin {
   // Exact resource positioned by the user, reauthorized when opening a view.
   omloom.v1.AssetRef target = 1;
-  // Horizontal offset from automatic placement, in diagram units, ±4096.
+  // Horizontal position relative to the diagram origin, in units, ±4096.
   sint32 x = 2;
-  // Vertical offset from automatic placement, in diagram units, ±4096.
+  // Vertical position relative to the diagram origin, in units, ±4096.
   sint32 y = 3;
 }
 message SaveView {

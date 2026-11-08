@@ -5607,6 +5607,7 @@ test('selected roots survive view changes, personal save and reload', async ({ p
     await page.goto(server.url);
     await expect(page.getByRole('button', { name: 'Outside selection', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '◦ Two selected roots', exact: true }).click();
+    await expect(page).toHaveURL(/(?:\?|&)saved=/);
     await page.reload();
     await expect(page.getByRole('heading',{name:'Software & services',exact:true})).toBeVisible();
     await expect(page.getByRole('heading',{name:'No resources at this level in this view',exact:true})).toBeVisible();

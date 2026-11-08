@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import HostNetwork from './HostNetwork.vue';
+import NetworkTree from './NetworkTree.vue';
 import HostImportEditor from './HostImportEditor.vue';
 import CategoryNav from './CategoryNav.vue';
 import WorkspaceIcon from './WorkspaceIcon.vue';
@@ -136,10 +137,27 @@ const sites = computed((): AssetRef[] => {
 });
 const topologyMode = computed(() => Number(route.query.view) === model.View.NETWORK && route.query.networkTable !== '1');
 const topology = computed(() => topologyMode.value && !route.query.asset);
+const navigatorOpen = ref(false);
+const branch = computed((): AssetRef | undefined => {
+  const { branch, branchInc } = route.query;
+  return Number(route.query.view) === model.View.NETWORK && typeof branch === 'string' && typeof branchInc === 'string'
+    ? { assetId: branch, incarnation: branchInc } : undefined;
+});
+const treeQuery = computed(() => model.Query.create({
+  view: model.View.OVERVIEW, roots: roots(), levelOnly: true, columns: ['name'], sort: 'name', limit: 25,
+  omitHostLocal: true,
+  network: sites.value.length || unknownSite.value
+    ? model.NetworkSelection.create({ sites: sites.value, unplaced: unknownSite.value }) : undefined,
+}));
+const treeScope = computed(() => JSON.stringify(model.Query.toJson(treeQuery.value)));
+function chooseBranch(target?: AssetRef) {
+  return change({ branch: target?.assetId, branchInc: target?.incarnation });
+}
 const unknownSite = computed(() => route.query.unknownSite === '1');
 const pins = ref<model.NetworkPin[]>([]);
 const savedQuery = computed(() => model.Query.create({
   ...query.value,
+  focus: route.query.asset ? query.value.focus : undefined,
   network: model.NetworkSelection.create({
     sites: sites.value, unplaced: unknownSite.value,
     layout: query.value.view === model.View.NETWORK && (pins.value.length || route.query.networkTable === '1')
@@ -156,11 +174,15 @@ function pin(value: model.NetworkPin) {
 const siteOptions = ref<model.Item[]>([]);
 const siteNext = ref<string>();
 const siteCursor = ref<string>();
+const siteError = ref('');
+const retrySiteCursor = ref<string>();
 let siteRequest: AbortController | undefined;
 async function loadSites(cursor?: string) {
   siteRequest?.abort();
   const request = new AbortController();
   siteRequest = request;
+  siteError.value = '';
+  retrySiteCursor.value = cursor;
   try {
     const reply = await call({ oneofKind: 'query', query: model.Query.create({
       view: model.View.HARDWARE, kinds: [K.SITE], columns: ['name'], sort: 'name', limit: 25, cursor,
@@ -170,7 +192,7 @@ async function loadSites(cursor?: string) {
     siteNext.value = reply.page.next;
     siteCursor.value = cursor;
   } catch (e) {
-    if (siteRequest === request && !request.signal.aborted) error.value = String(e);
+    if (siteRequest === request && !request.signal.aborted) siteError.value = String(e);
   }
 }
 function chooseSite(value: string) {
@@ -184,16 +206,19 @@ function removeSite(target: AssetRef) {
   const next = sites.value.filter(site => key(site) !== key(target));
   return change({ site: next.map(site => site.assetId), siteInc: next.map(site => site.incarnation) });
 }
+let viewIntent = 0;
 async function chooseProject(id: string) {
   const source = route.fullPath;
+  const intent = ++viewIntent;
+  const current = () => intent === viewIntent && source === route.fullPath;
   try {
-    const view = id ? await currentView(id) : undefined;
-    if (source !== route.fullPath) return;
+    const view = id ? await currentView(id, current) : undefined;
+    if (!current()) return;
     const roots = view?.query?.roots ?? [];
     if (id && !roots.length) throw Error('This project selection is no longer available.');
     await change({ scope: roots.map(root => root.assetId), scopeInc: roots.map(root => root.incarnation), project: id || undefined });
   } catch (failure) {
-    if (source === route.fullPath) error.value = String(failure);
+    if (current()) error.value = String(failure);
   }
 }
 const query = computed(() => model.Query.create({
@@ -206,11 +231,11 @@ const query = computed(() => model.Query.create({
     sites: sites.value, unplaced: unknownSite.value, includeTopology: topology.value,
   }) : undefined,
   predicates: parsePredicates(route.query.asset ? 'localFilter' : 'filter'),
-  focus: route.query.asset && route.query.incarnation ? { assetId: String(route.query.asset), incarnation: String(route.query.incarnation) } : undefined,
+  focus: route.query.asset && route.query.incarnation ? { assetId: String(route.query.asset), incarnation: String(route.query.incarnation) } : branch.value,
   includeContext: true, omitHostLocal: true,
   levelOnly: !String((route.query.asset ? route.query.localSearch : route.query.search) ?? '').trim()
     && !route.query[route.query.asset ? 'localFilter' : 'filter'] && !route.query.responsibility && route.query.unplaced !== '1'
-    && (!!route.query.asset || (!sites.value.length && !unknownSite.value)),
+    && (!!route.query.asset || (Number(route.query.view) !== model.View.NETWORK && !sites.value.length && !unknownSite.value)),
   responsibility: parseResponsibility(),
 }));
 const working = computed(() => model.WorkingContext.create({ roots: query.value.roots, focus: query.value.focus, expected: page.value.revision }));
@@ -371,6 +396,10 @@ async function nextRelations() {
 }
 async function change(values: Record<string, string | string[] | undefined>) {
   if ('scope' in values && !('project' in values)) values.project = undefined;
+  if ('scope' in values || 'site' in values || 'unknownSite' in values) {
+    values.branch = undefined;
+    values.branchInc = undefined;
+  }
   const focused = 'asset' in values ? values.asset : route.query.asset;
   if (focused) {
     for (const [field, local] of [['search','localSearch'],['kind','localKind'],['filter','localFilter'],['cursor','localCursor']] as const) {
@@ -478,11 +507,13 @@ function create() { if (loading.value) return; editing.value = undefined; editor
 function edit() { editing.value = detail.value?.item; editor.value = 'asset'; }
 async function useView(v: model.SavedView) {
   const source = route.fullPath;
+  const intent = ++viewIntent;
+  const current = () => intent === viewIntent && source === route.fullPath;
   try {
-    v = await currentView(v.id);
-    if (source !== route.fullPath) return;
+    v = await currentView(v.id, current);
+    if (!current()) return;
   } catch (failure) {
-    if (source === route.fullPath) error.value = String(failure);
+    if (current()) error.value = String(failure);
     return;
   }
   if (!v.query) return;
@@ -492,11 +523,11 @@ async function useView(v: model.SavedView) {
   pins.value = (q.network?.layout?.pins ?? []).map(pin => model.NetworkPin.create(pin));
   await router.push({ path: '/', query: { view: String(q.view), search: q.focus ? undefined : q.search || undefined, localSearch: q.focus ? q.search || undefined : undefined, columns: q.columns.join(','), sort: q.sort, desc: q.descending ? '1' : undefined, unplaced: q.unplaced ? '1' : undefined, kind: q.focus ? undefined : q.kinds.map(String), localKind: q.focus ? q.kinds.map(String) : undefined, scope: q.roots.map(t => t.assetId), scopeInc: q.roots.map(t => t.incarnation), filter: q.focus ? undefined : filter, localFilter: q.focus ? filter : undefined, responsibility:q.responsibility?JSON.stringify(model.ResponsibilityFilter.toJson(q.responsibility)):undefined, asset: q.focus?.assetId, incarnation: q.focus?.incarnation, site: q.network?.sites.map(s => s.assetId), siteInc: q.network?.sites.map(s => s.incarnation), unknownSite: q.network?.unplaced ? '1' : undefined, networkTable: q.network?.layout?.table ? '1' : undefined, saved: v.id } });
 }
-async function currentView(id: string) {
+async function currentView(id: string, current: () => boolean) {
   const result = await call({ oneofKind: 'views', views: {} });
   if (result.oneofKind !== 'views') throw Error('Saved views are unavailable.');
-  views.value = result.views.items;
-  const view = views.value.find(view => view.id === id);
+  if (current()) views.value = result.views.items;
+  const view = result.views.items.find(view => view.id === id);
   if (!view) throw Error('This saved view is no longer available.');
   return view;
 }
@@ -522,6 +553,10 @@ async function removeRelation(relation: import('./api').Relation) {
   try { await call({ oneofKind: 'relation', relation: { relation, remove: true } }, model.WorkingContext.create({ roots, expected: page.value.revision })); await saved(); } catch (e) { error.value = String(e); }
 }
 function allocate() { editing.value = undefined; editor.value = 'network'; }
+function restorePins() {
+  pins.value = (activeView.value?.query?.network?.layout?.pins ?? []).map(pin => model.NetworkPin.create(pin));
+}
+watch(() => route.query.saved, restorePins);
 watch(() => route.fullPath, load);
 watch(() => query.value.view === model.View.NETWORK, network => {
   if (network) void loadSites();
@@ -530,7 +565,7 @@ watch(() => query.value.view === model.View.NETWORK, network => {
 onMounted(async () => {
   try {
     await metadata();
-    pins.value = (activeView.value?.query?.network?.layout?.pins ?? []).map(pin => model.NetworkPin.create(pin));
+    restorePins();
     await load();
   } catch (e) {
     error.value = String(e);
@@ -560,6 +595,7 @@ onMounted(async () => {
   <button v-for="site in sites" :key="key(site)" @click="removeSite(site)">{{ identityName(siteOptions.find(item => key(item.target) === key(site))) || 'Selected site' }} ×</button>
   <button v-if="siteCursor" @click="loadSites()">First sites</button>
   <button v-if="siteNext" @click="loadSites(siteNext)">More sites</button>
+  <div v-if="siteError" role="alert" class="hint">{{ siteError }} <button @click="loadSites(retrySiteCursor)">Retry sites</button></div>
   <label>Project / selection
     <select :value="route.query.project || (query.roots.length ? 'explicit' : '')" @change="chooseProject(($event.target as HTMLSelectElement).value)">
       <option value="">All permitted resources</option>
@@ -572,6 +608,18 @@ onMounted(async () => {
     <button :aria-pressed="!topology" @click="change({ networkTable: '1' })">Table</button>
   </div>
 </div>
+<div class="inventory-content" :class="{ 'network-with-navigator': query.view === model.View.NETWORK && !route.query.asset && navigatorOpen }">
+<details v-if="query.view === model.View.NETWORK && !route.query.asset" class="network-navigator"
+  :open="navigatorOpen"
+  @toggle="navigatorOpen = ($event.target as HTMLDetailsElement).open">
+  <summary>Resource navigator</summary>
+  <nav v-if="navigatorOpen" aria-label="Network resources">
+    <button :aria-current="!branch ? 'true' : undefined" @click="chooseBranch()">All resources in selection</button>
+    <NetworkTree :key="treeScope" :query="treeQuery" :selected="branch" :ancestors="[]"
+      @select="chooseBranch" @inspect="open" />
+  </nav>
+</details>
+<div class="inventory-results">
 <div class="table-meta"><span>{{ page.total.toString() }} resources<span v-if="loading"> · Loading…</span></span><div><button v-if="!topology" @click="editor = 'columns'">Columns</button><button @click="editor = 'view'">Save view</button><button v-if="activeView" @click="useView(activeView)">Reset adjustments</button><button v-if="identity?.writable && query.view === model.View.NETWORK && actions.allocations.length" @click="allocate">Allocate IP / prefix</button></div></div>
 <div v-if="query.predicates.length||query.responsibility" class="selection"><span v-for="(p, index) in query.predicates" :key="index" class="chip">{{ definitions.find(d => d.id === p.field)?.name ?? p.field }} = {{ display(p.value) }}<button :aria-label="`Remove filter ${index + 1}`" @click="filters(query.predicates.filter((_, i) => i !== index),query.responsibility)">×</button></span><span v-if="query.responsibility" class="chip">{{model.ResponsibilityFacet[query.responsibility.facet]?.toLowerCase().replaceAll('_',' ')}}: {{query.responsibility.issuer}} / {{query.responsibility.subject}}<button aria-label="Remove responsibility filter" @click="filters(query.predicates)">×</button></span></div>
 <NetworkTopology v-if="topologyMode" v-show="topology && !loading && !error" :page="topologyPage" :name="resourceName" :pins="pins" :selected="detail?.item?.target" @open="open" @pin="pin" @clear="pins = []" />
@@ -587,7 +635,7 @@ onMounted(async () => {
 </td><td><button class="identity-link" @click="open(i.target)">{{ i.target?.assetId.slice(-8) }} ↗</button></td></tr></template></tbody></table></div>
 </template>
 <div v-if="!page.items.length && !loading && !error" class="empty"><span aria-hidden="true">▦</span><h2>{{ initialEmpty ? 'Start with the infrastructure you know' : query.levelOnly ? 'No resources at this level in this view' : 'No resources match this selection' }}</h2><p>{{ initialEmpty ? 'Create a resource or preview a CSV import. Each object keeps its own stable identity.' : query.levelOnly ? 'Choose another view or open an enclosing resource to inspect its contents. Nested resources are shown inside their owners.' : 'Try another term or change the scope. Search only includes fields you may read.' }}</p><button v-if="identity?.writable" class="primary" @click="create">Create resource</button></div>
-<footer class="pagination"><span>Current accepted state · revision {{ page.revision.toString() }}</span><div><button v-if="query.cursor" @click="change({ cursor: undefined })">First page</button><button :disabled="!page.next" @click="change({ cursor: page.next })">Next page →</button></div></footer></section>
+<footer class="pagination"><span>Current accepted state · revision {{ page.revision.toString() }}</span><div><button v-if="query.cursor" @click="change({ cursor: undefined })">First page</button><button :disabled="!page.next" @click="change({ cursor: page.next })">Next page →</button></div></footer></div></div></section>
 <section v-if="detail?.item" class="detail" aria-label="Resource details"><button class="back-to-list" @click="closeDetail">{{ parameters('trail').length ? 'Back to parent' : 'Back to inventory' }}</button><header><div><p class="eyebrow">{{ label(detail.item.kind) }}</p><h2 ref="detailHeading" tabindex="-1">{{ detailName || 'Resource details' }}</h2></div><div class="actions"><button @click="change({ scope: detail.item.target?.assetId, scopeInc: detail.item.target?.incarnation, asset: undefined, incarnation: undefined, trail: undefined })">Use as scope</button><button v-if="identity?.writable" @click="edit">Edit resource</button><button aria-label="Close resource details" @click="closeDetail">×</button></div></header><dl><template v-for="f in detail.item.fields" :key="f.name"><dt>{{ definitions.find(d => d.id === f.name)?.name ?? f.name.replaceAll('_',' ') }}</dt><dd>{{ display(f) }}</dd></template><dt>Stable identity</dt><dd class="mono">{{ detail.item.target?.assetId }}</dd><dt>Incarnation</dt><dd class="mono">{{ detail.item.target?.incarnation }}</dd><dt>Accepted revision</dt><dd>{{ detail.item.revision.toString() }}</dd></dl>
 <section class="phone-context" aria-label="Local resources"><label for="local-perspective">Resource perspective</label><select id="local-perspective" :value="query.view" @change="change({ view: ($event.target as HTMLSelectElement).value, kind: undefined })"><option v-for="v in presentations" :key="v.id" :value="v.id">{{ v.name }}</option></select><div class="actions"><button v-if="identity?.writable && actions.creations.length" class="primary" @click="create">+ Create resource</button><button v-if="identity?.writable && query.view === model.View.NETWORK && actions.allocations.length" @click="allocate">Allocate IP / prefix</button></div><ul><li v-for="item in page.items.filter(i => key(i.target) !== key(detail?.item?.target))" :key="key(item.target)"><button @click="open(item.target)">{{ resourceName(item) || item.target?.assetId.slice(-8) }}</button><span>{{ label(item.kind) }}</span></li></ul><button v-if="page.next" @click="change({ cursor: page.next })">Next local resources</button></section>
 <section v-if="[K.IP_ADDRESS, K.PREFIX, K.VLAN, K.ADDRESS_GROUP].includes(detail.item.kind)"><div class="section-title"><h3>{{ detail.item.kind === K.PREFIX ? 'Prefix details' : 'Address allocation' }}</h3><button v-if="identity?.writable" @click="editing = detail.item; editor = 'network'">Review network settings</button><button v-if="identity?.writable && [K.IP_ADDRESS, K.ADDRESS_GROUP].includes(detail.item.kind)" @click="editor = 'member'">Assign participant</button></div><p v-if="detail.group">Shared group: <button @click="open(detail.group.target)">{{ display(detail.group.fields.find(f => f.name === 'name')) }} · {{ detail.group.target?.assetId.slice(-8) }}</button></p><p v-if="!detail.participantsComplete" class="hint">Participant coverage is restricted. Missing participants do not prove the allocation is free.</p><ul><li v-for="p in detail.participants" :key="key(p.interface)"><button @click="open(p.interface)">Interface {{ p.interface?.assetId.slice(-8) }}</button><span v-if="p.priority !== undefined"> · Intended priority {{ p.priority }}</span><button v-if="identity?.writable" @click="removeParticipant(p)">Remove participant</button></li></ul></section>

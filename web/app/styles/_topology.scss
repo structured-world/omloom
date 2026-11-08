@@ -11,6 +11,18 @@
 .network-selectors label { display: grid; min-width: 0; gap: t.$space; }
 .network-selectors select { max-width: 100%; }
 .network-selectors .representation-controls { margin: 0 0 0 auto; }
+.network-navigator { padding: t.$space * 3; border-bottom: 1px solid var(--line); }
+.network-navigator summary { cursor: pointer; }
+.network-navigator nav { margin-top: t.$space * 2; max-height: 45vh; overflow: auto; }
+.network-navigator ul { list-style: none; margin: 0; padding-inline-start: t.$space * 3; }
+.network-navigator li { margin-block: t.$space; }
+.network-navigator small { margin-inline: t.$space; color: var(--ink-soft); }
+.network-navigator [aria-current=true] { outline: 2px solid currentColor; }
+.inventory-results { min-width: 0; }
+@media (min-width: 1000px) {
+  .network-with-navigator { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(0, 3fr); }
+  .network-with-navigator .network-navigator { border-inline-end: 1px solid var(--line); }
+}
 .network-topology {
   min-width: 0;
   border-block: 1px solid var(--line);

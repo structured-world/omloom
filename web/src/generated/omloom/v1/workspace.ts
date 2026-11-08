@@ -2300,13 +2300,13 @@ export interface NetworkPin {
      */
     target?: AssetRef;
     /**
-     * Horizontal offset from automatic placement, in diagram units, ±4096.
+     * Horizontal position relative to the diagram origin, in units, ±4096.
      *
      * @generated from protobuf field: sint32 x = 2
      */
     x: number;
     /**
-     * Vertical offset from automatic placement, in diagram units, ±4096.
+     * Vertical position relative to the diagram origin, in units, ±4096.
      *
      * @generated from protobuf field: sint32 y = 3
      */

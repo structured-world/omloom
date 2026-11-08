@@ -115,7 +115,7 @@ pub(super) fn ownership_path(children: bool, reverse: bool) -> &'static str {
     }
 }
 
-fn browse_clause(
+pub(super) fn browse_clause(
     context: &Context,
     values: &mut HashMap<String, Value>,
     reverse: Option<bool>,
@@ -553,10 +553,18 @@ impl Store {
             visible_clause(context, None, &mut values),
         ];
         let mut site_entry = None;
+        let without_site = query
+            .network
+            .as_ref()
+            .is_some_and(|network| network.unplaced);
         if let Some(network) = &query.network
-            && (!network.sites.is_empty() || network.unplaced)
+            && !network.sites.is_empty()
         {
-            let members = tx.located_selection(context, network)?;
+            if without_site {
+                return Err(Error::Invalid);
+            }
+            tx.validate_sites(context, &network.sites)?;
+            let members = tx.working_scope(context, &network.sites)?;
             let sites = parameter(
                 &mut values,
                 Value::Array(
@@ -566,11 +574,8 @@ impl Store {
                         .collect(),
                 ),
             );
-            let negate = if network.unplaced { "NOT " } else { "" };
-            clauses.push(format!("{negate}a.key IN {sites}"));
-            if !network.unplaced {
-                site_entry = Some(sites);
-            }
+            clauses.push(format!("a.key IN {sites}"));
+            site_entry = Some(sites);
         }
         if query.require_physical_read {
             clauses.push(visible_clause(context, Some("physical"), &mut values));
@@ -1246,13 +1251,23 @@ impl Store {
             bindings.join(", "),
             clauses.join(" AND ")
         );
-        let bases = match prefix_entries {
+        let mut bases = match prefix_entries {
             Some(entries) => entries
                 .into_iter()
                 .map(|entry| format!("{entry}{tail}"))
                 .collect::<Vec<_>>(),
             None => vec![format!("{entry}{tail}")],
         };
+        if without_site {
+            let keys = tx.unplaced_candidates(context, &bases, &values)?;
+            let keys = parameter(
+                &mut values,
+                Value::Array(keys.into_iter().map(text).collect()),
+            );
+            for base in &mut bases {
+                base.push_str(&format!(" AND a.key IN {keys}"));
+            }
+        }
         let sort = match query.sort.as_str() {
             "" | "name" => format!(
                 "CASE WHEN {} THEN a.name_sort ELSE a.asset END",

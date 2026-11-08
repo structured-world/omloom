@@ -22,7 +22,7 @@ use std::{
 type Properties = BTreeMap<String, Value>;
 type Result<T> = std::result::Result<T, Error>;
 const ROOT: &str = "installation";
-const SCHEMA_VERSION: u64 = 24;
+const SCHEMA_VERSION: u64 = 25;
 const PHYSICAL_TEXT: &[&str] = &["basis", "mounting", "item", "enclosure", "old_item"];
 const PHYSICAL_NUMBERS: &[&str] = &[
     "material_count",
@@ -191,6 +191,9 @@ fn props(items: impl IntoIterator<Item = (&'static str, Value)>) -> Properties {
 }
 
 fn charged_row(key: &str, parent: &str, class: Class, mut data: Properties) -> Result<Properties> {
+    if parent == "relations" {
+        workspace::topology::derive_pair(&mut data)?;
+    }
     data.insert("key".into(), text(key));
     data.insert("parent".into(), text(parent));
     data.insert("class".into(), int(class as u64)?);
@@ -543,6 +546,7 @@ impl Store {
         schema.add_property(PropertyDef::new("query", PropertyType::Binary));
         schema.add_property(PropertyDef::new("working", PropertyType::Binary));
         schema.add_property(PropertyDef::new("payload", PropertyType::Binary));
+        schema.add_property(PropertyDef::new("topology_pair", PropertyType::Binary));
         for name in ["choices", "audiences", "editors", "columns"] {
             schema.add_property(PropertyDef::new(
                 name,
@@ -670,6 +674,7 @@ impl Store {
                             "prefix_length",
                             "working",
                             "payload",
+                            "topology_pair",
                             "virtualization_role",
                             "count",
                             "bytes",
@@ -718,6 +723,7 @@ impl Store {
             ("omloom_asset", "asset"),
             // Reverse administrative inheritance follows exact relation endpoints.
             ("omloom_to_asset", "to_asset"),
+            ("omloom_topology_pair", "topology_pair"),
             ("omloom_group", "group"),
             ("omloom_party_lookup", "party_lookup"),
             ("omloom_request_account", "request_account"),
@@ -790,6 +796,9 @@ impl Store {
         if version < 24 {
             workspace::host_identity::matching::upgrade(&store)?;
         }
+        if version < 25 {
+            workspace::topology::upgrade_pairs(&store)?;
+        }
         if version < SCHEMA_VERSION {
             // Publish the format only after all resumable projections are ready.
             let mut tx = store.begin()?;
@@ -820,6 +829,13 @@ impl Store {
                 .db
                 .execute_cypher_shared(query, None, None, None, None)?;
         }
+        store.db.execute_cypher_shared(
+            "MATCH (n:OmRow {topology_pair:$pair}) RETURN n.key AS key LIMIT 1",
+            params([("pair", Value::Binary(vec![0; 64]))]),
+            None,
+            None,
+            None,
+        )?;
         Ok(store)
     }
     fn policy_identity(&self) -> String {

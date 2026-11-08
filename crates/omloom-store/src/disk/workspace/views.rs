@@ -26,7 +26,7 @@ fn visible_layouts<'a>(
     tx: &Tx<'_>,
     context: &Context,
     queries: impl IntoIterator<Item = &'a mut api::Query>,
-) -> Result<()> {
+) -> Result<BTreeSet<AssetRef>> {
     let mut keys = BTreeSet::new();
     let mut layouts = Vec::new();
     for query in queries {
@@ -55,6 +55,7 @@ fn visible_layouts<'a>(
         layouts.push((layout, targets));
     }
     let mut permitted = BTreeSet::new();
+    let mut current = BTreeSet::new();
     let mut keys = keys.into_iter();
     loop {
         let batch: Vec<_> = keys.by_ref().take(128).map(text).collect();
@@ -70,6 +71,7 @@ fn visible_layouts<'a>(
         )?;
         for row in rows {
             let reference = target(&row)?;
+            current.insert(reference);
             if context.readable(reference, number(&row, "kind")? as i32) {
                 permitted.insert(reference);
             }
@@ -83,8 +85,17 @@ fn visible_layouts<'a>(
                 .is_some_and(|target| permitted.contains(&target))
         });
     }
-    Ok(())
+    Ok(current)
 }
+
+fn pins(query: &api::Query) -> &[api::NetworkPin] {
+    query
+        .network
+        .as_ref()
+        .and_then(|network| network.layout.as_ref())
+        .map_or(&[], |layout| layout.pins.as_slice())
+}
+
 impl Store {
     pub(super) fn workspace_views(&self, context: &Context) -> Result<Vec<api::SavedView>> {
         let tx = self.begin()?;
@@ -112,6 +123,21 @@ impl Store {
         now: u64,
     ) -> Result<api::Reply> {
         let mut view = request.view.ok_or(Error::Invalid)?;
+        if request.remove {
+            let id = view.id.parse::<AuthorityId>().map_err(|_| Error::Invalid)?;
+            let mut tx = self.begin()?;
+            let key = format!("view/{id}");
+            let row = tx.get(&key)?.ok_or(Error::Missing)?;
+            if string(&row, "owner")? != context.actor {
+                return Err(Error::Denied);
+            }
+            if number(&row, "revision")? != view.revision {
+                return Err(Error::Conflict);
+            }
+            tx.delete(&key)?;
+            tx.audit(&key, &context.actor, "view.removed", view.revision, now)?;
+            return Ok(mutation(tx.commit()?, Vec::new()));
+        }
         if view.name.trim().is_empty()
             || view.name.len() > 100
             || view.audiences.len() > 16
@@ -154,7 +180,6 @@ impl Store {
             }
             tx.validate_sites(context, &network.sites)?;
         }
-        visible_layouts(&tx, context, [query.as_mut()])?;
         let old = if view.id.is_empty() {
             if view.revision != 0 || (!view.owner.is_empty() && view.owner != context.actor) {
                 return Err(Error::Denied);
@@ -169,9 +194,9 @@ impl Store {
                     .ok_or(Error::Missing)?,
             )
         };
-        if let Some(row) = &old {
-            let previous = decode(row)?;
-            if !visible(&previous, context) || !editable(&previous, context) {
+        let previous = old.as_ref().map(decode).transpose()?;
+        if let Some(previous) = &previous {
+            if !visible(previous, context) || !editable(previous, context) {
                 return Err(Error::Denied);
             }
             if previous.revision != view.revision {
@@ -186,23 +211,23 @@ impl Store {
             if previous.owner != view.owner && !context.recipients.contains(&view.owner) {
                 return Err(Error::Denied);
             }
-            if request.remove {
-                if previous.owner != context.actor {
-                    return Err(Error::Denied);
+        }
+        let previous_query = previous.as_ref().and_then(|saved| saved.query.as_deref());
+        let mut readable_previous = previous_query.filter(|q| !pins(q).is_empty()).cloned();
+        let current = visible_layouts(
+            &tx,
+            context,
+            core::iter::once(query.as_mut()).chain(readable_previous.iter_mut()),
+        )?;
+        let mut hidden = Vec::new();
+        if let (Some(previous), Some(readable)) = (previous_query, readable_previous.as_ref()) {
+            for pin in pins(previous) {
+                if current.contains(&parse_target(pin.target.as_ref())?)
+                    && !pins(readable).contains(pin)
+                {
+                    hidden.push(pin.clone());
                 }
-                let key = format!("view/{}", view.id);
-                tx.delete(&key)?;
-                tx.audit(&key, &context.actor, "view.removed", view.revision, now)?;
-                return Ok(mutation(tx.commit()?, Vec::new()));
             }
-            if previous == view {
-                tx.commit()?;
-                return Ok(reply(api::reply::Result::Views(api::Views {
-                    items: vec![view],
-                })));
-            }
-        } else if request.remove {
-            return Err(Error::Invalid);
         }
         let existing_audiences = old
             .as_ref()
@@ -221,9 +246,25 @@ impl Store {
             || old
                 .as_ref()
                 .is_some_and(|p| string(p, "owner").ok().as_ref() != Some(&view.owner));
+        if !hidden.is_empty()
+            && (view
+                .audiences
+                .iter()
+                .any(|a| !existing_audiences.contains(a))
+                || previous
+                    .as_ref()
+                    .is_some_and(|saved| saved.owner != view.owner))
+        {
+            return Err(Error::Denied);
+        }
         if disclosure && request.publish {
             let query = view.query.as_ref().ok_or(Error::Invalid)?;
-            for reference in query.roots.iter().chain(query.focus.iter()) {
+            for reference in query
+                .roots
+                .iter()
+                .chain(query.focus.iter())
+                .chain(pins(query).iter().filter_map(|pin| pin.target.as_ref()))
+            {
                 let target = parse_target(Some(reference))?;
                 let row = tx.visible_asset(context, target)?;
                 if number(&row, "kind")? == wire::AssetKind::ProviderAccount as u64
@@ -244,8 +285,34 @@ impl Store {
                 items: vec![view],
             })));
         }
+        let mut stored = view.clone();
+        if !hidden.is_empty() {
+            let query = stored.query.as_mut().ok_or(Error::Invalid)?;
+            if query.view != api::View::Network as i32 {
+                return Err(Error::Denied);
+            }
+            let layout = query
+                .network
+                .get_or_insert_with(Default::default)
+                .layout
+                .get_or_insert_with(Default::default);
+            if layout.pins.len() + hidden.len() > 64 {
+                return Err(Error::Limit);
+            }
+            layout.pins.extend(hidden);
+            if query.encoded_len() > 8192 {
+                return Err(Error::Limit);
+            }
+        }
+        if previous.as_ref() == Some(&stored) {
+            tx.commit()?;
+            return Ok(reply(api::reply::Result::Views(api::Views {
+                items: vec![view],
+            })));
+        }
         view.revision = view.revision.checked_add(1).ok_or(Error::Limit)?;
-        tx.require_view_capacity(&view)?;
+        stored.revision = view.revision;
+        tx.require_view_capacity(&stored)?;
         let key = format!("view/{}", view.id);
         tx.put_against(
             &key,
@@ -259,7 +326,7 @@ impl Store {
                 ("editors", strings(&view.editors)),
                 (
                     "query",
-                    Value::Binary(view.query.as_ref().ok_or(Error::Invalid)?.encode_to_vec()),
+                    Value::Binary(stored.query.as_ref().ok_or(Error::Invalid)?.encode_to_vec()),
                 ),
             ]),
             old.as_ref(),

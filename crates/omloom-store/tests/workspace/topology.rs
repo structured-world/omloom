@@ -51,6 +51,10 @@ fn topology_projects_known_links_without_disclosing_denied_endpoints() -> TestRe
     let topology = page.topology.ok_or("topology")?;
     assert_eq!(topology.edges.len(), 1);
     assert_eq!(topology.edges[0].kind, wire::RelationKind::MemberOf as i32);
+    for edge in &topology.edges {
+        assert!(page.items.iter().any(|item| item.target == edge.from));
+        assert!(page.items.iter().any(|item| item.target == edge.to));
+    }
     assert!(!topology.more_edges);
     let mut reader = operator();
     reader.grants[0].read = Fields::Selected(vec!["name".into()]);
@@ -73,8 +77,14 @@ fn topology_projects_known_links_without_disclosing_denied_endpoints() -> TestRe
     let mut selector = graph_query();
     selector.limit = 1;
     let first = graph(&store, &actor, selector.clone())?;
+    assert_eq!(first.items.len(), 1);
+    assert!(first.topology.ok_or("first topology")?.edges.is_empty());
     selector.cursor = first.next;
     assert!(selector.cursor.is_some());
+    let second = graph(&store, &actor, selector.clone())?;
+    assert_eq!(second.items.len(), 1);
+    assert_ne!(second.items[0].target, first.items[0].target);
+    assert!(second.topology.ok_or("second topology")?.edges.is_empty());
     create(&store, &actor, K::Vrf, "New revision")?;
     assert!(matches!(
         graph(&store, &actor, selector),
@@ -157,6 +167,157 @@ fn topology_intersects_sites_with_independent_selection() -> TestResult {
     Ok(())
 }
 
+// Filtering for one interface must not consume the unrelated site inventory.
+#[test]
+fn topology_unplaced_narrow_query_ignores_unrelated_sites() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let site = create(&store, &actor, K::Site, "Located site")?;
+    let host = child(&store, &actor, &site, K::Device, "Located host")?;
+    child(&store, &actor, &host, K::Interface, "Needle located")?;
+    let expected = create(&store, &actor, K::Interface, "Needle unplaced")?;
+    for index in 0..128 {
+        create(&store, &actor, K::Site, &format!("Unrelated {index}"))?;
+    }
+    let mut selector = graph_query();
+    selector.kinds = vec![K::Interface as i32];
+    selector.search = "Needle".into();
+    selector.network.as_mut().ok_or("selection")?.unplaced = true;
+    let page = graph(&store, &actor, selector)?;
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].target.as_ref(), Some(&expected));
+    Ok(())
+}
+
+// Reopening the previous format backfills the index without changing the accepted link.
+#[test]
+fn topology_pair_index_backfills_existing_relations() -> TestResult {
+    use coordinode_embed::{Intent, LabelDeclaration, SchemaPackage};
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    store.workspace(
+        &actor,
+        api::Request {
+            command: Some(C::Address(api::Address {
+                address: Some("192.0.2.9/24".into()),
+                create_prefix: true,
+                ..Default::default()
+            })),
+            working: Some(api::WorkingContext {
+                expected: Some(store.usage()?.revision),
+                ..Default::default()
+            }),
+        },
+        100,
+    )?;
+    let expected = graph(&store, &actor, graph_query())?
+        .topology
+        .ok_or("topology")?;
+    assert_eq!(expected.edges.len(), 1);
+    let db = store.diagnostic_database();
+    for statement in [
+        "DROP INDEX omloom_topology_pair",
+        "MATCH (n:OmRow {parent:'relations'}) REMOVE n.topology_pair",
+        "MATCH (n:OmRow {key:'installation'}) SET n.`schema`=24",
+    ] {
+        db.execute_cypher_shared(statement, None, None, None, None)?;
+    }
+    let mut schema = db
+        .label_schemas()?
+        .into_iter()
+        .find(|schema| schema.name == "OmRow")
+        .ok_or("schema")?;
+    let expected_revision = schema.schema_revision;
+    schema
+        .properties
+        .remove("topology_pair")
+        .ok_or("pair property")?;
+    schema
+        .remove_constraint("omloom_key")
+        .ok_or("key constraint")?;
+    let publication = db.publish_schema(SchemaPackage {
+        labels: vec![LabelDeclaration {
+            schema,
+            intent: Intent::Change { expected_revision },
+        }],
+        edge_types: Vec::new(),
+        constraints: Vec::new(),
+    })?;
+    assert!(
+        db.await_schema(&publication, std::time::Duration::from_secs(20))?
+            .all_ready()
+    );
+    drop(store);
+    let store = Store::open(dir.path(), policy())?;
+    assert_eq!(
+        graph(&store, &actor, graph_query())?.topology,
+        Some(expected)
+    );
+    Ok(())
+}
+
+// The same stable asset ID must not attach links from an earlier incarnation.
+#[test]
+fn topology_never_attaches_links_to_a_different_incarnation() -> TestResult {
+    use coordinode_core::graph::types::Value;
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let interface = create(&store, &actor, K::Interface, "Uplink")?;
+    let segment = create(&store, &actor, K::L2Domain, "Fabric")?;
+    call(
+        &store,
+        &actor,
+        C::Relation(api::Relationship {
+            relation: Some(wire::Relation {
+                from: Some(interface.clone()),
+                to: Some(segment.clone()),
+                kind: wire::RelationKind::On as i32,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+    )?;
+    assert_eq!(
+        graph(&store, &actor, graph_query())?
+            .topology
+            .ok_or("topology")?
+            .edges
+            .len(),
+        1
+    );
+    let incarnation = omloom_contracts::ids::IncarnationId::generate().to_string();
+    store.diagnostic_database().execute_cypher_shared(
+        "MATCH (n:OmRow {key:$key}) SET n.incarnation=$incarnation",
+        Some(
+            [
+                (
+                    "key".into(),
+                    Value::String(format!("asset/{}", segment.asset_id)),
+                ),
+                ("incarnation".into(), Value::String(incarnation.clone())),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        None,
+        None,
+        None,
+    )?;
+    let page = graph(&store, &actor, graph_query())?;
+    assert!(
+        page.items
+            .iter()
+            .any(|item| item.target.as_ref().is_some_and(|target| {
+                target.asset_id == segment.asset_id && target.incarnation == incarnation
+            }))
+    );
+    assert!(page.topology.ok_or("topology")?.edges.is_empty());
+    Ok(())
+}
+
 // Dense membership retains independent links and bounds the permitted output.
 #[test]
 fn topology_caps_dense_pages_and_keeps_parallel_links() -> TestResult {
@@ -231,15 +392,19 @@ fn topology_caps_dense_pages_and_keeps_parallel_links() -> TestResult {
             connect(port, segment)?;
         }
     }
+    for index in 0..64 {
+        let off_page = create(&store, &actor, K::L2Domain, &format!("Outside {index:02}"))?;
+        connect(&ports[0], &off_page)?;
+    }
     let before = store.usage()?;
     store.set_diagnostic_query_check(|db, statement| {
-        if statement.contains("r.to_asset+'/'+r.to_incarnation") {
+        if statement.contains("RETURN properties(r) AS p ORDER BY r.key LIMIT $limit") {
             let plan = db
                 .explain_plan(statement, None)
                 .expect("topology plan")
                 .explain();
             assert!(
-                plan.contains("IndexScan(r:OmRow ON omloom_asset(asset))"),
+                plan.contains("IndexScan(r:OmRow ON omloom_topology_pair(topology_pair))"),
                 "{plan}"
             );
         }
@@ -337,7 +502,45 @@ fn topology_layout_survives_reopen_and_filters_hidden_pins() -> TestResult {
     assert!(layout.pins.is_empty());
     assert_eq!(store.usage()?, before);
 
-    let mut changed = original.clone();
+    let mut renamed = restricted.items[0].clone();
+    renamed.name = "Renamed by restricted editor".into();
+    let R::Views(result) = call(
+        &store,
+        &editor,
+        C::SaveView(api::SaveView {
+            view: Some(renamed),
+            publish: true,
+            ..Default::default()
+        }),
+    )?
+    else {
+        return Err("save result".into());
+    };
+    assert!(
+        result.items[0]
+            .query
+            .as_ref()
+            .and_then(|q| q.network.as_ref())
+            .and_then(|n| n.layout.as_ref())
+            .ok_or("layout")?
+            .pins
+            .is_empty()
+    );
+    let R::Views(author) = call(&store, &actor, C::Views(api::Empty {}))? else {
+        return Err("views".into());
+    };
+    assert_eq!(
+        author.items[0]
+            .query
+            .as_ref()
+            .and_then(|q| q.network.as_ref())
+            .and_then(|n| n.layout.as_ref())
+            .ok_or("layout")?
+            .pins,
+        vec![pin]
+    );
+
+    let mut changed = author.items[0].clone();
     changed.name = "First concurrent edit".into();
     call(
         &store,
@@ -360,5 +563,104 @@ fn topology_layout_survives_reopen_and_filters_hidden_pins() -> TestResult {
         ),
         Err(Error::Conflict)
     ));
+    Ok(())
+}
+
+// Deleting a definition only requires current authority over that definition.
+#[test]
+fn topology_owner_can_remove_a_view_with_an_unreadable_site() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let mut actor = operator();
+    let site = create(&store, &actor, K::Site, "Site")?;
+    let mut query = graph_query();
+    query.network.as_mut().ok_or("selection")?.sites.push(site);
+    let R::Views(saved) = call(
+        &store,
+        &actor,
+        C::SaveView(api::SaveView {
+            view: Some(api::SavedView {
+                name: "Site view".into(),
+                query: Some(Box::new(query)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+    )?
+    else {
+        return Err("saved view".into());
+    };
+    actor.grants[0].scope = Scope::Kinds(vec![K::Interface]);
+    let result = call(
+        &store,
+        &actor,
+        C::SaveView(api::SaveView {
+            view: Some(saved.items[0].clone()),
+            remove: true,
+            ..Default::default()
+        }),
+    )?;
+    assert!(matches!(result, R::Mutation(_)));
+    let R::Views(remaining) = call(&store, &actor, C::Views(api::Empty {}))? else {
+        return Err("views".into());
+    };
+    assert!(remaining.items.is_empty());
+    Ok(())
+}
+
+// Configured allocations are attached through Member rather than Relation.
+#[test]
+fn topology_projects_authorized_membership_assignments() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let interface = create(&store, &actor, K::Interface, "Management")?;
+    let space = create(&store, &actor, K::AddressSpace, "Management space")?;
+    let R::Mutation(created) = call(
+        &store,
+        &actor,
+        C::Network(api::Network {
+            kind: K::IpAddress as i32,
+            name: "Management IP".into(),
+            cidr: "192.0.2.3/24".into(),
+            address_space: Some(space),
+            sharing: api::SharedUse::Exclusive as i32,
+            ..Default::default()
+        }),
+    )?
+    else {
+        return Err("address".into());
+    };
+    let address = created.targets[0].clone();
+    call(
+        &store,
+        &actor,
+        C::Member(api::Member {
+            address: Some(address.clone()),
+            interface: Some(interface.clone()),
+            expected: store.asset(AssetRef::try_from(&address)?)?.revision,
+            ..Default::default()
+        }),
+    )?;
+    let before = store.usage()?;
+    let edge = graph(&store, &actor, graph_query())?
+        .topology
+        .ok_or("topology")?
+        .edges
+        .into_iter()
+        .find(|edge| edge.kind == wire::RelationKind::AssignedTo as i32)
+        .ok_or("assignment link missing")?;
+    assert_eq!(edge.from, Some(address));
+    assert_eq!(edge.to, Some(interface));
+    let mut reader = operator();
+    reader.grants[0].read = Fields::Selected(vec!["name".into(), "relations".into()]);
+    assert!(
+        graph(&store, &reader, graph_query())?
+            .topology
+            .ok_or("topology")?
+            .edges
+            .is_empty()
+    );
+    assert_eq!(store.usage()?, before);
     Ok(())
 }

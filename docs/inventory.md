@@ -400,6 +400,10 @@ and **Project / selection** are independent. Choose one or more permitted sites,
 or **No known site**, and intersect that choice with a saved resource selection.
 An empty result keeps both filters in place.
 
+Open **Resource navigator** to browse entities by ownership. Expanding a row
+fetches that level. Selecting a container shows its network branch in both the
+diagram and table while retaining the site and project filters.
+
 The diagram draws relationships whose two endpoints are on the current page.
 Open a resource to see additional authorized relationship pages and use the
 ordinary inventory editor. The recorded link type describes the evidence.
@@ -415,8 +419,10 @@ rechecks access to pinned resource incarnations when loading them.
 
 The browser requests 25 nodes per page. A network projection returns at most
 128 recorded links and uses the existing response byte limit. Site selection
-accepts up to 16 explicit sites, and location traversal uses the common
-1,024-resource scope ceiling. Larger location scopes must be narrowed.
+accepts up to 16 explicit sites, and traversal from those sites uses the common
+1,024-resource scope ceiling. **No known site** checks visible ownership above
+the matching resources. Narrow the selection if it exceeds 4,096 candidates
+or the ownership traversal exceeds its work limit.
 
 List context is limited to authorized owner labels and address hints for the
 displayed services/interfaces. It does not load host routing tables, firewall

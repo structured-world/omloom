@@ -24,7 +24,7 @@ mod responsibility;
 mod segments;
 mod software;
 mod source_layout;
-mod topology;
+pub(super) mod topology;
 mod typed_values;
 mod views;
 mod vm_placement;

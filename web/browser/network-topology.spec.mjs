@@ -34,12 +34,177 @@ for (const width of [1440, 390]) test(`known topology supports inspect, arrange 
     await expect(dialog).toBeHidden();
     await page.reload();
     await page.getByRole('button', { name: '◦ Arranged network', exact: true }).click();
-    await expect(node).toBeVisible();
-    expect(parseInt(await node.evaluate(el => el.style.left))).toBe(parseInt(left) + 16);
+    await expect(page).toHaveURL(/(?:\?|&)saved=/);
+    await expect(node).toHaveCSS('left', `${parseInt(left) + 16}px`);
+    await page.reload();
+    await expect(node).toHaveCSS('left', `${parseInt(left) + 16}px`);
     await page.getByRole('button', { name: 'Table', exact: true }).click();
     await expect(graph).toHaveCount(0);
     await expect(page.getByRole('table').getByRole('button', { name: '192.0.2.9', exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+});
+
+test('network history restores the positions of the selected view', async ({ page }) => {
+  // Back and Forward restore the matching saved layout without an explicit sidebar click.
+  await withFieldHost(async url => {
+    const { m, rpc } = await workspaceClient(url);
+    const target = (await rpc({ oneofKind: 'address', address: m.Address.create({ address: '192.0.2.12' }) })).mutation.targets[0];
+    for (const [name, x] of [['Map A', 96], ['Map B', 224]]) {
+      await rpc({ oneofKind: 'saveView', saveView: m.SaveView.create({
+        view: { name, query: m.Query.create({ view: m.View.NETWORK, limit: 25,
+          network: { layout: { pins: [{ target, x, y: 64 }] } },
+        }) },
+      }) });
+    }
+    await page.goto(`${url}/#/?view=1`);
+    const graph = page.getByRole('region', { name: 'Current network topology' });
+    const node = graph.getByRole('button', { name: '192.0.2.12', exact: true });
+    await page.getByRole('button', { name: '◦ Map A', exact: true }).click();
+    await expect(page).toHaveURL(/saved=/);
+    await expect(node).toBeVisible();
+    const a = await node.evaluate(el => el.style.left);
+    await page.getByRole('button', { name: '◦ Map B', exact: true }).click();
+    await expect.poll(() => node.evaluate(el => el.style.left)).not.toBe(a);
+    await page.goBack();
+    await expect(node).toHaveCSS('left', a);
+    await page.goForward();
+    await expect.poll(() => node.evaluate(el => el.style.left)).not.toBe(a);
+  });
+});
+
+test('an earlier network view response cannot win after a second selection', async ({ page }) => {
+  // Serve the older request first, while the newer selection is still waiting.
+  await withFieldHost(async url => {
+    const { m, rpc } = await workspaceClient(url);
+    for (const name of ['Old selection', 'New selection']) {
+      await rpc({ oneofKind: 'saveView', saveView: m.SaveView.create({
+        view: { name, query: m.Query.create({ view: m.View.NETWORK, search: name, limit: 25 }) },
+      }) });
+    }
+    await page.goto(`${url}/#/?view=1`);
+    const first = page.getByRole('button', { name: '◦ Old selection', exact: true });
+    const second = page.getByRole('button', { name: '◦ New selection', exact: true });
+    await expect(second).toBeVisible();
+    const release = [Promise.withResolvers(), Promise.withResolvers()];
+    const arrived = [Promise.withResolvers(), Promise.withResolvers()];
+    let count = 0;
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      const command = m.Request.fromBinary(route.request().postDataBuffer().subarray(5)).command;
+      if (command.oneofKind !== 'views' || count === 2) return route.continue();
+      const index = count++;
+      arrived[index].resolve();
+      await release[index].promise;
+      await route.continue();
+    });
+    try {
+      await first.click();
+      await arrived[0].promise;
+      await second.click();
+      await arrived[1].promise;
+      const returned = page.waitForResponse(response => {
+        const data = response.request().postDataBuffer();
+        return response.url().endsWith('/omloom.workspace.v1.Workspace/Call') && data &&
+          m.Request.fromBinary(data.subarray(5)).command.oneofKind === 'views';
+      });
+      release[0].resolve();
+      await returned;
+      release[1].resolve();
+      await expect(page).toHaveURL(/search=New\+selection/);
+    } finally {
+      for (const gate of release) gate.resolve();
+    }
+  });
+});
+
+for (const width of [1440, 390]) test(`network navigator opens a nested device branch at ${width}px`, async ({ page }) => {
+  // Owners are navigable independently from the network kinds in the diagram.
+  await withFieldHost(async url => {
+    const { m, rpc } = await workspaceClient(url);
+    const write = (kind, name, parent) => rpc({ oneofKind: 'write', write: m.Write.create({
+      kind, parent, changes: [{ name: 'name', value: { oneofKind: 'text', text: name } }],
+    }) }, parent);
+    const host = (await write(m.AssetKind.DEVICE, 'Core switch')).mutation.targets[0];
+    await write(m.AssetKind.INTERFACE, 'Uplink', host);
+    await write(m.AssetKind.L2_DOMAIN, 'Unrelated segment');
+    await page.setViewportSize({ width, height: 850 });
+    await page.goto(`${url}/#/?view=1`);
+    const graph = page.getByRole('region', { name: 'Current network topology' });
+    await expect(graph.getByRole('button', { name: 'Uplink', exact: true })).toBeVisible();
+    await page.getByText('Resource navigator', { exact: true }).click();
+    const navigator = page.getByRole('navigation', { name: 'Network resources' });
+    await expect(navigator.getByRole('button', { name: 'Uplink', exact: true })).toHaveCount(0);
+    await navigator.getByRole('button', { name: 'Expand Core switch', exact: true }).click();
+    await expect(navigator.getByRole('button', { name: 'Uplink', exact: true })).toBeVisible();
+    await navigator.getByRole('button', { name: 'Core switch', exact: true }).click();
+    await expect(graph.getByRole('button', { name: 'Uplink', exact: true })).toBeVisible();
+    await expect(graph.getByRole('button', { name: 'Unrelated segment', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Table', exact: true }).click();
+    await expect(page.getByRole('table').getByRole('button', { name: 'Uplink', exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+});
+
+test('a late site-picker failure leaves the topology usable', async ({ page }) => {
+  // A separate option lookup can fail after the inventory has already rendered.
+  await withFieldHost(async url => {
+    const { m, rpc } = await workspaceClient(url);
+    await rpc({ oneofKind: 'write', write: m.Write.create({
+      kind: m.AssetKind.SITE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'Edge site' } }],
+    }) });
+    await rpc({ oneofKind: 'address', address: m.Address.create({ address: '192.0.2.18' }) });
+    const delayed = Promise.withResolvers();
+    let failSite = true;
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      const command = m.Request.fromBinary(route.request().postDataBuffer().subarray(5)).command;
+      if (failSite && command.oneofKind === 'query' && command.query.kinds[0] === m.AssetKind.SITE) {
+        failSite = false;
+        await delayed.promise;
+        return route.abort();
+      }
+      return route.continue();
+    });
+    const graph = page.getByRole('region', { name: 'Current network topology' });
+    const node = graph.getByRole('button', { name: '192.0.2.18', exact: true });
+    try {
+      await page.goto(`${url}/#/?view=1`);
+      await expect(node).toBeVisible();
+    } finally {
+      delayed.resolve();
+    }
+    await expect(node).toBeVisible();
+    await page.getByRole('button', { name: 'Retry sites' }).click();
+    await expect(page.getByRole('combobox', { name: 'Site', exact: true }).getByRole('option', { name: 'Edge site' })).toHaveCount(1);
+    await expect(node).toBeVisible();
+  });
+});
+
+test('fit contains a widely arranged topology on a phone', async ({ page }) => {
+  // A pinned card keeps the same canvas coordinates when another card leaves the page.
+  await withFieldHost(async url => {
+    const { m, rpc } = await workspaceClient(url);
+    const target = (await rpc({ oneofKind: 'address', address: m.Address.create({ address: '192.0.2.22' }) })).mutation.targets[0];
+    await rpc({ oneofKind: 'address', address: m.Address.create({ address: '192.0.2.1' }) });
+    await rpc({ oneofKind: 'saveView', saveView: m.SaveView.create({
+      view: { name: 'Wide map', query: m.Query.create({
+        view: m.View.NETWORK, sort: 'name', limit: 25, network: { layout: { pins: [{ target, x: 3800, y: 64 }] } },
+      }) },
+    }) });
+    await page.setViewportSize({ width: 390, height: 850 });
+    await page.goto(`${url}/#/?view=1`);
+    await page.getByRole('button', { name: '◦ Wide map', exact: true }).click();
+    await expect(page).toHaveURL(/saved=/);
+    const graph = page.getByRole('region', { name: 'Current network topology' });
+    const node = graph.getByRole('button', { name: '192.0.2.22', exact: true });
+    const scroll = graph.locator('.network-topology-scroll');
+    await expect(node).toHaveCSS('left', '3800px');
+    const search = page.getByRole('textbox', { name: 'Search inventory' });
+    await search.fill('192.0.2.22');
+    await search.press('Enter');
+    await expect(graph.getByRole('button', { name: '192.0.2.1', exact: true })).toHaveCount(0);
+    await expect(node).toHaveCSS('left', '3800px');
+    await graph.getByRole('button', { name: 'Fit', exact: true }).click();
+    expect(await scroll.evaluate(el => el.scrollWidth)).toBe(await scroll.evaluate(el => el.clientWidth));
   });
 });
 
@@ -96,8 +261,9 @@ test('site and project intersect and obsolete scope requests cannot restore node
     } finally {
       release();
     }
+    await page.unrouteAll({ behavior: 'wait' });
+    await expect(northNode).toBeVisible();
     await expect(southNode).toHaveCount(0);
-    await page.unrouteAll({ behavior: 'ignoreErrors' });
     await site.selectOption({ label: 'South site' });
     await expect(page.getByRole('heading', { name: 'No resources match this selection' })).toBeVisible();
     await expect(southNode).toHaveCount(0);
