@@ -198,6 +198,53 @@ fn network_branch_queries_nested_resources_within_enclosing_roots() -> TestResul
     Ok(())
 }
 
+// A project rooted at an address space allows navigation by namespace and range.
+#[test]
+fn network_branch_accepts_prefix_within_project_address_space() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let space = create(&store, &actor, K::AddressSpace, "Project space")?;
+    let other = create(&store, &actor, K::AddressSpace, "Other space")?;
+    let network = |kind: K, cidr: &str, space: &wire::AssetRef| match call(
+        &store,
+        &actor,
+        C::Network(api::Network {
+            kind: kind as i32,
+            name: cidr.into(),
+            cidr: cidr.into(),
+            address_space: Some(space.clone()),
+            sharing: api::SharedUse::Exclusive as i32,
+            ..Default::default()
+        }),
+    )? {
+        R::Mutation(result) => result.targets.into_iter().next().ok_or(Error::Corrupt),
+        _ => Err(Error::Corrupt),
+    };
+    let prefix = network(K::Prefix, "192.0.2.0/25", &space)?;
+    let outside = network(K::Prefix, "192.0.2.0/25", &other)?;
+    let address = network(K::IpAddress, "192.0.2.3/25", &space)?;
+    network(K::IpAddress, "192.0.2.4/25", &other)?;
+    network(K::IpAddress, "192.0.2.130/25", &space)?;
+
+    let mut selector = graph_query();
+    selector.roots = vec![space];
+    selector.focus = Some(prefix);
+    selector.kinds = vec![K::IpAddress as i32];
+    selector.level_only = false;
+    let before = store.usage()?;
+    let page = graph(&store, &actor, selector.clone())?;
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].target.as_ref(), Some(&address));
+    selector.focus = Some(outside);
+    assert!(matches!(
+        graph(&store, &actor, selector),
+        Err(Error::Denied)
+    ));
+    assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
 // Filtering for one interface must not consume the unrelated site inventory.
 #[test]
 fn topology_unplaced_narrow_query_ignores_unrelated_sites() -> TestResult {

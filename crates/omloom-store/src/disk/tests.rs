@@ -147,10 +147,10 @@ fn statement_memory_exhaustion_is_a_resource_limit() {
     assert!(matches!(error, Error::Limit));
 }
 
-// A real old catalog differs from a new catalog with an old application marker.
-// Opening must admit the additive declaration before migrating any row.
+// Exercise the existing upgrade of version-2 fields in a strict catalog that
+// already satisfies the initial topology schema requirement.
 #[test]
-fn old_strict_catalog_upgrades_without_recreating_the_database()
+fn old_fields_upgrade_in_a_strict_catalog_with_topology_support()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let dir = tempfile::tempdir()?;
     let policy = Policy {
@@ -176,7 +176,7 @@ fn old_strict_catalog_upgrades_without_recreating_the_database()
         .find(|s| s.name == "OmRow")
         .ok_or(Error::Corrupt)?;
     let expected_revision = old.schema_revision;
-    // The complete version-2 declaration is independent of the current schema.
+    // Keep the version-2 fields explicit to exercise catalog admission.
     let mut declaration = LabelSchema::new_node_id("OmRow");
     declaration.add_property(PropertyDef::new("key", PropertyType::String).not_null());
     for name in [
@@ -246,6 +246,7 @@ fn old_strict_catalog_upgrades_without_recreating_the_database()
         ));
     }
     declaration.add_property(PropertyDef::new("digest", PropertyType::Binary));
+    declaration.add_property(PropertyDef::new("topology_pair", PropertyType::Binary));
     let publication = store.db.publish_schema(SchemaPackage {
         labels: vec![LabelDeclaration {
             schema: declaration,

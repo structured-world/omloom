@@ -394,6 +394,10 @@ resources or grant access to their containers.
 
 ### Network topology
 
+The topology index is part of the initial storage schema. Use a fresh store
+when trying this feature with a development database created before that index
+was introduced.
+
 Network opens a diagram of known current resources. Switch to **Table** for the
 same selection with columns, bulk actions and ordinary list navigation. **Site**
 and **Project / selection** are independent. Choose one or more permitted sites,

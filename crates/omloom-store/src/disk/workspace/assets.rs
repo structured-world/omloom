@@ -695,15 +695,12 @@ impl Store {
             focus: query.focus.clone(),
             expected: None,
         };
-        if view == api::View::Network
-            && !query.level_only
-            && let Some(branch) = working.focus.take()
-        {
+        if view == api::View::Network && !query.level_only && working.focus.is_some() {
             if !working.roots.is_empty() {
+                // Validate the branch against the project, including IPAM containment.
                 tx.selection(context, &working, false)?;
-                tx.verify_owned_focus(context, &working.roots, parse_target(Some(&branch))?)?;
             }
-            working.roots = vec![branch];
+            working.roots = working.focus.take().into_iter().collect();
         }
         let browse_roots: Vec<_> = working
             .focus

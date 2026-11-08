@@ -251,6 +251,7 @@ impl Tx<'_> {
             }
         }
         let mut topology = api::NetworkTopology::default();
+        // The initial schema includes the pair index, and relation writes supply its keys.
         // Exact pair probes keep off-page adjacency out of the read even for hubs.
         let mut pairs = Vec::new();
         for &(from, source_kind) in &authorized {
