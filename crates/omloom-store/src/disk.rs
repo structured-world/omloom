@@ -22,7 +22,7 @@ use std::{
 type Properties = BTreeMap<String, Value>;
 type Result<T> = std::result::Result<T, Error>;
 const ROOT: &str = "installation";
-const SCHEMA_VERSION: u64 = 25;
+const SCHEMA_VERSION: u64 = 24;
 const PHYSICAL_TEXT: &[&str] = &["basis", "mounting", "item", "enclosure", "old_item"];
 const PHYSICAL_NUMBERS: &[&str] = &[
     "material_count",
@@ -190,6 +190,17 @@ fn props(items: impl IntoIterator<Item = (&'static str, Value)>) -> Properties {
     items.into_iter().map(|(k, v)| (k.into(), v)).collect()
 }
 
+fn property_charge(name: &str, value: &Value, parent: &str) -> u64 {
+    let bytes = match value {
+        // Charge the maximum supported width before dispatching to a recovery owner.
+        Value::String(_) if parent == "leases" && name == "worker" => 256,
+        Value::String(value) => value.len() as u64,
+        Value::Binary(value) => value.len() as u64,
+        _ => 16,
+    };
+    name.len() as u64 + 64 + bytes
+}
+
 fn charged_row(key: &str, parent: &str, class: Class, mut data: Properties) -> Result<Properties> {
     if parent == "relations" {
         workspace::topology::derive_pair(&mut data)?;
@@ -199,16 +210,8 @@ fn charged_row(key: &str, parent: &str, class: Class, mut data: Properties) -> R
     data.insert("class".into(), int(class as u64)?);
     let mut size = 128u64;
     for (name, value) in &data {
-        let bytes = match value {
-            // A recovery owner may have a longer identifier than the first
-            // worker. Charge its full supported width before any dispatch.
-            Value::String(_) if parent == "leases" && name == "worker" => 256,
-            Value::String(value) => value.len() as u64,
-            Value::Binary(value) => value.len() as u64,
-            _ => 16,
-        };
         size = size
-            .checked_add(name.len() as u64 + 64 + bytes)
+            .checked_add(property_charge(name, value, parent))
             .ok_or(Error::Limit)?;
     }
     if parent == "relations" {
@@ -674,7 +677,6 @@ impl Store {
                             "prefix_length",
                             "working",
                             "payload",
-                            "topology_pair",
                             "virtualization_role",
                             "count",
                             "bytes",
@@ -795,9 +797,6 @@ impl Store {
         }
         if version < 24 {
             workspace::host_identity::matching::upgrade(&store)?;
-        }
-        if version < 25 {
-            workspace::topology::upgrade_pairs(&store)?;
         }
         if version < SCHEMA_VERSION {
             // Publish the format only after all resumable projections are ready.

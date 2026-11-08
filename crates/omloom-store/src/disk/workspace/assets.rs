@@ -695,13 +695,23 @@ impl Store {
             focus: query.focus.clone(),
             expected: None,
         };
-        let browse_roots: Vec<_> = query
+        if view == api::View::Network
+            && !query.level_only
+            && let Some(branch) = working.focus.take()
+        {
+            if !working.roots.is_empty() {
+                tx.selection(context, &working, false)?;
+                tx.verify_owned_focus(context, &working.roots, parse_target(Some(&branch))?)?;
+            }
+            working.roots = vec![branch];
+        }
+        let browse_roots: Vec<_> = working
             .focus
             .iter()
-            .chain(query.roots.iter().filter(|_| query.focus.is_none()))
+            .chain(working.roots.iter().filter(|_| working.focus.is_none()))
             .cloned()
             .collect();
-        let mut level_only = query.level_only || query.focus.is_some();
+        let mut level_only = query.level_only || working.focus.is_some();
         for root in &browse_roots {
             let row = tx.visible_asset(context, parse_target(Some(root))?)?;
             if [

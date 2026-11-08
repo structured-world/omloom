@@ -50,7 +50,7 @@ test('network history restores the positions of the selected view', async ({ pag
   await withFieldHost(async url => {
     const { m, rpc } = await workspaceClient(url);
     const target = (await rpc({ oneofKind: 'address', address: m.Address.create({ address: '192.0.2.12' }) })).mutation.targets[0];
-    for (const [name, x] of [['Map A', 96], ['Map B', 224]]) {
+    for (const [name, x] of [['Map A', 96], ['Map B', -224]]) {
       await rpc({ oneofKind: 'saveView', saveView: m.SaveView.create({
         view: { name, query: m.Query.create({ view: m.View.NETWORK, limit: 25,
           network: { layout: { pins: [{ target, x, y: 64 }] } },
@@ -63,13 +63,16 @@ test('network history restores the positions of the selected view', async ({ pag
     await page.getByRole('button', { name: '◦ Map A', exact: true }).click();
     await expect(page).toHaveURL(/saved=/);
     await expect(node).toBeVisible();
-    const a = await node.evaluate(el => el.style.left);
+    await expect(node).toHaveCSS('left', '96px');
     await page.getByRole('button', { name: '◦ Map B', exact: true }).click();
-    await expect.poll(() => node.evaluate(el => el.style.left)).not.toBe(a);
+    await expect(node).toHaveCSS('left', '-224px');
     await page.goBack();
-    await expect(node).toHaveCSS('left', a);
+    await expect(node).toHaveCSS('left', '96px');
     await page.goForward();
-    await expect.poll(() => node.evaluate(el => el.style.left)).not.toBe(a);
+    await expect(node).toHaveCSS('left', '-224px');
+    await graph.getByRole('button', { name: 'Arrange', exact: true }).click();
+    await node.press('ArrowRight');
+    await expect(node).toHaveCSS('left', '-208px');
   });
 });
 
@@ -117,6 +120,86 @@ test('an earlier network view response cannot win after a second selection', asy
   });
 });
 
+test('returning to a route does not revive a pending saved view selection', async ({ page }) => {
+  await withFieldHost(async url => {
+    const { m, rpc } = await workspaceClient(url);
+    await rpc({ oneofKind: 'saveView', saveView: m.SaveView.create({
+      view: { name: 'Pending map', query: m.Query.create({ view: m.View.NETWORK, limit: 25 }) },
+    }) });
+    await page.goto(`${url}/#/?view=1`);
+    const pending = page.getByRole('button', { name: '◦ Pending map', exact: true });
+    await expect(pending).toBeVisible();
+    const release = Promise.withResolvers();
+    const arrived = Promise.withResolvers();
+    const isViews = request => {
+      const data = request.postDataBuffer();
+      return data && m.Request.fromBinary(data.subarray(5)).command.oneofKind === 'views';
+    };
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      if (isViews(route.request())) {
+        arrived.resolve();
+        await release.promise;
+      }
+      await route.continue();
+    });
+    try {
+      await pending.click();
+      await arrived.promise;
+      await page.getByRole('button', { name: 'Table', exact: true }).click();
+      await expect(page).toHaveURL(/networkTable=1/);
+      await page.goBack();
+      await expect(page).toHaveURL(/view=1$/);
+      const response = page.waitForResponse(result => result.url().endsWith('/omloom.workspace.v1.Workspace/Call') && isViews(result.request()));
+      release.resolve();
+      await (await response).finished();
+      await page.waitForLoadState('networkidle');
+      await expect(page).toHaveURL(/view=1$/);
+    } finally {
+      release.resolve();
+    }
+  });
+});
+
+test('network navigator expands a software product to its releases', async ({ page }) => {
+  await withFieldHost(async url => {
+    const { m, rpc } = await workspaceClient(url);
+    const write = (kind, name) => rpc({ oneofKind: 'write', write: m.Write.create({
+      kind, changes: [{ name: 'name', value: { oneofKind: 'text', text: name } }],
+    }) });
+    const product = (await write(m.AssetKind.SOFTWARE_PRODUCT, 'Gateway software')).mutation.targets[0];
+    const release = (await write(m.AssetKind.SOFTWARE_RELEASE, 'Gateway release')).mutation.targets[0];
+    await rpc({ oneofKind: 'relation', relation: m.Relationship.create({
+      relation: { from: release, to: product, kind: m.RelationKind.RELEASE_OF },
+    }) });
+    await page.goto(`${url}/#/?view=1`);
+    await page.getByText('Resource navigator', { exact: true }).click();
+    const navigator = page.getByRole('navigation', { name: 'Network resources' });
+    await navigator.getByRole('button', { name: 'Expand Gateway software', exact: true }).click();
+    await expect(navigator.getByRole('button', { name: 'Gateway release', exact: true })).toBeVisible();
+  });
+});
+
+test('selecting a network segment opens its recorded participants', async ({ page }) => {
+  await withFieldHost(async url => {
+    const { m, rpc } = await workspaceClient(url);
+    const vm = (await rpc({ oneofKind: 'write', write: m.Write.create({
+      kind: m.AssetKind.VIRTUAL_MACHINE,
+      changes: [{ name: 'name', value: { oneofKind: 'text', text: 'VM without a known interface' } }],
+    }) })).mutation.targets[0];
+    await rpc({ oneofKind: 'segment', segment: m.Segment.create({
+      name: 'Application network', participants: [{ subject: vm }],
+    }) });
+    await page.goto(`${url}/#/?view=1`);
+    await page.getByText('Resource navigator', { exact: true }).click();
+    await page.getByRole('navigation', { name: 'Network resources' })
+      .getByRole('button', { name: 'Application network', exact: true }).click();
+    const panel = page.getByRole('region', { name: 'L2 participation' });
+    await panel.getByRole('button', { name: 'Show memberships' }).click();
+    await expect(panel.getByRole('button', { name: 'VM without a known interface', exact: true })).toBeVisible();
+    await expect(panel.getByText('interface unknown', { exact: false })).toBeVisible();
+  });
+});
+
 for (const width of [1440, 390]) test(`network navigator opens a nested device branch at ${width}px`, async ({ page }) => {
   // Owners are navigable independently from the network kinds in the diagram.
   await withFieldHost(async url => {
@@ -124,8 +207,11 @@ for (const width of [1440, 390]) test(`network navigator opens a nested device b
     const write = (kind, name, parent) => rpc({ oneofKind: 'write', write: m.Write.create({
       kind, parent, changes: [{ name: 'name', value: { oneofKind: 'text', text: name } }],
     }) }, parent);
-    const host = (await write(m.AssetKind.DEVICE, 'Core switch')).mutation.targets[0];
+    const site = (await write(m.AssetKind.SITE, 'Main site')).mutation.targets[0];
+    const host = (await write(m.AssetKind.DEVICE, 'Core switch', site)).mutation.targets[0];
     await write(m.AssetKind.INTERFACE, 'Uplink', host);
+    const peer = (await write(m.AssetKind.DEVICE, 'Peer switch', site)).mutation.targets[0];
+    await write(m.AssetKind.INTERFACE, 'Peer uplink', peer);
     await write(m.AssetKind.L2_DOMAIN, 'Unrelated segment');
     await page.setViewportSize({ width, height: 850 });
     await page.goto(`${url}/#/?view=1`);
@@ -133,11 +219,21 @@ for (const width of [1440, 390]) test(`network navigator opens a nested device b
     await expect(graph.getByRole('button', { name: 'Uplink', exact: true })).toBeVisible();
     await page.getByText('Resource navigator', { exact: true }).click();
     const navigator = page.getByRole('navigation', { name: 'Network resources' });
+    await navigator.getByRole('button', { name: 'Main site', exact: true }).click();
+    await expect(page.locator('[aria-label="Selected network scope"]')).toContainText('Main site');
+    await expect(graph.getByRole('button', { name: 'Uplink', exact: true })).toBeVisible();
+    await expect(graph.getByRole('button', { name: 'Peer uplink', exact: true })).toBeVisible();
+    await expect(graph.getByRole('button', { name: 'Unrelated segment', exact: true })).toHaveCount(0);
+    await navigator.getByRole('button', { name: 'Expand Main site', exact: true }).click();
     await expect(navigator.getByRole('button', { name: 'Uplink', exact: true })).toHaveCount(0);
     await navigator.getByRole('button', { name: 'Expand Core switch', exact: true }).click();
     await expect(navigator.getByRole('button', { name: 'Uplink', exact: true })).toBeVisible();
+    await navigator.getByRole('button', { name: 'Expand Peer switch', exact: true }).click();
+    await expect(navigator.getByRole('button', { name: 'Peer uplink', exact: true })).toBeVisible();
+    await expect(navigator.getByRole('button', { name: 'Uplink', exact: true })).toBeVisible();
     await navigator.getByRole('button', { name: 'Core switch', exact: true }).click();
     await expect(graph.getByRole('button', { name: 'Uplink', exact: true })).toBeVisible();
+    await expect(graph.getByRole('button', { name: 'Peer uplink', exact: true })).toHaveCount(0);
     await expect(graph.getByRole('button', { name: 'Unrelated segment', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Table', exact: true }).click();
     await expect(page.getByRole('table').getByRole('button', { name: 'Uplink', exact: true })).toBeVisible();

@@ -53,8 +53,8 @@ const nodes = computed(() => props.page.items.map(item => {
   const base = networkPosition(position.value.get(id) ?? 0, 4);
   const pin = pins.value.get(id);
   const point = {
-    x: Math.max(8, pin?.x ?? base.x),
-    y: Math.max(8, pin?.y ?? base.y),
+    x: pin?.x ?? base.x,
+    y: pin?.y ?? base.y,
   };
   return { item, id, point };
 }));
@@ -72,8 +72,13 @@ const paths = computed(() => {
     return [{ edge, path: networkPath(a, b, from <= to ? offset : -offset) }];
   });
 });
-const width = computed(() => Math.max(260, ...nodes.value.map(n => n.point.x + CARD_WIDTH + 40)));
-const height = computed(() => Math.max(152, ...nodes.value.map(n => n.point.y + CARD_HEIGHT + 40)));
+// Move the canvas origin into view without changing the stored coordinates.
+const offset = computed(() => ({
+  x: 8 - Math.min(8, ...nodes.value.map(n => n.point.x)),
+  y: 8 - Math.min(8, ...nodes.value.map(n => n.point.y)),
+}));
+const width = computed(() => Math.max(260, ...nodes.value.map(n => n.point.x + offset.value.x + CARD_WIDTH + 40)));
+const height = computed(() => Math.max(152, ...nodes.value.map(n => n.point.y + offset.value.y + CARD_HEIGHT + 40)));
 const minimumZoom = computed(() => Math.min(.35, (scroll.value?.clientWidth || width.value) / width.value));
 function fit() {
   if (!scroll.value?.clientWidth) return;
@@ -84,21 +89,21 @@ function move(node: typeof nodes.value[number], x: number, y: number) {
   if (!node.item.target) return;
   emit('pin', {
     target: node.item.target,
-    x: Math.round(Math.max(8, Math.min(4096, x))),
-    y: Math.round(Math.max(8, Math.min(4096, y))),
+    x: Math.round(Math.max(-4096, Math.min(4096, x))),
+    y: Math.round(Math.max(-4096, Math.min(4096, y))),
   });
 }
 let drag: { id: string; dx: number; dy: number; pointer: number } | undefined;
 function start(event: PointerEvent, node: typeof nodes.value[number]) {
   if (!arrange.value || event.button !== 0 || !stage.value) return;
   const rect = stage.value.getBoundingClientRect();
-  drag = { id: node.id, dx: (event.clientX - rect.left) / zoom.value - node.point.x, dy: (event.clientY - rect.top) / zoom.value - node.point.y, pointer: event.pointerId };
+  drag = { id: node.id, dx: (event.clientX - rect.left) / zoom.value - offset.value.x - node.point.x, dy: (event.clientY - rect.top) / zoom.value - offset.value.y - node.point.y, pointer: event.pointerId };
   (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
 }
 function update(event: PointerEvent, node: typeof nodes.value[number]) {
   if (drag?.id !== node.id || drag.pointer !== event.pointerId || !stage.value) return;
   const rect = stage.value.getBoundingClientRect();
-  move(node, (event.clientX - rect.left) / zoom.value - drag.dx, (event.clientY - rect.top) / zoom.value - drag.dy);
+  move(node, (event.clientX - rect.left) / zoom.value - offset.value.x - drag.dx, (event.clientY - rect.top) / zoom.value - offset.value.y - drag.dy);
 }
 function moveWithKey(event: KeyboardEvent, node: typeof nodes.value[number]) {
   if (!arrange.value) return;
@@ -130,13 +135,13 @@ function inspect(target?: AssetRef) {
       <div class="network-topology-frame" :style="{ width: width * zoom + 'px', height: height * zoom + 'px' }">
         <div ref="stage" class="network-topology-stage" :class="{ arranging: arrange }"
           :style="{ width: width + 'px', height: height + 'px', transform: `scale(${zoom})` }">
-          <svg aria-hidden="true" :width="width" :height="height">
+          <svg aria-hidden="true" :width="width" :height="height" :viewBox="`${-offset.x} ${-offset.y} ${width} ${height}`">
             <path v-for="link in paths" :key="link.edge.relationId" :d="link.path"
               :class="{ membership: [RelationKind.ON, RelationKind.MEMBER_OF].includes(link.edge.kind) }" />
           </svg>
           <button v-for="node in nodes" :key="node.id" class="network-topology-node"
             :title="prefixTitles.get(node.id)"
-            :style="{ left: node.point.x + 'px', top: node.point.y + 'px', width: CARD_WIDTH + 'px', height: CARD_HEIGHT + 'px' }"
+            :style="{ left: node.point.x + 'px', top: node.point.y + 'px', translate: `${offset.x}px ${offset.y}px`, width: CARD_WIDTH + 'px', height: CARD_HEIGHT + 'px' }"
             :aria-current="node.id === key(selected) ? 'true' : undefined" @click="inspect(node.item.target)"
             @pointerdown="start($event, node)" @pointermove="update($event, node)" @lostpointercapture="drag = undefined"
             @keydown="moveWithKey($event, node)">

@@ -3,14 +3,14 @@ import { onScopeDispose, ref } from 'vue';
 import { AssetKind as K, call, identityName, key, label, model, type AssetRef } from './api';
 
 const props = defineProps<{ query: model.Query; selected?: AssetRef; ancestors: string[] }>();
-const emit = defineEmits<{ select: [target: AssetRef]; inspect: [target: AssetRef] }>();
+const emit = defineEmits<{ select: [item: model.Item]; inspect: [target: AssetRef] }>();
 const containers = new Set([K.SITE, K.LOCATION, K.RACK, K.DEVICE, K.VIRTUAL_MACHINE, K.SOFTWARE_INSTALLATION,
   K.SERVICE, K.WORKLOAD, K.CONTAINER, K.INTERFACE, K.PORT, K.PHYSICAL_COMPONENT, K.PHYSICAL_POSITION,
-  K.ADDRESS_SPACE, K.PREFIX, K.L2_DOMAIN]);
+  K.ADDRESS_SPACE, K.PREFIX, K.L2_DOMAIN, K.SOFTWARE_PRODUCT]);
 const items = ref<model.Item[]>([]);
 const next = ref<string>();
 const cursor = ref<string>();
-const expanded = ref('');
+const expanded = ref(new Set<string>());
 const loading = ref(false);
 const error = ref('');
 let request: AbortController | undefined;
@@ -29,7 +29,8 @@ async function load(position?: string) {
     items.value = result.page.items.filter(item => item.target && !props.ancestors.includes(key(item.target)));
     next.value = result.page.next;
     cursor.value = position;
-    if (!items.value.some(item => key(item.target) === expanded.value)) expanded.value = '';
+    const visible = new Set(items.value.map(item => key(item.target)));
+    for (const target of expanded.value) if (!visible.has(target)) expanded.value.delete(target);
   } catch (failure) {
     if (!controller.signal.aborted) error.value = String(failure);
   } finally {
@@ -38,8 +39,11 @@ async function load(position?: string) {
 }
 function select(item: model.Item) {
   if (!item.target) return;
-  if (containers.has(item.kind)) emit('select', item.target);
+  if (containers.has(item.kind) && ![K.L2_DOMAIN, K.SOFTWARE_PRODUCT].includes(item.kind)) emit('select', item);
   else emit('inspect', item.target);
+}
+function toggle(target: string) {
+  if (!expanded.value.delete(target)) expanded.value.add(target);
 }
 void load();
 </script>
@@ -51,14 +55,14 @@ void load();
   <ul v-if="!error && items.length">
     <li v-for="item in items" :key="key(item.target)">
       <button v-if="containers.has(item.kind) && ancestors.length < 12"
-        :aria-label="`${expanded === key(item.target) ? 'Collapse' : 'Expand'} ${identityName(item)}`"
-        :aria-expanded="expanded === key(item.target)"
-        @click="expanded = expanded === key(item.target) ? '' : key(item.target)">{{ expanded === key(item.target) ? '−' : '+' }}</button>
+        :aria-label="`${expanded.has(key(item.target)) ? 'Collapse' : 'Expand'} ${identityName(item)}`"
+        :aria-expanded="expanded.has(key(item.target))"
+        @click="toggle(key(item.target))">{{ expanded.has(key(item.target)) ? '−' : '+' }}</button>
       <button :aria-current="key(item.target) === key(selected) ? 'true' : undefined"
         @click="select(item)">{{ identityName(item) }}</button>
       <small>{{ label(item.kind) }}</small>
-      <NetworkTree v-if="expanded === key(item.target)" :key="expanded"
-        :query="{ ...query, focus: item.target }" :selected="selected" :ancestors="[...ancestors, expanded]"
+      <NetworkTree v-if="expanded.has(key(item.target))" :key="key(item.target)"
+        :query="{ ...query, focus: item.target }" :selected="selected" :ancestors="[...ancestors, key(item.target)]"
         @select="emit('select', $event)" @inspect="emit('inspect', $event)" />
     </li>
   </ul>

@@ -75,8 +75,9 @@ message Query {
   uint32 limit = 10;
   // Explicit selection of objects without a confirmed physical placement.
   bool unplaced = 11;
-  // Explicit resource perspective within roots, rechecked by the server. Only
-  // its local components are projected; upstream topology is not inferred.
+  // Explicit resource perspective within roots, rechecked by the server.
+  // In Network, level_only=false selects the bounded ownership branch.
+  // Other focused queries project local components.
   optional omloom.v1.AssetRef focus = 12;
   // Request bounded owner/address context for visible rows, not additional authority.
   bool include_context = 13;

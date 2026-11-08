@@ -299,7 +299,18 @@ impl Store {
             if layout.pins.len() + hidden.len() > 64 {
                 return Err(Error::Limit);
             }
-            layout.pins.extend(hidden);
+            if let (Some(previous), Some(readable)) = (previous_query, readable_previous.as_ref())
+                && layout.pins == pins(readable)
+            {
+                // Unchanged visible positions keep their original interleaving with hidden pins.
+                layout.pins = pins(previous)
+                    .iter()
+                    .filter(|pin| hidden.contains(pin) || pins(readable).contains(pin))
+                    .cloned()
+                    .collect();
+            } else {
+                layout.pins.extend(hidden);
+            }
             if query.encoded_len() > 8192 {
                 return Err(Error::Limit);
             }

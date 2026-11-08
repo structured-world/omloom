@@ -167,6 +167,37 @@ fn topology_intersects_sites_with_independent_selection() -> TestResult {
     Ok(())
 }
 
+// Selecting a network branch includes its deeper permitted interfaces and keeps the enclosing project.
+#[test]
+fn network_branch_queries_nested_resources_within_enclosing_roots() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let site = create(&store, &actor, K::Site, "Production site")?;
+    let host = child(&store, &actor, &site, K::Device, "Production switch")?;
+    let interface = child(&store, &actor, &host, K::Interface, "Production uplink")?;
+    let other = create(&store, &actor, K::Site, "Other site")?;
+    let outside = child(&store, &actor, &other, K::Device, "Other switch")?;
+    child(&store, &actor, &outside, K::Interface, "Other uplink")?;
+    let mut selector = graph_query();
+    selector.roots = vec![site.clone()];
+    selector.focus = Some(site);
+    selector.kinds = vec![K::Interface as i32];
+    selector.level_only = false;
+    let page = graph(&store, &actor, selector.clone())?;
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].target.as_ref(), Some(&interface));
+    selector.level_only = true;
+    assert_eq!(graph(&store, &actor, selector.clone())?.total, 0);
+    selector.level_only = false;
+    selector.focus = Some(other);
+    assert!(matches!(
+        graph(&store, &actor, selector),
+        Err(Error::Denied)
+    ));
+    Ok(())
+}
+
 // Filtering for one interface must not consume the unrelated site inventory.
 #[test]
 fn topology_unplaced_narrow_query_ignores_unrelated_sites() -> TestResult {
@@ -187,74 +218,6 @@ fn topology_unplaced_narrow_query_ignores_unrelated_sites() -> TestResult {
     let page = graph(&store, &actor, selector)?;
     assert_eq!(page.total, 1);
     assert_eq!(page.items[0].target.as_ref(), Some(&expected));
-    Ok(())
-}
-
-// Reopening the previous format backfills the index without changing the accepted link.
-#[test]
-fn topology_pair_index_backfills_existing_relations() -> TestResult {
-    use coordinode_embed::{Intent, LabelDeclaration, SchemaPackage};
-    let dir = tempfile::tempdir()?;
-    let store = Store::open(dir.path(), policy())?;
-    let actor = operator();
-    store.workspace(
-        &actor,
-        api::Request {
-            command: Some(C::Address(api::Address {
-                address: Some("192.0.2.9/24".into()),
-                create_prefix: true,
-                ..Default::default()
-            })),
-            working: Some(api::WorkingContext {
-                expected: Some(store.usage()?.revision),
-                ..Default::default()
-            }),
-        },
-        100,
-    )?;
-    let expected = graph(&store, &actor, graph_query())?
-        .topology
-        .ok_or("topology")?;
-    assert_eq!(expected.edges.len(), 1);
-    let db = store.diagnostic_database();
-    for statement in [
-        "DROP INDEX omloom_topology_pair",
-        "MATCH (n:OmRow {parent:'relations'}) REMOVE n.topology_pair",
-        "MATCH (n:OmRow {key:'installation'}) SET n.`schema`=24",
-    ] {
-        db.execute_cypher_shared(statement, None, None, None, None)?;
-    }
-    let mut schema = db
-        .label_schemas()?
-        .into_iter()
-        .find(|schema| schema.name == "OmRow")
-        .ok_or("schema")?;
-    let expected_revision = schema.schema_revision;
-    schema
-        .properties
-        .remove("topology_pair")
-        .ok_or("pair property")?;
-    schema
-        .remove_constraint("omloom_key")
-        .ok_or("key constraint")?;
-    let publication = db.publish_schema(SchemaPackage {
-        labels: vec![LabelDeclaration {
-            schema,
-            intent: Intent::Change { expected_revision },
-        }],
-        edge_types: Vec::new(),
-        constraints: Vec::new(),
-    })?;
-    assert!(
-        db.await_schema(&publication, std::time::Duration::from_secs(20))?
-            .all_ready()
-    );
-    drop(store);
-    let store = Store::open(dir.path(), policy())?;
-    assert_eq!(
-        graph(&store, &actor, graph_query())?.topology,
-        Some(expected)
-    );
     Ok(())
 }
 
@@ -454,9 +417,14 @@ fn topology_layout_survives_reopen_and_filters_hidden_pins() -> TestResult {
         x: -20,
         y: 43,
     };
+    let visible_pin = api::NetworkPin {
+        target: Some(create(&store, &actor, K::Vrf, "Visible VRF")?),
+        x: 100,
+        y: 50,
+    };
     let mut query = graph_query();
     query.network.as_mut().ok_or("network")?.layout = Some(api::NetworkLayout {
-        pins: vec![pin.clone()],
+        pins: vec![pin.clone(), visible_pin.clone()],
         table: true,
     });
     let R::Views(saved) = call(
@@ -499,7 +467,17 @@ fn topology_layout_survives_reopen_and_filters_hidden_pins() -> TestResult {
         .and_then(|network| network.layout.as_ref())
         .ok_or("layout")?;
     assert!(layout.table);
-    assert!(layout.pins.is_empty());
+    assert_eq!(layout.pins, vec![visible_pin.clone()]);
+    assert_eq!(store.usage()?, before);
+    call(
+        &store,
+        &editor,
+        C::SaveView(api::SaveView {
+            view: Some(restricted.items[0].clone()),
+            publish: true,
+            ..Default::default()
+        }),
+    )?;
     assert_eq!(store.usage()?, before);
 
     let mut renamed = restricted.items[0].clone();
@@ -516,15 +494,15 @@ fn topology_layout_survives_reopen_and_filters_hidden_pins() -> TestResult {
     else {
         return Err("save result".into());
     };
-    assert!(
+    assert_eq!(
         result.items[0]
             .query
             .as_ref()
             .and_then(|q| q.network.as_ref())
             .and_then(|n| n.layout.as_ref())
             .ok_or("layout")?
-            .pins
-            .is_empty()
+            .pins,
+        vec![visible_pin.clone()]
     );
     let R::Views(author) = call(&store, &actor, C::Views(api::Empty {}))? else {
         return Err("views".into());
@@ -537,7 +515,7 @@ fn topology_layout_survives_reopen_and_filters_hidden_pins() -> TestResult {
             .and_then(|n| n.layout.as_ref())
             .ok_or("layout")?
             .pins,
-        vec![pin]
+        vec![pin, visible_pin]
     );
 
     let mut changed = author.items[0].clone();

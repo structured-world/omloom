@@ -115,8 +115,9 @@ export interface Query {
      */
     unplaced: boolean;
     /**
-     * Explicit resource perspective within roots, rechecked by the server. Only
-     * its local components are projected; upstream topology is not inferred.
+     * Explicit resource perspective within roots, rechecked by the server.
+     * In Network, level_only=false selects the bounded ownership branch.
+     * Other focused queries project local components.
      *
      * @generated from protobuf field: optional omloom.v1.AssetRef focus = 12
      */

@@ -150,14 +150,18 @@ const treeQuery = computed(() => model.Query.create({
     ? model.NetworkSelection.create({ sites: sites.value, unplaced: unknownSite.value }) : undefined,
 }));
 const treeScope = computed(() => JSON.stringify(model.Query.toJson(treeQuery.value)));
-function chooseBranch(target?: AssetRef) {
-  return change({ branch: target?.assetId, branchInc: target?.incarnation });
+const selectedBranch = ref<model.Item>();
+const branchItem = computed(() => key(selectedBranch.value?.target) === key(branch.value) ? selectedBranch.value : undefined);
+function chooseBranch(item?: model.Item) {
+  selectedBranch.value = item;
+  returnQuery = undefined;
+  return change({ branch: item?.target?.assetId, branchInc: item?.target?.incarnation,
+    asset: undefined, incarnation: undefined, trail: undefined, origin: undefined });
 }
 const unknownSite = computed(() => route.query.unknownSite === '1');
 const pins = ref<model.NetworkPin[]>([]);
 const savedQuery = computed(() => model.Query.create({
   ...query.value,
-  focus: route.query.asset ? query.value.focus : undefined,
   network: model.NetworkSelection.create({
     sites: sites.value, unplaced: unknownSite.value,
     layout: query.value.view === model.View.NETWORK && (pins.value.length || route.query.networkTable === '1')
@@ -233,13 +237,17 @@ const query = computed(() => model.Query.create({
   predicates: parsePredicates(route.query.asset ? 'localFilter' : 'filter'),
   focus: route.query.asset && route.query.incarnation ? { assetId: String(route.query.asset), incarnation: String(route.query.incarnation) } : branch.value,
   includeContext: true, omitHostLocal: true,
-  levelOnly: !String((route.query.asset ? route.query.localSearch : route.query.search) ?? '').trim()
+  levelOnly: (Number(route.query.view) === model.View.NETWORK && !!route.query.asset)
+    || (!String((route.query.asset ? route.query.localSearch : route.query.search) ?? '').trim()
     && !route.query[route.query.asset ? 'localFilter' : 'filter'] && !route.query.responsibility && route.query.unplaced !== '1'
-    && (!!route.query.asset || (Number(route.query.view) !== model.View.NETWORK && !sites.value.length && !unknownSite.value)),
+    && (!!route.query.asset || (Number(route.query.view) !== model.View.NETWORK && !sites.value.length && !unknownSite.value))),
   responsibility: parseResponsibility(),
 }));
 const working = computed(() => model.WorkingContext.create({ roots: query.value.roots, focus: query.value.focus, expected: page.value.revision }));
-const enclosing = computed(() => model.WorkingContext.create({ roots: query.value.roots, expected: page.value.revision }));
+const enclosing = computed(() => model.WorkingContext.create({
+  roots: branch.value && !route.query.asset ? [branch.value] : query.value.roots,
+  expected: page.value.revision,
+}));
 function parsePredicates(parameter: string): model.Predicate[] {
   if (!route.query[parameter]) return [];
   try { const json = JSON.parse(String(route.query[parameter])); return model.Query.fromJson({ predicates: json }).predicates; } catch { return [{ field: 'unavailable', value: text('unavailable', '') }]; }
@@ -521,7 +529,9 @@ async function useView(v: model.SavedView) {
   const json = model.Query.toJson(q);
   const filter = q.predicates.length && json && typeof json === 'object' && !Array.isArray(json) ? JSON.stringify(json.predicates) : undefined;
   pins.value = (q.network?.layout?.pins ?? []).map(pin => model.NetworkPin.create(pin));
-  await router.push({ path: '/', query: { view: String(q.view), search: q.focus ? undefined : q.search || undefined, localSearch: q.focus ? q.search || undefined : undefined, columns: q.columns.join(','), sort: q.sort, desc: q.descending ? '1' : undefined, unplaced: q.unplaced ? '1' : undefined, kind: q.focus ? undefined : q.kinds.map(String), localKind: q.focus ? q.kinds.map(String) : undefined, scope: q.roots.map(t => t.assetId), scopeInc: q.roots.map(t => t.incarnation), filter: q.focus ? undefined : filter, localFilter: q.focus ? filter : undefined, responsibility:q.responsibility?JSON.stringify(model.ResponsibilityFilter.toJson(q.responsibility)):undefined, asset: q.focus?.assetId, incarnation: q.focus?.incarnation, site: q.network?.sites.map(s => s.assetId), siteInc: q.network?.sites.map(s => s.incarnation), unknownSite: q.network?.unplaced ? '1' : undefined, networkTable: q.network?.layout?.table ? '1' : undefined, saved: v.id } });
+  const branchFocus = q.view === model.View.NETWORK && !q.levelOnly ? q.focus : undefined;
+  const localFocus = branchFocus ? undefined : q.focus;
+  await router.push({ path: '/', query: { view: String(q.view), search: localFocus ? undefined : q.search || undefined, localSearch: localFocus ? q.search || undefined : undefined, columns: q.columns.join(','), sort: q.sort, desc: q.descending ? '1' : undefined, unplaced: q.unplaced ? '1' : undefined, kind: localFocus ? undefined : q.kinds.map(String), localKind: localFocus ? q.kinds.map(String) : undefined, scope: q.roots.map(t => t.assetId), scopeInc: q.roots.map(t => t.incarnation), filter: localFocus ? undefined : filter, localFilter: localFocus ? filter : undefined, responsibility:q.responsibility?JSON.stringify(model.ResponsibilityFilter.toJson(q.responsibility)):undefined, asset: localFocus?.assetId, incarnation: localFocus?.incarnation, branch: branchFocus?.assetId, branchInc: branchFocus?.incarnation, site: q.network?.sites.map(s => s.assetId), siteInc: q.network?.sites.map(s => s.incarnation), unknownSite: q.network?.unplaced ? '1' : undefined, networkTable: q.network?.layout?.table ? '1' : undefined, saved: v.id } });
 }
 async function currentView(id: string, current: () => boolean) {
   const result = await call({ oneofKind: 'views', views: {} });
@@ -557,6 +567,7 @@ function restorePins() {
   pins.value = (activeView.value?.query?.network?.layout?.pins ?? []).map(pin => model.NetworkPin.create(pin));
 }
 watch(() => route.query.saved, restorePins);
+watch(() => route.fullPath, () => { viewIntent++; }, { flush: 'sync' });
 watch(() => route.fullPath, load);
 watch(() => query.value.view === model.View.NETWORK, network => {
   if (network) void loadSites();
@@ -608,18 +619,23 @@ onMounted(async () => {
     <button :aria-pressed="!topology" @click="change({ networkTable: '1' })">Table</button>
   </div>
 </div>
-<div class="inventory-content" :class="{ 'network-with-navigator': query.view === model.View.NETWORK && !route.query.asset && navigatorOpen }">
-<details v-if="query.view === model.View.NETWORK && !route.query.asset" class="network-navigator"
+<div class="inventory-content" :class="{ 'network-with-navigator': query.view === model.View.NETWORK && navigatorOpen }">
+<details v-if="query.view === model.View.NETWORK" class="network-navigator"
   :open="navigatorOpen"
   @toggle="navigatorOpen = ($event.target as HTMLDetailsElement).open">
   <summary>Resource navigator</summary>
   <nav v-if="navigatorOpen" aria-label="Network resources">
-    <button :aria-current="!branch ? 'true' : undefined" @click="chooseBranch()">All resources in selection</button>
-    <NetworkTree :key="treeScope" :query="treeQuery" :selected="branch" :ancestors="[]"
+    <button :aria-current="!query.focus ? 'true' : undefined" @click="chooseBranch()">All resources in selection</button>
+    <NetworkTree :key="treeScope" :query="treeQuery" :selected="query.focus" :ancestors="[]"
       @select="chooseBranch" @inspect="open" />
   </nav>
 </details>
 <div class="inventory-results">
+<div v-if="branch && !route.query.asset" class="table-meta" aria-label="Selected network scope">
+  <div><strong>{{ identityName(branchItem) || 'Selected network branch' }}</strong>
+    <small v-if="branchItem"> · {{ label(branchItem.kind) }}</small></div>
+  <div><button @click="open(branch)">Inspect selected resource</button><button @click="chooseBranch()">Clear branch</button></div>
+</div>
 <div class="table-meta"><span>{{ page.total.toString() }} resources<span v-if="loading"> · Loading…</span></span><div><button v-if="!topology" @click="editor = 'columns'">Columns</button><button @click="editor = 'view'">Save view</button><button v-if="activeView" @click="useView(activeView)">Reset adjustments</button><button v-if="identity?.writable && query.view === model.View.NETWORK && actions.allocations.length" @click="allocate">Allocate IP / prefix</button></div></div>
 <div v-if="query.predicates.length||query.responsibility" class="selection"><span v-for="(p, index) in query.predicates" :key="index" class="chip">{{ definitions.find(d => d.id === p.field)?.name ?? p.field }} = {{ display(p.value) }}<button :aria-label="`Remove filter ${index + 1}`" @click="filters(query.predicates.filter((_, i) => i !== index),query.responsibility)">×</button></span><span v-if="query.responsibility" class="chip">{{model.ResponsibilityFacet[query.responsibility.facet]?.toLowerCase().replaceAll('_',' ')}}: {{query.responsibility.issuer}} / {{query.responsibility.subject}}<button aria-label="Remove responsibility filter" @click="filters(query.predicates)">×</button></span></div>
 <NetworkTopology v-if="topologyMode" v-show="topology && !loading && !error" :page="topologyPage" :name="resourceName" :pins="pins" :selected="detail?.item?.target" @open="open" @pin="pin" @clear="pins = []" />
@@ -677,7 +693,7 @@ onMounted(async () => {
 <NetworkEditor v-if="editor === 'network'" :item="editing" :group="editing ? detail?.group : undefined" :definitions="definitions" :working="editing ? enclosing : working" :allocations="actions.allocations" :view="query.view" @close="editor = ''" @saved="saved" @refresh="load" />
 <MemberEditor v-if="editor === 'member' && detail" :detail="detail" :working="enclosing" :removal="participantRemoval" @close="editor = ''; participantRemoval = undefined" @saved="participantRemoval = undefined; saved()" />
 <FilterEditor v-if="editor === 'filter'" :definitions="definitions" :predicates="query.predicates" :responsibility="query.responsibility" @close="editor = ''" @apply="filters" />
-<BulkEditor v-if="editor === 'bulk'" :items="selectedItems" :revision="page.revision" :definitions="definitions" :working="working" @close="editor = ''" @saved="saved" />
+<BulkEditor v-if="editor === 'bulk'" :items="selectedItems" :revision="page.revision" :definitions="definitions" :working="branch && !route.query.asset ? enclosing : working" @close="editor = ''" @saved="saved" />
 <SelectedRequirements v-if="factReview" :items="factReview.items" :working="factReview.working" :definitions="definitions" :findings="factReview.findings" @close="factReview=undefined" @saved="saved" />
 <RelationEditor v-if="editor === 'relation' && detail?.item?.target" :target="detail.item.target" :working="enclosing" @close="editor = ''" @saved="saved" />
 <AddressBinding v-if="editor === 'binding' && detail?.item" :item="detail.item" :working="enclosing" :definitions="definitions" @close="editor = ''" @saved="saved" />

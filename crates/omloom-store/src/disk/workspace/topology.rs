@@ -38,31 +38,6 @@ pub(in crate::disk) fn derive_pair(data: &mut Properties) -> Result<()> {
     Ok(())
 }
 
-pub(in crate::disk) fn upgrade_pairs(store: &Store) -> Result<()> {
-    let mut after = String::new();
-    loop {
-        let mut tx = store.begin()?;
-        let rows = tx.query(
-            "MATCH (n:OmRow {parent:'relations'}) WHERE n.key>$after AND n.kind IN $kinds AND n.topology_pair IS NULL RETURN properties(n) AS p ORDER BY n.key LIMIT 128",
-            params([
-                ("after", text(&after)),
-                ("kinds", Value::Array(RELATIONS.iter().map(|kind| Value::Int(*kind as i64)).collect())),
-            ]),
-        )?;
-        if rows.is_empty() {
-            tx.commit()?;
-            return Ok(());
-        }
-        for row in rows {
-            after = string(&row, "key")?;
-            let mut data = row.clone();
-            operations::strip_envelope(&mut data);
-            tx.put_projection(&after, "relations", Class::Inventory, data, Some(&row))?;
-        }
-        tx.commit()?;
-    }
-}
-
 impl Tx<'_> {
     /// Project configured participants by exact membership keys, without expanding other interfaces.
     fn topology_assignments(

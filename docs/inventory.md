@@ -401,8 +401,10 @@ or **No known site**, and intersect that choice with a saved resource selection.
 An empty result keeps both filters in place.
 
 Open **Resource navigator** to browse entities by ownership. Expanding a row
-fetches that level. Selecting a container shows its network branch in both the
-diagram and table while retaining the site and project filters.
+fetches that level and leaves other branches open. Selecting a container scopes
+both the diagram and the table to its network branch, including nested resources,
+while retaining the site and project filters. Selecting a segment opens its
+details and paged L2 participants, including VMs whose interface is still unknown.
 
 The diagram draws relationships whose two endpoints are on the current page.
 Open a resource to see additional authorized relationship pages and use the
