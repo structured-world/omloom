@@ -102,7 +102,8 @@ const comparable = computed(() => {
 });
 function compareIdentity() {
   const items = page.value.items.filter(item => selected.value.includes(key(item.target)));
-  if (comparable.value && items[0]?.target && items[1]?.target) identityPair.value = {left:items[0].target,right:items[1].target,working:model.WorkingContext.create(working.value)};
+  const scope = branch.value && !route.query.asset ? enclosing.value : working.value;
+  if (comparable.value && items[0]?.target && items[1]?.target) identityPair.value = {left:items[0].target,right:items[1].target,working:model.WorkingContext.create(scope)};
 }
 async function findIdentityCandidates(){
   const current=detail.value;if(!current?.item?.target||findingCandidates.value)return;
@@ -326,12 +327,14 @@ let generation = 0;
 let loadedQuery = '';
 let detailRefresh: Promise<void> = Promise.resolve();
 let inventoryRequest: AbortController | undefined;
+const topologyFailed = ref(false);
 async function load() {
   inventoryRequest?.abort();
   inventoryRequest = new AbortController();
   const signal = inventoryRequest.signal;
   identityCandidates.value=undefined;resolvedAlias.value=undefined;
   const turn = ++generation; loading.value = true; error.value = '';
+  topologyFailed.value = false;
   preparedActions.value = model.Actions.create();
   const signature = JSON.stringify(model.Query.toJson(query.value));
   if (signature !== loadedQuery) { selected.value = []; search.value = query.value.search; loadedQuery = signature; }
@@ -361,7 +364,7 @@ async function load() {
     if (turn !== generation) return;
     if (prepared?.oneofKind === 'actions') preparedActions.value = prepared.actions;
     selected.value = selected.value.filter(id => result.page.items.some(item => key(item.target) === id));
-  } catch (e) { if (turn === generation) { page.value = model.Page.create(); if (topology.value) topologyPage.value = page.value; if (!target) detail.value = undefined; error.value = String(e); } } finally {
+  } catch (e) { if (turn === generation) { page.value = model.Page.create(); if (topology.value) { topologyPage.value = page.value; topologyFailed.value = true; } if (!target) detail.value = undefined; error.value = String(e); } } finally {
     await detailLoad;
     if (turn === generation) {
       loading.value = false;
@@ -377,7 +380,7 @@ async function metadata() {
   if (i.oneofKind === 'identity') identity.value = i.identity; if (d.oneofKind === 'definitions') definitions.value = d.definitions.items; if (v.oneofKind === 'views') views.value = v.views.items;
 }
 async function read(target: AssetRef, relationsCursor?: string, networkCursor?: string) {
-  const working = model.WorkingContext.create({ roots: query.value.roots, focus: topologyMode.value ? undefined : target });
+  const working = model.WorkingContext.create({ roots: query.value.roots, focus: query.value.view === model.View.NETWORK ? undefined : target });
   const result = await call({ oneofKind: 'read', read: { target, relationsCursor, networkCursor } }, working);
   if (result.oneofKind !== 'detail') throw Error('Unexpected resource response');
   return result.detail;
@@ -489,7 +492,7 @@ function withoutContinuation(selection: LocationQuery, origin = true): LocationQ
 async function saved(target?: AssetRef) {
   loading.value = true;
   editor.value = ''; notice.value = 'Changes saved to local storage.';
-  navigatorRefresh.value++;
+  refreshNetworkNavigation();
   try {
     const next = withoutContinuation(route.query);
     const trail = parameters('trail');
@@ -509,14 +512,21 @@ async function saved(target?: AssetRef) {
   } catch (e) { error.value = String(e); loading.value = false; }
 }
 async function reloadSelection() {
-  navigatorRefresh.value++;
+  refreshNetworkNavigation();
   const cursor = route.query.asset ? 'localCursor' : 'cursor';
   if (route.query[cursor] !== undefined) await change({ cursor: undefined });
   else await load();
 }
 function refreshInventory() {
-  navigatorRefresh.value++;
+  refreshNetworkNavigation();
   return load();
+}
+function refreshNetworkNavigation() {
+  if (query.value.view !== model.View.NETWORK) return;
+  navigatorRefresh.value++;
+  siteCursor.value = undefined;
+  siteNext.value = undefined;
+  void loadSites();
 }
 function create() { if (loading.value) return; editing.value = undefined; editor.value = 'asset'; }
 function edit() { editing.value = detail.value?.item; editor.value = 'asset'; }
@@ -573,7 +583,19 @@ function allocate() { editing.value = undefined; editor.value = 'network'; }
 function restorePins() {
   pins.value = (activeView.value?.query?.network?.layout?.pins ?? []).map(pin => model.NetworkPin.create(pin));
 }
-watch(() => route.query.saved, restorePins);
+watch([() => route.query.saved, () => query.value.view === model.View.NETWORK], async ([id, network], _, cleanup) => {
+  pins.value = [];
+  if (!network || typeof id !== 'string') return;
+  let cancelled = false;
+  cleanup(() => { cancelled = true; });
+  const current = () => !cancelled && route.query.saved === id;
+  try {
+    const view = await currentView(id, current);
+    if (current()) pins.value = (view.query?.network?.layout?.pins ?? []).map(pin => model.NetworkPin.create(pin));
+  } catch (failure) {
+    if (current()) error.value = String(failure);
+  }
+});
 watch(() => route.fullPath, () => { viewIntent++; }, { flush: 'sync' });
 watch(() => route.fullPath, load);
 watch(() => query.value.view === model.View.NETWORK, network => {
@@ -645,7 +667,7 @@ onMounted(async () => {
 </div>
 <div class="table-meta"><span>{{ page.total.toString() }} resources<span v-if="loading"> · Loading…</span></span><div><button v-if="!topology" @click="editor = 'columns'">Columns</button><button @click="editor = 'view'">Save view</button><button v-if="activeView" @click="useView(activeView)">Reset adjustments</button><button v-if="identity?.writable && query.view === model.View.NETWORK && actions.allocations.length" @click="allocate">Allocate IP / prefix</button></div></div>
 <div v-if="query.predicates.length||query.responsibility" class="selection"><span v-for="(p, index) in query.predicates" :key="index" class="chip">{{ definitions.find(d => d.id === p.field)?.name ?? p.field }} = {{ display(p.value) }}<button :aria-label="`Remove filter ${index + 1}`" @click="filters(query.predicates.filter((_, i) => i !== index),query.responsibility)">×</button></span><span v-if="query.responsibility" class="chip">{{model.ResponsibilityFacet[query.responsibility.facet]?.toLowerCase().replaceAll('_',' ')}}: {{query.responsibility.issuer}} / {{query.responsibility.subject}}<button aria-label="Remove responsibility filter" @click="filters(query.predicates)">×</button></span></div>
-<NetworkTopology v-if="topologyMode" v-show="topology && !loading && !error" :page="topologyPage" :name="resourceName" :pins="pins" :selected="detail?.item?.target" @open="open" @pin="pin" @clear="pins = []" />
+<NetworkTopology v-if="topologyMode" v-show="topology && !loading && !topologyFailed" :page="topologyPage" :name="resourceName" :pins="pins" :selected="detail?.item?.target" @open="open" @pin="pin" @clear="pins = []" />
 <template v-if="!topology">
 <div v-if="selected.length" class="selection">{{ selected.length }} selected on this page<button :disabled="loading" @click="selectedScope">Use selected as scope</button><button v-if="selectedDevices" :disabled="loading" @click="reviewSelectedFacts">Check selected devices</button><button v-if="comparable" :disabled="loading" @click="compareIdentity">Compare identity</button><button v-if="segmentable" :disabled="loading" @click="recordSegment(selectedItems)">Record shared segment</button><button v-if="identity?.writable" :disabled="loading" @click="editor = 'bulk'">Review bulk change</button><button @click="selected = []">Clear selection</button></div>
 <div v-if="page.items.length" class="phone-list-tools"><button class="select-mode" :aria-pressed="selectMode||selected.length>0" @click="toggleSelection">{{ selectMode||selected.length ? 'Cancel selection' : 'Select' }}</button><label class="check select-page"><input type="checkbox" aria-label="Select phone page" :disabled="loading" :checked="selected.length === page.items.length" @change="selected = ($event.target as HTMLInputElement).checked ? page.items.map(i => key(i.target)) : []">Select page</label><label>Sort<select aria-label="Sort resources" :value="`${query.sort}:${query.descending ? 'desc' : 'asc'}`" @change="change({ sort: ($event.target as HTMLSelectElement).value.split(':')[0], desc: ($event.target as HTMLSelectElement).value.endsWith(':desc') ? '1' : undefined })"><option value="name:asc">Name A–Z</option><option value="name:desc">Name Z–A</option><option value="kind:asc">Resource kind</option></select></label></div>

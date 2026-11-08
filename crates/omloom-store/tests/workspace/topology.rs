@@ -62,6 +62,22 @@ fn topology_projects_known_links_without_disclosing_denied_endpoints() -> TestRe
     let topology = restricted.topology.ok_or("restricted topology")?;
     assert!(topology.edges.is_empty());
     assert!(!topology.more_edges);
+    for endpoint in page
+        .items
+        .iter()
+        .map(|item| item.target.as_ref().ok_or(Error::Corrupt))
+    {
+        let mut reader = reader.clone();
+        reader.grants.push(Grant {
+            scope: Scope::Targets(vec![AssetRef::try_from(endpoint?)?]),
+            read: Fields::Selected(vec!["relations".into()]),
+            write: Fields::Selected(vec![]),
+            writable: false,
+        });
+        let page = graph(&store, &reader, graph_query())?;
+        assert_eq!(page.items.len(), 2);
+        assert!(page.topology.ok_or("topology")?.edges.is_empty());
+    }
     reader.grants[0].scope = Scope::Kinds(vec![K::Prefix]);
     let restricted = graph(&store, &reader, graph_query())?;
     assert_eq!(restricted.total, 1);
@@ -242,6 +258,71 @@ fn network_branch_accepts_prefix_within_project_address_space() -> TestResult {
         Err(Error::Denied)
     ));
     assert_eq!(store.usage()?, before);
+    Ok(())
+}
+
+// A wide frontier of shared workloads must not substitute a per-batch limit for the parent limit.
+#[cfg(feature = "diagnostics")]
+#[test]
+fn topology_scope_accepts_shared_workloads_across_a_wide_frontier() -> TestResult {
+    use coordinode_core::graph::types::Value;
+    use omloom_contracts::ids::RelationId;
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let site = create(&store, &actor, K::Site, "Site")?;
+    let hosts = (0..17)
+        .map(|index| child(&store, &actor, &site, K::Device, &format!("Host {index}")))
+        .collect::<Result<Vec<_>, _>>()?;
+    let services = (0..121)
+        .map(|index| create(&store, &actor, K::Service, &format!("Service {index}")))
+        .collect::<Result<Vec<_>, _>>()?;
+    // Seed only the rows and adjacency needed by this read-path regression.
+    for host in &hosts {
+        let rows = services
+            .iter()
+            .map(|service| {
+                Value::Map(
+                    [
+                        (
+                            "key".into(),
+                            Value::String(format!("relation/{}", RelationId::generate())),
+                        ),
+                        (
+                            "service".into(),
+                            Value::String(format!("asset/{}", service.asset_id)),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                )
+            })
+            .collect();
+        store.diagnostic_database().execute_cypher_shared(
+            "MATCH (h:OmRow {key:$host}) UNWIND $rows AS row MATCH (s:OmRow {key:row.service}) CREATE (s)-[:OmRelationFrom]->(r:OmRow {key:row.key,parent:'relations',asset:s.asset,incarnation:s.incarnation,to_asset:h.asset,to_incarnation:h.incarnation,kind:$kind,revision:1,authority:'fixture'})-[:OmRelationTo]->(h)",
+            Some([
+                ("host".into(), Value::String(format!("asset/{}", host.asset_id))),
+                ("rows".into(), Value::Array(rows)),
+                ("kind".into(), Value::Int(wire::RelationKind::RunsOn as i64)),
+            ].into_iter().collect()), None, None, None,
+        )?;
+    }
+    let mut selection = graph_query();
+    selection.view = api::View::Overview as i32;
+    selection
+        .network
+        .as_mut()
+        .ok_or(Error::Corrupt)?
+        .include_topology = false;
+    selection.network.as_mut().ok_or(Error::Corrupt)?.sites = vec![site];
+    selection.kinds = vec![K::Service as i32];
+    let page = graph(&store, &actor, selection)?;
+    assert_eq!(page.total, services.len() as u64);
+    assert!(page.items.iter().all(|item| {
+        item.target
+            .as_ref()
+            .is_some_and(|target| services.contains(target))
+    }));
     Ok(())
 }
 

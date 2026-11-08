@@ -146,6 +146,7 @@ function inspect(target?: AssetRef) {
               :class="{ membership: [RelationKind.ON, RelationKind.MEMBER_OF].includes(link.edge.kind) }" />
           </svg>
           <button v-for="node in nodes" :key="node.id" class="network-topology-node"
+            :aria-label="`${labels.get(node.id)}, ${label(node.item.kind)}`"
             :title="prefixTitles.get(node.id)"
             :style="{ left: node.point.x + 'px', top: node.point.y + 'px', translate: `${offset.x}px ${offset.y}px`, width: CARD_WIDTH + 'px', height: CARD_HEIGHT + 'px' }"
             :aria-current="node.id === key(selected) ? 'true' : undefined" @click="inspect(node.item.target)"

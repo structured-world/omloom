@@ -915,6 +915,7 @@ fn account_card_sharing_requires_its_own_capability() -> TestResult {
         Err(Error::Denied)
     ));
     assert_eq!(store.usage()?, before);
+    let mut focused = publish.clone();
     let query = publish
         .view
         .as_mut()
@@ -941,6 +942,11 @@ fn account_card_sharing_requires_its_own_capability() -> TestResult {
     ));
     assert_eq!(store.usage()?, before);
     actor.grants[0].write = Fields::Selected(vec!["account.share".into()]);
+    focused.view.as_mut().expect("view").name = "Focused account".into();
+    let Reply::Views(focused) = call(&store, &actor, Command::SaveView(focused))? else {
+        panic!("focused view");
+    };
+    assert_eq!(focused.items[0].audiences, vec!["operations"]);
     let Reply::Views(published) = call(&store, &actor, Command::SaveView(publish))? else {
         panic!("view");
     };
