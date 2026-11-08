@@ -30,10 +30,10 @@ fn saved_views_validate_responsibility_filters_without_matching_assets() -> Test
                 api::request::Command::SaveView(api::SaveView {
                     view: Some(api::SavedView {
                         name: "Owner view".into(),
-                        query: Some(api::Query {
+                        query: Some(Box::new(api::Query {
                             responsibility: Some(filter),
                             ..query()
-                        }),
+                        })),
                         ..Default::default()
                     }),
                     ..Default::default()
@@ -56,7 +56,7 @@ fn saved_view_admission_preserves_metadata_reply_budget() -> TestResult {
     let actor = operator();
     let small = api::SavedView {
         name: "Small view".into(),
-        query: Some(query()),
+        query: Some(Box::new(query())),
         ..Default::default()
     };
     let Reply::Views(saved) = call(
@@ -88,7 +88,7 @@ fn saved_view_admission_preserves_metadata_reply_budget() -> TestResult {
             Command::SaveView(api::SaveView {
                 view: Some(api::SavedView {
                     name: format!("Large {index}"),
-                    query: Some(large_query.clone()),
+                    query: Some(Box::new(large_query.clone())),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -106,7 +106,7 @@ fn saved_view_admission_preserves_metadata_reply_budget() -> TestResult {
     }
     assert!(refused, "oversized saved-view collection admitted");
     let mut expanded = small.clone();
-    expanded.query = Some(large_query);
+    expanded.query = Some(Box::new(large_query));
     let before = store.usage()?;
     assert!(matches!(
         call(
@@ -390,7 +390,7 @@ fn personal_publication_and_shared_edit_conflicts() -> TestResult {
         api::request::Command::SaveView(api::SaveView {
             view: Some(api::SavedView {
                 name: "Private topology".into(),
-                query: Some(query()),
+                query: Some(Box::new(query())),
                 ..Default::default()
             }),
             ..Default::default()
@@ -460,7 +460,7 @@ fn personal_publication_and_shared_edit_conflicts() -> TestResult {
     let api::reply::Result::Page(page) = call(
         &store,
         &colleague,
-        api::request::Command::Query(view.query.clone().expect("query")),
+        api::request::Command::Query(*view.query.clone().expect("query")),
     )?
     else {
         panic!("page")
@@ -526,7 +526,7 @@ fn invalid_saved_predicate_is_not_silently_removed() -> TestResult {
         api::request::Command::SaveView(api::SaveView {
             view: Some(api::SavedView {
                 name: "Backup hosts".into(),
-                query: Some(q.clone()),
+                query: Some(Box::new(q.clone())),
                 ..Default::default()
             }),
             ..Default::default()
@@ -553,7 +553,7 @@ fn invalid_saved_predicate_is_not_silently_removed() -> TestResult {
         panic!("views")
     };
     assert_eq!(views.items[0].id, saved.items[0].id);
-    assert_eq!(views.items[0].query.as_ref(), Some(&q));
+    assert_eq!(views.items[0].query.as_deref(), Some(&q));
     assert!(matches!(
         call(&store, &context, api::request::Command::Query(q)),
         Err(Error::Incomplete)

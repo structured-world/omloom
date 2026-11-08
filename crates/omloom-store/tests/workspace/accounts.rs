@@ -896,13 +896,13 @@ fn account_card_sharing_requires_its_own_capability() -> TestResult {
     let (_, account) = setup(&store)?;
     let mut actor = operator();
     actor.grants[0].write = Fields::Selected(vec!["account.use".into()]);
-    let publish = api::SaveView {
+    let mut publish = api::SaveView {
         view: Some(api::SavedView {
             name: "Selected account".into(),
-            query: Some(api::Query {
-                focus: Some(account),
+            query: Some(Box::new(api::Query {
+                focus: Some(account.clone()),
                 ..query()
-            }),
+            })),
             audiences: vec!["operations".into()],
             ..Default::default()
         }),
@@ -910,6 +910,31 @@ fn account_card_sharing_requires_its_own_capability() -> TestResult {
         ..Default::default()
     };
     let before = store.usage()?;
+    assert!(matches!(
+        call(&store, &actor, Command::SaveView(publish.clone())),
+        Err(Error::Denied)
+    ));
+    assert_eq!(store.usage()?, before);
+    let query = publish
+        .view
+        .as_mut()
+        .expect("view")
+        .query
+        .as_mut()
+        .expect("query");
+    query.focus = None;
+    query.view = api::View::Network as i32;
+    query.network = Some(Box::new(api::NetworkSelection {
+        layout: Some(api::NetworkLayout {
+            pins: vec![api::NetworkPin {
+                target: Some(account),
+                x: 10,
+                y: 10,
+            }],
+            ..Default::default()
+        }),
+        ..Default::default()
+    }));
     assert!(matches!(
         call(&store, &actor, Command::SaveView(publish.clone())),
         Err(Error::Denied)

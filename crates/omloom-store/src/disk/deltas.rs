@@ -28,7 +28,15 @@ impl Capture {
         {
             return Ok(());
         }
+        // The indexed pair is derived from the relation endpoints on every write, including undo.
+        let derived = old.and_then(|row| row.get("topology_pair"));
         let size = old.map(|p| number(p, "size")).transpose()?.unwrap_or(0);
+        let size = match derived {
+            Some(pair) => size
+                .checked_sub(property_charge("topology_pair", pair, "relations"))
+                .ok_or(Error::Corrupt)?,
+            None => size,
+        };
         let charge = usize::try_from(size)
             .map_err(|_| Error::Limit)?
             .checked_mul(6)
@@ -39,7 +47,13 @@ impl Capture {
             return Err(Error::Limit);
         }
         self.bytes = next;
-        self.rows.insert(key.into(), old.cloned());
+        let before = old.map(|row| {
+            row.iter()
+                .filter(|(name, _)| name.as_str() != "topology_pair")
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect()
+        });
+        self.rows.insert(key.into(), before);
         Ok(())
     }
     pub fn encode(&self) -> Result<Vec<u8>> {

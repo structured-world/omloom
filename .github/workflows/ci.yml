@@ -39,14 +39,12 @@ jobs:
         with:
           cache-bin: 'false'
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Install mold
-        uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
-        with:
-          make-default: false
-      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
-        with:
-          version: "36.2"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install mold and protoc
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sh scripts/install-ci-release-tool.sh mold
+          sh scripts/install-ci-release-tool.sh protoc
       - uses: taiki-e/install-action@1919c4a95903d2c33e4a221102edca87309fc14b # v2
         with:
           tool: nextest
@@ -78,7 +76,13 @@ jobs:
         with:
           cache-bin: 'false'
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install protoc on macOS
+        if: runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sh scripts/install-ci-release-tool.sh protoc
       - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        if: runner.os == 'Windows'
         with:
           version: "36.2"
           repo-token: ${{ secrets.GITHUB_TOKEN }}

@@ -115,7 +115,7 @@ pub(super) fn ownership_path(children: bool, reverse: bool) -> &'static str {
     }
 }
 
-fn browse_clause(
+pub(super) fn browse_clause(
     context: &Context,
     values: &mut HashMap<String, Value>,
     reverse: Option<bool>,
@@ -512,6 +512,16 @@ impl Store {
             return Err(Error::Invalid);
         }
         let view = api::View::try_from(query.view).map_err(|_| Error::Invalid)?;
+        let include_topology = query
+            .network
+            .as_ref()
+            .is_some_and(|network| network.include_topology);
+        if include_topology && view != api::View::Network {
+            return Err(Error::Invalid);
+        }
+        if let Some(network) = &mut query.network {
+            network.layout = None;
+        }
         if let Some(filter) = &query.responsibility {
             super::responsibility::validate_filter(filter)?;
         }
@@ -542,6 +552,31 @@ impl Store {
             "a.parent='assets'".to_owned(),
             visible_clause(context, None, &mut values),
         ];
+        let mut site_entry = None;
+        let without_site = query
+            .network
+            .as_ref()
+            .is_some_and(|network| network.unplaced);
+        if let Some(network) = &query.network
+            && !network.sites.is_empty()
+        {
+            if without_site {
+                return Err(Error::Invalid);
+            }
+            tx.validate_sites(context, &network.sites)?;
+            let members = tx.working_scope(context, &network.sites)?;
+            let sites = parameter(
+                &mut values,
+                Value::Array(
+                    members
+                        .into_iter()
+                        .map(|target| text(asset_key(target)))
+                        .collect(),
+                ),
+            );
+            clauses.push(format!("a.key IN {sites}"));
+            site_entry = Some(sites);
+        }
         if query.require_physical_read {
             clauses.push(visible_clause(context, Some("physical"), &mut values));
         }
@@ -660,13 +695,20 @@ impl Store {
             focus: query.focus.clone(),
             expected: None,
         };
-        let browse_roots: Vec<_> = query
+        if view == api::View::Network && !query.level_only && working.focus.is_some() {
+            if !working.roots.is_empty() {
+                // Validate the branch against the project, including IPAM containment.
+                tx.selection(context, &working, false)?;
+            }
+            working.roots = working.focus.take().into_iter().collect();
+        }
+        let browse_roots: Vec<_> = working
             .focus
             .iter()
-            .chain(query.roots.iter().filter(|_| query.focus.is_none()))
+            .chain(working.roots.iter().filter(|_| working.focus.is_none()))
             .cloned()
             .collect();
-        let mut level_only = query.level_only || query.focus.is_some();
+        let mut level_only = query.level_only || working.focus.is_some();
         for root in &browse_roots {
             let row = tx.visible_asset(context, parse_target(Some(root))?)?;
             if [
@@ -1204,6 +1246,11 @@ impl Store {
                 clauses.push(format!("a.key IN {keys}"));
             }
         }
+        if let Some(keys) = site_entry
+            && entry == "MATCH (a:OmRow {parent:'assets'})"
+        {
+            entry = format!("UNWIND {keys} AS site_key MATCH (a:OmRow {{key:site_key}})");
+        }
         clauses.retain(|clause| clause != "true");
         let tail = format!(
             "{} WITH {} WHERE {}",
@@ -1211,13 +1258,23 @@ impl Store {
             bindings.join(", "),
             clauses.join(" AND ")
         );
-        let bases = match prefix_entries {
+        let mut bases = match prefix_entries {
             Some(entries) => entries
                 .into_iter()
                 .map(|entry| format!("{entry}{tail}"))
                 .collect::<Vec<_>>(),
             None => vec![format!("{entry}{tail}")],
         };
+        if without_site {
+            let keys = tx.unplaced_candidates(context, &bases, &values)?;
+            let keys = parameter(
+                &mut values,
+                Value::Array(keys.into_iter().map(text).collect()),
+            );
+            for base in &mut bases {
+                base.push_str(&format!(" AND a.key IN {keys}"));
+            }
+        }
         let sort = match query.sort.as_str() {
             "" | "name" => format!(
                 "CASE WHEN {} THEN a.name_sort ELSE a.asset END",
@@ -1399,7 +1456,8 @@ impl Store {
         // Reserve both cohort positions when a page merges disjoint sources.
         let cursor_bytes = 2 * 20 + 3 + fingerprint.len() + selected.position.max_bytes();
         bytes += 1 + prost::length_delimiter_len(cursor_bytes) + cursor_bytes;
-        let envelope = 1 + prost::length_delimiter_len(MAX_REPLY_BYTES);
+        let envelope =
+            1 + prost::length_delimiter_len(MAX_REPLY_BYTES) + if include_topology { 8 } else { 0 };
         let mut emitted = 0;
         for (index, item) in items.iter().enumerate() {
             let size = item.encoded_len();
@@ -1421,6 +1479,11 @@ impl Store {
         if query.include_context {
             contexts.truncate(emitted);
         }
+        let topology = if include_topology {
+            Some(tx.network_topology(context, &items, MAX_REPLY_BYTES - envelope - bytes)?)
+        } else {
+            None
+        };
         tx.commit()?;
         if self.usage()?.revision != revision {
             return Err(Error::Expired);
@@ -1429,6 +1492,7 @@ impl Store {
         Ok(api::Page {
             items,
             contexts,
+            topology,
             total,
             revision,
             next: if next_position.rank()? < total {

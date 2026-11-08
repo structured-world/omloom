@@ -190,22 +190,28 @@ fn props(items: impl IntoIterator<Item = (&'static str, Value)>) -> Properties {
     items.into_iter().map(|(k, v)| (k.into(), v)).collect()
 }
 
+fn property_charge(name: &str, value: &Value, parent: &str) -> u64 {
+    let bytes = match value {
+        // Charge the maximum supported width before dispatching to a recovery owner.
+        Value::String(_) if parent == "leases" && name == "worker" => 256,
+        Value::String(value) => value.len() as u64,
+        Value::Binary(value) => value.len() as u64,
+        _ => 16,
+    };
+    name.len() as u64 + 64 + bytes
+}
+
 fn charged_row(key: &str, parent: &str, class: Class, mut data: Properties) -> Result<Properties> {
+    if parent == "relations" {
+        workspace::topology::derive_pair(&mut data)?;
+    }
     data.insert("key".into(), text(key));
     data.insert("parent".into(), text(parent));
     data.insert("class".into(), int(class as u64)?);
     let mut size = 128u64;
     for (name, value) in &data {
-        let bytes = match value {
-            // A recovery owner may have a longer identifier than the first
-            // worker. Charge its full supported width before any dispatch.
-            Value::String(_) if parent == "leases" && name == "worker" => 256,
-            Value::String(value) => value.len() as u64,
-            Value::Binary(value) => value.len() as u64,
-            _ => 16,
-        };
         size = size
-            .checked_add(name.len() as u64 + 64 + bytes)
+            .checked_add(property_charge(name, value, parent))
             .ok_or(Error::Limit)?;
     }
     if parent == "relations" {
@@ -543,6 +549,7 @@ impl Store {
         schema.add_property(PropertyDef::new("query", PropertyType::Binary));
         schema.add_property(PropertyDef::new("working", PropertyType::Binary));
         schema.add_property(PropertyDef::new("payload", PropertyType::Binary));
+        schema.add_property(PropertyDef::new("topology_pair", PropertyType::Binary));
         for name in ["choices", "audiences", "editors", "columns"] {
             schema.add_property(PropertyDef::new(
                 name,
@@ -718,6 +725,7 @@ impl Store {
             ("omloom_asset", "asset"),
             // Reverse administrative inheritance follows exact relation endpoints.
             ("omloom_to_asset", "to_asset"),
+            ("omloom_topology_pair", "topology_pair"),
             ("omloom_group", "group"),
             ("omloom_party_lookup", "party_lookup"),
             ("omloom_request_account", "request_account"),
@@ -820,6 +828,13 @@ impl Store {
                 .db
                 .execute_cypher_shared(query, None, None, None, None)?;
         }
+        store.db.execute_cypher_shared(
+            "MATCH (n:OmRow {topology_pair:$pair}) RETURN n.key AS key LIMIT 1",
+            params([("pair", Value::Binary(vec![0; 64]))]),
+            None,
+            None,
+            None,
+        )?;
         Ok(store)
     }
     fn policy_identity(&self) -> String {

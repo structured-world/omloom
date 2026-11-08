@@ -18,6 +18,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     prost_build::Config::new()
         .extern_path(".omloom.v1", "crate::wire")
         .boxed(".omloom.workspace.v1.Network.parent")
+        .boxed(".omloom.workspace.v1.Query.network")
+        .boxed(".omloom.workspace.v1.SavedView.query")
         .boxed(".omloom.workspace.v1.Address.allocation")
         .boxed(".omloom.workspace.v1.Address.interface")
         .boxed(".omloom.workspace.v1.Reply.result.detail")
@@ -58,7 +60,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 Type::String => "Kind::Text".into(),
                 Type::Bytes => "Kind::Bytes".into(),
-                Type::Uint32 => "Kind::Varint(u32::MAX as u64)".into(),
+                Type::Uint32 | Type::Sint32 => "Kind::Varint(u32::MAX as u64)".into(),
                 Type::Bool => "Kind::Varint(1)".into(),
                 Type::Enum => "Kind::Varint(i32::MAX as u64)".into(),
                 Type::Uint64 | Type::Sint64 => "Kind::Varint(u64::MAX)".into(),
@@ -81,6 +83,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     && matches!(field.name(), "sources" | "boundaries")
                 {
                     8
+                } else if message.name() == "NetworkSelection" && field.name() == "sites" {
+                    16
                 } else if (message.name() == "EvaluateRequirements" && field.name() == "nodes")
                     || (message.name() == "RequirementGroup" && field.name() == "members")
                     || (message.name() == "PhysicalPlan" && field.name() == "steps")
@@ -94,6 +98,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     || (message.name() == "PhysicalCableEnd" && field.name() == "channels")
                     || (message.name() == "PhysicalChannelSet" && field.name() == "channels")
                     || (message.name() == "PhysicalDefinition" && field.name() == "channels")
+                    || (message.name() == "NetworkLayout" && field.name() == "pins")
                 {
                     64
                 } else if message.name() == "PhysicalMaterial" && field.name() == "specifications" {
