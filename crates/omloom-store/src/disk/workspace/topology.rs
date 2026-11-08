@@ -77,20 +77,48 @@ impl Tx<'_> {
                 "UNWIND $keys AS key MATCH (n:OmRow {key:key}) RETURN properties(n) AS p",
                 params([("keys", Value::Array(allocation_keys))]),
             )?;
+            let mut groups = BTreeSet::new();
+            let mut assignments = Vec::with_capacity(rows.len());
             for row in rows {
                 let address = target(&row)?;
                 let owner = network::groups::group_of(&row)?.unwrap_or(address);
                 if owner != address {
-                    let kind = K::AddressGroup as i32;
-                    if !context.field(owner, kind, "network", false)
-                        || number(&self.asset(owner)?, "adoption")?
-                            != wire::Adoption::Adopted as u64
-                    {
+                    if !context.field(owner, K::AddressGroup as i32, "network", false) {
                         continue;
                     }
+                    groups.insert(owner);
                 }
-                owners.push((address, owner));
+                assignments.push((address, owner));
             }
+            if !groups.is_empty() {
+                // Many addresses can share an owner. Read only the state needed for validation.
+                let rows = self.raw(
+                    "UNWIND $keys AS key MATCH (n:OmRow {key:key})
+                     RETURN key AS key, n.asset AS asset, n.incarnation AS incarnation, n.adoption AS adoption",
+                    [(
+                        "keys".into(),
+                        Value::Array(groups.iter().map(|&group| text(asset_key(group))).collect()),
+                    )]
+                    .into(),
+                )?;
+                if rows.len() != groups.len() {
+                    return Err(Error::Missing);
+                }
+                for row in rows {
+                    let group = target(&row)?;
+                    if string(&row, "key")? != asset_key(group) || !groups.contains(&group) {
+                        return Err(Error::Conflict);
+                    }
+                    if number(&row, "adoption")? != wire::Adoption::Adopted as u64 {
+                        groups.remove(&group);
+                    }
+                }
+            }
+            owners.extend(
+                assignments
+                    .into_iter()
+                    .filter(|&(address, owner)| address == owner || groups.contains(&owner)),
+            );
         }
         let pairs: Vec<_> = owners
             .iter()

@@ -770,3 +770,101 @@ fn topology_projects_authorized_membership_assignments() -> TestResult {
     assert_eq!(store.usage()?, before);
     Ok(())
 }
+
+// Several addresses sharing one owner require only one bounded read of group state.
+#[test]
+fn topology_batches_shared_address_group_validation() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let store = Store::open(dir.path(), policy())?;
+    let actor = operator();
+    let interface = create(&store, &actor, K::Interface, "Management")?;
+    let space = create(&store, &actor, K::AddressSpace, "Management space")?;
+    let create_address = |cidr: &str, group: Option<&api::Item>| -> Result<_, Error> {
+        let R::Mutation(created) = call(
+            &store,
+            &actor,
+            C::Network(api::Network {
+                kind: K::IpAddress as i32,
+                name: cidr.into(),
+                cidr: cidr.into(),
+                address_space: Some(space.clone()),
+                sharing: if group.is_none() {
+                    api::SharedUse::Anycast as i32
+                } else {
+                    api::SharedUse::Unspecified as i32
+                },
+                group_name: if group.is_none() {
+                    "Shared".into()
+                } else {
+                    String::new()
+                },
+                group: group.and_then(|g| g.target.clone()),
+                expected_group: group.map(|g| g.revision),
+                ..Default::default()
+            }),
+        )?
+        else {
+            return Err(Error::Corrupt);
+        };
+        Ok(created.targets[0].clone())
+    };
+    let first = create_address("192.0.2.3/32", None)?;
+    let R::Detail(detail) = call(
+        &store,
+        &actor,
+        C::Read(api::Read {
+            target: Some(first.clone()),
+            ..Default::default()
+        }),
+    )?
+    else {
+        return Err("address detail".into());
+    };
+    let group = detail.group.ok_or("address group")?;
+    let second = create_address("192.0.2.4/32", Some(&group))?;
+    let owner = group.target.ok_or("group target")?;
+    call(
+        &store,
+        &actor,
+        C::Member(api::Member {
+            address: Some(owner.clone()),
+            interface: Some(interface.clone()),
+            expected: store.asset(AssetRef::try_from(&owner)?)?.revision,
+            ..Default::default()
+        }),
+    )?;
+    let registry = store.diagnostic_database().query_registry();
+    registry.reset();
+    let page = graph(&store, &actor, graph_query())?
+        .topology
+        .ok_or("topology")?;
+    for address in [&first, &second] {
+        assert!(
+            page.edges
+                .iter()
+                .any(|edge| edge.from.as_ref() == Some(address)
+                    && edge.to.as_ref() == Some(&interface)
+                    && edge.kind == wire::RelationKind::AssignedTo as i32)
+        );
+    }
+    let group_reads: u64 = registry
+        .top_by_impact(64)
+        .iter()
+        .filter(|query| query.canonical_query.contains("n.adoption AS adoption"))
+        .map(|query| query.count)
+        .sum();
+    assert_eq!(
+        group_reads, 1,
+        "validate all group owners with one scalar projection"
+    );
+    let mut limited = operator();
+    limited.grants[0].scope = Scope::Kinds(vec![K::IpAddress, K::Interface]);
+    let page = graph(&store, &limited, graph_query())?
+        .topology
+        .ok_or("topology")?;
+    assert!(
+        page.edges.is_empty(),
+        "a hidden group cannot disclose its memberships"
+    );
+    Ok(())
+}

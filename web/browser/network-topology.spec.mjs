@@ -152,6 +152,7 @@ test('an earlier network view response cannot win after a second selection', asy
 });
 
 test('returning to a route does not revive a pending saved view selection', async ({ page }) => {
+  // Hold the complete HTTP response before delivery to the app, across a round trip in history.
   await withFieldHost(async url => {
     const { m, rpc } = await workspaceClient(url);
     await rpc({ oneofKind: 'saveView', saveView: m.SaveView.create({
@@ -160,33 +161,46 @@ test('returning to a route does not revive a pending saved view selection', asyn
     await page.goto(`${url}/#/?view=1`);
     const pending = page.getByRole('button', { name: '◦ Pending map', exact: true });
     await expect(pending).toBeVisible();
-    const release = Promise.withResolvers();
-    const arrived = Promise.withResolvers();
-    const isViews = request => {
-      const data = request.postDataBuffer();
-      return data && m.Request.fromBinary(data.subarray(5)).command.oneofKind === 'views';
-    };
-    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
-      if (isViews(route.request())) {
-        arrived.resolve();
-        await release.promise;
-      }
-      await route.continue();
+    await page.exposeFunction('isSavedViewsRequest', body =>
+      m.Request.fromBinary(Uint8Array.from(body).subarray(5)).command.oneofKind === 'views');
+    await page.evaluate(() => {
+      const nativeFetch = window.fetch;
+      const gate = Promise.withResolvers();
+      const reply = { ready: false, consumed: false, release: gate.resolve, restore: () => { window.fetch = nativeFetch; } };
+      window.heldSavedView = reply;
+      window.fetch = async (input, init) => {
+        const response = await nativeFetch(input, init);
+        if (reply.ready || !String(input).endsWith('/omloom.workspace.v1.Workspace/Call')
+            || !init?.body || !await window.isSavedViewsRequest(Array.from(init.body))) return response;
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        reply.ready = true;
+        await gate.promise;
+        let sent = false;
+        const body = new ReadableStream({ pull(controller) {
+          if (!sent) {
+            sent = true;
+            controller.enqueue(bytes);
+          } else {
+            controller.close();
+            reply.consumed = true;
+          }
+        } }, { highWaterMark: 0 });
+        return new Response(body, { status: response.status, headers: response.headers });
+      };
     });
     try {
       await pending.click();
-      await arrived.promise;
+      await expect.poll(() => page.evaluate(() => window.heldSavedView.ready)).toBe(true);
       await page.getByRole('button', { name: 'Table', exact: true }).click();
       await expect(page).toHaveURL(/networkTable=1/);
       await page.goBack();
       await expect(page).toHaveURL(/view=1$/);
-      const response = page.waitForResponse(result => result.url().endsWith('/omloom.workspace.v1.Workspace/Call') && isViews(result.request()));
-      release.resolve();
-      await (await response).finished();
-      await page.waitForLoadState('networkidle');
+      await page.evaluate(() => window.heldSavedView.release());
+      await expect.poll(() => page.evaluate(() => window.heldSavedView.consumed)).toBe(true);
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
       await expect(page).toHaveURL(/view=1$/);
     } finally {
-      release.resolve();
+      await page.evaluate(() => { window.heldSavedView.release(); window.heldSavedView.restore(); });
     }
   });
 });
