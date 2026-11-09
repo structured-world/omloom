@@ -896,13 +896,13 @@ fn account_card_sharing_requires_its_own_capability() -> TestResult {
     let (_, account) = setup(&store)?;
     let mut actor = operator();
     actor.grants[0].write = Fields::Selected(vec!["account.use".into()]);
-    let publish = api::SaveView {
+    let mut publish = api::SaveView {
         view: Some(api::SavedView {
             name: "Selected account".into(),
-            query: Some(api::Query {
-                focus: Some(account),
+            query: Some(Box::new(api::Query {
+                focus: Some(account.clone()),
                 ..query()
-            }),
+            })),
             audiences: vec!["operations".into()],
             ..Default::default()
         }),
@@ -915,7 +915,62 @@ fn account_card_sharing_requires_its_own_capability() -> TestResult {
         Err(Error::Denied)
     ));
     assert_eq!(store.usage()?, before);
+    let mut focused = publish.clone();
+    let query = publish
+        .view
+        .as_mut()
+        .expect("view")
+        .query
+        .as_mut()
+        .expect("query");
+    query.focus = None;
+    query.view = api::View::Network as i32;
+    query.network = Some(Box::new(api::NetworkSelection {
+        layout: Some(api::NetworkLayout {
+            pins: vec![api::NetworkPin {
+                target: Some(account.clone()),
+                x: 10,
+                y: 10,
+            }],
+            ..Default::default()
+        }),
+        ..Default::default()
+    }));
+    assert!(matches!(
+        call(&store, &actor, Command::SaveView(publish.clone())),
+        Err(Error::Denied)
+    ));
+    assert_eq!(store.usage()?, before);
     actor.grants[0].write = Fields::Selected(vec!["account.share".into()]);
+    focused.view.as_mut().expect("view").name = "Focused account".into();
+    let Reply::Views(focused) = call(&store, &actor, Command::SaveView(focused))? else {
+        panic!("focused view");
+    };
+    let focused = &focused.items[0];
+    assert_eq!(focused.audiences, vec!["operations"]);
+    assert_eq!(
+        focused
+            .query
+            .as_ref()
+            .and_then(|query| query.focus.as_ref()),
+        Some(&account)
+    );
+    let Reply::Views(reloaded) = call(&store, &actor, Command::Views(api::Empty {}))? else {
+        panic!("reloaded views");
+    };
+    let reloaded = reloaded
+        .items
+        .iter()
+        .find(|view| view.id == focused.id)
+        .expect("published view");
+    assert_eq!(reloaded.audiences, vec!["operations"]);
+    assert_eq!(
+        reloaded
+            .query
+            .as_ref()
+            .and_then(|query| query.focus.as_ref()),
+        Some(&account)
+    );
     let Reply::Views(published) = call(&store, &actor, Command::SaveView(publish))? else {
         panic!("view");
     };

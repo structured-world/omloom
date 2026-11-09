@@ -67,6 +67,15 @@ pub struct AssetRef {
     pub asset: AssetId,
     pub incarnation: IncarnationId,
 }
+impl AssetRef {
+    /// Fixed-width identity for database keys: asset UUID followed by incarnation UUID.
+    pub fn to_bytes(self) -> [u8; 32] {
+        let mut bytes = [0; 32];
+        bytes[..16].copy_from_slice(self.asset.0.as_bytes());
+        bytes[16..].copy_from_slice(self.incarnation.0.as_bytes());
+        bytes
+    }
+}
 impl TryFrom<&crate::wire::AssetRef> for AssetRef {
     type Error = Error;
     fn try_from(value: &crate::wire::AssetRef) -> Result<Self, Error> {

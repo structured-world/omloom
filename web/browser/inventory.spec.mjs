@@ -275,7 +275,7 @@ test('allocation form creates a canonical prefix without an optional label on de
         await dialog.getByLabel('Address / prefix', { exact: true }).fill('2001:db8:1::/64');
         await dialog.getByRole('button', { name: 'Allocate', exact: true }).click();
         await expect(dialog).toBeHidden();
-        await expect(page.getByRole('button', { name: '2001:db8:1::/64', exact: true })).toBeVisible();
+        await expect(page.getByRole('button', { name: '2001:db8:1::/64, prefix', exact: true })).toBeVisible();
         const items = (await rpc({ oneofKind: 'query', query: m.Query.create({ view: m.View.NETWORK, roots: [space], kinds: [m.AssetKind.PREFIX], columns: ['name', 'cidr', 'address_space'], limit: 10 }) })).page.items;
         expect(items).toHaveLength(1);
         expect(items[0].fields.find(f => f.name === 'cidr')?.value.text).toBe('2001:db8:1::/64');
@@ -301,6 +301,7 @@ test('prefix correction reviews domain changes and allocation ownership before a
       const page = await browser.newPage({ viewport: { width, height: 900 } }); page.setDefaultTimeout(5000);
       try {
         await page.goto(`${server.url}/#/?view=1&kind=${m.AssetKind.PREFIX}`);
+        await page.getByRole('button', { name: 'Table', exact: true }).click();
         if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
         for (const name of [`Allocated subnet ${width}`, `Unresolved subnet ${width}`]) await page.getByRole('checkbox', { name: `Select ${name}`, exact: true }).check();
         await page.getByRole('button', { name: 'Compare identity', exact: true }).click();
@@ -355,6 +356,7 @@ for (const width of [1440, 390]) test(`prefix correction opens and accepts with 
       const page = await browser.newPage({ viewport: { width, height: 900 } }); page.setDefaultTimeout(5000);
       try {
         await page.goto(`${server.url}/#/?view=1&kind=${m.AssetKind.PREFIX}`);
+        await page.getByRole('button', { name: 'Table', exact: true }).click();
         if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
         for (const name of [`Retained ${width}`, `Duplicate ${width}`]) await page.getByRole('checkbox', { name: `Select ${name}`, exact: true }).check();
         await page.getByRole('button', { name: 'Compare identity', exact: true }).click();
@@ -565,8 +567,10 @@ test('inventory CSV exports retain the visible unnamed prefix CIDR', async ({ br
       try {
         for (const view of [m.View.OVERVIEW, m.View.NETWORK]) {
           await page.goto(`${server.url}/#/?view=${view}&kind=${m.AssetKind.PREFIX}&columns=${encodeURIComponent(columns.join(','))}`);
-          await expect(page.getByRole('button', { name: '192.0.2.0/24', exact: true })).toBeVisible();
-          await expect(page.getByRole('button', { name: '192.0.2.0/24', exact: true })).toHaveAttribute('title', '192.0.2.0/24');
+          const name = view === m.View.NETWORK ? '192.0.2.0/24, prefix' : '192.0.2.0/24';
+          const resource = page.getByRole('button', { name, exact: true });
+          await expect(resource).toBeVisible();
+          await expect(resource).toHaveAttribute('title', '192.0.2.0/24');
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
           if (width < 600 && await page.getByRole('button', { name: 'More', exact: true }).getAttribute('aria-expanded') !== 'true') await page.getByRole('button', { name: 'More', exact: true }).click();
           const pending = page.waitForEvent('download');
@@ -738,6 +742,7 @@ for (const width of [1440, 390]) test(`known prefix refinement, contextual creat
     expect(retained.target).toEqual(prefix);
     await rpc({ oneofKind: 'network', network: m.Network.create({ kind: m.AssetKind.PREFIX, cidr: '192.0.2.0/24', sharing: m.SharedUse.EXCLUSIVE }) });
     await page.goto(`${server.url}/#/?view=1`);
+    await page.getByRole('button', { name: 'Table', exact: true }).click();
     if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
     await page.getByRole('checkbox', { name: 'Select Workshop subnet', exact: true }).check();
     await page.getByRole('checkbox', { name: /^Select 192\.0\.2\.0\/24 \([0-9a-f]{8}\)$/ }).check();
@@ -842,6 +847,7 @@ test('known IP/CIDR review preserves drafts and atomically creates an unresolved
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         await page.screenshot({ path: `test-results/known-prefix-${width}.png`, fullPage: true });
         await page.goto(`${server.url}/#/?view=1`);
+        await page.getByRole('button', { name: 'Table', exact: true }).click();
         if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
         await expect(page.getByRole('checkbox', { name: /^Select 192\.0\.2\.0\/24 \([0-9a-f]{8}\)$/ })).toHaveCount(width === 1440 ? 1 : 2);
       } finally { await page.close(); }
@@ -3891,7 +3897,7 @@ test('Unplaced combines with text and scoped address search in the browser', asy
       await page.goto(`${server.url}/#/?view=${m.View.NETWORK}&unplaced=1&scope=${space.assetId}&scopeInc=${space.incarnation}`);
       await page.getByRole('textbox', { name: 'Search inventory', exact: true }).fill('192.0.2.5');
       await page.getByRole('button', { name: 'Search', exact: true }).click();
-      await expect(page.getByRole('button', { name: 'Address', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Address, ip address', exact: true })).toBeVisible();
       await expect(page.getByRole('alert')).toHaveCount(0);
     }
   } finally { await server.stop(); await rm(dir, { recursive: true, force: true }); }
@@ -4419,6 +4425,7 @@ test('local network evidence keeps service ownership, coverage and phone navigat
     await object(m.AssetKind.INTERFACE,'unaddressed sibling',os);
     await rpc({oneofKind:'interfaceAddresses',interfaceAddresses:m.InterfaceAddresses.create({interface:osInterface,source:'Fixture collector',observedAt:1000n,complete:true,addresses:[{address:'192.0.2.99',stability:m.AddressStability.STABLE,state:m.AddressState.PREFERRED}]})},osInterface);
     await page.goto(`${server.url}/#/?view=1&search=unaddressed`);
+    await page.getByRole('button', { name: 'Table', exact: true }).click();
     const unaddressed=page.locator('tbody tr').filter({has:page.getByRole('button',{name:'unaddressed sibling',exact:true})});
     await expect(unaddressed).toContainText('Address not known');
     await expect(unaddressed).not.toContainText('192.0.2.99');
@@ -5187,10 +5194,11 @@ test('known address display names work as typed name filters', async ({ page }) 
         await dialog.getByLabel('Equals', { exact: true }).fill(address);
         await dialog.getByRole('button', { name: 'Apply filter', exact: true }).click();
         await expect(dialog).toBeHidden();
-        await expect(page.getByRole('button', { name: address, exact: true })).toBeVisible();
+        const card = page.getByRole('button', { name: `${address}, address reference`, exact: true });
+        await expect(card).toBeVisible();
         await page.reload();
-        await expect(page.getByRole('button', { name: address, exact: true })).toBeVisible();
-        await page.getByRole('button', { name: address, exact: true }).click();
+        await expect(card).toBeVisible();
+        await card.click();
         await expect(page.getByRole('region', { name: 'Resource details' }).getByRole('heading', { name: address, exact: true })).toBeVisible();
       }
     }
@@ -5277,7 +5285,7 @@ test('shared gateway addresses use one durable group and intended participant se
       await dialog.getByRole('button', { name: 'Allocate', exact: true }).click();
       await expect(dialog).toBeHidden();
     }
-    await page.getByRole('button', { name: 'Gateway A', exact: true }).click();
+    await page.getByRole('button', { name: 'Gateway A, ip address', exact: true }).click();
     await page.getByRole('button', { name: 'Assign participant', exact: true }).click();
     const dialog = page.getByRole('dialog');
     await dialog.getByLabel('Interface', { exact: true }).selectOption({ label: await dialog.getByLabel('Interface', { exact: true }).locator('option').filter({ hasText: 'Router uplink' }).textContent() });
@@ -5286,7 +5294,7 @@ test('shared gateway addresses use one durable group and intended participant se
     await dialog.getByRole('button', { name: 'Assign participant', exact: true }).click();
     await expect(dialog).toBeHidden();
     await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
-    await page.getByRole('button', { name: 'Gateway B', exact: true }).click();
+    await page.getByRole('button', { name: 'Gateway B, ip address', exact: true }).click();
     await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('Intended priority 255');
     const hash = new URL(page.url()).hash;
     await server.stop(); server = await host(dir);
@@ -5299,7 +5307,7 @@ test('shared gateway addresses use one durable group and intended participant se
     await expect(dialog).toBeHidden();
     await expect(page.getByRole('button', { name: 'Remove participant', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Close resource details', exact: true }).click();
-    await page.getByRole('button', { name: 'Gateway A', exact: true }).click();
+    await page.getByRole('button', { name: 'Gateway A, ip address', exact: true }).click();
     await expect(page.getByRole('region', { name: 'Resource details' })).toContainText('Shared group:');
     await expect(page.getByRole('button', { name: 'Remove participant', exact: true })).toHaveCount(0);
     await page.screenshot({ path: 'test-results/shared-address-group.png', fullPage: true });
@@ -5602,6 +5610,7 @@ test('selected roots survive view changes, personal save and reload', async ({ p
     await page.goto(server.url);
     await expect(page.getByRole('button', { name: 'Outside selection', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '◦ Two selected roots', exact: true }).click();
+    await expect(page).toHaveURL(/(?:\?|&)saved=/);
     await page.reload();
     await expect(page.getByRole('heading',{name:'Software & services',exact:true})).toBeVisible();
     await expect(page.getByRole('heading',{name:'No resources at this level in this view',exact:true})).toBeVisible();

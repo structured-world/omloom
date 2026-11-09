@@ -204,6 +204,7 @@ for (const width of [1440,390]) test(`CSV segment import and reviewed merge at $
     const kept=(await rpc({oneofKind:'write',write:m.Write.create({kind:m.AssetKind.L2_DOMAIN,changes:[{name:'name',value:{oneofKind:'text',text:'Retained segment'}}]})})).mutation.targets[0];
     await rpc({oneofKind:'segment',segment:m.Segment.create({target:kept,participants:[{subject:vm}]})});
     await page.goto(`${url}/#/?view=1`);
+    await page.getByRole('button',{name:'Table',exact:true}).click();
     if(width===390)await page.getByRole('button',{name:'Select',exact:true}).click();
     await page.getByRole('checkbox',{name:new RegExp(`^Select l2 domain.*${imported.assetId.slice(-8)}`)}).check();
     await page.getByRole('checkbox',{name:'Select Retained segment',exact:true}).check();

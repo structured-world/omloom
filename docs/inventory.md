@@ -392,6 +392,47 @@ IPAM selection uses its namespace and address-range semantics independently
 of physical ownership. Hidden ownership does not conceal otherwise permitted
 resources or grant access to their containers.
 
+### Network topology
+
+The topology index is part of the initial storage schema. Use a fresh store
+when trying this feature with a development database created before that index
+was introduced.
+
+Network opens a diagram of known current resources. Switch to **Table** for the
+same selection with columns, bulk actions and ordinary list navigation. **Site**
+and **Project / selection** are independent. Choose one or more permitted sites,
+or **No known site**, and intersect that choice with a saved resource selection.
+An empty result keeps both filters in place.
+
+Open **Resource navigator** to browse entities by ownership. Expanding a row
+fetches that level and leaves other branches open. Selecting a container scopes
+both the diagram and the table to its network branch, including nested resources,
+while retaining the site and project filters. Selecting a segment opens its
+details and paged L2 participants, including VMs whose interface is still unknown.
+
+The diagram draws relationships whose two endpoints are on the current page.
+Open a resource to see additional authorized relationship pages and use the
+ordinary inventory editor. The recorded link type describes the evidence.
+Missing links, partial observations and disconnected cards do not establish
+network reachability. On a phone, opening a card leads to the full detail
+screen with a return action.
+
+**Arrange** enables dragging or arrow-key movement of cards. **Save view**
+stores only explicitly arranged positions and the chosen presentation.
+Refreshing, zooming and rearranging before saving leave inventory untouched.
+Returning to the same saved map keeps local moves while rechecking its saved
+positions. If the updated layout fills the 64-position limit, it keeps the saved
+positions and reports any new moves that did not fit.
+Shared definitions use their existing audience and editor rules, and the store
+rechecks access to pinned resource incarnations when loading them.
+
+The browser requests 25 nodes per page. A network projection returns at most
+128 recorded links and uses the existing response byte limit. Site selection
+accepts up to 16 explicit sites, and traversal from those sites uses the common
+1,024-resource scope ceiling. **No known site** checks visible ownership above
+the matching resources. Narrow the selection if it exceeds 4,096 candidates
+or the ownership traversal exceeds its work limit.
+
 List context is limited to authorized owner labels and address hints for the
 displayed services/interfaces. It does not load host routing tables, firewall
 rules or the address sets of ancestor hosts and sibling services. Network

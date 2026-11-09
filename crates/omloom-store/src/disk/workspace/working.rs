@@ -418,24 +418,55 @@ impl Tx<'_> {
             return Err(Error::Limit);
         }
         let mut selected = BTreeSet::new();
-        let mut pending = Vec::new();
+        let mut frontier = BTreeSet::new();
         for root in roots {
             let target = parse_target(Some(root))?;
             self.visible_asset(context, target)?;
             if selected.insert(target) {
-                pending.push(target);
+                frontier.insert(asset_key(target));
             }
         }
-        while let Some(parent) = pending.pop() {
-            for child in self.local_children(context, parent)? {
-                if !selected.contains(&child) {
-                    if selected.len() >= 1024 {
-                        return Err(Error::Limit);
+        let mut batches = Vec::new();
+        while !frontier.is_empty() {
+            batches.push(frontier);
+            let mut next = BTreeSet::new();
+            while let Some(mut batch) = batches.pop() {
+                let edges = match self.context_edges(context, &batch, true) {
+                    // A dense level can exceed the query's row budget without
+                    // any single parent exceeding its original limit.
+                    Err(Error::Limit) if batch.len() > 1 => {
+                        let pivot = batch
+                            .iter()
+                            .nth(batch.len() / 2)
+                            .ok_or(Error::Corrupt)?
+                            .clone();
+                        batches.push(batch.split_off(&pivot));
+                        batches.push(batch);
+                        continue;
                     }
-                    selected.insert(child);
-                    pending.push(child);
+                    result => result?,
+                };
+                for (parent, child, relation) in edges {
+                    let child_ref = crate::disk::target(&child)?;
+                    let parent_ref = crate::disk::target(&parent)?;
+                    let parent_kind = wire::AssetKind::try_from(number(&parent, "kind")? as i32)
+                        .map_err(|_| Error::Corrupt)?;
+                    let child_kind = wire::AssetKind::try_from(number(&child, "kind")? as i32)
+                        .map_err(|_| Error::Corrupt)?;
+                    let from = parse_target(relation.from.as_ref())?;
+                    let to = parse_target(relation.to.as_ref())?;
+                    if refines(parent_ref, parent_kind, child_kind, relation.kind, from, to)
+                        && !selected.contains(&child_ref)
+                    {
+                        if selected.len() >= 1024 {
+                            return Err(Error::Limit);
+                        }
+                        selected.insert(child_ref);
+                        next.insert(asset_key(child_ref));
+                    }
                 }
             }
+            frontier = next;
         }
         Ok(selected)
     }

@@ -247,6 +247,7 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(reply(api::reply::Result::Page(api::Page {
+            topology: None,
             items,
             total: total as u64,
             revision,

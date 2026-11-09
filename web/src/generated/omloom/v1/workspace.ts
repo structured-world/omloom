@@ -115,8 +115,9 @@ export interface Query {
      */
     unplaced: boolean;
     /**
-     * Explicit resource perspective within roots, rechecked by the server. Only
-     * its local components are projected; upstream topology is not inferred.
+     * Explicit resource perspective within roots, rechecked by the server.
+     * In Network, level_only=false selects the bounded ownership branch.
+     * Other focused queries project local components.
      *
      * @generated from protobuf field: optional omloom.v1.AssetRef focus = 12
      */
@@ -150,6 +151,42 @@ export interface Query {
      * @generated from protobuf field: optional omloom.workspace.v1.ResponsibilityFilter responsibility = 16
      */
     responsibility?: ResponsibilityFilter;
+    /**
+     * Independent location selector and optional current Network projection.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.NetworkSelection network = 18
+     */
+    network?: NetworkSelection;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.NetworkSelection
+ */
+export interface NetworkSelection {
+    /**
+     * Explicit permitted site roots, intersected with the independent resource
+     * selection. Empty includes every location, including unknown location.
+     *
+     * @generated from protobuf field: repeated omloom.v1.AssetRef sites = 1
+     */
+    sites: AssetRef[];
+    /**
+     * Request typed edges within this page of the Network view.
+     *
+     * @generated from protobuf field: bool include_topology = 2
+     */
+    includeTopology: boolean;
+    /**
+     * Explicit Network presentation preferences. Used only by saved definitions.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.NetworkLayout layout = 3
+     */
+    layout?: NetworkLayout;
+    /**
+     * Select resources without a known permitted site. Mutually exclusive with sites.
+     *
+     * @generated from protobuf field: bool unplaced = 4
+     */
+    unplaced: boolean;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.ResponsibilityFilter
@@ -1020,6 +1057,58 @@ export interface Page {
      * @generated from protobuf field: repeated omloom.workspace.v1.ItemContext contexts = 5
      */
     contexts: ItemContext[];
+    /**
+     * Current authorized edges between emitted nodes, present only when requested.
+     *
+     * @generated from protobuf field: optional omloom.workspace.v1.NetworkTopology topology = 6
+     */
+    topology?: NetworkTopology;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.NetworkTopology
+ */
+export interface NetworkTopology {
+    /**
+     * Permitted typed links, with independent identities for parallel links.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.NetworkLink edges = 1
+     */
+    edges: NetworkLink[];
+    /**
+     * True when the page has more permitted internal edges than the drawing limit.
+     *
+     * @generated from protobuf field: bool more_edges = 2
+     */
+    moreEdges: boolean;
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.NetworkLink
+ */
+export interface NetworkLink {
+    /**
+     * Stable identity of the recorded relation, used to distinguish parallel links.
+     *
+     * @generated from protobuf field: string relation_id = 1
+     */
+    relationId: string;
+    /**
+     * Permitted source incarnation on this page, as recorded by the relationship.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef from = 2
+     */
+    from?: AssetRef;
+    /**
+     * Permitted destination incarnation on this page, as recorded by the relationship.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef to = 3
+     */
+    to?: AssetRef;
+    /**
+     * Type of recorded evidence, which does not imply packet reachability.
+     *
+     * @generated from protobuf field: omloom.v1.RelationKind kind = 4
+     */
+    kind: RelationKind;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.OwnerContext
@@ -2183,6 +2272,46 @@ export interface SavedView {
      * @generated from protobuf field: repeated string editors = 7
      */
     editors: string[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.NetworkLayout
+ */
+export interface NetworkLayout {
+    /**
+     * Explicit table preference. Omission uses the topology default.
+     *
+     * @generated from protobuf field: bool table = 1
+     */
+    table: boolean;
+    /**
+     * User-arranged positions, at most 64, for exact permitted incarnations.
+     *
+     * @generated from protobuf field: repeated omloom.workspace.v1.NetworkPin pins = 2
+     */
+    pins: NetworkPin[];
+}
+/**
+ * @generated from protobuf message omloom.workspace.v1.NetworkPin
+ */
+export interface NetworkPin {
+    /**
+     * Exact resource positioned by the user, reauthorized when opening a view.
+     *
+     * @generated from protobuf field: omloom.v1.AssetRef target = 1
+     */
+    target?: AssetRef;
+    /**
+     * Horizontal position relative to the diagram origin, in units, ±4096.
+     *
+     * @generated from protobuf field: sint32 x = 2
+     */
+    x: number;
+    /**
+     * Vertical position relative to the diagram origin, in units, ±4096.
+     *
+     * @generated from protobuf field: sint32 y = 3
+     */
+    y: number;
 }
 /**
  * @generated from protobuf message omloom.workspace.v1.SaveView
@@ -7874,7 +8003,8 @@ class Query$Type extends MessageType<Query> {
             { no: 13, name: "include_context", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
             { no: 14, name: "omit_host_local", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
             { no: 15, name: "level_only", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
-            { no: 16, name: "responsibility", kind: "message", T: () => ResponsibilityFilter }
+            { no: 16, name: "responsibility", kind: "message", T: () => ResponsibilityFilter },
+            { no: 18, name: "network", kind: "message", T: () => NetworkSelection }
         ]);
     }
 }
@@ -7882,6 +8012,21 @@ class Query$Type extends MessageType<Query> {
  * @generated MessageType for protobuf message omloom.workspace.v1.Query
  */
 export const Query = new Query$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class NetworkSelection$Type extends MessageType<NetworkSelection> {
+    constructor() {
+        super("omloom.workspace.v1.NetworkSelection", [
+            { no: 1, name: "sites", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => AssetRef },
+            { no: 2, name: "include_topology", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 3, name: "layout", kind: "message", T: () => NetworkLayout },
+            { no: 4, name: "unplaced", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.NetworkSelection
+ */
+export const NetworkSelection = new NetworkSelection$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class ResponsibilityFilter$Type extends MessageType<ResponsibilityFilter> {
     constructor() {
@@ -8246,7 +8391,8 @@ class Page$Type extends MessageType<Page> {
             { no: 2, name: "next", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 3, name: "total", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
             { no: 4, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/, L: 0 /*LongType.BIGINT*/ },
-            { no: 5, name: "contexts", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => ItemContext }
+            { no: 5, name: "contexts", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => ItemContext },
+            { no: 6, name: "topology", kind: "message", T: () => NetworkTopology }
         ]);
     }
 }
@@ -8254,6 +8400,34 @@ class Page$Type extends MessageType<Page> {
  * @generated MessageType for protobuf message omloom.workspace.v1.Page
  */
 export const Page = new Page$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class NetworkTopology$Type extends MessageType<NetworkTopology> {
+    constructor() {
+        super("omloom.workspace.v1.NetworkTopology", [
+            { no: 1, name: "edges", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => NetworkLink },
+            { no: 2, name: "more_edges", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.NetworkTopology
+ */
+export const NetworkTopology = new NetworkTopology$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class NetworkLink$Type extends MessageType<NetworkLink> {
+    constructor() {
+        super("omloom.workspace.v1.NetworkLink", [
+            { no: 1, name: "relation_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "from", kind: "message", T: () => AssetRef },
+            { no: 3, name: "to", kind: "message", T: () => AssetRef },
+            { no: 4, name: "kind", kind: "enum", T: () => ["omloom.v1.RelationKind", RelationKind, "RELATION_KIND_"] }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.NetworkLink
+ */
+export const NetworkLink = new NetworkLink$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class OwnerContext$Type extends MessageType<OwnerContext> {
     constructor() {
@@ -8740,6 +8914,33 @@ class SavedView$Type extends MessageType<SavedView> {
  * @generated MessageType for protobuf message omloom.workspace.v1.SavedView
  */
 export const SavedView = new SavedView$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class NetworkLayout$Type extends MessageType<NetworkLayout> {
+    constructor() {
+        super("omloom.workspace.v1.NetworkLayout", [
+            { no: 1, name: "table", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 2, name: "pins", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => NetworkPin }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.NetworkLayout
+ */
+export const NetworkLayout = new NetworkLayout$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class NetworkPin$Type extends MessageType<NetworkPin> {
+    constructor() {
+        super("omloom.workspace.v1.NetworkPin", [
+            { no: 1, name: "target", kind: "message", T: () => AssetRef },
+            { no: 2, name: "x", kind: "scalar", T: 17 /*ScalarType.SINT32*/ },
+            { no: 3, name: "y", kind: "scalar", T: 17 /*ScalarType.SINT32*/ }
+        ]);
+    }
+}
+/**
+ * @generated MessageType for protobuf message omloom.workspace.v1.NetworkPin
+ */
+export const NetworkPin = new NetworkPin$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class SaveView$Type extends MessageType<SaveView> {
     constructor() {

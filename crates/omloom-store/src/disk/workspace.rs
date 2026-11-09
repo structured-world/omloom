@@ -24,6 +24,7 @@ mod responsibility;
 mod segments;
 mod software;
 mod source_layout;
+pub(super) mod topology;
 mod typed_values;
 mod views;
 mod vm_placement;
@@ -444,7 +445,15 @@ impl Store {
 
     fn workspace_rows(&self, parent: &str, limit: usize) -> Result<Vec<Properties>> {
         let tx = self.begin()?;
-        let rows = tx.query(
+        let rows = tx.workspace_rows(parent, limit)?;
+        tx.commit()?;
+        Ok(rows)
+    }
+}
+
+impl Tx<'_> {
+    fn workspace_rows(&self, parent: &str, limit: usize) -> Result<Vec<Properties>> {
+        let rows = self.query(
             "MATCH (n:OmRow) WHERE n.parent=$parent RETURN properties(n) AS p LIMIT $limit",
             params([
                 ("parent", text(parent)),
@@ -454,12 +463,8 @@ impl Store {
         if rows.len() > limit {
             return Err(Error::Limit);
         }
-        tx.commit()?;
         Ok(rows)
     }
-}
-
-impl Tx<'_> {
     fn raw(
         &self,
         query: &str,
