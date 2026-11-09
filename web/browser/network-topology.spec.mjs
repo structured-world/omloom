@@ -316,14 +316,18 @@ test('saving a resource refreshes its expanded navigator level', async ({ page }
 });
 
 test('inventory refresh reloads site options', async ({ page }) => {
+  // The initial read must have completed before the new site exists.
   await withFieldHost(async url => {
     const { m, rpc } = await workspaceClient(url);
+    const createSite = name => rpc({ oneofKind: 'write', write: m.Write.create({
+      kind: m.AssetKind.SITE, changes: [{ name: 'name', value: { oneofKind: 'text', text: name } }],
+    }) });
+    await createSite('Initial site');
     await page.goto(`${url}/#/?view=1`);
     const picker = page.getByRole('combobox', { name: 'Site', exact: true });
-    await expect(picker).toBeVisible();
-    await rpc({ oneofKind: 'write', write: m.Write.create({
-      kind: m.AssetKind.SITE, changes: [{ name: 'name', value: { oneofKind: 'text', text: 'New site' } }],
-    }) });
+    await expect(picker.getByRole('option', { name: 'Initial site', exact: true })).toHaveCount(1);
+    await createSite('New site');
+    await expect(picker.getByRole('option', { name: 'New site', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: '↻ Refresh', exact: true }).click();
     await expect(picker.getByRole('option', { name: 'New site' })).toHaveCount(1);
   });
@@ -376,6 +380,76 @@ test('history checks whether a saved map still exists', async ({ page }) => {
     await page.goBack();
     await expect(page.getByRole('alert').filter({ hasText: 'This saved view is no longer available.' })).toBeVisible();
     await expect(node).toHaveCSS('left', '32px');
+  });
+});
+
+test('back from the table rechecks the same saved map', async ({ page }) => {
+  // The saved definition can change while the table is open under the same view ID.
+  await withFieldHost(async url => {
+    const { m, rpc } = await workspaceClient(url);
+    const target = (await rpc({ oneofKind: 'address', address: m.Address.create({ address: '192.0.2.21' }) })).mutation.targets[0];
+    const view = (await rpc({ oneofKind: 'saveView', saveView: m.SaveView.create({
+      view: { name: 'Shared layout', query: m.Query.create({ view: m.View.NETWORK, limit: 25,
+        network: { layout: { pins: [{ target, x: 128, y: 64 }] } },
+      }) },
+    }) })).views.items[0];
+    await page.goto(`${url}/#/?view=1`);
+    await page.getByRole('button', { name: '◦ Shared layout', exact: true }).click();
+    const node = page.getByRole('button', { name: '192.0.2.21, address reference', exact: true });
+    await expect(node).toHaveCSS('left', '128px');
+    await page.getByRole('button', { name: 'Table', exact: true }).click();
+    await expect(page.getByRole('table')).toBeVisible();
+    view.query.network.layout.pins[0].x = 224;
+    await rpc({ oneofKind: 'saveView', saveView: m.SaveView.create({ view }) });
+    await page.goBack();
+    await expect(node).toHaveCSS('left', '224px');
+  });
+});
+
+test('late saved layout preserves a manual move and restores untouched cards', async ({ page }) => {
+  // A real saved-view response arrives after arranging one card on the newly loaded map.
+  await withFieldHost(async url => {
+    const { m, rpc } = await workspaceClient(url);
+    const addresses = ['192.0.2.22', '192.0.2.23'];
+    const pins = [];
+    for (const address of addresses) {
+      const target = (await rpc({ oneofKind: 'address', address: m.Address.create({ address }) })).mutation.targets[0];
+      pins.push({ target, x: 512, y: 64 + 100 * pins.length });
+    }
+    await rpc({ oneofKind: 'saveView', saveView: m.SaveView.create({
+      view: { name: 'Delayed layout', query: m.Query.create({ view: m.View.NETWORK, limit: 25,
+        network: { layout: { pins } },
+      }) },
+    }) });
+    await page.goto(`${url}/#/?view=1`);
+    await page.getByRole('button', { name: '◦ Delayed layout', exact: true }).click();
+    const graph = page.getByRole('region', { name: 'Current network topology' });
+    const [moved, untouched] = addresses.map(address => graph.getByRole('button', { name: `${address}, address reference`, exact: true }));
+    await expect(untouched).toHaveCSS('left', '512px');
+    await page.getByRole('button', { name: 'Hardware', exact: true }).click();
+    const ready = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    await page.route('**/omloom.workspace.v1.Workspace/Call', async route => {
+      const data = route.request().postDataBuffer();
+      if (!data || m.Request.fromBinary(data.subarray(5)).command.oneofKind !== 'views') return route.continue();
+      const response = await route.fetch();
+      ready.resolve();
+      await release.promise;
+      await route.fulfill({ response });
+    });
+    try {
+      await page.goBack();
+      await ready.promise;
+      await graph.getByRole('button', { name: 'Arrange', exact: true }).click();
+      await moved.press('ArrowRight');
+      const position = await moved.evaluate(node => node.style.left);
+      expect(position).not.toBe('512px');
+      release.resolve();
+      await expect(untouched).toHaveCSS('left', '512px');
+      await expect(moved).toHaveCSS('left', position);
+    } finally {
+      release.resolve();
+    }
   });
 });
 

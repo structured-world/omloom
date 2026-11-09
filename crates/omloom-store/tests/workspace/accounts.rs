@@ -928,7 +928,7 @@ fn account_card_sharing_requires_its_own_capability() -> TestResult {
     query.network = Some(Box::new(api::NetworkSelection {
         layout: Some(api::NetworkLayout {
             pins: vec![api::NetworkPin {
-                target: Some(account),
+                target: Some(account.clone()),
                 x: 10,
                 y: 10,
             }],
@@ -946,7 +946,30 @@ fn account_card_sharing_requires_its_own_capability() -> TestResult {
     let Reply::Views(focused) = call(&store, &actor, Command::SaveView(focused))? else {
         panic!("focused view");
     };
-    assert_eq!(focused.items[0].audiences, vec!["operations"]);
+    let focused = &focused.items[0];
+    assert_eq!(focused.audiences, vec!["operations"]);
+    assert_eq!(
+        focused
+            .query
+            .as_ref()
+            .and_then(|query| query.focus.as_ref()),
+        Some(&account)
+    );
+    let Reply::Views(reloaded) = call(&store, &actor, Command::Views(api::Empty {}))? else {
+        panic!("reloaded views");
+    };
+    let reloaded = reloaded
+        .items
+        .iter()
+        .find(|view| view.id == focused.id)
+        .expect("published view");
+    assert_eq!(
+        reloaded
+            .query
+            .as_ref()
+            .and_then(|query| query.focus.as_ref()),
+        Some(&account)
+    );
     let Reply::Views(published) = call(&store, &actor, Command::SaveView(publish))? else {
         panic!("view");
     };

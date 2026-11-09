@@ -21,7 +21,7 @@ import AvailabilityAccess from './AvailabilityAccess.vue';
 import PhysicalOffers from './PhysicalOffers.vue';
 import { softwareFields } from './software-fields';
 import { equipmentFields } from './equipment-fields';
-import { ref, computed, watch, onMounted, nextTick, defineAsyncComponent } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted, nextTick, defineAsyncComponent } from 'vue';
 const PowerPathsPanel=defineAsyncComponent(()=>import('./PowerPathsPanel.vue'));
 const PhysicalPlanner=defineAsyncComponent(()=>import('./PhysicalPlanner.vue'));
 const PhysicalScene=defineAsyncComponent(()=>import('./PhysicalScene.vue'));
@@ -580,22 +580,38 @@ async function removeRelation(relation: import('./api').Relation) {
   try { await call({ oneofKind: 'relation', relation: { relation, remove: true } }, model.WorkingContext.create({ roots, expected: page.value.revision })); await saved(); } catch (e) { error.value = String(e); }
 }
 function allocate() { editing.value = undefined; editor.value = 'network'; }
-function restorePins() {
-  pins.value = (activeView.value?.query?.network?.layout?.pins ?? []).map(pin => model.NetworkPin.create(pin));
-}
-watch([() => route.query.saved, () => query.value.view === model.View.NETWORK], async ([id, network], _, cleanup) => {
+const layoutHistory = ref(0);
+let historyTarget: string | undefined;
+onUnmounted(router.options.history.listen(to => { historyTarget = router.resolve(to).fullPath; }));
+onUnmounted(router.afterEach((to, from, failure) => {
+  if (to.fullPath !== historyTarget) return;
+  historyTarget = undefined;
+  // A pop can reopen the map without changing either the view or its saved ID.
+  if (!failure && topology.value && (from.query.networkTable === '1' || from.query.asset)
+    && typeof to.query.saved === 'string' && to.query.saved === from.query.saved && to.query.view === from.query.view) {
+    layoutHistory.value++;
+  }
+}));
+watch([() => route.query.saved, () => query.value.view === model.View.NETWORK, layoutHistory], async ([id, network], _, cleanup) => {
   pins.value = [];
+  const draft = pins.value;
   if (!network || typeof id !== 'string') return;
   let cancelled = false;
   cleanup(() => { cancelled = true; });
   const current = () => !cancelled && route.query.saved === id;
   try {
     const view = await currentView(id, current);
-    if (current()) pins.value = (view.query?.network?.layout?.pins ?? []).map(pin => model.NetworkPin.create(pin));
+    // A reset replaces the draft. Moves made during the read take priority per card.
+    if (!current() || pins.value !== draft) return;
+    const moved = new Set(draft.map(pin => key(pin.target)));
+    for (const pin of view.query?.network?.layout?.pins ?? []) {
+      if (draft.length === 64) break;
+      if (!moved.has(key(pin.target))) draft.push(model.NetworkPin.create(pin));
+    }
   } catch (failure) {
     if (current()) error.value = String(failure);
   }
-});
+}, { immediate: true });
 watch(() => route.fullPath, () => { viewIntent++; }, { flush: 'sync' });
 watch(() => route.fullPath, load);
 watch(() => query.value.view === model.View.NETWORK, network => {
@@ -605,7 +621,6 @@ watch(() => query.value.view === model.View.NETWORK, network => {
 onMounted(async () => {
   try {
     await metadata();
-    restorePins();
     await load();
   } catch (e) {
     error.value = String(e);
