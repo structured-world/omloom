@@ -963,6 +963,7 @@ fn account_card_sharing_requires_its_own_capability() -> TestResult {
         .iter()
         .find(|view| view.id == focused.id)
         .expect("published view");
+    assert_eq!(reloaded.audiences, vec!["operations"]);
     assert_eq!(
         reloaded
             .query

@@ -420,6 +420,9 @@ screen with a return action.
 **Arrange** enables dragging or arrow-key movement of cards. **Save view**
 stores only explicitly arranged positions and the chosen presentation.
 Refreshing, zooming and rearranging before saving leave inventory untouched.
+Returning to the same saved map keeps local moves while rechecking its saved
+positions. If the updated layout fills the 64-position limit, it keeps the saved
+positions and reports any new moves that did not fit.
 Shared definitions use their existing audience and editor rules, and the store
 rechecks access to pinned resource incarnations when loading them.
 

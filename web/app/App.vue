@@ -21,7 +21,7 @@ import AvailabilityAccess from './AvailabilityAccess.vue';
 import PhysicalOffers from './PhysicalOffers.vue';
 import { softwareFields } from './software-fields';
 import { equipmentFields } from './equipment-fields';
-import { ref, computed, watch, onMounted, onUnmounted, nextTick, defineAsyncComponent } from 'vue';
+import { ref, shallowRef, computed, watch, onMounted, onUnmounted, nextTick, defineAsyncComponent } from 'vue';
 const PowerPathsPanel=defineAsyncComponent(()=>import('./PowerPathsPanel.vue'));
 const PhysicalPlanner=defineAsyncComponent(()=>import('./PhysicalPlanner.vue'));
 const PhysicalScene=defineAsyncComponent(()=>import('./PhysicalScene.vue'));
@@ -161,7 +161,20 @@ function chooseBranch(item?: model.Item) {
     asset: undefined, incarnation: undefined, trail: undefined, origin: undefined });
 }
 const unknownSite = computed(() => route.query.unknownSite === '1');
-const pins = ref<model.NetworkPin[]>([]);
+const MAX_LAYOUT_PINS = 64;
+const savedPins = shallowRef<model.NetworkPin[]>([]);
+const movedPins = ref(new Map<string, model.NetworkPin>());
+const resetLayout = ref(false);
+const layoutReady = ref(false);
+const savedLayoutBlocked = computed(() => query.value.view === model.View.NETWORK
+  && typeof route.query.saved === 'string' && !layoutReady.value);
+const pins = computed(() => {
+  if (resetLayout.value) return [...movedPins.value.values()];
+  if (!movedPins.value.size) return savedPins.value;
+  const result = new Map(savedPins.value.map(pin => [key(pin.target), pin]));
+  for (const [id, pin] of movedPins.value) result.set(id, pin);
+  return [...result.values()];
+});
 const savedQuery = computed(() => model.Query.create({
   ...query.value,
   network: model.NetworkSelection.create({
@@ -172,10 +185,32 @@ const savedQuery = computed(() => model.Query.create({
   }),
 }));
 function pin(value: model.NetworkPin) {
-  const index = pins.value.findIndex(previous => key(previous.target) === key(value.target));
-  if (index >= 0) pins.value.splice(index, 1, value);
-  else if (pins.value.length < 64) pins.value.push(value);
-  else notice.value = 'This view already has 64 manual positions. Reset positions to arrange a new set.';
+  const id = key(value.target);
+  if (pins.value.length < MAX_LAYOUT_PINS || pins.value.some(previous => key(previous.target) === id)) {
+    movedPins.value.set(id, value);
+  } else notice.value = 'This view already has 64 manual positions. Reset positions to arrange a new set.';
+}
+function clearPins() {
+  movedPins.value.clear();
+  resetLayout.value = true;
+}
+function replaceSavedPins(next: model.NetworkPin[]) {
+  savedPins.value = next;
+  if (resetLayout.value || movedPins.value.size === 0) return;
+  // Stored pins own their slots. A local move of a stored card uses the same slot.
+  const slots = new Set(next.map(pin => key(pin.target)));
+  for (const id of movedPins.value.keys()) {
+    if (slots.has(id)) continue;
+    if (slots.size === MAX_LAYOUT_PINS) {
+      movedPins.value.delete(id);
+      notice.value = 'Some new moves did not fit. All saved positions were kept.';
+    } else slots.add(id);
+  }
+}
+function acceptLayout(next: model.NetworkPin[]) {
+  savedPins.value = next;
+  movedPins.value.clear();
+  resetLayout.value = false;
 }
 const siteOptions = ref<model.Item[]>([]);
 const siteNext = ref<string>();
@@ -229,7 +264,8 @@ async function chooseProject(id: string) {
 }
 const query = computed(() => model.Query.create({
   view: Number(route.query.view ?? 0), search: String((route.query.asset ? route.query.localSearch : route.query.search) ?? ''),
-  kinds: parameters(route.query.asset ? 'localKind' : 'kind').map(Number), columns: String(route.query.columns ?? 'name,description').split(','),
+  kinds: parameters(route.query.asset ? 'localKind' : 'kind').map(Number),
+  columns: route.query.columns === '' ? [] : String(route.query.columns ?? 'name,description').split(','),
   sort: String(route.query.sort ?? 'name'), descending: route.query.desc === '1', unplaced: !route.query.asset && route.query.unplaced === '1', limit: 25,
   cursor: typeof (route.query.asset ? route.query.localCursor : route.query.cursor) === 'string' ? String(route.query.asset ? route.query.localCursor : route.query.cursor) : undefined,
   roots: roots(),
@@ -513,6 +549,7 @@ async function saved(target?: AssetRef) {
 }
 async function reloadSelection() {
   refreshNetworkNavigation();
+  if (savedLayoutBlocked.value) layoutHistory.value++;
   const cursor = route.query.asset ? 'localCursor' : 'cursor';
   if (route.query[cursor] !== undefined) await change({ cursor: undefined });
   else await load();
@@ -545,7 +582,7 @@ async function useView(v: model.SavedView) {
   const q = v.query;
   const json = model.Query.toJson(q);
   const filter = q.predicates.length && json && typeof json === 'object' && !Array.isArray(json) ? JSON.stringify(json.predicates) : undefined;
-  pins.value = (q.network?.layout?.pins ?? []).map(pin => model.NetworkPin.create(pin));
+  acceptLayout(q.network?.layout?.pins ?? []);
   const branchFocus = q.view === model.View.NETWORK && !q.levelOnly ? q.focus : undefined;
   const localFocus = branchFocus ? undefined : q.focus;
   await router.push({ path: '/', query: { view: String(q.view), search: localFocus ? undefined : q.search || undefined, localSearch: localFocus ? q.search || undefined : undefined, columns: q.columns.join(','), sort: q.sort, desc: q.descending ? '1' : undefined, unplaced: q.unplaced ? '1' : undefined, kind: localFocus ? undefined : q.kinds.map(String), localKind: localFocus ? q.kinds.map(String) : undefined, scope: q.roots.map(t => t.assetId), scopeInc: q.roots.map(t => t.incarnation), filter: localFocus ? undefined : filter, localFilter: localFocus ? filter : undefined, responsibility:q.responsibility?JSON.stringify(model.ResponsibilityFilter.toJson(q.responsibility)):undefined, asset: localFocus?.assetId, incarnation: localFocus?.incarnation, branch: branchFocus?.assetId, branchInc: branchFocus?.incarnation, site: q.network?.sites.map(s => s.assetId), siteInc: q.network?.sites.map(s => s.incarnation), unknownSite: q.network?.unplaced ? '1' : undefined, networkTable: q.network?.layout?.table ? '1' : undefined, saved: v.id } });
@@ -580,6 +617,12 @@ async function removeRelation(relation: import('./api').Relation) {
   try { await call({ oneofKind: 'relation', relation: { relation, remove: true } }, model.WorkingContext.create({ roots, expected: page.value.revision })); await saved(); } catch (e) { error.value = String(e); }
 }
 function allocate() { editing.value = undefined; editor.value = 'network'; }
+function viewSaved(viewId: string | undefined, submitted: model.Query) {
+  if (viewId && route.query.saved === viewId && savedQuery.value === submitted) {
+    acceptLayout(submitted.network?.layout?.pins ?? []);
+  }
+  void saved();
+}
 const layoutHistory = ref(0);
 let historyTarget: string | undefined;
 onUnmounted(router.options.history.listen(to => { historyTarget = router.resolve(to).fullPath; }));
@@ -592,24 +635,23 @@ onUnmounted(router.afterEach((to, from, failure) => {
     layoutHistory.value++;
   }
 }));
-watch([() => route.query.saved, () => query.value.view === model.View.NETWORK, layoutHistory], async ([id, network], _, cleanup) => {
-  pins.value = [];
-  const draft = pins.value;
+watch([() => route.query.saved, () => query.value.view === model.View.NETWORK, layoutHistory], async ([id, network], [previousId], cleanup) => {
+  if (id !== previousId) acceptLayout([]);
+  layoutReady.value = false;
   if (!network || typeof id !== 'string') return;
   let cancelled = false;
   cleanup(() => { cancelled = true; });
   const current = () => !cancelled && route.query.saved === id;
   try {
     const view = await currentView(id, current);
-    // A reset replaces the draft. Moves made during the read take priority per card.
-    if (!current() || pins.value !== draft) return;
-    const moved = new Set(draft.map(pin => key(pin.target)));
-    for (const pin of view.query?.network?.layout?.pins ?? []) {
-      if (draft.length === 64) break;
-      if (!moved.has(key(pin.target))) draft.push(model.NetworkPin.create(pin));
-    }
+    if (!current()) return;
+    replaceSavedPins(view.query?.network?.layout?.pins ?? []);
+    layoutReady.value = true;
   } catch (failure) {
-    if (current()) error.value = String(failure);
+    if (current()) {
+      savedPins.value = [];
+      error.value = String(failure);
+    }
   }
 }, { immediate: true });
 watch(() => route.fullPath, () => { viewIntent++; }, { flush: 'sync' });
@@ -682,7 +724,7 @@ onMounted(async () => {
 </div>
 <div class="table-meta"><span>{{ page.total.toString() }} resources<span v-if="loading"> · Loading…</span></span><div><button v-if="!topology" @click="editor = 'columns'">Columns</button><button @click="editor = 'view'">Save view</button><button v-if="activeView" @click="useView(activeView)">Reset adjustments</button><button v-if="identity?.writable && query.view === model.View.NETWORK && actions.allocations.length" @click="allocate">Allocate IP / prefix</button></div></div>
 <div v-if="query.predicates.length||query.responsibility" class="selection"><span v-for="(p, index) in query.predicates" :key="index" class="chip">{{ definitions.find(d => d.id === p.field)?.name ?? p.field }} = {{ display(p.value) }}<button :aria-label="`Remove filter ${index + 1}`" @click="filters(query.predicates.filter((_, i) => i !== index),query.responsibility)">×</button></span><span v-if="query.responsibility" class="chip">{{model.ResponsibilityFacet[query.responsibility.facet]?.toLowerCase().replaceAll('_',' ')}}: {{query.responsibility.issuer}} / {{query.responsibility.subject}}<button aria-label="Remove responsibility filter" @click="filters(query.predicates)">×</button></span></div>
-<NetworkTopology v-if="topologyMode" v-show="topology && !loading && !topologyFailed" :page="topologyPage" :name="resourceName" :pins="pins" :selected="detail?.item?.target" @open="open" @pin="pin" @clear="pins = []" />
+<NetworkTopology v-if="topologyMode" v-show="topology && !loading && !topologyFailed" :page="topologyPage" :name="resourceName" :pins="pins" :selected="detail?.item?.target" @open="open" @pin="pin" @clear="clearPins" />
 <template v-if="!topology">
 <div v-if="selected.length" class="selection">{{ selected.length }} selected on this page<button :disabled="loading" @click="selectedScope">Use selected as scope</button><button v-if="selectedDevices" :disabled="loading" @click="reviewSelectedFacts">Check selected devices</button><button v-if="comparable" :disabled="loading" @click="compareIdentity">Compare identity</button><button v-if="segmentable" :disabled="loading" @click="recordSegment(selectedItems)">Record shared segment</button><button v-if="identity?.writable" :disabled="loading" @click="editor = 'bulk'">Review bulk change</button><button @click="selected = []">Clear selection</button></div>
 <div v-if="page.items.length" class="phone-list-tools"><button class="select-mode" :aria-pressed="selectMode||selected.length>0" @click="toggleSelection">{{ selectMode||selected.length ? 'Cancel selection' : 'Select' }}</button><label class="check select-page"><input type="checkbox" aria-label="Select phone page" :disabled="loading" :checked="selected.length === page.items.length" @change="selected = ($event.target as HTMLInputElement).checked ? page.items.map(i => key(i.target)) : []">Select page</label><label>Sort<select aria-label="Sort resources" :value="`${query.sort}:${query.descending ? 'desc' : 'asc'}`" @change="change({ sort: ($event.target as HTMLSelectElement).value.split(':')[0], desc: ($event.target as HTMLSelectElement).value.endsWith(':desc') ? '1' : undefined })"><option value="name:asc">Name A–Z</option><option value="name:desc">Name Z–A</option><option value="kind:asc">Resource kind</option></select></label></div>
@@ -733,7 +775,7 @@ onMounted(async () => {
 <HostIdentityCompare v-if="identityPair" :left="identityPair.left" :right="identityPair.right" :working="identityPair.working" @close="identityPair=undefined" @changed="load()" />
 <SegmentEditor v-if="segmentDraft" :subjects="segmentDraft.subjects" :membership="segmentDraft.membership" @close="segmentDraft = undefined" @saved="segmentDraft = undefined; saved()" />
 <VmPlacement v-if="placementVm" :target="placementVm" :working="enclosing" @close="placementVm=undefined" @saved="placementSaved" />
-<ViewEditor v-if="editor === 'view' && identity" :query="savedQuery" :identity="identity" :existing="activeView" @close="editor = ''" @saved="saved" />
+<ViewEditor v-if="editor === 'view' && identity" :query="savedQuery" :identity="identity" :existing="activeView" :layout-blocked="savedLayoutBlocked" @close="editor = ''" @saved="viewSaved" />
 <NetworkEditor v-if="editor === 'network'" :item="editing" :group="editing ? detail?.group : undefined" :definitions="definitions" :working="editing ? enclosing : working" :allocations="actions.allocations" :view="query.view" @close="editor = ''" @saved="saved" @refresh="refreshInventory" />
 <MemberEditor v-if="editor === 'member' && detail" :detail="detail" :working="enclosing" :removal="participantRemoval" @close="editor = ''; participantRemoval = undefined" @saved="participantRemoval = undefined; saved()" />
 <FilterEditor v-if="editor === 'filter'" :definitions="definitions" :predicates="query.predicates" :responsibility="query.responsibility" @close="editor = ''" @apply="filters" />
