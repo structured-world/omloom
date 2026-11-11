@@ -1305,3 +1305,23 @@ scenarios with temporary disk directories. It does not intercept API requests
 or replace the database. The scripts own their temporary data and generated
 verification output. Native OS evidence and production identity integration
 remain separate qualifications.
+
+### Measure the physical renderer
+
+Run the benchmark on a desktop with hardware WebGL2 and Google Chrome. Use a
+new output directory for each run.
+
+```sh
+yarn generate && yarn build:app
+cargo +stable build --locked -p omloom-app --bin omloom-dev
+node web/bench/physical-renderer.mjs var/render-measurement-01
+node web/bench/equipment-asset.mjs var/render-measurement-01/geometry-1.json var/render-measurement-01/equipment.json
+```
+
+The renderer benchmark creates disposable inventory, opens the actual workspace
+and records the build hashes, projected wire bytes, cold startup, refresh,
+camera latency and idle draws for two fixture sizes. It exports the same
+geometry for engine comparisons. The optional asset trial decodes a generated
+static GLB, verifies dimensions against the fixture, and checks that malformed or
+out-of-profile inputs are rejected before decoding. The trial does not enable
+model imports. Browser heap samples exclude GPU and driver memory.

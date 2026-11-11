@@ -1,6 +1,7 @@
 import {test,expect} from '@playwright/test';
 import {withFieldHost} from './field-host.mjs';
 import {workspaceClient} from './workspace-client.mjs';
+import {fixture} from './physical-scene-fixture.mjs';
 import {OrthographicCamera,Vector3} from 'three';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -20,32 +21,6 @@ async function interiorRaster(page,png){
   },png.toString('base64'));
 }
 
-async function fixture(url){
-  const {m,rpc}=await workspaceClient(url);
-  const create=async(kind,name)=>(await rpc({oneofKind:'write',write:m.Write.create({kind,changes:[{name:'name',value:{oneofKind:'text',text:name}}]})})).mutation.targets[0];
-  const physical=async action=>{const response=await rpc({oneofKind:'physical',physical:m.Physical.create({action})});expect(response.oneofKind).toBe('physical');return response.physical;};
-  const axis=(startUm,lengthUm)=>({startUm,lengthUm});
-  const volume=(x,y,z,w,h,d)=>({x:axis(x,w),y:axis(y,h),z:axis(z,d)});
-  const rack=await create(m.AssetKind.RACK,'Measured rack');
-  const host=await create(m.AssetKind.DEVICE,'Installed server');
-  const unknown=await create(m.AssetKind.DEVICE,'Spare server');
-  const a=await create(m.AssetKind.PORT,'eth-a'),b=await create(m.AssetKind.PORT,'eth-b');
-  const cable=await create(m.AssetKind.CABLE,'Patch cable');
-  await physical({oneofKind:'define',define:{definition:{target:rack,basis:'Measured enclosure',volume:volume(0n,0n,0n,600000n,2200000n,1000000n)}}});
-  await physical({oneofKind:'define',define:{definition:{target:host,basis:'Measured chassis frame',volume:volume(0n,0n,0n,500000n,200000n,850000n)}}});
-  async function actual(steps){const {plan}=await physical({oneofKind:'save',save:{plan:{name:'Recorded inspection',steps}}});await physical({oneofKind:'complete',complete:{plan:{id:plan.id,revision:plan.revision},actualState:true,discrepancy:'Actual inspection; no live connectivity qualification',completedSteps:steps.map((_,i)=>i)}});}
-  await actual([{action:{oneofKind:'placement',placement:{item:host,enclosure:rack,volume:volume(50000n,300000n,50000n,500000n,200000n,850000n)}}},{action:{oneofKind:'placement',placement:{item:unknown,enclosure:rack,volume:volume(50000n,700000n,50000n,500000n,200000n,850000n)}}}]);
-  for(const port of [a,b])await rpc({oneofKind:'relation',relation:m.Relationship.create({relation:{from:host,to:port,kind:m.RelationKind.HAS_PORT}})});
-  const detail=await rpc({oneofKind:'read',read:m.Read.create({target:host})});
-  for(const [i,port]of [a,b].entries()){
-    const binding=detail.detail.relations.find(r=>r.to?.assetId===port.assetId&&r.kind===m.RelationKind.HAS_PORT);
-    expect(binding).toBeDefined();
-    await physical({oneofKind:'portAnchor',portAnchor:{bindingId:binding.relationId,expectedBindingRevision:binding.revision,volume:volume(BigInt(40000+i*300000),60000n,0n,40000n,30000n,20000n)}});
-  }
-  for(const end of ['a','b'])await physical({oneofKind:'cableEnd',cableEnd:{cable,end:{key:end,name:end,basis:'Labelled inspected cable'}}});
-  await actual([a,b].map((port,i)=>({action:{oneofKind:'wiring',wiring:{cable,endKey:i?'b':'a',basis:{oneofKind:'expectedEndRevision',expectedEndRevision:1n},intent:m.PhysicalWiringIntent.PRESERVE,after:{oneofKind:'port',port}}}})));
-  return{m,rpc,rack,host,unknown,a,b,cable};
-}
 
 for(const width of [1440,390])test(`real scoped physical scene and component expansion at ${width}px`,async({page})=>{
   // Real accepted placements and named cable-end effects drive the scene. The
@@ -158,6 +133,35 @@ test('Reset camera restores the original orthographic zoom',async({page})=>{
     await test.info().attach('reset-before',{body:before,contentType:'image/png'});
     await test.info().attach('reset-after',{body:after,contentType:'image/png'});
     expect(await interiorRaster(page,after)).toEqual(baseline);
+  });
+});
+
+test('context loss leaves the resource inspector usable and retry owns one canvas', async ({ page }) => {
+  // A lost GPU context must leave an accessible path to the same inventory.
+  await withFieldHost(async url => {
+    const { rack, rpc } = await fixture(url);
+    const revision = await rpc({ oneofKind: 'query', query: { limit: 1 } });
+    await page.goto(`${url}/#/?view=2&scope=${rack.assetId}&scopeInc=${rack.incarnation}`);
+    const toggle = page.getByRole('button', { name: '3D scene', exact: true });
+    await toggle.click();
+    const scene = page.getByRole('region', { name: 'Physical 3D workspace' });
+    const canvas = scene.getByRole('img', { name: 'Physical infrastructure 3D scene' });
+    await expect(canvas).toBeVisible();
+    await canvas.evaluate(element => {
+      const extension = element.getContext('webgl2')?.getExtension('WEBGL_lose_context');
+      if (!extension) throw Error('Context loss testing is unavailable');
+      extension.loseContext();
+    });
+    await expect(scene.getByRole('alert')).toContainText('The graphics context was lost');
+    await scene.getByRole('button', { name: 'Installed server', exact: true }).click();
+    await expect(scene.getByRole('region', { name: 'Selected 3D resource' })).toContainText('Installed server');
+    await scene.getByRole('button', { name: 'Retry 3D' }).click();
+    await expect(scene.getByRole('alert')).toHaveCount(0);
+    await expect(canvas).toHaveCount(1);
+    await toggle.click();
+    await expect(page.locator('.scene-stage canvas')).toHaveCount(0);
+    const after = await rpc({ oneofKind: 'query', query: { limit: 1 } });
+    expect(after.page.revision).toBe(revision.page.revision);
   });
 });
 
