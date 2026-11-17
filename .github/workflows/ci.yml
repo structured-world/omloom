@@ -45,7 +45,7 @@ jobs:
         run: |
           sh scripts/install-ci-release-tool.sh mold
           sh scripts/install-ci-release-tool.sh protoc
-      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+      - uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2
         with:
           tool: nextest
           fallback: none
@@ -86,7 +86,7 @@ jobs:
         with:
           version: "36.2"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+      - uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2
         with:
           tool: nextest
           fallback: none
