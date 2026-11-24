@@ -9,6 +9,7 @@ publish = false
 
 [features]
 diagnostics = ["omloom-store/diagnostics"]
+embedded-sid = ["dep:coordinode-embed", "dep:sid", "dep:sid-crypto", "dep:sid-plugin", "dep:sid-storage"]
 
 [[bin]]
 name = "omloom-dev"
@@ -36,9 +37,18 @@ reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
 rustls-graviola = "0.4.0"
 webpki-roots = "1"
+coordinode-embed = { version = "0.10.1", optional = true }
+sid = { package = "structured-id", git = "https://github.com/structured-id/sid", rev = "8ee2878ef01c1ef2b0757590b02f60ed4aaee666", optional = true }
+sid-crypto = { git = "https://github.com/structured-id/sid", rev = "8ee2878ef01c1ef2b0757590b02f60ed4aaee666", default-features = false, features = ["primitives", "jwt-rustcrypto", "tls-rustcrypto"], optional = true }
+sid-plugin = { git = "https://github.com/structured-id/sid", rev = "8ee2878ef01c1ef2b0757590b02f60ed4aaee666", optional = true }
+sid-storage = { git = "https://github.com/structured-id/sid", rev = "8ee2878ef01c1ef2b0757590b02f60ed4aaee666", default-features = false, features = ["storage-coordinode"], optional = true }
 
 [build-dependencies]
 tonic-prost-build = "0.14.6"
 
 [dev-dependencies]
 tempfile = "3"
+
+[[test]]
+name = "sid_host"
+required-features = ["embedded-sid"]

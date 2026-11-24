@@ -109,8 +109,9 @@ integers. Browser verification is not installation or application acceptance.
 
 ## Development
 
-Install Rust 1.95+, protoc 36.2+, Node 24+, Corepack and cargo-nextest. Run
-`corepack enable`, `yarn install --immutable`, then `yarn playwright install chromium`.
+Install stable Rust (1.99 or later), protoc 36.2+, Node 24+, Corepack and
+cargo-nextest. Run `corepack enable`, `yarn install --immutable`, then
+`yarn playwright install chromium`.
 The complete verification gate also needs the Docker CLI to render the collector's
 inspect template against an isolated synthetic API. It uses an empty temporary
 client configuration and requires no Docker daemon or running containers.

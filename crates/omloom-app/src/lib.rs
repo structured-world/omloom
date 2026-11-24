@@ -17,6 +17,8 @@ use tonic::{Code, Request, Response, Status};
 use tonic_types::{ErrorDetails, StatusExt};
 pub mod codec;
 pub mod fixtures;
+#[cfg(feature = "embedded-sid")]
+pub mod identity;
 mod observe;
 #[cfg(test)]
 mod tests;

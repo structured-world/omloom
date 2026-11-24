@@ -185,7 +185,7 @@ fn request(plan: api::PhysicalPlan) -> Result<api::PhysicalDeviceReceipt> {
 fn unrelated_commit_loss_is_definitively_rejected()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let dir = tempfile::tempdir()?;
-    let mut store = Store::open(dir.path(), policy())?;
+    let store = Store::open(dir.path(), policy())?;
     let actor = actor();
     let plan = save(&store, &actor, "Receiving")?;
     let working = api::WorkingContext {
@@ -199,10 +199,14 @@ fn unrelated_commit_loss_is_definitively_rejected()
     let result = store.commit_receipt(tx, &actor, &request, &working, 100);
     assert!(matches!(result, Err(Error::Rejected(cause)) if matches!(*cause, Error::Conflict)));
     assert_eq!(store.usage()?, before);
-    let rows = store
-        .db
-        .execute_cypher("MATCH (n:OmRow {parent:'assets'}) RETURN n.key AS key")?;
-    assert!(rows.is_empty());
+    let result = store.db.execute_cypher_shared(
+        "MATCH (n:OmRow {parent:'assets'}) RETURN n.key AS key",
+        None,
+        None,
+        None,
+        None,
+    )?;
+    assert!(result.rows.is_empty());
     Ok(())
 }
 
