@@ -99,7 +99,7 @@ impl From<DatabaseError> for Error {
 /// Concurrent hosts must share a supported replicated Database, not independently
 /// open the same directory. All exclusion and counters are database transactions.
 pub struct Store {
-    db: Database,
+    db: std::sync::Arc<Database>,
     policy: Policy,
     #[cfg(feature = "diagnostics")]
     query_check: Option<fn(&Database, &str)>,
@@ -377,7 +377,7 @@ impl Store {
         db.set_query_memory_limit(bytes)
             .map_err(|_| Error::Invalid)?;
         db.set_retention_window(Duration::from_secs(1));
-        let store = Self::from_database_inner(db, policy, previous)?;
+        let store = Self::from_database_inner(db.into(), policy, previous)?;
         if path
             .join("RESTORE_REQUIRED")
             .try_exists()
@@ -388,13 +388,14 @@ impl Store {
         Ok(store)
     }
 
-    /// Also accepts a host-owned replicated database using the same transaction API.
-    pub fn from_database(db: Database, policy: Policy) -> Result<Self> {
-        Self::from_database_inner(db, policy, None)
+    /// Attaches inventory to a database owned by trusted host composition.
+    /// The host may share the handle with the embedded identity provider.
+    pub fn from_database(db: impl Into<std::sync::Arc<Database>>, policy: Policy) -> Result<Self> {
+        Self::from_database_inner(db.into(), policy, None)
     }
 
     fn from_database_inner(
-        mut db: Database,
+        db: std::sync::Arc<Database>,
         policy: Policy,
         previous: Option<&Policy>,
     ) -> Result<Self> {
@@ -731,7 +732,13 @@ impl Store {
             ("omloom_request_account", "request_account"),
             ("omloom_claim", "claim"),
         ] {
-            match db.execute_cypher(&format!("CREATE INDEX {name} ON :OmRow({property})")) {
+            match db.execute_cypher_shared(
+                &format!("CREATE INDEX {name} ON :OmRow({property})"),
+                None,
+                None,
+                None,
+                None,
+            ) {
                 Ok(_) => {}
                 Err(DatabaseError::CatalogObjectExists {
                     object: coordinode_embed::CatalogObject::Index,
