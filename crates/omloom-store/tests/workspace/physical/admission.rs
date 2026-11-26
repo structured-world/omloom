@@ -1255,10 +1255,10 @@ fn staged_two_unit_replacement_evaluates_each_intermediate_state() -> TestResult
         )),
         ..Default::default()
     });
-    for index in 1..3 {
-        plan.steps[index].control = Some(api::PlanControl {
+    for (predecessor, step) in plan.steps.iter_mut().skip(1).take(2).enumerate() {
+        step.control = Some(api::PlanControl {
             after: vec![api::PlanDependency {
-                step: (index - 1) as u32,
+                step: predecessor as u32,
                 when: api::PlanTrigger::Reported as i32,
             }],
             ..Default::default()
